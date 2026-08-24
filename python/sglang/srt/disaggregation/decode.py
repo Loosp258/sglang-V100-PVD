@@ -364,6 +364,19 @@ class DecodePreallocQueue:
         )
 
     def _init_kv_manager(self) -> CommonKVManager:
+        if self.scheduler.server_args.disaggregation_topology == "pvd":
+            if self.draft_token_to_kv_pool is not None:
+                raise RuntimeError("PVD v1 does not support a draft-model KV pool")
+            from sglang.srt.disaggregation.pvd.conn import PVDKVManager
+
+            return PVDKVManager(
+                scheduler=self.scheduler,
+                kv_pool=self.token_to_kv_pool,
+                metadata_buffers=self.metadata_buffers,
+                tp_rank=self.tp_rank,
+                tp_size=self.tp_size,
+                gloo_group=self.gloo_group,
+            )
         kv_args_class = get_kv_class(self.transfer_backend, KVClassType.KVARGS)
         kv_args = kv_args_class()
 
@@ -444,6 +457,10 @@ class DecodePreallocQueue:
         else:
             decode_req = self._create_receiver_and_enqueue(req)
 
+            if self.scheduler.server_args.disaggregation_topology == "pvd":
+                decode_req.kv_receiver.init(0)
+                return
+
             # NOTE: fake transfer does not need to resolve prefill dp rank in the pending queue
             if _is_fake_transfer(req, self.scheduler.server_args):
                 decode_req.kv_receiver.init(0)
@@ -498,6 +515,14 @@ class DecodePreallocQueue:
         return None
 
     def _create_receiver_and_enqueue(self, req: Req) -> DecodeRequest:
+        if self.scheduler.server_args.disaggregation_topology == "pvd":
+            from sglang.srt.disaggregation.pvd.conn import PVDKVReceiver
+
+            kv_receiver = PVDKVReceiver(mgr=self.kv_manager, req=req)
+            decode_req = DecodeRequest(req=req, kv_receiver=kv_receiver)
+            self.queue.append(decode_req)
+            return decode_req
+
         backend = (
             TransferBackend.FAKE
             if _is_fake_transfer(req, self.scheduler.server_args)

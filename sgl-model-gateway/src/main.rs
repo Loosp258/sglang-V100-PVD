@@ -199,6 +199,25 @@ struct CliArgs {
     #[arg(long, default_value_t = false, help_heading = "PD Disaggregation")]
     pd_disaggregation: bool,
 
+    /// Enable PVD (Prefill-Vector-Decode) disaggregation. This reuses the PD
+    /// worker selection path and adds a vector-tier coordination identity.
+    #[arg(
+        long,
+        default_value_t = false,
+        requires = "pvd_vector_coordinator_url",
+        help_heading = "PVD Disaggregation"
+    )]
+    pvd_disaggregation: bool,
+
+    /// Rank-0 HTTP coordinator URL of the vector tier (for example,
+    /// http://vector-node:31000).
+    #[arg(
+        long,
+        requires = "pvd_disaggregation",
+        help_heading = "PVD Disaggregation"
+    )]
+    pvd_vector_coordinator_url: Option<String>,
+
     /// Decode server URLs (can be specified multiple times)
     #[arg(long, action = ArgAction::Append, help_heading = "PD Disaggregation")]
     decode: Vec<String>,
@@ -912,7 +931,7 @@ impl CliArgs {
             RoutingMode::OpenAI {
                 worker_urls: self.worker_urls.clone(),
             }
-        } else if self.pd_disaggregation {
+        } else if self.pd_disaggregation || self.pvd_disaggregation {
             RoutingMode::PrefillDecode {
                 prefill_urls,
                 decode_urls: self.decode.clone(),
@@ -1070,6 +1089,8 @@ impl CliArgs {
             .circuit_breaker(!self.disable_circuit_breaker)
             .enable_wasm(self.enable_wasm)
             .igw(self.enable_igw)
+            .pvd_disaggregation(self.pvd_disaggregation)
+            .maybe_pvd_vector_coordinator_url(self.pvd_vector_coordinator_url.as_ref())
             .maybe_server_cert_and_key(self.tls_cert_path.as_ref(), self.tls_key_path.as_ref());
 
         builder.build()
@@ -1097,7 +1118,7 @@ impl CliArgs {
                 check_interval: std::time::Duration::from_secs(60),
                 port: self.service_discovery_port,
                 namespace: self.service_discovery_namespace.clone(),
-                pd_mode: self.pd_disaggregation,
+                pd_mode: self.pd_disaggregation || self.pvd_disaggregation,
                 prefill_selector: Self::parse_selector(&self.prefill_selector),
                 decode_selector: Self::parse_selector(&self.decode_selector),
                 bootstrap_port_annotation: "sglang.ai/bootstrap-port".to_string(),
@@ -1241,6 +1262,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "IGW (Inference Gateway)".to_string()
     } else if matches!(cli_args.backend, Backend::Openai) {
         "OpenAI Backend".to_string()
+    } else if cli_args.pvd_disaggregation {
+        "PVD Disaggregated".to_string()
     } else if cli_args.pd_disaggregation {
         "PD Disaggregated".to_string()
     } else {
@@ -1262,7 +1285,9 @@ Provide --worker-urls or PD flags as usual.",
     if !cli_args.enable_igw {
         println!("Policy: {}", cli_args.policy);
 
-        if cli_args.pd_disaggregation && !prefill_urls.is_empty() {
+        if (cli_args.pd_disaggregation || cli_args.pvd_disaggregation)
+            && !prefill_urls.is_empty()
+        {
             println!("Prefill nodes: {:?}", prefill_urls);
             println!("Decode nodes: {:?}", cli_args.decode);
         }

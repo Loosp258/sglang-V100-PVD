@@ -1267,7 +1267,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 init_mooncake_transfer_engine,
             )
 
-            init_mooncake_transfer_engine(
+            mooncake_engine = init_mooncake_transfer_engine(
                 hostname=get_local_ip_auto(),
                 gpu_id=self.gpu_id,
                 ib_device=(
@@ -1275,6 +1275,34 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     or self.server_args.mooncake_ib_device
                 ),
             )
+            if self.server_args.disaggregation_topology == "pvd":
+                from sglang.srt.disaggregation.pvd.mooncake_engine import (
+                    MooncakePVDTransferEngine,
+                )
+                from sglang.srt.disaggregation.pvd.preflight import run_rank_preflight
+
+                rails = self.server_args.pvd_rank_rails.split(",")
+                rank = self.tp_rank
+                expected_rail = rails[rank]
+                if mooncake_engine.get_ib_device() != expected_rail:
+                    raise RuntimeError(
+                        f"PVD rank {rank} expected {expected_rail}, Mooncake selected "
+                        f"{mooncake_engine.get_ib_device()}"
+                    )
+                adapter = MooncakePVDTransferEngine.from_existing(
+                    mooncake_engine, rail=expected_rail
+                )
+                self.pvd_preflight_report = run_rank_preflight(
+                    rank=rank,
+                    rails=rails,
+                    device=f"cuda:{self.gpu_id}",
+                    engine=adapter,
+                    strict=self.server_args.pvd_strict_rdma_preflight,
+                )
+                logger.info(
+                    "PVD rank/rail/GDR preflight passed: %s",
+                    self.pvd_preflight_report.to_dict(),
+                )
 
     def load_model(self):
         tic_total = time.perf_counter()

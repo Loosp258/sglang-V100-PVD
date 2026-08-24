@@ -9,6 +9,31 @@ impl ConfigValidator {
         Self::validate_policy(&config.policy)?;
         Self::validate_server_settings(config)?;
 
+        if config.pvd_disaggregation {
+            if !matches!(&config.mode, RoutingMode::PrefillDecode { .. }) {
+                return Err(ConfigError::ValidationFailed {
+                    reason: "PVD disaggregation requires PrefillDecode routing mode".to_string(),
+                });
+            }
+            if !matches!(
+                &config.connection_mode,
+                crate::core::ConnectionMode::Http
+            ) {
+                return Err(ConfigError::ValidationFailed {
+                    reason: "PVD v1 currently requires HTTP worker connections".to_string(),
+                });
+            }
+            if config
+                .pvd_vector_coordinator_url
+                .as_deref()
+                .is_none_or(|url| url.trim().is_empty())
+            {
+                return Err(ConfigError::MissingRequired {
+                    field: "pvd_vector_coordinator_url".to_string(),
+                });
+            }
+        }
+
         if let Some(discovery) = &config.discovery {
             Self::validate_discovery(discovery, &config.mode)?;
         }

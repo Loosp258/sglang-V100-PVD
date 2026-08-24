@@ -54,6 +54,7 @@ pub struct PDRouter {
     pub retry_config: RetryConfig,
     pub api_key: Option<String>,
     pub enable_igw: bool,
+    pub pvd_disaggregation: bool,
 }
 
 #[derive(Clone)]
@@ -77,6 +78,68 @@ struct PDRequestContext<'a> {
 struct BreakerOutcomesRecorded;
 
 impl PDRouter {
+    async fn validate_pvd_coordinator(
+        client: &Client,
+        base_url: &str,
+    ) -> Result<(), String> {
+        let health_url = format!("{}/health", base_url.trim_end_matches('/'));
+        let response = client
+            .get(&health_url)
+            .send()
+            .await
+            .map_err(|error| format!("PVD vector coordinator health check failed: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "PVD vector coordinator health check returned {}",
+                response.status()
+            ));
+        }
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("invalid PVD vector health response: {error}"))?;
+        if payload.get("healthy").and_then(Value::as_bool) != Some(true)
+            || payload.get("world_size").and_then(Value::as_u64) != Some(2)
+        {
+            return Err("PVD vector group is not a healthy two-rank group".to_string());
+        }
+        let shards = payload
+            .get("shards")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "PVD vector health response has no shards".to_string())?;
+        if shards.len() != 2 {
+            return Err(format!(
+                "PVD requires exactly two vector shards, got {}",
+                shards.len()
+            ));
+        }
+        for (rank, rail) in [(0_u64, "mlx5_0"), (1_u64, "mlx5_1")] {
+            let shard = shards
+                .iter()
+                .find(|item| item.get("rank").and_then(Value::as_u64) == Some(rank))
+                .ok_or_else(|| format!("PVD vector rank {rank} is missing"))?;
+            if shard.get("rail").and_then(Value::as_str) != Some(rail) {
+                return Err(format!("PVD vector rank {rank} is not bound to {rail}"));
+            }
+            let preflight = shard
+                .get("preflight")
+                .ok_or_else(|| format!("PVD vector rank {rank} has no preflight report"))?;
+            for field in [
+                "rail_present",
+                "active_port",
+                "gpu_memory_registered",
+                "local_gpu_transfer",
+            ] {
+                if preflight.get(field).and_then(Value::as_bool) != Some(true) {
+                    return Err(format!(
+                        "PVD vector rank {rank} failed preflight field {field}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn proxy_to_first_prefill_worker(
         &self,
         endpoint: &str,
@@ -169,6 +232,14 @@ impl PDRouter {
     }
 
     pub async fn new(ctx: &Arc<crate::app_context::AppContext>) -> Result<Self, String> {
+        if ctx.router_config.pvd_disaggregation {
+            let coordinator_url = ctx
+                .router_config
+                .pvd_vector_coordinator_url
+                .as_deref()
+                .ok_or_else(|| "PVD vector coordinator URL is required".to_string())?;
+            Self::validate_pvd_coordinator(&ctx.client, coordinator_url).await?;
+        }
         Ok(PDRouter {
             worker_registry: Arc::clone(&ctx.worker_registry),
             policy_registry: Arc::clone(&ctx.policy_registry),
@@ -176,6 +247,7 @@ impl PDRouter {
             retry_config: ctx.router_config.effective_retry_config(),
             api_key: ctx.router_config.api_key.clone(),
             enable_igw: ctx.router_config.enable_igw,
+            pvd_disaggregation: ctx.router_config.pvd_disaggregation,
         })
     }
 
@@ -224,6 +296,32 @@ impl PDRouter {
     const BOOTSTRAP_HOST_KEY: &'static str = "bootstrap_host";
     const BOOTSTRAP_PORT_KEY: &'static str = "bootstrap_port";
     const BOOTSTRAP_ROOM_KEY: &'static str = "bootstrap_room";
+    const PVD_TRANSFER_ID_KEY: &'static str = "pvd_transfer_id";
+    const PVD_DELIVERY_ID_KEY: &'static str = "pvd_delivery_id";
+
+    fn inject_pvd_identity_into_value(
+        mut original: Value,
+        batch_size: Option<usize>,
+    ) -> Result<Value, String> {
+        let obj = original
+            .as_object_mut()
+            .ok_or_else(|| "Request must be a JSON object".to_string())?;
+        let new_id = || Value::from(uuid::Uuid::new_v4().to_string());
+        if let Some(n) = batch_size {
+            obj.insert(
+                Self::PVD_TRANSFER_ID_KEY.to_string(),
+                Value::Array((0..n).map(|_| new_id()).collect()),
+            );
+            obj.insert(
+                Self::PVD_DELIVERY_ID_KEY.to_string(),
+                Value::Array((0..n).map(|_| new_id()).collect()),
+            );
+        } else {
+            obj.insert(Self::PVD_TRANSFER_ID_KEY.to_string(), new_id());
+            obj.insert(Self::PVD_DELIVERY_ID_KEY.to_string(), new_id());
+        }
+        Ok(original)
+    }
 
     fn inject_bootstrap_into_value(
         mut original: Value,
@@ -351,6 +449,16 @@ impl PDRouter {
                             Ok(v) => v,
                             Err(e) => return Self::handle_serialization_error(e),
                         };
+
+                        if self.pvd_disaggregation {
+                            json_request = match Self::inject_pvd_identity_into_value(
+                                json_request,
+                                context.batch_size,
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => return Self::handle_serialization_error(e),
+                            };
+                        }
 
                         let ctx_is_stream = context.is_stream;
                         let response = self
@@ -1564,6 +1672,7 @@ mod tests {
             retry_config: RetryConfig::default(),
             api_key: Some("test_api_key".to_string()),
             enable_igw: false,
+            pvd_disaggregation: false,
         }
     }
 
@@ -1573,6 +1682,28 @@ mod tests {
             .build();
         worker.set_healthy(healthy);
         Box::new(worker)
+    }
+
+    #[test]
+    fn test_inject_pvd_scalar_identity() {
+        let value =
+            PDRouter::inject_pvd_identity_into_value(json!({"prompt": "hello"}), None).unwrap();
+        let transfer_id = value["pvd_transfer_id"].as_str().unwrap();
+        let delivery_id = value["pvd_delivery_id"].as_str().unwrap();
+        assert!(!transfer_id.is_empty());
+        assert!(!delivery_id.is_empty());
+        assert_ne!(transfer_id, delivery_id);
+    }
+
+    #[test]
+    fn test_inject_pvd_batch_identity() {
+        let value = PDRouter::inject_pvd_identity_into_value(json!({}), Some(2)).unwrap();
+        let transfer_ids = value["pvd_transfer_id"].as_array().unwrap();
+        let delivery_ids = value["pvd_delivery_id"].as_array().unwrap();
+        assert_eq!(transfer_ids.len(), 2);
+        assert_eq!(delivery_ids.len(), 2);
+        assert_ne!(transfer_ids[0], transfer_ids[1]);
+        assert_ne!(delivery_ids[0], delivery_ids[1]);
     }
 
     #[tokio::test]

@@ -1945,6 +1945,8 @@ class Scheduler(
                 bootstrap_host=recv_req.bootstrap_host,
                 bootstrap_port=recv_req.bootstrap_port,
                 bootstrap_room=recv_req.bootstrap_room,
+                pvd_transfer_id=recv_req.pvd_transfer_id,
+                pvd_delivery_id=recv_req.pvd_delivery_id,
                 disagg_mode=self.disaggregation_mode,
                 routed_dp_rank=recv_req.routed_dp_rank,
                 disagg_prefill_dp_rank=recv_req.disagg_prefill_dp_rank,
@@ -1969,6 +1971,7 @@ class Scheduler(
                 if (
                     recv_req.bootstrap_room is None
                     and self.transfer_backend != TransferBackend.FAKE
+                    and self.server_args.disaggregation_topology != "pvd"
                 ):
                     error_msg = (
                         f"Invalid request: Disaggregated request received without "
@@ -2022,6 +2025,19 @@ class Scheduler(
             req.set_finish_with_abort(error_msg)
             self.init_req_max_new_tokens(req)
             self._add_request_to_queue(req)
+            return
+
+        if self.server_args.disaggregation_topology == "pvd" and (
+            not req.pvd_transfer_id or not req.pvd_delivery_id
+        ):
+            error_msg = (
+                "Invalid PVD request: pvd_transfer_id and pvd_delivery_id are required; "
+                "route the request through a Gateway launched with --pvd-disaggregation"
+            )
+            logger.error("%s rid=%s", error_msg, req.rid)
+            recv_req.time_stats.trace_ctx.abort(abort_info={"reason": error_msg})
+            prepare_abort(req, error_msg, status_code=HTTPStatus.BAD_REQUEST)
+            self.output_streamer.stream_output([req], req.return_logprob)
             return
 
         if self.spec_algorithm.is_dflash_family():

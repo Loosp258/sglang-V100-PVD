@@ -141,6 +141,19 @@ class PrefillBootstrapQueue:
             )
 
     def _init_kv_manager(self) -> CommonKVManager:
+        if self.scheduler.server_args.disaggregation_topology == "pvd":
+            if self.draft_token_to_kv_pool is not None:
+                raise RuntimeError("PVD v1 does not support a draft-model KV pool")
+            from sglang.srt.disaggregation.pvd.conn import PVDKVManager
+
+            return PVDKVManager(
+                scheduler=self.scheduler,
+                kv_pool=self.token_to_kv_pool,
+                metadata_buffers=self.metadata_buffers,
+                tp_rank=self.tp_rank,
+                tp_size=self.tp_size,
+                gloo_group=self.gloo_group,
+            )
         kv_args_class = get_kv_class(self.transfer_backend, KVClassType.KVARGS)
         kv_args = kv_args_class()
         kv_args.engine_rank = self.tp_rank
@@ -221,6 +234,14 @@ class PrefillBootstrapQueue:
 
     def add(self, req: Req, num_kv_heads: int) -> None:
         if self._check_if_req_exceed_kv_capacity(req):
+            return
+
+        if self.scheduler.server_args.disaggregation_topology == "pvd":
+            from sglang.srt.disaggregation.pvd.conn import PVDKVSender
+
+            req.disagg_kv_sender = PVDKVSender(mgr=self.kv_manager, req=req)
+            self._process_req(req)
+            self.queue.append(req)
             return
 
         backend = (

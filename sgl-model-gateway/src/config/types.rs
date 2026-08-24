@@ -59,6 +59,13 @@ pub struct RouterConfig {
     pub health_check: HealthCheckConfig,
     #[serde(default)]
     pub enable_igw: bool,
+    /// Enable PVD (Prefill-Vector-Decode) routing on top of the existing PD router.
+    /// The vector tier owns reusable, rank-sharded prompt KV entries.
+    #[serde(default)]
+    pub pvd_disaggregation: bool,
+    /// Rank-0 coordinator endpoint of the vector tier.
+    #[serde(default)]
+    pub pvd_vector_coordinator_url: Option<String>,
     /// Can be a HuggingFace model ID or local path
     pub model_path: Option<String>,
     /// Overrides model_path tokenizer if provided
@@ -536,6 +543,8 @@ impl Default for RouterConfig {
             disable_circuit_breaker: false,
             health_check: HealthCheckConfig::default(),
             enable_igw: false,
+            pvd_disaggregation: false,
+            pvd_vector_coordinator_url: None,
             connection_mode: ConnectionMode::Http,
             model_path: None,
             tokenizer_path: None,

@@ -491,6 +491,21 @@ impl RouterConfigBuilder {
         self
     }
 
+    // ==================== PVD Disaggregation ====================
+
+    pub fn pvd_disaggregation(mut self, enable: bool) -> Self {
+        self.config.pvd_disaggregation = enable;
+        self
+    }
+
+    pub fn maybe_pvd_vector_coordinator_url(
+        mut self,
+        url: Option<impl Into<String>>,
+    ) -> Self {
+        self.config.pvd_vector_coordinator_url = url.map(Into::into);
+        self
+    }
+
     // ==================== Option Setters ====================
     // Accept Option<T> and only set if Some
 

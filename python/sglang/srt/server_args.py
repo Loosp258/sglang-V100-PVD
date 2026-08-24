@@ -813,6 +813,13 @@ class ServerArgs:
 
     # PD disaggregation: can be "null" (not disaggregated), "prefill" (prefill-only), or "decode" (decode-only)
     disaggregation_mode: Literal["null", "prefill", "decode"] = "null"
+    # Keep the existing PD path as the default. PVD is opt-in and uses an
+    # external rank-sharded vector worker group between P and D.
+    disaggregation_topology: Literal["pd", "pvd"] = "pd"
+    pvd_vector_coordinator_url: Optional[str] = None
+    pvd_model_instance_id: Optional[str] = None
+    pvd_rank_rails: str = "mlx5_0,mlx5_1"
+    pvd_strict_rdma_preflight: bool = True
     disaggregation_transfer_backend: str = "mooncake"
     disaggregation_bootstrap_port: int = 8998
     disaggregation_ib_device: Optional[str] = None
@@ -894,6 +901,13 @@ class ServerArgs:
         )
 
         handle_pd_disaggregation(self)
+
+        # PVD is an explicit topology layered above the proven PD role setup.
+        from sglang.srt.arg_groups.pvd_disaggregation_hook import (
+            handle_pvd_disaggregation,
+        )
+
+        handle_pvd_disaggregation(self)
 
         # Validate --prefill-only-disable-kv-cache args early (before dummy-model
         # short-circuit). The backend check is run later after backends settle.
@@ -6878,6 +6892,33 @@ class ServerArgs:
             default=ServerArgs.disaggregation_mode,
             choices=["null", "prefill", "decode"],
             help='Only used for PD disaggregation. "prefill" for prefill-only server, and "decode" for decode-only server. If not specified, it is not PD disaggregated',
+        )
+        parser.add_argument(
+            "--disaggregation-topology",
+            choices=["pd", "pvd"],
+            default=ServerArgs.disaggregation_topology,
+            help="Disaggregation topology. The existing PD path remains the default.",
+        )
+        parser.add_argument(
+            "--pvd-vector-coordinator-url",
+            default=ServerArgs.pvd_vector_coordinator_url,
+            help="PVD rank-0 vector coordinator base URL.",
+        )
+        parser.add_argument(
+            "--pvd-model-instance-id",
+            default=ServerArgs.pvd_model_instance_id,
+            help="Stable identifier shared by matching P, V and D model instances.",
+        )
+        parser.add_argument(
+            "--pvd-rank-rails",
+            default=ServerArgs.pvd_rank_rails,
+            help="Comma-separated rank-to-RDMA-rail mapping. PVD v1 uses mlx5_0,mlx5_1.",
+        )
+        parser.add_argument(
+            "--pvd-strict-rdma-preflight",
+            action=argparse.BooleanOptionalAction,
+            default=ServerArgs.pvd_strict_rdma_preflight,
+            help="Fail startup unless both rails and GPUDirect RDMA pass preflight.",
         )
         parser.add_argument(
             "--disaggregation-transfer-backend",

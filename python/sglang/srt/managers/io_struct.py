@@ -212,6 +212,10 @@ class GenerateReqInput(BaseReq):
     bootstrap_room: Optional[Union[List[int], int]] = None
     bootstrap_pair_key: Optional[Union[List[str], str]] = None
     decode_tp_size: Optional[Union[List[Optional[int]], int]] = None
+    # PVD identity. req_id + model_instance_id + transfer_id form an Entry key;
+    # Delivery has an independent id so one Entry can serve multiple decoders.
+    pvd_transfer_id: Optional[Union[List[Optional[str]], str]] = None
+    pvd_delivery_id: Optional[Union[List[Optional[str]], str]] = None
 
     # Require reasoning for the request (hybrid reasoning model only)
     require_reasoning: bool = False
@@ -414,6 +418,7 @@ class GenerateReqInput(BaseReq):
         self._normalize_logprob_params(num)
         self._normalize_custom_logit_processor(num)
         self._normalize_bootstrap_params(num)
+        self._normalize_pvd_params(num)
 
     def _expand_inputs(self, num):
         """Expand the main inputs (text, input_ids, input_embeds) for parallel sampling."""
@@ -624,6 +629,18 @@ class GenerateReqInput(BaseReq):
             ):
                 raise ValueError("Session params must be a dict or a list of dicts.")
 
+    def _normalize_pvd_params(self, num):
+        for name in ("pvd_transfer_id", "pvd_delivery_id"):
+            value = getattr(self, name)
+            if value is None:
+                setattr(self, name, [None] * num)
+            elif isinstance(value, str):
+                setattr(self, name, [value] * num)
+            elif isinstance(value, list):
+                setattr(self, name, value * self.parallel_sample_num)
+            else:
+                raise ValueError(f"{name} must be a string or list of strings")
+
     def _get_positional_embed_overrides_item(
         self, i: int
     ) -> Optional[PositionalEmbeds]:
@@ -693,6 +710,12 @@ class GenerateReqInput(BaseReq):
             ),
             decode_tp_size=(
                 self.decode_tp_size[i] if self.decode_tp_size is not None else None
+            ),
+            pvd_transfer_id=(
+                self.pvd_transfer_id[i] if self.pvd_transfer_id is not None else None
+            ),
+            pvd_delivery_id=(
+                self.pvd_delivery_id[i] if self.pvd_delivery_id is not None else None
             ),
             routed_dp_rank=self.routed_dp_rank,
             disagg_prefill_dp_rank=self.disagg_prefill_dp_rank,
@@ -770,6 +793,8 @@ class TokenizedGenerateReqInput(BaseReq):
     bootstrap_room: Optional[int] = None
     bootstrap_pair_key: Optional[str] = None
     decode_tp_size: Optional[int] = None
+    pvd_transfer_id: Optional[str] = None
+    pvd_delivery_id: Optional[str] = None
 
     # Require reasoning for the request (hybrid reasoning model only)
     require_reasoning: bool = False
