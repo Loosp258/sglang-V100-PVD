@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from sglang.srt.environ import envs
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sglang.srt.server_args import ServerArgs
@@ -43,16 +47,19 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     if server_args.pp_size != 1:
         raise ValueError("PVD v1 requires --pp-size 1")
     rails = [item.strip() for item in server_args.pvd_rank_rails.split(",")]
-    if rails != ["mlx5_0", "mlx5_1"]:
-        raise ValueError(
-            "PVD v1 requires --pvd-rank-rails mlx5_0,mlx5_1 so "
-            "P0->V0->D0 and P1->V1->D1 remain rail-local"
-        )
+    from sglang.srt.disaggregation.pvd.preflight import validate_rank_rail_names
+
+    rail_mode = validate_rank_rail_names(rails)
     server_args.pvd_rank_rails = ",".join(rails)
+    if rail_mode == "single-rail-debug":
+        logger.warning(
+            "PVD single-rail debug mode is active: TP ranks 0 and 1 both use "
+            "mlx5_0; this mode has no rail redundancy or dual-rail bandwidth"
+        )
     if server_args.disaggregation_transfer_backend != "mooncake":
         raise ValueError("PVD v1 currently requires the mooncake transfer backend")
     if not server_args.pvd_strict_rdma_preflight:
-        raise ValueError("PVD P/D roles require strict dual-rail GPUDirect preflight")
+        raise ValueError("PVD P/D roles require strict rank/rail GPUDirect preflight")
     if server_args.speculative_algorithm is not None:
         raise ValueError("PVD v1 does not support speculative decoding")
     if server_args.enable_hierarchical_cache:
@@ -70,8 +77,8 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         raise ValueError("PVD v1 requires decode radix cache to remain disabled")
 
     # Feed the existing Mooncake GPU->HCA selector an explicit per-GPU map.
-    server_args.disaggregation_ib_device = (
-        '{"0":"mlx5_0","1":"mlx5_1"}'
+    server_args.disaggregation_ib_device = json.dumps(
+        {"0": rails[0], "1": rails[1]}, separators=(",", ":")
     )
     # Every Entry owns a complete prompt KV allocation. Prefix reuse on P would
     # make the exported allocation partial and violate the Entry manifest.

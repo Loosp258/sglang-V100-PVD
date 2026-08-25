@@ -1,4 +1,4 @@
-"""Strict dual-rail and GPUDirect preflight checks for PVD v1."""
+"""Strict rank/rail and GPUDirect preflight checks for PVD v1."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ class PVDPreflightError(RuntimeError):
 class PVDPreflightReport:
     rank: int
     rail: str
+    rail_mode: str
     cuda_device: str
     rail_present: bool
     active_port: bool
@@ -34,11 +35,29 @@ class PVDPreflightReport:
         return asdict(self)
 
 
-def validate_dual_rail_names(rails: Iterable[str]) -> None:
+DUAL_RAILS = ("mlx5_0", "mlx5_1")
+SINGLE_RAIL_DEBUG = ("mlx5_0", "mlx5_0")
+
+
+def validate_rank_rail_names(rails: Iterable[str]) -> str:
     values = list(rails)
-    if values != ["mlx5_0", "mlx5_1"]:
+    if tuple(values) == DUAL_RAILS:
+        return "dual-rail"
+    if tuple(values) == SINGLE_RAIL_DEBUG:
+        return "single-rail-debug"
+    raise PVDPreflightError(
+        "PVD v1 requires rank rails ['mlx5_0', 'mlx5_1'] for production "
+        "or ['mlx5_0', 'mlx5_0'] for single-rail debug mode, "
+        f"got {values}"
+    )
+
+
+def validate_dual_rail_names(rails: Iterable[str]) -> None:
+    """Backward-compatible validator for callers that require dual rail."""
+    values = list(rails)
+    if tuple(values) != DUAL_RAILS:
         raise PVDPreflightError(
-            f"PVD v1 requires rails ['mlx5_0', 'mlx5_1'], got {values}"
+            f"PVD dual-rail mode requires {list(DUAL_RAILS)}, got {values}"
         )
 
 
@@ -64,7 +83,7 @@ def run_rank_preflight(
     strict: bool = True,
 ) -> PVDPreflightReport:
     rails = list(rails)
-    validate_dual_rail_names(rails)
+    rail_mode = validate_rank_rail_names(rails)
     rail = rails[rank]
     if platform.system() != "Linux" and strict:
         raise PVDPreflightError("production PVD RDMA preflight requires Linux")
@@ -119,6 +138,7 @@ def run_rank_preflight(
     return PVDPreflightReport(
         rank=rank,
         rail=rail,
+        rail_mode=rail_mode,
         cuda_device=device,
         rail_present=rail_present,
         active_port=active_port,

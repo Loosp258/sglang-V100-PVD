@@ -113,17 +113,47 @@ impl PDRouter {
                 shards.len()
             ));
         }
-        for (rank, rail) in [(0_u64, "mlx5_0"), (1_u64, "mlx5_1")] {
-            let shard = shards
-                .iter()
-                .find(|item| item.get("rank").and_then(Value::as_u64) == Some(rank))
-                .ok_or_else(|| format!("PVD vector rank {rank} is missing"))?;
-            if shard.get("rail").and_then(Value::as_str) != Some(rail) {
-                return Err(format!("PVD vector rank {rank} is not bound to {rail}"));
-            }
+        let rank0 = shards
+            .iter()
+            .find(|item| item.get("rank").and_then(Value::as_u64) == Some(0))
+            .ok_or_else(|| "PVD vector rank 0 is missing".to_string())?;
+        let rank1 = shards
+            .iter()
+            .find(|item| item.get("rank").and_then(Value::as_u64) == Some(1))
+            .ok_or_else(|| "PVD vector rank 1 is missing".to_string())?;
+        let reported_rank0_rail = rank0.get("rail").and_then(Value::as_str);
+        let reported_rank1_rail = rank1.get("rail").and_then(Value::as_str);
+        let (rank0_rail, rank1_rail, rail_mode) =
+            match (reported_rank0_rail, reported_rank1_rail) {
+                (Some(rank0_rail @ "mlx5_0"), Some(rank1_rail @ "mlx5_1")) => {
+                    (rank0_rail, rank1_rail, "dual-rail")
+                }
+                (Some(rank0_rail @ "mlx5_0"), Some(rank1_rail @ "mlx5_0")) => {
+                    warn!(
+                        "PVD vector group is using single-rail debug mode; both ranks share mlx5_0"
+                    );
+                    (rank0_rail, rank1_rail, "single-rail-debug")
+                }
+                _ => {
+                    return Err(format!(
+                        "unsupported PVD vector rank/rail mapping: rank0={reported_rank0_rail:?}, rank1={reported_rank1_rail:?}"
+                    ));
+                }
+            };
+        for (rank, rail, shard) in [
+            (0_u64, rank0_rail, rank0),
+            (1_u64, rank1_rail, rank1),
+        ] {
             let preflight = shard
                 .get("preflight")
                 .ok_or_else(|| format!("PVD vector rank {rank} has no preflight report"))?;
+            if preflight.get("rail").and_then(Value::as_str) != Some(rail)
+                || preflight.get("rail_mode").and_then(Value::as_str) != Some(rail_mode)
+            {
+                return Err(format!(
+                    "PVD vector rank {rank} preflight does not match {rail_mode} mapping on {rail}"
+                ));
+            }
             for field in [
                 "rail_present",
                 "active_port",

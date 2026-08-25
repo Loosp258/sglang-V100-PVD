@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import logging
 import os
 import signal
 from typing import List
@@ -28,10 +29,13 @@ from sglang.srt.disaggregation.pvd.coordinator import (
 from sglang.srt.disaggregation.pvd.mooncake_engine import MooncakePVDTransferEngine
 from sglang.srt.disaggregation.pvd.preflight import (
     run_rank_preflight,
-    validate_dual_rail_names,
+    validate_rank_rail_names,
 )
 from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
+
+
+logger = logging.getLogger(__name__)
 
 
 def _positive_int(value: str) -> int:
@@ -58,7 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--rank1-shard-url",
         help="rank-1 private URL as seen by rank 0, e.g. http://10.0.0.2:9201",
     )
-    parser.add_argument("--rails", default="mlx5_0,mlx5_1")
+    parser.add_argument(
+        "--rails",
+        "--pvd-rank-rails",
+        dest="rails",
+        default="mlx5_0,mlx5_1",
+        help=(
+            "rank-to-rail mapping: mlx5_0,mlx5_1 for production or "
+            "mlx5_0,mlx5_0 for single-rail debug mode"
+        ),
+    )
     parser.add_argument(
         "--transfer-backend", choices=["mooncake", "fake"], default="mooncake"
     )
@@ -92,7 +105,12 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
     if args.rank not in (0, 1):
         raise ValueError("PVD V rank must be 0 or 1")
     rails = [value.strip() for value in args.rails.split(",") if value.strip()]
-    validate_dual_rail_names(rails)
+    rail_mode = validate_rank_rail_names(rails)
+    if rail_mode == "single-rail-debug":
+        logger.warning(
+            "PVD single-rail debug mode is active: both V ranks use mlx5_0; "
+            "there is no rail redundancy or aggregate dual-rail bandwidth"
+        )
     if args.rank == 0 and not args.rank1_shard_url:
         raise ValueError("rank 0 requires --rank1-shard-url")
     if args.transfer_backend == "fake" and not args.allow_fake_transport:
@@ -126,7 +144,7 @@ async def _reaper(
 
 
 async def _wait_for_rank1(
-    client: HttpShardClient, *, timeout: float, strict: bool
+    client: HttpShardClient, *, timeout: float, strict: bool, expected_rail: str
 ) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     last_error: Exception | None = None
@@ -135,8 +153,11 @@ async def _wait_for_rank1(
             health = await client.health()
             if health.get("rank") != 1 or health.get("world_size") != 2:
                 raise RuntimeError(f"unexpected rank-1 health payload: {health}")
-            if health.get("rail") != "mlx5_1":
-                raise RuntimeError("V rank 1 must be bound to mlx5_1")
+            if health.get("rail") != expected_rail:
+                raise RuntimeError(
+                    f"V rank 1 must be bound to {expected_rail}, "
+                    f"got {health.get('rail')}"
+                )
             if strict:
                 preflight = health.get("preflight", {})
                 for field in (
@@ -212,6 +233,7 @@ async def _serve(args: argparse.Namespace) -> None:
             remote_client,
             timeout=args.rank1_startup_timeout_secs,
             strict=args.strict_rdma_preflight,
+            expected_rail=rails[1],
         )
         coordinator = VectorCoordinator(
             [LocalShardClient(store, preflight=preflight), remote_client],

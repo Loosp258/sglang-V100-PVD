@@ -6912,13 +6912,16 @@ class ServerArgs:
         parser.add_argument(
             "--pvd-rank-rails",
             default=ServerArgs.pvd_rank_rails,
-            help="Comma-separated rank-to-RDMA-rail mapping. PVD v1 uses mlx5_0,mlx5_1.",
+            help=(
+                "Comma-separated rank-to-RDMA-rail mapping. Use mlx5_0,mlx5_1 "
+                "for production or mlx5_0,mlx5_0 for single-rail debug mode."
+            ),
         )
         parser.add_argument(
             "--pvd-strict-rdma-preflight",
             action=argparse.BooleanOptionalAction,
             default=ServerArgs.pvd_strict_rdma_preflight,
-            help="Fail startup unless both rails and GPUDirect RDMA pass preflight.",
+            help="Fail startup unless each configured rank rail and GPUDirect RDMA pass preflight.",
         )
         parser.add_argument(
             "--disaggregation-transfer-backend",

@@ -20,6 +20,10 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVLayoutSignature,
     KVShardManifest,
 )
+from sglang.srt.disaggregation.pvd.preflight import (
+    PVDPreflightError,
+    validate_rank_rail_names,
+)
 from sglang.srt.disaggregation.pvd.request_state import (
     DeliveryState,
     EntryState,
@@ -93,6 +97,16 @@ def put_tensor(
     )
     assert engine.poll(handle) == TransferStatus.SUCCESS
     return registration
+
+
+def test_rank_rail_modes_are_explicit_and_bounded():
+    assert validate_rank_rail_names(["mlx5_0", "mlx5_1"]) == "dual-rail"
+    assert (
+        validate_rank_rail_names(["mlx5_0", "mlx5_0"])
+        == "single-rail-debug"
+    )
+    with unittest.TestCase().assertRaises(PVDPreflightError):
+        validate_rank_rail_names(["mlx5_1", "mlx5_1"])
 
 
 def test_full_prompt_entry_can_feed_multiple_deliveries():
@@ -322,6 +336,7 @@ if __name__ == '__main__':
     suite = unittest.TestSuite(
         unittest.FunctionTestCase(test)
         for test in (
+            test_rank_rail_modes_are_explicit_and_bounded,
             test_full_prompt_entry_can_feed_multiple_deliveries,
             test_bounded_descriptor_uses_pool_base_offset,
             test_full_prompt_packer_preserves_page_and_component_order,
