@@ -26,7 +26,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     ProtocolValidationError,
     RemoteRegionDescriptor,
 )
-from sglang.srt.disaggregation.pvd.request_state import StateTransitionError
+from sglang.srt.disaggregation.pvd.request_state import InvalidStateTransition
 from sglang.srt.disaggregation.pvd.vector_store import (
     EntryConflictError,
     EntryNotFoundError,
@@ -49,7 +49,7 @@ async def pvd_error_middleware(request: web.Request, handler):
         return _json_error(f"invalid request: {exc}", 400)
     except EntryNotFoundError as exc:
         return _json_error(str(exc), 404)
-    except (EntryConflictError, StateTransitionError) as exc:
+    except (EntryConflictError, InvalidStateTransition) as exc:
         return _json_error(str(exc), 409)
     except ResourceExhaustedError as exc:
         return _json_error(str(exc), 507)
