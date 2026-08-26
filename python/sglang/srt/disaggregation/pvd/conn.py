@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import copy
 import math
 import threading
 import time
@@ -24,6 +25,7 @@ from sglang.srt.disaggregation.pvd.kv_packer import (
     PVD_TENSOR_LAYOUT,
     describe_kv_layout,
     pack_full_prompt_kv,
+    pack_full_prompt_kv_head_shard,
     unpack_full_prompt_kv,
 )
 from sglang.srt.disaggregation.pvd.mooncake_engine import MooncakePVDTransferEngine
@@ -40,6 +42,7 @@ from sglang.srt.disaggregation.pvd.runtime import (
     PVDEntryLease,
     PVDPrefillRuntime,
 )
+from sglang.srt.disaggregation.pvd.sharding import validate_compute_layout
 from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
 
 
@@ -78,17 +81,17 @@ class PVDKVManager:
         tp_size: int,
         gloo_group,
     ) -> None:
-        if tp_size != 2:
-            raise PVDConnectionError("PVD v1 requires exactly two TP ranks")
+        if tp_size not in (1, 2, 4):
+            raise PVDConnectionError("PVD 2.0 currently supports compute TP 1, 2 or 4")
         if scheduler.ps.pp_size != 1:
-            raise PVDConnectionError("PVD v1 does not support pipeline parallelism")
+            raise PVDConnectionError("PVD does not support pipeline parallelism")
         if scheduler.tp_worker.is_hybrid_swa:
-            raise PVDConnectionError("PVD v1 does not support hybrid/SWA KV pools")
+            raise PVDConnectionError("PVD does not support hybrid/SWA KV pools")
         if hasattr(kv_pool, "get_state_buf_infos"):
             state_ptrs, _, _ = kv_pool.get_state_buf_infos()
             if state_ptrs:
                 raise PVDConnectionError(
-                    "PVD v1 does not support KV pools with SWA/DSA/Mamba state buffers"
+                    "PVD does not support KV pools with SWA/DSA/Mamba state buffers"
                 )
         req_to_token_pool = getattr(scheduler, "req_to_token_pool", None)
         if req_to_token_pool is not None and hasattr(
@@ -97,7 +100,7 @@ class PVDKVManager:
             state_ptrs, _, _ = req_to_token_pool.get_state_buf_infos()
             if state_ptrs:
                 raise PVDConnectionError(
-                    "PVD v1 does not support request-scoped Mamba state buffers"
+                    "PVD does not support request-scoped Mamba state buffers"
                 )
 
         shared_engine = get_mooncake_transfer_engine()
@@ -112,6 +115,11 @@ class PVDKVManager:
         self.gloo_group = gloo_group
         self.page_size = kv_pool.page_size
         self.rails = [item.strip() for item in scheduler.server_args.pvd_rank_rails.split(",")]
+        if len(self.rails) != self.tp_size:
+            raise PVDConnectionError(
+                f"PVD requires one rail per compute rank; got {len(self.rails)} "
+                f"rails for TP={self.tp_size}"
+            )
         self.rail = self.rails[tp_rank]
         self.model_instance_id = scheduler.server_args.pvd_model_instance_id
         self.control = _AsyncControlLoop()
@@ -149,7 +157,15 @@ class PVDKVManager:
             transfer_id=transfer_id,
         )
 
+    def _total_kv_heads(self) -> int:
+        model_config = self.scheduler.model_config
+        getter = getattr(model_config, "get_total_num_kv_heads", None)
+        if getter is not None:
+            return int(getter())
+        return int(self._layout_description["component_token_shapes"][0][0]) * self.tp_size
+
     def layout(self) -> KVLayoutSignature:
+        """Return this P/D compute rank group's layout."""
         model_config = self.scheduler.model_config
         components = self._layout_description
         kv_heads = getattr(self.kv_pool, "head_num", None)
@@ -162,12 +178,57 @@ class PVDKVManager:
             kv_dtype=components["component_dtypes"][0],
             page_size=self.page_size,
             num_layers=int(model_config.num_hidden_layers),
+            total_kv_heads=self._total_kv_heads(),
             kv_heads_per_rank=int(kv_heads),
             head_dim=int(model_config.head_dim),
             tp_size=self.tp_size,
             pp_size=1,
             tensor_layout=PVD_TENSOR_LAYOUT,
             extra=components,
+        )
+
+    def storage_layout(self) -> KVLayoutSignature:
+        """Return the stable two-shard V layout, independent of P/D compute TP."""
+        compute = self.layout()
+        if compute.total_kv_heads % 2:
+            raise PVDConnectionError(
+                "PVD 2.0 V TP2 storage requires an even number of total KV heads"
+            )
+        heads = compute.total_kv_heads // 2
+        extra = copy.deepcopy(dict(compute.extra))
+        source_heads = compute.kv_heads_per_rank
+        token_shapes = extra.get("component_token_shapes", [])
+        bytes_per_token = extra.get("component_bytes_per_token", [])
+        if source_heads <= 0 or any(
+            int(value) % source_heads for value in bytes_per_token
+        ):
+            raise PVDConnectionError("KV components cannot be split by head")
+        adjusted_shapes = []
+        for shape in token_shapes:
+            shape = list(shape)
+            if not shape or int(shape[0]) != source_heads:
+                raise PVDConnectionError(
+                    "PVD heterogeneous TP requires KV head to be tensor dimension 1"
+                )
+            shape[0] = heads
+            adjusted_shapes.append(shape)
+        extra["component_token_shapes"] = adjusted_shapes
+        extra["component_bytes_per_token"] = [
+            int(value) // source_heads * heads for value in bytes_per_token
+        ]
+        return KVLayoutSignature(
+            model_id=compute.model_id,
+            model_revision=compute.model_revision,
+            kv_dtype=compute.kv_dtype,
+            page_size=compute.page_size,
+            num_layers=compute.num_layers,
+            total_kv_heads=compute.total_kv_heads,
+            kv_heads_per_rank=heads,
+            head_dim=compute.head_dim,
+            tp_size=2,
+            pp_size=compute.pp_size,
+            tensor_layout=compute.tensor_layout,
+            extra=extra,
         )
 
     def local_shard_manifest(self, prompt_tokens: int) -> KVShardManifest:
@@ -192,14 +253,40 @@ class PVDKVManager:
             layer_end=end_layer,
         )
 
+    def storage_shard_manifest(
+        self, prompt_tokens: int, rank: int, layout: KVLayoutSignature
+    ) -> KVShardManifest:
+        page_count = math.ceil(prompt_tokens / self.page_size)
+        rail = self.rails[rank] if len(self.rails) > rank else self.rails[0]
+        bytes_per_token = sum(layout.extra["component_bytes_per_token"])
+        start_layer = int(getattr(self.kv_pool, "start_layer", 0))
+        end_layer_value = getattr(self.kv_pool, "end_layer", None)
+        end_layer = int(
+            end_layer_value
+            if end_layer_value is not None
+            else start_layer + self.scheduler.model_config.num_hidden_layers
+        )
+        return KVShardManifest(
+            rank=rank,
+            rail=rail,
+            expected_bytes=page_count * self.page_size * bytes_per_token,
+            page_count=page_count,
+            last_page_valid_tokens=prompt_tokens % self.page_size or self.page_size,
+            layer_start=start_layer,
+            layer_end=end_layer,
+        )
+
     def gather_rank_objects(self, local: Dict[str, Any]) -> List[Dict[str, Any]]:
         gathered: List[Optional[Dict[str, Any]]] = [None] * self.tp_size
         torch.distributed.all_gather_object(
             gathered, local, group=self.gloo_group
         )
         result = [item for item in gathered if item is not None]
-        if sorted(int(item["rank"]) for item in result) != [0, 1]:
-            raise PVDConnectionError("PVD rank object exchange did not produce ranks 0 and 1")
+        expected = list(range(self.tp_size))
+        if sorted(int(item["rank"]) for item in result) != expected:
+            raise PVDConnectionError(
+                f"PVD rank object exchange did not produce ranks {expected}"
+            )
         return result
 
     async def wait_for_stored_entry(
@@ -230,24 +317,35 @@ class PVDKVSender:
         self._started_at: Optional[float] = None
         self._metric = KVTransferMetric()
 
-        local_shard = mgr.local_shard_manifest(len(req.origin_input_ids))
-        gathered = mgr.gather_rank_objects(
-            {"rank": mgr.tp_rank, "shard": local_shard.to_dict()}
-        )
-        shards = {
-            int(item["rank"]): KVShardManifest.from_dict(item["shard"])
-            for item in gathered
-        }
+        if mgr.tp_size not in (1, 2):
+            raise PVDConnectionError("PVD Prefill currently supports TP1 or TP2")
+        storage_layout = mgr.storage_layout()
+        if mgr.tp_size == 1:
+            shards = {
+                rank: mgr.storage_shard_manifest(
+                    len(req.origin_input_ids), rank, storage_layout
+                )
+                for rank in range(2)
+            }
+        else:
+            local_shard = mgr.local_shard_manifest(len(req.origin_input_ids))
+            gathered = mgr.gather_rank_objects(
+                {"rank": mgr.tp_rank, "shard": local_shard.to_dict()}
+            )
+            shards = {
+                int(item["rank"]): KVShardManifest.from_dict(item["shard"])
+                for item in gathered
+            }
         self._create_future = mgr.control.submit(
             mgr.prefill_runtime.create_entry(
                 req_id=self.key.req_id,
                 transfer_id=self.key.transfer_id,
-                layout=mgr.layout(),
+                layout=storage_layout,
                 prompt_token_count=len(req.origin_input_ids),
                 shards=shards,
             )
         )
-        self._expected_pages = local_shard.page_count
+        self._expected_pages = next(iter(shards.values())).page_count
 
     def init(self, num_kv_indices: int, aux_index: Optional[int] = None):
         if num_kv_indices != self._expected_pages:
@@ -295,28 +393,61 @@ class PVDKVSender:
 
     def _send(self, kv_indices, state_indices: Optional[List] = None):
         if state_indices and any(item is not None for item in state_indices):
-            raise PVDConnectionError("PVD v1 does not support auxiliary KV state")
+            raise PVDConnectionError("PVD does not support auxiliary KV state")
         if self._lease is None:
             self._lease = self._create_future.result()
-        packed = pack_full_prompt_kv(
-            self.kv_mgr.kv_pool, kv_indices, page_size=self.kv_mgr.page_size
-        )
-        if packed.page_count != self._expected_pages:
-            raise PVDConnectionError(
-                f"PVD packed {packed.page_count} pages, expected {self._expected_pages}"
-            )
         self._started_at = time.monotonic()
-        self._metric.transfer_total_bytes = packed.expected_bytes
-        self._publish_future = self.kv_mgr.control.submit(
-            self.kv_mgr.prefill_runtime.publish_tensor_shard(
-                lease=self._lease,
-                rank=self.kv_mgr.tp_rank,
-                tensor=packed.tensor,
-                endpoint="pvd-prefill",
-                rail=self.kv_mgr.rail,
-                first_token=self._first_token(),
+        if self.kv_mgr.tp_size == 1:
+            storage_heads = self._lease.manifest.layout.kv_heads_per_rank
+            packed_shards = [
+                pack_full_prompt_kv_head_shard(
+                    self.kv_mgr.kv_pool,
+                    kv_indices,
+                    page_size=self.kv_mgr.page_size,
+                    head_start=rank * storage_heads,
+                    head_count=storage_heads,
+                )
+                for rank in range(2)
+            ]
+            self._metric.transfer_total_bytes = sum(
+                packed.expected_bytes for packed in packed_shards
             )
-        )
+
+            async def publish_all():
+                return await asyncio.gather(
+                    *(
+                        self.kv_mgr.prefill_runtime.publish_tensor_shard(
+                            lease=self._lease,
+                            rank=rank,
+                            tensor=packed.tensor,
+                            endpoint="pvd-prefill",
+                            rail=self.kv_mgr.rail,
+                            first_token=self._first_token() if rank == 0 else None,
+                        )
+                        for rank, packed in enumerate(packed_shards)
+                    )
+                )
+
+            self._publish_future = self.kv_mgr.control.submit(publish_all())
+        else:
+            packed = pack_full_prompt_kv(
+                self.kv_mgr.kv_pool, kv_indices, page_size=self.kv_mgr.page_size
+            )
+            if packed.page_count != self._expected_pages:
+                raise PVDConnectionError(
+                    f"PVD packed {packed.page_count} pages, expected {self._expected_pages}"
+                )
+            self._metric.transfer_total_bytes = packed.expected_bytes
+            self._publish_future = self.kv_mgr.control.submit(
+                self.kv_mgr.prefill_runtime.publish_tensor_shard(
+                    lease=self._lease,
+                    rank=self.kv_mgr.tp_rank,
+                    tensor=packed.tensor,
+                    endpoint="pvd-prefill",
+                    rail=self.kv_mgr.rail,
+                    first_token=self._first_token(),
+                )
+            )
 
     def poll(self) -> int:
         if self.conclude_state is not None:
@@ -386,8 +517,12 @@ class PVDKVReceiver:
 
     def _validate_entry(self, record: Dict[str, Any]) -> KVEntryManifest:
         manifest = KVEntryManifest.from_dict(record["manifest"])
-        if manifest.layout.fingerprint != self.kv_mgr.layout().fingerprint:
-            raise PVDConnectionError("PVD Entry layout does not match Decode KV layout")
+        try:
+            validate_compute_layout(manifest.layout, self.kv_mgr.layout())
+        except ValueError as exc:
+            raise PVDConnectionError(
+                f"PVD Entry layout does not match Decode KV layout: {exc}"
+            ) from exc
         if manifest.prompt_token_count != len(self.req.origin_input_ids):
             raise PVDConnectionError("PVD Entry prompt length does not match Decode request")
         return manifest
@@ -452,20 +587,21 @@ class PVDKVReceiver:
         if aux_index is None:
             raise PVDConnectionError("PVD Decode requires a metadata buffer index")
         if decode_prefix_len not in (None, 0):
-            raise PVDConnectionError("PVD v1 requires Decode radix cache to be disabled")
+            raise PVDConnectionError("PVD requires Decode radix cache to be disabled")
         if state_indices and any(item is not None for item in state_indices):
-            raise PVDConnectionError("PVD v1 does not support auxiliary KV state")
+            raise PVDConnectionError("PVD does not support auxiliary KV state")
         if self._entry_record is None:
             self._entry_record = self._entry_future.result()
         manifest = self._validate_entry(self._entry_record)
-        shard = manifest.shard(self.kv_mgr.tp_rank)
-        if len(kv_indices) != shard.page_count:
+        local_shard = self.kv_mgr.local_shard_manifest(manifest.prompt_token_count)
+        if len(kv_indices) != local_shard.page_count:
             raise PVDConnectionError(
-                f"Decode allocated {len(kv_indices)} pages, Entry requires {shard.page_count}"
+                f"Decode allocated {len(kv_indices)} pages, Entry requires "
+                f"{local_shard.page_count}"
             )
         self._page_indices = kv_indices
         self._staging = torch.empty(
-            shard.expected_bytes,
+            local_shard.expected_bytes,
             dtype=torch.uint8,
             device=f"cuda:{self.kv_mgr.scheduler.ps.gpu_id}",
         )
@@ -474,7 +610,10 @@ class PVDKVReceiver:
             endpoint="pvd-decode",
             rank=self.kv_mgr.tp_rank,
             rail=self.kv_mgr.rail,
-            metadata={"delivery_id": self.delivery_id},
+            metadata={
+                "delivery_id": self.delivery_id,
+                "pvd_layout": self.kv_mgr.layout().to_dict(),
+            },
         )
         gathered = self.kv_mgr.gather_rank_objects(
             {

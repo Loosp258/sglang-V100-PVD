@@ -14,8 +14,13 @@ from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryKey,
     KVEntryManifest,
+    KVLayoutSignature,
     KVShardManifest,
     RemoteRegionDescriptor,
+)
+from sglang.srt.disaggregation.pvd.sharding import (
+    layout_from_destination,
+    source_rank_and_head_offset,
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
@@ -142,6 +147,7 @@ class DeliveryShardRecord:
 class EntryShardRecord:
     key: KVEntryKey
     layout_fingerprint: str
+    layout: KVLayoutSignature
     manifest: KVShardManifest
     allocation: PageAllocation
     target_region: RemoteRegionDescriptor
@@ -159,6 +165,7 @@ class EntryShardRecord:
         return {
             "key": self.key.to_dict(),
             "layout_fingerprint": self.layout_fingerprint,
+            "layout": self.layout.to_dict(),
             "manifest": self.manifest.to_dict(),
             "page_indices": self.allocation.page_indices,
             "target_region": self.target_region.to_dict(),
@@ -195,7 +202,7 @@ class VectorKVStore:
         if rank < 0 or rank >= world_size:
             raise ValueError(f"rank {rank} is outside world size {world_size}")
         if world_size != 2:
-            raise ValueError("PVD v1 requires exactly two V ranks")
+            raise ValueError("PVD requires exactly two V storage ranks")
         if page_bytes <= 0:
             raise ValueError("page_bytes must be positive")
         if device == "cpu" and not allow_cpu_for_tests:
@@ -273,6 +280,7 @@ class VectorKVStore:
             record = EntryShardRecord(
                 key=manifest.key,
                 layout_fingerprint=manifest.layout.fingerprint,
+                layout=manifest.layout,
                 manifest=shard,
                 allocation=allocation,
                 target_region=target_region,
@@ -321,10 +329,6 @@ class VectorKVStore:
         delivery_id: str,
         destination: RemoteRegionDescriptor,
     ) -> DeliveryShardRecord:
-        if destination.rank != self.rank:
-            raise EntryConflictError(
-                f"V rank {self.rank} cannot deliver to D rank {destination.rank}"
-            )
         if destination.rail != self.rail:
             raise EntryConflictError(
                 f"rank {self.rank} requires rail {self.rail}, destination uses {destination.rail}"
@@ -371,15 +375,117 @@ class VectorKVStore:
                 delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
             delivery.state = transition(delivery.state, DeliveryState.V_WRITING)
 
-            local_offset = entry.allocation.start_page * self.page_bytes
-            local = MemorySlice(
-                registration=self.registration,
-                offset=local_offset,
-                length=entry.manifest.expected_bytes,
+            allocation_offset = entry.allocation.start_page * self.page_bytes
+            destination_layout_value = delivery.destination.backend_metadata.get(
+                "pvd_layout"
             )
-            handle = self.transfer_engine.submit_put(
-                local, delivery.destination, remote_offset=0
-            )
+            if destination_layout_value is None:
+                if delivery.destination.rank != self.rank:
+                    raise EntryConflictError(
+                        "legacy delivery requires matching V and D ranks"
+                    )
+                local = MemorySlice(
+                    registration=self.registration,
+                    offset=allocation_offset,
+                    length=entry.manifest.expected_bytes,
+                )
+                handle = self.transfer_engine.submit_put(
+                    local, delivery.destination, remote_offset=0
+                )
+            else:
+                destination_layout = layout_from_destination(delivery.destination)
+                source_rank, source_head_offset = source_rank_and_head_offset(
+                    entry.layout, destination_layout, delivery.destination.rank
+                )
+                if source_rank != self.rank:
+                    raise EntryConflictError(
+                        f"D rank {delivery.destination.rank} belongs to V rank "
+                        f"{source_rank}, not V rank {self.rank}"
+                    )
+                token_count = entry.manifest.page_count * entry.layout.page_size
+                expected_destination_bytes = sum(
+                    int(value)
+                    for value in destination_layout.extra[
+                        "component_bytes_per_token"
+                    ]
+                ) * token_count
+                if delivery.destination.length != expected_destination_bytes:
+                    raise EntryConflictError(
+                        f"D rank {delivery.destination.rank} registered "
+                        f"{delivery.destination.length} bytes, expected "
+                        f"{expected_destination_bytes}"
+                    )
+                if destination_layout.fingerprint == entry.layout.fingerprint:
+                    handle = self.transfer_engine.submit_put(
+                        MemorySlice(
+                            registration=self.registration,
+                            offset=allocation_offset,
+                            length=entry.manifest.expected_bytes,
+                        ),
+                        delivery.destination,
+                        remote_offset=0,
+                    )
+                else:
+                    source_bytes = [
+                        int(value)
+                        for value in entry.layout.extra[
+                            "component_bytes_per_token"
+                        ]
+                    ]
+                    destination_bytes = [
+                        int(value)
+                        for value in destination_layout.extra[
+                            "component_bytes_per_token"
+                        ]
+                    ]
+                    source_region = self.pool[
+                        allocation_offset : allocation_offset
+                        + entry.manifest.expected_bytes
+                    ]
+                    chunks = []
+                    component_base = 0
+                    for source_bpt, destination_bpt in zip(
+                        source_bytes, destination_bytes
+                    ):
+                        bytes_per_head = (
+                            source_bpt // entry.layout.kv_heads_per_rank
+                        )
+                        byte_start = source_head_offset * bytes_per_head
+                        component = source_region[
+                            component_base : component_base
+                            + token_count * source_bpt
+                        ].reshape(token_count, source_bpt)
+                        chunks.append(
+                            component[
+                                :, byte_start : byte_start + destination_bpt
+                            ]
+                            .contiguous()
+                            .reshape(-1)
+                        )
+                        component_base += token_count * source_bpt
+                    staging = torch.cat(chunks).contiguous()
+                    registration = self.transfer_engine.register_memory(
+                        staging,
+                        endpoint="pvd-vector-slice",
+                        rank=self.rank,
+                        rail=self.rail,
+                        metadata={"delivery_id": delivery.delivery_id},
+                    )
+                    try:
+                        handle = self.transfer_engine.submit_put(
+                            MemorySlice(
+                                registration=registration,
+                                offset=0,
+                                length=staging.numel(),
+                            ),
+                            delivery.destination,
+                            remote_offset=0,
+                        )
+                    finally:
+                        # Both supported PVD engines complete submit_put
+                        # synchronously, so the staging registration can be
+                        # released immediately after the call returns.
+                        self.transfer_engine.release_memory(registration)
             delivery.transfer_handle = handle
             status = self.transfer_engine.poll(handle)
             if status == TransferStatus.SUCCESS:

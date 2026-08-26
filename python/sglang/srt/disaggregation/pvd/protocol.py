@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
 
-PVD_PROTOCOL_VERSION = 1
+PVD_PROTOCOL_VERSION = 2
 
 
 class ProtocolValidationError(ValueError):
@@ -68,6 +68,7 @@ class KVLayoutSignature:
     kv_dtype: str
     page_size: int
     num_layers: int
+    total_kv_heads: int
     kv_heads_per_rank: int
     head_dim: int
     tp_size: int
@@ -83,6 +84,7 @@ class KVLayoutSignature:
         for name in (
             "page_size",
             "num_layers",
+            "total_kv_heads",
             "kv_heads_per_rank",
             "head_dim",
             "tp_size",
@@ -116,6 +118,7 @@ class KVLayoutSignature:
             kv_dtype=str(value["kv_dtype"]),
             page_size=int(value["page_size"]),
             num_layers=int(value["num_layers"]),
+            total_kv_heads=int(value["total_kv_heads"]),
             kv_heads_per_rank=int(value["kv_heads_per_rank"]),
             head_dim=int(value["head_dim"]),
             tp_size=int(value["tp_size"]),

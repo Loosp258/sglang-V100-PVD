@@ -42,7 +42,7 @@ def kv_components(kv_pool: Any) -> List[torch.Tensor]:
         value = kv_pool.kv_buffer
         return list(value) if isinstance(value, (list, tuple)) else [value]
     raise UnsupportedKVPoolError(
-        f"PVD v1 cannot obtain tensor components from {type(kv_pool).__name__}"
+        f"PVD cannot obtain tensor components from {type(kv_pool).__name__}"
     )
 
 
@@ -85,6 +85,45 @@ def pack_full_prompt_kv(
     for component in components:
         token_indices = _page_token_indices(pages, page_size, device=component.device)
         selected = component.index_select(0, token_indices).contiguous()
+        byte_view = selected.view(torch.uint8).reshape(-1)
+        chunks.append(byte_view)
+        component_bytes.append(byte_view.numel() // pages.numel())
+    packed = torch.cat(chunks).contiguous()
+    return PVDPackedKV(
+        tensor=packed,
+        page_count=pages.numel(),
+        page_size=page_size,
+        component_bytes_per_page=component_bytes,
+    )
+
+
+def pack_full_prompt_kv_head_shard(
+    kv_pool: Any,
+    page_indices: Sequence[int] | torch.Tensor,
+    *,
+    page_size: int,
+    head_start: int,
+    head_count: int,
+) -> PVDPackedKV:
+    """Pack a contiguous KV-head interval from a rank-local MHA/GQA pool."""
+    if head_start < 0 or head_count <= 0:
+        raise ValueError("invalid KV-head interval")
+    components = kv_components(kv_pool)
+    pages = torch.as_tensor(page_indices, dtype=torch.long)
+    if pages.numel() == 0:
+        raise ValueError("full prompt KV requires at least one page")
+    chunks = []
+    component_bytes = []
+    for component in components:
+        if component.ndim < 3:
+            raise UnsupportedKVPoolError(
+                "PVD heterogeneous TP requires token/head/dimension KV components"
+            )
+        if head_start + head_count > component.shape[1]:
+            raise ValueError("KV-head interval exceeds the local component")
+        token_indices = _page_token_indices(pages, page_size, device=component.device)
+        selected = component.index_select(0, token_indices)
+        selected = selected[:, head_start : head_start + head_count, ...].contiguous()
         byte_view = selected.view(torch.uint8).reshape(-1)
         chunks.append(byte_view)
         component_bytes.append(byte_view.numel() // pages.numel())

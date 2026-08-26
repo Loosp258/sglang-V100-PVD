@@ -11,6 +11,7 @@ from sglang.srt.disaggregation.pvd.coordinator import (
 )
 from sglang.srt.disaggregation.pvd.kv_packer import (
     pack_full_prompt_kv,
+    pack_full_prompt_kv_head_shard,
     unpack_full_prompt_kv,
 )
 from sglang.srt.disaggregation.pvd.protocol import (
@@ -27,6 +28,12 @@ from sglang.srt.disaggregation.pvd.preflight import (
 from sglang.srt.disaggregation.pvd.request_state import (
     DeliveryState,
     EntryState,
+)
+from sglang.srt.disaggregation.pvd.server import (
+    _create_store,
+    _parse_device_ids,
+    _validate_args,
+    build_parser,
 )
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     FakeTransferEngine,
@@ -47,11 +54,18 @@ def make_manifest(req_id: str = "req-1") -> KVEntryManifest:
         kv_dtype="float16",
         page_size=4,
         num_layers=4,
+        total_kv_heads=4,
         kv_heads_per_rank=2,
         head_dim=8,
         tp_size=2,
         pp_size=1,
         tensor_layout="flat-test-layout",
+        extra={
+            "component_count": 1,
+            "component_dtypes": ["torch.float16"],
+            "component_token_shapes": [[2, 1]],
+            "component_bytes_per_token": [4],
+        },
     )
     return KVEntryManifest(
         key=KVEntryKey.new("model-instance", req_id),
@@ -105,8 +119,104 @@ def test_rank_rail_modes_are_explicit_and_bounded():
         validate_rank_rail_names(["mlx5_0", "mlx5_0"])
         == "single-rail-debug"
     )
+    assert validate_rank_rail_names(["mlx5_0"]) == "single-rail-debug"
+    assert (
+        validate_rank_rail_names(["mlx5_0"] * 4) == "single-rail-debug"
+    )
     with unittest.TestCase().assertRaises(PVDPreflightError):
         validate_rank_rail_names(["mlx5_1", "mlx5_1"])
+
+
+def test_v_launcher_defaults_to_single_process_group_mode():
+    args = build_parser().parse_args(
+        [
+            "--advertise-host",
+            "127.0.0.1",
+            "--total-pages",
+            "8",
+            "--page-bytes",
+            str(PAGE_BYTES),
+            "--pvd-rank-rails",
+            "mlx5_0,mlx5_0",
+        ]
+    )
+    assert args.rank is None
+    assert _parse_device_ids(args.devices, args.world_size) == [0, 1]
+    assert _validate_args(args) == ["mlx5_0", "mlx5_0"]
+
+
+def test_v_launcher_keeps_legacy_rank_mode_and_validates_group_devices():
+    rank1 = build_parser().parse_args(
+        [
+            "--rank",
+            "1",
+            "--advertise-host",
+            "127.0.0.1",
+            "--total-pages",
+            "8",
+            "--page-bytes",
+            str(PAGE_BYTES),
+        ]
+    )
+    assert _validate_args(rank1) == ["mlx5_0", "mlx5_1"]
+
+    with unittest.TestCase().assertRaisesRegex(ValueError, "distinct CUDA device"):
+        _parse_device_ids("0,0", 2)
+    with unittest.TestCase().assertRaisesRegex(ValueError, "requires 2 entries"):
+        _parse_device_ids("0", 2)
+    invalid_rails = build_parser().parse_args(
+        [
+            "--advertise-host",
+            "127.0.0.1",
+            "--total-pages",
+            "8",
+            "--page-bytes",
+            str(PAGE_BYTES),
+            "--pvd-rank-rails",
+            "mlx5_0",
+        ]
+    )
+    with unittest.TestCase().assertRaisesRegex(ValueError, "per storage rank"):
+        _validate_args(invalid_rails)
+
+
+def test_v_group_builds_two_local_shards_in_one_process():
+    async def scenario():
+        args = build_parser().parse_args(
+            [
+                "--advertise-host",
+                "127.0.0.1",
+                "--total-pages",
+                "8",
+                "--page-bytes",
+                str(PAGE_BYTES),
+                "--pvd-rank-rails",
+                "mlx5_0,mlx5_0",
+                "--transfer-backend",
+                "fake",
+                "--allow-fake-transport",
+                "--allow-cpu-for-tests",
+                "--no-strict-rdma-preflight",
+            ]
+        )
+        rails = _validate_args(args)
+        stores = [
+            _create_store(args, rank=rank, local_rank=rank, rails=rails)[0]
+            for rank in (0, 1)
+        ]
+        try:
+            coordinator = VectorCoordinator(
+                [LocalShardClient(store) for store in stores]
+            )
+            health = await coordinator.health()
+            assert health["healthy"] is True
+            assert [item["rank"] for item in health["shards"]] == [0, 1]
+            assert all(item["device"] == "cpu" for item in health["shards"])
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(scenario())
 
 
 def test_full_prompt_entry_can_feed_multiple_deliveries():
@@ -207,6 +317,145 @@ def test_full_prompt_packer_preserves_page_and_component_order():
         assert torch.count_nonzero(destination_component[6:8]) == 0
 
 
+def test_prefill_tp1_packer_splits_two_v_head_shards():
+    class Pool:
+        k_buffer = [torch.arange(32, dtype=torch.uint8).reshape(8, 4, 1)]
+        v_buffer = [torch.arange(100, 132, dtype=torch.uint8).reshape(8, 4, 1)]
+
+    first = pack_full_prompt_kv_head_shard(
+        Pool(), [1], page_size=2, head_start=0, head_count=2
+    )
+    second = pack_full_prompt_kv_head_shard(
+        Pool(), [1], page_size=2, head_start=2, head_count=2
+    )
+    assert first.tensor.tolist() == [8, 9, 12, 13, 108, 109, 112, 113]
+    assert second.tensor.tolist() == [10, 11, 14, 15, 110, 111, 114, 115]
+
+
+def test_v_tp2_slices_one_entry_into_decode_tp4():
+    async def scenario():
+        engine = FakeTransferEngine()
+        stores = [
+            VectorKVStore(
+                rank=rank,
+                world_size=2,
+                rail="mlx5_0",
+                device="cpu",
+                total_pages=8,
+                page_bytes=8,
+                endpoint=f"v{rank}",
+                transfer_engine=engine,
+                allow_cpu_for_tests=True,
+            )
+            for rank in (0, 1)
+        ]
+        storage_layout = KVLayoutSignature(
+            model_id="test-model",
+            model_revision="revision",
+            kv_dtype="uint8",
+            page_size=2,
+            num_layers=1,
+            total_kv_heads=4,
+            kv_heads_per_rank=2,
+            head_dim=1,
+            tp_size=2,
+            pp_size=1,
+            tensor_layout="sglang-pvd-v1/component-page-token-major",
+            extra={
+                "component_count": 2,
+                "component_dtypes": ["torch.uint8", "torch.uint8"],
+                "component_token_shapes": [[2, 1], [2, 1]],
+                "component_bytes_per_token": [2, 2],
+            },
+        )
+        decode_layout = KVLayoutSignature(
+            model_id="test-model",
+            model_revision="revision",
+            kv_dtype="uint8",
+            page_size=2,
+            num_layers=1,
+            total_kv_heads=4,
+            kv_heads_per_rank=1,
+            head_dim=1,
+            tp_size=4,
+            pp_size=1,
+            tensor_layout="sglang-pvd-v1/component-page-token-major",
+            extra={
+                "component_count": 2,
+                "component_dtypes": ["torch.uint8", "torch.uint8"],
+                "component_token_shapes": [[1, 1], [1, 1]],
+                "component_bytes_per_token": [1, 1],
+            },
+        )
+        manifest = KVEntryManifest(
+            key=KVEntryKey.new("model-instance", "tp1-to-tp4"),
+            layout=storage_layout,
+            prompt_token_count=3,
+            shards=[
+                KVShardManifest(
+                    rank=rank,
+                    rail="mlx5_0",
+                    expected_bytes=16,
+                    page_count=2,
+                    last_page_valid_tokens=1,
+                    layer_start=0,
+                    layer_end=1,
+                )
+                for rank in (0, 1)
+            ],
+        )
+        coordinator = VectorCoordinator([LocalShardClient(store) for store in stores])
+        registrations = []
+        try:
+            entry = await coordinator.create_entry(manifest)
+            # Component-major: four tokens x two heads, then V with +10.
+            sources = [
+                torch.tensor([0, 1, 0, 1, 0, 1, 0, 1, 10, 11, 10, 11, 10, 11, 10, 11], dtype=torch.uint8),
+                torch.tensor([2, 3, 2, 3, 2, 3, 2, 3, 12, 13, 12, 13, 12, 13, 12, 13], dtype=torch.uint8),
+            ]
+            for rank in (0, 1):
+                registrations.append(
+                    put_tensor(engine, sources[rank], entry.target_regions[rank], rank)
+                )
+            await coordinator.commit_shard(
+                manifest.key, 0, 16, FirstTokenMetadata(output_token_id=7)
+            )
+            await coordinator.commit_shard(manifest.key, 1, 16)
+
+            destinations = {}
+            outputs = []
+            for rank in range(4):
+                output = torch.zeros(8, dtype=torch.uint8)
+                registration = engine.register_memory(
+                    output,
+                    endpoint=f"d{rank}",
+                    rank=rank,
+                    rail="mlx5_0",
+                    metadata={"pvd_layout": decode_layout.to_dict()},
+                )
+                registrations.append(registration)
+                outputs.append(output)
+                destinations[rank] = registration.descriptor
+            delivery = await coordinator.reserve_delivery(
+                key=manifest.key,
+                delivery_id="decode-tp4",
+                destinations=destinations,
+            )
+            assert delivery.source_shards == {0: 0, 1: 0, 2: 1, 3: 1}
+            delivery = await coordinator.start_delivery("decode-tp4")
+            assert delivery.state == DeliveryState.DELIVERED
+            for rank, output in enumerate(outputs):
+                assert output.tolist() == [rank] * 4 + [rank + 10] * 4
+            await coordinator.ack_delivery("decode-tp4")
+        finally:
+            for registration in registrations:
+                engine.release_memory(registration)
+            for store in stores:
+                store.close()
+
+    asyncio.run(scenario())
+
+
 def test_coordinator_requires_rank0_first_token_and_returns_two_targets():
     async def scenario():
         engine = FakeTransferEngine()
@@ -270,6 +519,7 @@ def test_coordinator_create_and_delivery_are_idempotent_under_rank_races():
                     endpoint=f"d{rank}",
                     rank=rank,
                     rail=f"mlx5_{rank}",
+                    metadata={"pvd_layout": manifest.layout.to_dict()},
                 )
                 registrations.append(registration)
                 destinations[rank] = registration.descriptor
@@ -337,9 +587,14 @@ if __name__ == '__main__':
         unittest.FunctionTestCase(test)
         for test in (
             test_rank_rail_modes_are_explicit_and_bounded,
+            test_v_launcher_defaults_to_single_process_group_mode,
+            test_v_launcher_keeps_legacy_rank_mode_and_validates_group_devices,
+            test_v_group_builds_two_local_shards_in_one_process,
             test_full_prompt_entry_can_feed_multiple_deliveries,
             test_bounded_descriptor_uses_pool_base_offset,
             test_full_prompt_packer_preserves_page_and_component_order,
+            test_prefill_tp1_packer_splits_two_v_head_shards,
+            test_v_tp2_slices_one_entry_into_decode_tp4,
             test_coordinator_requires_rank0_first_token_and_returns_two_targets,
             test_coordinator_create_and_delivery_are_idempotent_under_rank_races,
             test_coordinator_owns_entry_ttl,

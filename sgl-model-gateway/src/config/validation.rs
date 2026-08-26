@@ -884,6 +884,28 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_pvd_mode_with_independent_worker_pool_sizes() {
+        let mut config = RouterConfig::new(
+            RoutingMode::PrefillDecode {
+                prefill_urls: vec![
+                    ("http://prefill1:8000".to_string(), None),
+                    ("http://prefill2:8000".to_string(), None),
+                    ("http://prefill3:8000".to_string(), None),
+                ],
+                decode_urls: vec!["http://decode1:8000".to_string()],
+                prefill_policy: Some(PolicyConfig::RoundRobin),
+                decode_policy: Some(PolicyConfig::Random),
+            },
+            PolicyConfig::Random,
+        );
+        config.pvd_disaggregation = true;
+        config.pvd_vector_coordinator_url =
+            Some("http://vector-coordinator:9000".to_string());
+
+        assert!(ConfigValidator::validate(&config).is_ok());
+    }
+
+    #[test]
     fn test_validate_pd_mode_power_of_two_insufficient_workers() {
         let config = RouterConfig::new(
             RoutingMode::PrefillDecode {

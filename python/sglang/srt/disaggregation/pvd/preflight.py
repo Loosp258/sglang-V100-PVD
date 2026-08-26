@@ -1,4 +1,4 @@
-"""Strict rank/rail and GPUDirect preflight checks for PVD v1."""
+"""Strict rank/rail and GPUDirect preflight checks for PVD."""
 
 from __future__ import annotations
 
@@ -43,11 +43,11 @@ def validate_rank_rail_names(rails: Iterable[str]) -> str:
     values = list(rails)
     if tuple(values) == DUAL_RAILS:
         return "dual-rail"
-    if tuple(values) == SINGLE_RAIL_DEBUG:
+    if values and all(value == "mlx5_0" for value in values):
         return "single-rail-debug"
     raise PVDPreflightError(
-        "PVD v1 requires rank rails ['mlx5_0', 'mlx5_1'] for production "
-        "or ['mlx5_0', 'mlx5_0'] for single-rail debug mode, "
+        "PVD requires ['mlx5_0', 'mlx5_1'] for TP2 production dual rail, "
+        "or one mlx5_0 value per rank for single-rail debug mode, "
         f"got {values}"
     )
 

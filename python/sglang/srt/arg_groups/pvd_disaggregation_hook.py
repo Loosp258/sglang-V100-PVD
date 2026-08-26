@@ -40,45 +40,56 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         "--pvd-vector-coordinator-url", server_args.pvd_vector_coordinator_url
     )
 
-    if server_args.tp_size != 2:
-        raise ValueError("PVD v1 requires --tp-size 2 for P and D")
+    supported_tp = (
+        (1, 2) if server_args.disaggregation_mode == "prefill" else (2, 4)
+    )
+    if server_args.tp_size not in supported_tp:
+        raise ValueError(
+            f"PVD 2.0 {server_args.disaggregation_mode} currently supports "
+            f"--tp-size {supported_tp}"
+        )
     if server_args.dp_size != 1 or server_args.enable_dp_attention:
-        raise ValueError("PVD v1 requires one TP group (dp-size=1, DP attention off)")
+        raise ValueError("PVD requires one TP group (dp-size=1, DP attention off)")
     if server_args.pp_size != 1:
-        raise ValueError("PVD v1 requires --pp-size 1")
+        raise ValueError("PVD requires --pp-size 1")
     rails = [item.strip() for item in server_args.pvd_rank_rails.split(",")]
+    if len(rails) != server_args.tp_size:
+        raise ValueError(
+            "PVD requires exactly one --pvd-rank-rails value per TP rank; "
+            f"got {len(rails)} values for TP={server_args.tp_size}"
+        )
     from sglang.srt.disaggregation.pvd.preflight import validate_rank_rail_names
 
     rail_mode = validate_rank_rail_names(rails)
     server_args.pvd_rank_rails = ",".join(rails)
     if rail_mode == "single-rail-debug":
         logger.warning(
-            "PVD single-rail debug mode is active: TP ranks 0 and 1 both use "
-            "mlx5_0; this mode has no rail redundancy or dual-rail bandwidth"
+            "PVD single-rail debug mode is active: all TP ranks use mlx5_0; "
+            "this mode has no rail redundancy or dual-rail bandwidth"
         )
     if server_args.disaggregation_transfer_backend != "mooncake":
-        raise ValueError("PVD v1 currently requires the mooncake transfer backend")
+        raise ValueError("PVD currently requires the mooncake transfer backend")
     if not server_args.pvd_strict_rdma_preflight:
         raise ValueError("PVD P/D roles require strict rank/rail GPUDirect preflight")
     if server_args.speculative_algorithm is not None:
-        raise ValueError("PVD v1 does not support speculative decoding")
+        raise ValueError("PVD does not support speculative decoding")
     if server_args.enable_hierarchical_cache:
-        raise ValueError("PVD v1 does not support hierarchical KV cache")
+        raise ValueError("PVD does not support hierarchical KV cache")
     if server_args.enable_hisparse:
-        raise ValueError("PVD v1 does not support HiSparse decode destinations")
+        raise ValueError("PVD does not support HiSparse decode destinations")
     if server_args.enable_prefill_context_parallel:
-        raise ValueError("PVD v1 does not support Prefill context parallelism")
+        raise ValueError("PVD does not support Prefill context parallelism")
     if envs.SGLANG_DISAGG_STAGING_BUFFER.get():
         raise ValueError(
             "PVD uses its own full-prompt staging layout; "
             "SGLANG_DISAGG_STAGING_BUFFER must be disabled"
         )
     if server_args.disaggregation_decode_enable_radix_cache:
-        raise ValueError("PVD v1 requires decode radix cache to remain disabled")
+        raise ValueError("PVD requires decode radix cache to remain disabled")
 
     # Feed the existing Mooncake GPU->HCA selector an explicit per-GPU map.
     server_args.disaggregation_ib_device = json.dumps(
-        {"0": rails[0], "1": rails[1]}, separators=(",", ":")
+        {str(rank): rail for rank, rail in enumerate(rails)}, separators=(",", ":")
     )
     # Every Entry owns a complete prompt KV allocation. Prefix reuse on P would
     # make the exported allocation partial and violate the Entry manifest.

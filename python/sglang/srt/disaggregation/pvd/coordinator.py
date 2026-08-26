@@ -23,6 +23,10 @@ from sglang.srt.disaggregation.pvd.request_state import (
     transition,
 )
 from sglang.srt.disaggregation.pvd.selector import PassThroughSelector
+from sglang.srt.disaggregation.pvd.sharding import (
+    layout_from_destination,
+    source_rank_and_head_offset,
+)
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
 
 
@@ -154,6 +158,7 @@ class DeliveryRecord:
     delivery_id: str
     entry_key: KVEntryKey
     destinations: Dict[int, RemoteRegionDescriptor]
+    source_shards: Dict[int, int]
     state: DeliveryState
     created_at: float
     deadline: float
@@ -167,6 +172,10 @@ class DeliveryRecord:
             "destinations": {
                 str(rank): descriptor.to_dict()
                 for rank, descriptor in self.destinations.items()
+            },
+            "source_shards": {
+                str(rank): source_rank
+                for rank, source_rank in self.source_shards.items()
             },
             "state": self.state.value,
             "created_at": self.created_at,
@@ -191,7 +200,7 @@ class VectorCoordinator:
     ) -> None:
         ranks = sorted(client.rank for client in shard_clients)
         if ranks != [0, 1]:
-            raise ValueError(f"PVD v1 requires V shard ranks [0, 1], got {ranks}")
+            raise ValueError(f"PVD requires V storage shard ranks [0, 1], got {ranks}")
         self.shards = {client.rank: client for client in shard_clients}
         self.metrics = metrics or PVDMetrics()
         self.entry_ttl_secs = entry_ttl_secs
@@ -341,12 +350,41 @@ class VectorCoordinator:
         delivery_id: str,
         destinations: Dict[int, RemoteRegionDescriptor],
     ) -> DeliveryRecord:
-        if sorted(destinations) != [0, 1]:
-            raise CoordinatorError("delivery must provide D destinations for ranks 0 and 1")
         async with self._lock:
             entry = self.entries.get(key)
             if entry is None:
                 raise CoordinatorError("cannot reserve delivery for an unknown entry")
+            destination_ranks = sorted(destinations)
+            if not destination_ranks or destination_ranks != list(
+                range(len(destination_ranks))
+            ):
+                raise CoordinatorError(
+                    "delivery D destination ranks must be contiguous from rank 0"
+                )
+            source_shards: Dict[int, int] = {}
+            for rank, destination in destinations.items():
+                if destination.rank != rank:
+                    raise CoordinatorError(
+                        f"destination map key {rank} does not match descriptor rank "
+                        f"{destination.rank}"
+                    )
+                if "pvd_layout" in destination.backend_metadata:
+                    compute_layout = layout_from_destination(destination)
+                    if compute_layout.tp_size != len(destinations):
+                        raise CoordinatorError(
+                            f"D layout TP={compute_layout.tp_size} does not match "
+                            f"{len(destinations)} destinations"
+                        )
+                    source_rank, _ = source_rank_and_head_offset(
+                        entry.manifest.layout, compute_layout, rank
+                    )
+                    source_shards[rank] = source_rank
+                else:
+                    if destination_ranks != [0, 1]:
+                        raise CoordinatorError(
+                            "heterogeneous delivery destinations require pvd_layout metadata"
+                        )
+                    source_shards[rank] = rank
             existing = self.deliveries.get(delivery_id)
             if existing is not None:
                 if existing.entry_key != key or existing.destinations != destinations:
@@ -364,6 +402,7 @@ class VectorCoordinator:
                 delivery_id=delivery_id,
                 entry_key=key,
                 destinations=destinations,
+                source_shards=source_shards,
                 state=state,
                 created_at=now,
                 deadline=now + self.delivery_timeout_secs,
@@ -374,10 +413,10 @@ class VectorCoordinator:
         try:
             results = await asyncio.gather(
                 *(
-                    self.shards[rank].reserve_delivery(
-                        key, delivery_id, destinations[rank]
+                    self.shards[source_shards[rank]].reserve_delivery(
+                        key, self._subdelivery_id(delivery_id, rank), destinations[rank]
                     )
-                    for rank in (0, 1)
+                    for rank in destination_ranks
                 )
             )
         except Exception as exc:
@@ -385,7 +424,8 @@ class VectorCoordinator:
             raise
         async with self._lock:
             record.shard_states = {
-                rank: DeliveryState(results[rank]["state"]) for rank in (0, 1)
+                rank: DeliveryState(result["state"])
+                for rank, result in zip(destination_ranks, results)
             }
             self.metrics.increment("coordinator_deliveries_created")
             return record
@@ -410,18 +450,20 @@ class VectorCoordinator:
                 delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
             delivery.state = transition(delivery.state, DeliveryState.V_WRITING)
 
+        destination_ranks = sorted(delivery.destinations)
         results = await asyncio.gather(
             *(
-                self.shards[rank].start_delivery(
-                    delivery.entry_key, delivery.delivery_id
+                self.shards[delivery.source_shards[rank]].start_delivery(
+                    delivery.entry_key,
+                    self._subdelivery_id(delivery.delivery_id, rank),
                 )
-                for rank in (0, 1)
+                for rank in destination_ranks
             ),
             return_exceptions=True,
         )
         async with self._lock:
             failures = []
-            for rank, result in enumerate(results):
+            for rank, result in zip(destination_ranks, results):
                 if isinstance(result, Exception):
                     failures.append(f"rank {rank}: {result}")
                 else:
@@ -432,12 +474,12 @@ class VectorCoordinator:
             if failures:
                 await asyncio.gather(
                     *(
-                        self.shards[rank].cancel_delivery(
+                        self.shards[delivery.source_shards[rank]].cancel_delivery(
                             delivery.entry_key,
-                            delivery.delivery_id,
+                            self._subdelivery_id(delivery.delivery_id, rank),
                             "; ".join(failures),
                         )
-                        for rank in (0, 1)
+                        for rank in destination_ranks
                     ),
                     return_exceptions=True,
                 )
@@ -447,7 +489,7 @@ class VectorCoordinator:
                 self.metrics.increment("coordinator_delivery_failures")
             elif all(
                 delivery.shard_states.get(rank) == DeliveryState.DELIVERED
-                for rank in (0, 1)
+                for rank in destination_ranks
             ):
                 delivery.state = transition(delivery.state, DeliveryState.DELIVERED)
                 self.metrics.increment("coordinator_deliveries_completed")
@@ -468,7 +510,12 @@ class VectorCoordinator:
                 return delivery
             key = delivery.entry_key
         await asyncio.gather(
-            *(self.shards[rank].ack_delivery(key, delivery_id) for rank in (0, 1))
+            *(
+                self.shards[delivery.source_shards[rank]].ack_delivery(
+                    key, self._subdelivery_id(delivery_id, rank)
+                )
+                for rank in sorted(delivery.destinations)
+            )
         )
         async with self._lock:
             delivery.state = transition(delivery.state, DeliveryState.ACKED)
@@ -495,8 +542,10 @@ class VectorCoordinator:
             key = delivery.entry_key
         await asyncio.gather(
             *(
-                self.shards[rank].cancel_delivery(key, delivery_id, reason)
-                for rank in (0, 1)
+                self.shards[delivery.source_shards[rank]].cancel_delivery(
+                    key, self._subdelivery_id(delivery_id, rank), reason
+                )
+                for rank in sorted(delivery.destinations)
             ),
             return_exceptions=True,
         )
@@ -507,6 +556,10 @@ class VectorCoordinator:
                 self.entries[key].active_delivery_count -= 1
                 self.metrics.increment("coordinator_deliveries_cancelled")
             return delivery
+
+    @staticmethod
+    def _subdelivery_id(delivery_id: str, destination_rank: int) -> str:
+        return f"{delivery_id}:d{destination_rank}"
 
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> EntryRecord:
         async with self._lock:

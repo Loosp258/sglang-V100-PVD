@@ -115,6 +115,16 @@ class MooncakePVDTransferEngine(TransferEngine):
             handle.error = "PUT exceeds bounded remote region"
             return handle
 
+        # Packing and heterogeneous head staging use CUDA kernels. GPUDirect
+        # RDMA is not ordered behind PyTorch's current CUDA stream, so make the
+        # source bytes visible before Mooncake starts reading GPU memory.
+        try:
+            torch.cuda.synchronize(local.registration.buffer.device)
+        except Exception as exc:
+            handle.status = TransferStatus.FAILED
+            handle.error = f"CUDA source synchronization failed: {exc}"
+            return handle
+
         local_address = local.registration.descriptor.address + local.offset
         remote_address = remote.address + remote_offset
         ret = self._engine.transfer_sync(
