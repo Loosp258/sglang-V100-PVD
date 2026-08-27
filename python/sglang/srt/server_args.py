@@ -817,6 +817,10 @@ class ServerArgs:
     # external rank-sharded vector worker group between P and D.
     disaggregation_topology: Literal["pd", "pvd"] = "pd"
     pvd_vector_coordinator_url: Optional[str] = None
+    pvd_vector_groups: Optional[List[str]] = None
+    # Normalized trusted group-id -> coordinator URL map. Populated by the
+    # PVD argument hook; it is intentionally not a public request field.
+    pvd_vector_coordinator_map: Optional[Dict[str, str]] = None
     pvd_model_instance_id: Optional[str] = None
     pvd_rank_rails: str = "mlx5_0,mlx5_1"
     pvd_strict_rdma_preflight: bool = True
@@ -6903,6 +6907,17 @@ class ServerArgs:
             "--pvd-vector-coordinator-url",
             default=ServerArgs.pvd_vector_coordinator_url,
             help="PVD rank-0 vector coordinator base URL.",
+        )
+        parser.add_argument(
+            "--pvd-vector-group",
+            dest="pvd_vector_groups",
+            action="append",
+            default=ServerArgs.pvd_vector_groups,
+            metavar="ID=URL",
+            help=(
+                "Request-selectable PVD vector worker group. May be repeated. "
+                "The legacy coordinator URL creates a group named 'default'."
+            ),
         )
         parser.add_argument(
             "--pvd-model-instance-id",

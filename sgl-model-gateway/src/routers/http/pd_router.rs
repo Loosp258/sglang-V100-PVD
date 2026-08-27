@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -17,7 +23,7 @@ use tracing::{debug, error, warn};
 
 use super::pd_types::api_path;
 use crate::{
-    config::types::RetryConfig,
+    config::types::{PvdVectorGroupConfig, RetryConfig},
     core::{
         is_retryable_status, HashRing, RetryExecutor, Worker, WorkerLoadGuard, WorkerRegistry,
         WorkerType, UNKNOWN_MODEL_ID,
@@ -55,6 +61,8 @@ pub struct PDRouter {
     pub api_key: Option<String>,
     pub enable_igw: bool,
     pub pvd_disaggregation: bool,
+    pub pvd_vector_groups: Vec<PvdVectorGroupConfig>,
+    pvd_vector_next: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -262,13 +270,26 @@ impl PDRouter {
     }
 
     pub async fn new(ctx: &Arc<crate::app_context::AppContext>) -> Result<Self, String> {
+        let mut pvd_vector_groups = ctx.router_config.pvd_vector_groups.clone();
         if ctx.router_config.pvd_disaggregation {
-            let coordinator_url = ctx
-                .router_config
-                .pvd_vector_coordinator_url
-                .as_deref()
-                .ok_or_else(|| "PVD vector coordinator URL is required".to_string())?;
-            Self::validate_pvd_coordinator(&ctx.client, coordinator_url).await?;
+            if pvd_vector_groups.is_empty() {
+                let coordinator_url = ctx
+                    .router_config
+                    .pvd_vector_coordinator_url
+                    .as_deref()
+                    .ok_or_else(|| "PVD vector coordinator URL is required".to_string())?;
+                pvd_vector_groups.push(PvdVectorGroupConfig {
+                    id: "default".to_string(),
+                    coordinator_url: coordinator_url.trim_end_matches('/').to_string(),
+                });
+            }
+            for group in &pvd_vector_groups {
+                Self::validate_pvd_coordinator(&ctx.client, &group.coordinator_url)
+                    .await
+                    .map_err(|error| {
+                        format!("PVD vector group {} failed validation: {error}", group.id)
+                    })?;
+            }
         }
         Ok(PDRouter {
             worker_registry: Arc::clone(&ctx.worker_registry),
@@ -278,6 +299,8 @@ impl PDRouter {
             api_key: ctx.router_config.api_key.clone(),
             enable_igw: ctx.router_config.enable_igw,
             pvd_disaggregation: ctx.router_config.pvd_disaggregation,
+            pvd_vector_groups,
+            pvd_vector_next: AtomicUsize::new(0),
         })
     }
 
@@ -328,10 +351,12 @@ impl PDRouter {
     const BOOTSTRAP_ROOM_KEY: &'static str = "bootstrap_room";
     const PVD_TRANSFER_ID_KEY: &'static str = "pvd_transfer_id";
     const PVD_DELIVERY_ID_KEY: &'static str = "pvd_delivery_id";
+    const PVD_VECTOR_GROUP_ID_KEY: &'static str = "pvd_vector_group_id";
 
     fn inject_pvd_identity_into_value(
         mut original: Value,
         batch_size: Option<usize>,
+        vector_group_id: &str,
     ) -> Result<Value, String> {
         let obj = original
             .as_object_mut()
@@ -346,11 +371,32 @@ impl PDRouter {
                 Self::PVD_DELIVERY_ID_KEY.to_string(),
                 Value::Array((0..n).map(|_| new_id()).collect()),
             );
+            obj.insert(
+                Self::PVD_VECTOR_GROUP_ID_KEY.to_string(),
+                Value::Array(
+                    (0..n)
+                        .map(|_| Value::from(vector_group_id.to_string()))
+                        .collect(),
+                ),
+            );
         } else {
             obj.insert(Self::PVD_TRANSFER_ID_KEY.to_string(), new_id());
             obj.insert(Self::PVD_DELIVERY_ID_KEY.to_string(), new_id());
+            obj.insert(
+                Self::PVD_VECTOR_GROUP_ID_KEY.to_string(),
+                Value::from(vector_group_id),
+            );
         }
         Ok(original)
+    }
+
+    fn select_pvd_vector_group(&self) -> Result<&PvdVectorGroupConfig, String> {
+        if self.pvd_vector_groups.is_empty() {
+            return Err("No PVD vector worker groups are configured".to_string());
+        }
+        let index = self.pvd_vector_next.fetch_add(1, Ordering::Relaxed)
+            % self.pvd_vector_groups.len();
+        Ok(&self.pvd_vector_groups[index])
     }
 
     fn inject_bootstrap_into_value(
@@ -459,10 +505,20 @@ impl PDRouter {
                             }
                         };
 
+                        let vector_group = if self.pvd_disaggregation {
+                            match self.select_pvd_vector_group() {
+                                Ok(group) => Some(group),
+                                Err(e) => return Self::handle_server_selection_error(e),
+                            }
+                        } else {
+                            None
+                        };
+
                         debug!(
-                            "PD retry attempt {} using prefill={} decode={}",
+                            "PD retry attempt {} using prefill={} vector={:?} decode={}",
                             attempt,
                             prefill.url(),
+                            vector_group.map(|group| group.id.as_str()),
                             decode.url()
                         );
 
@@ -484,6 +540,7 @@ impl PDRouter {
                             json_request = match Self::inject_pvd_identity_into_value(
                                 json_request,
                                 context.batch_size,
+                                &vector_group.expect("PVD vector group must be selected").id,
                             ) {
                                 Ok(v) => v,
                                 Err(e) => return Self::handle_serialization_error(e),
@@ -1703,6 +1760,8 @@ mod tests {
             api_key: Some("test_api_key".to_string()),
             enable_igw: false,
             pvd_disaggregation: false,
+            pvd_vector_groups: vec![],
+            pvd_vector_next: AtomicUsize::new(0),
         }
     }
 
@@ -1717,23 +1776,56 @@ mod tests {
     #[test]
     fn test_inject_pvd_scalar_identity() {
         let value =
-            PDRouter::inject_pvd_identity_into_value(json!({"prompt": "hello"}), None).unwrap();
+            PDRouter::inject_pvd_identity_into_value(
+                json!({"prompt": "hello"}),
+                None,
+                "vector-1",
+            )
+            .unwrap();
         let transfer_id = value["pvd_transfer_id"].as_str().unwrap();
         let delivery_id = value["pvd_delivery_id"].as_str().unwrap();
         assert!(!transfer_id.is_empty());
         assert!(!delivery_id.is_empty());
         assert_ne!(transfer_id, delivery_id);
+        assert_eq!(value["pvd_vector_group_id"], "vector-1");
     }
 
     #[test]
     fn test_inject_pvd_batch_identity() {
-        let value = PDRouter::inject_pvd_identity_into_value(json!({}), Some(2)).unwrap();
+        let value = PDRouter::inject_pvd_identity_into_value(
+            json!({}),
+            Some(2),
+            "vector-2",
+        )
+        .unwrap();
         let transfer_ids = value["pvd_transfer_id"].as_array().unwrap();
         let delivery_ids = value["pvd_delivery_id"].as_array().unwrap();
         assert_eq!(transfer_ids.len(), 2);
         assert_eq!(delivery_ids.len(), 2);
         assert_ne!(transfer_ids[0], transfer_ids[1]);
         assert_ne!(delivery_ids[0], delivery_ids[1]);
+        assert_eq!(
+            value["pvd_vector_group_id"],
+            json!(["vector-2", "vector-2"])
+        );
+    }
+
+    #[test]
+    fn test_vector_group_round_robin() {
+        let mut router = create_test_pd_router();
+        router.pvd_vector_groups = vec![
+            PvdVectorGroupConfig {
+                id: "vector-0".to_string(),
+                coordinator_url: "http://v0:9100".to_string(),
+            },
+            PvdVectorGroupConfig {
+                id: "vector-1".to_string(),
+                coordinator_url: "http://v1:9100".to_string(),
+            },
+        ];
+        assert_eq!(router.select_pvd_vector_group().unwrap().id, "vector-0");
+        assert_eq!(router.select_pvd_vector_group().unwrap().id, "vector-1");
+        assert_eq!(router.select_pvd_vector_group().unwrap().id, "vector-0");
     }
 
     #[tokio::test]

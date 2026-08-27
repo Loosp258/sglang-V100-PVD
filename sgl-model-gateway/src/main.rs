@@ -7,8 +7,9 @@ use smg::{
     config::{
         CircuitBreakerConfig, ConfigError, ConfigResult, DiscoveryConfig, HealthCheckConfig,
         HistoryBackend, ManualAssignmentMode, MetricsConfig, OracleConfig, PolicyConfig,
-        PostgresConfig, RedisConfig, RetryConfig, RouterConfig, RoutingMode, TokenizerCacheConfig,
-        TraceConfig, DEFAULT_CONNECT_TIMEOUT_SECS, DEFAULT_POOL_IDLE_TIMEOUT_SECS,
+        PostgresConfig, PvdVectorGroupConfig, RedisConfig, RetryConfig, RouterConfig, RoutingMode,
+        TokenizerCacheConfig, TraceConfig, DEFAULT_CONNECT_TIMEOUT_SECS,
+        DEFAULT_POOL_IDLE_TIMEOUT_SECS,
         DEFAULT_POOL_MAX_IDLE_PER_HOST, DEFAULT_TCP_KEEPALIVE_SECS,
     },
     core::ConnectionMode,
@@ -204,7 +205,6 @@ struct CliArgs {
     #[arg(
         long,
         default_value_t = false,
-        requires = "pvd_vector_coordinator_url",
         help_heading = "PVD Disaggregation"
     )]
     pvd_disaggregation: bool,
@@ -217,6 +217,17 @@ struct CliArgs {
         help_heading = "PVD Disaggregation"
     )]
     pvd_vector_coordinator_url: Option<String>,
+
+    /// Request-selectable vector worker group in ID=URL form. May be repeated.
+    /// The legacy --pvd-vector-coordinator-url creates a group named `default`.
+    #[arg(
+        long = "pvd-vector-group",
+        action = ArgAction::Append,
+        requires = "pvd_disaggregation",
+        value_name = "ID=URL",
+        help_heading = "PVD Disaggregation"
+    )]
+    pvd_vector_groups: Vec<String>,
 
     /// Decode server URLs (can be specified multiple times)
     #[arg(long, action = ArgAction::Append, help_heading = "PD Disaggregation")]
@@ -921,6 +932,66 @@ impl CliArgs {
         Ok(rcf)
     }
 
+    fn build_pvd_vector_groups(&self) -> ConfigResult<Vec<PvdVectorGroupConfig>> {
+        let mut groups = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        if let Some(url) = self.pvd_vector_coordinator_url.as_deref() {
+            let url = url.trim();
+            if !url.is_empty() {
+                seen.insert("default".to_string());
+                groups.push(PvdVectorGroupConfig {
+                    id: "default".to_string(),
+                    coordinator_url: url.trim_end_matches('/').to_string(),
+                });
+            }
+        }
+
+        for spec in &self.pvd_vector_groups {
+            let (id, url) = spec.split_once('=').ok_or_else(|| {
+                ConfigError::InvalidValue {
+                    field: "pvd_vector_group".to_string(),
+                    value: spec.clone(),
+                    reason: "expected ID=URL".to_string(),
+                }
+            })?;
+            let id = id.trim();
+            let url = url.trim();
+            if id.is_empty() || url.is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    field: "pvd_vector_group".to_string(),
+                    value: spec.clone(),
+                    reason: "both ID and URL must be non-empty".to_string(),
+                });
+            }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(ConfigError::InvalidValue {
+                    field: "pvd_vector_group".to_string(),
+                    value: spec.clone(),
+                    reason: "URL must use http:// or https://".to_string(),
+                });
+            }
+            if !seen.insert(id.to_string()) {
+                return Err(ConfigError::InvalidValue {
+                    field: "pvd_vector_group".to_string(),
+                    value: spec.clone(),
+                    reason: format!("duplicate vector group id {id}"),
+                });
+            }
+            groups.push(PvdVectorGroupConfig {
+                id: id.to_string(),
+                coordinator_url: url.trim_end_matches('/').to_string(),
+            });
+        }
+
+        if self.pvd_disaggregation && groups.is_empty() {
+            return Err(ConfigError::MissingRequired {
+                field: "pvd_vector_coordinator_url or pvd_vector_group".to_string(),
+            });
+        }
+        Ok(groups)
+    }
+
     fn to_router_config(
         &self,
         prefill_urls: Vec<(String, Option<u16>)>,
@@ -945,6 +1016,7 @@ impl CliArgs {
         };
 
         let policy = self.parse_policy(&self.policy);
+        let pvd_vector_groups = self.build_pvd_vector_groups()?;
 
         let discovery = if self.service_discovery {
             Some(DiscoveryConfig {
@@ -1091,6 +1163,7 @@ impl CliArgs {
             .igw(self.enable_igw)
             .pvd_disaggregation(self.pvd_disaggregation)
             .maybe_pvd_vector_coordinator_url(self.pvd_vector_coordinator_url.as_ref())
+            .pvd_vector_groups(pvd_vector_groups)
             .maybe_server_cert_and_key(self.tls_cert_path.as_ref(), self.tls_key_path.as_ref());
 
         builder.build()
@@ -1290,6 +1363,12 @@ Provide --worker-urls or PD flags as usual.",
         {
             println!("Prefill nodes: {:?}", prefill_urls);
             println!("Decode nodes: {:?}", cli_args.decode);
+            if cli_args.pvd_disaggregation {
+                println!(
+                    "Vector groups: {:?}",
+                    cli_args.build_pvd_vector_groups()?
+                );
+            }
         }
     }
 

@@ -351,6 +351,9 @@ class CompletionRequest(BaseModel):
     bootstrap_host: Optional[Union[List[str], str]] = None
     bootstrap_port: Optional[Union[List[Optional[int]], int]] = None
     bootstrap_room: Optional[Union[List[int], int]] = None
+    pvd_transfer_id: Optional[Union[List[Optional[str]], str]] = None
+    pvd_delivery_id: Optional[Union[List[Optional[str]], str]] = None
+    pvd_vector_group_id: Optional[Union[List[Optional[str]], str]] = None
 
     # For DP routing — external router assigns a specific DP worker
     routed_dp_rank: Optional[int] = None
@@ -737,6 +740,9 @@ class ChatCompletionRequest(BaseModel):
     bootstrap_host: Optional[Union[List[str], str]] = None
     bootstrap_port: Optional[Union[List[Optional[int]], int]] = None
     bootstrap_room: Optional[Union[List[int], int]] = None
+    pvd_transfer_id: Optional[Union[List[Optional[str]], str]] = None
+    pvd_delivery_id: Optional[Union[List[Optional[str]], str]] = None
+    pvd_vector_group_id: Optional[Union[List[Optional[str]], str]] = None
 
     # For DP routing — external router assigns a specific DP worker
     routed_dp_rank: Optional[int] = None

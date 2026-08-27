@@ -12,6 +12,13 @@ pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_POOL_MAX_IDLE_PER_HOST: usize = 500;
 pub const DEFAULT_TCP_KEEPALIVE_SECS: u64 = 30;
 
+/// One independently deployable PVD vector worker group.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PvdVectorGroupConfig {
+    pub id: String,
+    pub coordinator_url: String,
+}
+
 /// Main router configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouterConfig {
@@ -66,6 +73,11 @@ pub struct RouterConfig {
     /// Rank-0 coordinator endpoint of the vector tier.
     #[serde(default)]
     pub pvd_vector_coordinator_url: Option<String>,
+    /// Request-selectable vector worker groups. The legacy singular URL is
+    /// normalized to a group named `default` by the CLI and remains accepted
+    /// by programmatic configurations.
+    #[serde(default)]
+    pub pvd_vector_groups: Vec<PvdVectorGroupConfig>,
     /// Can be a HuggingFace model ID or local path
     pub model_path: Option<String>,
     /// Overrides model_path tokenizer if provided
@@ -545,6 +557,7 @@ impl Default for RouterConfig {
             enable_igw: false,
             pvd_disaggregation: false,
             pvd_vector_coordinator_url: None,
+            pvd_vector_groups: vec![],
             connection_mode: ConnectionMode::Http,
             model_path: None,
             tokenizer_path: None,

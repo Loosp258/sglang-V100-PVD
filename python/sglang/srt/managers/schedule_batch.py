@@ -670,6 +670,7 @@ class Req(ReqDllmMixin):
         bootstrap_room: Optional[int] = None,
         pvd_transfer_id: Optional[str] = None,
         pvd_delivery_id: Optional[str] = None,
+        pvd_vector_group_id: Optional[str] = None,
         disagg_mode: Optional[DisaggregationMode] = None,
         routed_dp_rank: Optional[int] = None,
         disagg_prefill_dp_rank: Optional[int] = None,
@@ -941,6 +942,7 @@ class Req(ReqDllmMixin):
         self.bootstrap_room: Optional[int] = bootstrap_room
         self.pvd_transfer_id: Optional[str] = pvd_transfer_id
         self.pvd_delivery_id: Optional[str] = pvd_delivery_id
+        self.pvd_vector_group_id: Optional[str] = pvd_vector_group_id
         self.skip_radix_cache_insert = bootstrap_host == FAKE_BOOTSTRAP_HOST
         self.disagg_kv_sender: Optional[BaseKVSender] = None
 

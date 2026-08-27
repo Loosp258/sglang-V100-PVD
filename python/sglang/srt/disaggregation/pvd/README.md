@@ -82,7 +82,8 @@ Use the sum of `component_bytes_per_token` reported by the storage layout,
 multiplied by `page_size`. V rejects a manifest whose per-prompt-page bytes
 exceed its configured `PAGE_BYTES`.
 
-Start P and D with the same coordinator URL and model instance ID:
+For one V group, start P and D with the same coordinator URL and model
+instance ID. The legacy URL is normalized to a trusted group named `default`:
 
 ```bash
 # node-1 (P)
@@ -158,6 +159,38 @@ represents one complete worker group. All groups must expose the same model,
 revision and semantic KV layout, but P and D group counts are independent and
 their supported TP sizes may differ. Supplying `--rank` to the V launcher keeps
 the old one-process-per-rank mode available for diagnostics.
+
+## Multiple request-selectable V groups
+
+The number of V worker groups is also independent. Each V group is still one
+two-GPU storage group with its own coordinator, V0 and V1. Give every P and D
+worker the same trusted ID-to-URL registry:
+
+```bash
+# Append these options to every P and D launch command. In multi-V mode omit
+# the legacy --pvd-vector-coordinator-url option.
+--pvd-vector-group vector-0=http://10.0.0.2:9100 \
+--pvd-vector-group vector-1=http://10.0.0.6:9100
+```
+
+Register the identical group IDs with the Gateway:
+
+```bash
+sglang-router --pvd-disaggregation \
+  --pvd-vector-group vector-0=http://10.0.0.2:9100 \
+  --pvd-vector-group vector-1=http://10.0.0.6:9100 \
+  --prefill http://10.0.0.1:30000 none \
+  --decode http://10.0.0.3:30000
+```
+
+At startup the Gateway strictly validates every configured V group. It then
+selects a complete V group round-robin for each routing attempt and injects
+the trusted `pvd_vector_group_id` together with `pvd_transfer_id` and
+`pvd_delivery_id` into both the P and D request copies. P and D reject a group
+ID that is absent from their startup registry; request data is never accepted
+as an arbitrary coordinator URL. An Entry and all of its Deliveries remain
+bound to the selected V group. A retry creates fresh IDs and may select another
+V group.
 
 The fake transport and CPU storage switches are test-only and require both
 `--allow-fake-transport` and `--no-strict-rdma-preflight`. The Gateway's strict

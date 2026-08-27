@@ -123,22 +123,37 @@ class PVDKVManager:
         self.rail = self.rails[tp_rank]
         self.model_instance_id = scheduler.server_args.pvd_model_instance_id
         self.control = _AsyncControlLoop()
-        self.client = PVDCoordinatorClient(
-            scheduler.server_args.pvd_vector_coordinator_url,
-            timeout_seconds=300.0,
+        coordinator_map = getattr(
+            scheduler.server_args, "pvd_vector_coordinator_map", None
         )
+        if not coordinator_map and scheduler.server_args.pvd_vector_coordinator_url:
+            coordinator_map = {
+                "default": scheduler.server_args.pvd_vector_coordinator_url.rstrip("/")
+            }
+        if not coordinator_map:
+            raise PVDConnectionError("PVD has no trusted vector coordinator groups")
+        self.clients = {
+            group_id: PVDCoordinatorClient(url, timeout_seconds=300.0)
+            for group_id, url in coordinator_map.items()
+        }
         self.transfer_engine = MooncakePVDTransferEngine.from_existing(
             shared_engine, rail=self.rail
         )
-        self.prefill_runtime = PVDPrefillRuntime(
-            model_instance_id=self.model_instance_id,
-            coordinator=self.client,
-            transfer_engine=self.transfer_engine,
-        )
-        self.decode_runtime = PVDDecodeRuntime(
-            coordinator=self.client,
-            transfer_engine=self.transfer_engine,
-        )
+        self.prefill_runtimes = {
+            group_id: PVDPrefillRuntime(
+                model_instance_id=self.model_instance_id,
+                coordinator=client,
+                transfer_engine=self.transfer_engine,
+            )
+            for group_id, client in self.clients.items()
+        }
+        self.decode_runtimes = {
+            group_id: PVDDecodeRuntime(
+                coordinator=client,
+                transfer_engine=self.transfer_engine,
+            )
+            for group_id, client in self.clients.items()
+        }
         self.kv_args = SimpleNamespace(state_types=[])
         self.is_dummy_cp_rank = False
         self._layout_description = describe_kv_layout(kv_pool)
@@ -156,6 +171,29 @@ class PVDKVManager:
             req_id=transfer_id,
             transfer_id=transfer_id,
         )
+
+    def vector_group_for(self, req) -> str:
+        group_id = getattr(req, "pvd_vector_group_id", None)
+        if not group_id:
+            raise PVDConnectionError(
+                "PVD request is missing pvd_vector_group_id; send it through "
+                "the PVD Gateway"
+            )
+        if group_id not in self.clients:
+            raise PVDConnectionError(
+                f"PVD request selected unknown vector group {group_id!r}; "
+                f"trusted groups are {sorted(self.clients)}"
+            )
+        return group_id
+
+    def client_for(self, req) -> PVDCoordinatorClient:
+        return self.clients[self.vector_group_for(req)]
+
+    def prefill_runtime_for(self, req) -> PVDPrefillRuntime:
+        return self.prefill_runtimes[self.vector_group_for(req)]
+
+    def decode_runtime_for(self, req) -> PVDDecodeRuntime:
+        return self.decode_runtimes[self.vector_group_for(req)]
 
     def _total_kv_heads(self) -> int:
         model_config = self.scheduler.model_config
@@ -290,11 +328,15 @@ class PVDKVManager:
         return result
 
     async def wait_for_stored_entry(
-        self, key: KVEntryKey, *, timeout_seconds: float = 300.0
+        self,
+        key: KVEntryKey,
+        runtime: PVDDecodeRuntime,
+        *,
+        timeout_seconds: float = 300.0,
     ) -> Dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
-            match = await self.decode_runtime.select_entry(key)
+            match = await runtime.select_entry(key)
             state = match.get("state")
             if match.get("found") and state == "stored":
                 return match["entry"]
@@ -310,6 +352,8 @@ class PVDKVSender:
         self.kv_mgr = mgr
         self.req = req
         self.key = mgr.key_for(req)
+        self.client = mgr.client_for(req)
+        self.prefill_runtime = mgr.prefill_runtime_for(req)
         self.conclude_state = None
         self._error: Optional[BaseException] = None
         self._lease: Optional[PVDEntryLease] = None
@@ -337,7 +381,7 @@ class PVDKVSender:
                 for item in gathered
             }
         self._create_future = mgr.control.submit(
-            mgr.prefill_runtime.create_entry(
+            self.prefill_runtime.create_entry(
                 req_id=self.key.req_id,
                 transfer_id=self.key.transfer_id,
                 layout=storage_layout,
@@ -388,7 +432,7 @@ class PVDKVSender:
             self._error = exc
             self.conclude_state = KVPoll.Failed
             self.kv_mgr.control.submit(
-                self.kv_mgr.client.cancel_entry(self.key, str(exc))
+                self.client.cancel_entry(self.key, str(exc))
             )
 
     def _send(self, kv_indices, state_indices: Optional[List] = None):
@@ -416,7 +460,7 @@ class PVDKVSender:
             async def publish_all():
                 return await asyncio.gather(
                     *(
-                        self.kv_mgr.prefill_runtime.publish_tensor_shard(
+                        self.prefill_runtime.publish_tensor_shard(
                             lease=self._lease,
                             rank=rank,
                             tensor=packed.tensor,
@@ -439,7 +483,7 @@ class PVDKVSender:
                 )
             self._metric.transfer_total_bytes = packed.expected_bytes
             self._publish_future = self.kv_mgr.control.submit(
-                self.kv_mgr.prefill_runtime.publish_tensor_shard(
+                self.prefill_runtime.publish_tensor_shard(
                     lease=self._lease,
                     rank=self.kv_mgr.tp_rank,
                     tensor=packed.tensor,
@@ -480,7 +524,7 @@ class PVDKVSender:
     def abort(self):
         self.conclude_state = KVPoll.Failed
         self.kv_mgr.control.submit(
-            self.kv_mgr.client.cancel_entry(self.key, "Prefill request aborted")
+            self.client.cancel_entry(self.key, "Prefill request aborted")
         )
 
     def clear(self):
@@ -492,6 +536,8 @@ class PVDKVReceiver:
         self.kv_mgr = mgr
         self.req = req
         self.key = mgr.key_for(req)
+        self.client = mgr.client_for(req)
+        self.decode_runtime = mgr.decode_runtime_for(req)
         self.delivery_id = getattr(req, "pvd_delivery_id", None)
         if not self.delivery_id:
             raise PVDConnectionError(
@@ -512,7 +558,7 @@ class PVDKVReceiver:
 
     def init(self, prefill_dp_rank: int):
         self._entry_future = self.kv_mgr.control.submit(
-            self.kv_mgr.wait_for_stored_entry(self.key)
+            self.kv_mgr.wait_for_stored_entry(self.key, self.decode_runtime)
         )
 
     def _validate_entry(self, record: Dict[str, Any]) -> KVEntryManifest:
@@ -628,7 +674,7 @@ class PVDKVReceiver:
         self._write_first_token_metadata(aux_index)
         self._started_at = time.monotonic()
         self._delivery_future = self.kv_mgr.control.submit(
-            self.kv_mgr.decode_runtime.deliver(
+            self.decode_runtime.deliver(
                 key=self.key,
                 destinations=destinations,
                 delivery_id=self.delivery_id,
@@ -660,7 +706,7 @@ class PVDKVReceiver:
                 )
                 self._unpacked = True
                 self._ack_future = self.kv_mgr.control.submit(
-                    self.kv_mgr.decode_runtime.ack(self.delivery_id)
+                    self.decode_runtime.ack(self.delivery_id)
                 )
                 return KVPoll.Transferring
             if not self._ack_future.done():
@@ -685,7 +731,7 @@ class PVDKVReceiver:
     def abort(self):
         self.conclude_state = KVPoll.Failed
         self.kv_mgr.control.submit(
-            self.kv_mgr.client.cancel_delivery(self.delivery_id, "Decode request aborted")
+            self.client.cancel_delivery(self.delivery_id, "Decode request aborted")
         )
         self._release_registration()
 

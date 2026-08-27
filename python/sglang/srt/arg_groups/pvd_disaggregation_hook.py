@@ -21,6 +21,30 @@ def _validate_http_url(name: str, value: str) -> None:
         raise ValueError(f"{name} must be an absolute HTTP(S) URL, got {value!r}")
 
 
+def _build_vector_group_map(server_args: "ServerArgs") -> dict[str, str]:
+    groups: dict[str, str] = {}
+    if server_args.pvd_vector_coordinator_url:
+        url = server_args.pvd_vector_coordinator_url.rstrip("/")
+        _validate_http_url("--pvd-vector-coordinator-url", url)
+        groups["default"] = url
+
+    for spec in server_args.pvd_vector_groups or []:
+        if "=" not in spec:
+            raise ValueError(
+                f"--pvd-vector-group must use ID=URL syntax, got {spec!r}"
+            )
+        group_id, url = (part.strip() for part in spec.split("=", 1))
+        if not group_id or not url:
+            raise ValueError(
+                f"--pvd-vector-group requires non-empty ID and URL, got {spec!r}"
+            )
+        if group_id in groups:
+            raise ValueError(f"duplicate PVD vector group id {group_id!r}")
+        _validate_http_url("--pvd-vector-group", url)
+        groups[group_id] = url.rstrip("/")
+    return groups
+
+
 def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     """Keep legacy PD untouched unless ``--disaggregation-topology pvd`` is set."""
     topology = server_args.disaggregation_topology
@@ -34,11 +58,12 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
             "PVD model servers must use --disaggregation-mode prefill or decode; "
             "the V role uses `python -m sglang.srt.disaggregation.pvd.server`"
         )
-    if not server_args.pvd_vector_coordinator_url:
-        raise ValueError("PVD requires --pvd-vector-coordinator-url")
-    _validate_http_url(
-        "--pvd-vector-coordinator-url", server_args.pvd_vector_coordinator_url
-    )
+    vector_groups = _build_vector_group_map(server_args)
+    if not vector_groups:
+        raise ValueError(
+            "PVD requires --pvd-vector-coordinator-url or --pvd-vector-group"
+        )
+    server_args.pvd_vector_coordinator_map = vector_groups
 
     supported_tp = (
         (1, 2) if server_args.disaggregation_mode == "prefill" else (2, 4)

@@ -216,6 +216,7 @@ class GenerateReqInput(BaseReq):
     # Delivery has an independent id so one Entry can serve multiple decoders.
     pvd_transfer_id: Optional[Union[List[Optional[str]], str]] = None
     pvd_delivery_id: Optional[Union[List[Optional[str]], str]] = None
+    pvd_vector_group_id: Optional[Union[List[Optional[str]], str]] = None
 
     # Require reasoning for the request (hybrid reasoning model only)
     require_reasoning: bool = False
@@ -630,7 +631,11 @@ class GenerateReqInput(BaseReq):
                 raise ValueError("Session params must be a dict or a list of dicts.")
 
     def _normalize_pvd_params(self, num):
-        for name in ("pvd_transfer_id", "pvd_delivery_id"):
+        for name in (
+            "pvd_transfer_id",
+            "pvd_delivery_id",
+            "pvd_vector_group_id",
+        ):
             value = getattr(self, name)
             if value is None:
                 setattr(self, name, [None] * num)
@@ -717,6 +722,11 @@ class GenerateReqInput(BaseReq):
             pvd_delivery_id=(
                 self.pvd_delivery_id[i] if self.pvd_delivery_id is not None else None
             ),
+            pvd_vector_group_id=(
+                self.pvd_vector_group_id[i]
+                if self.pvd_vector_group_id is not None
+                else None
+            ),
             routed_dp_rank=self.routed_dp_rank,
             disagg_prefill_dp_rank=self.disagg_prefill_dp_rank,
             conversation_id=self.conversation_id,
@@ -795,6 +805,7 @@ class TokenizedGenerateReqInput(BaseReq):
     decode_tp_size: Optional[int] = None
     pvd_transfer_id: Optional[str] = None
     pvd_delivery_id: Optional[str] = None
+    pvd_vector_group_id: Optional[str] = None
 
     # Require reasoning for the request (hybrid reasoning model only)
     require_reasoning: bool = False

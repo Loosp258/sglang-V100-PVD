@@ -1947,6 +1947,7 @@ class Scheduler(
                 bootstrap_room=recv_req.bootstrap_room,
                 pvd_transfer_id=recv_req.pvd_transfer_id,
                 pvd_delivery_id=recv_req.pvd_delivery_id,
+                pvd_vector_group_id=recv_req.pvd_vector_group_id,
                 disagg_mode=self.disaggregation_mode,
                 routed_dp_rank=recv_req.routed_dp_rank,
                 disagg_prefill_dp_rank=recv_req.disagg_prefill_dp_rank,
@@ -2028,10 +2029,13 @@ class Scheduler(
             return
 
         if self.server_args.disaggregation_topology == "pvd" and (
-            not req.pvd_transfer_id or not req.pvd_delivery_id
+            not req.pvd_transfer_id
+            or not req.pvd_delivery_id
+            or not req.pvd_vector_group_id
         ):
             error_msg = (
-                "Invalid PVD request: pvd_transfer_id and pvd_delivery_id are required; "
+                "Invalid PVD request: pvd_transfer_id, pvd_delivery_id and "
+                "pvd_vector_group_id are required; "
                 "route the request through a Gateway launched with --pvd-disaggregation"
             )
             logger.error("%s rid=%s", error_msg, req.rid)

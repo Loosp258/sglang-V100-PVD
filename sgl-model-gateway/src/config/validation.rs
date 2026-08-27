@@ -20,17 +20,31 @@ impl ConfigValidator {
                 crate::core::ConnectionMode::Http
             ) {
                 return Err(ConfigError::ValidationFailed {
-                    reason: "PVD v1 currently requires HTTP worker connections".to_string(),
+                    reason: "PVD currently requires HTTP worker connections".to_string(),
                 });
             }
-            if config
+            let has_legacy_group = config
                 .pvd_vector_coordinator_url
                 .as_deref()
-                .is_none_or(|url| url.trim().is_empty())
-            {
+                .is_some_and(|url| !url.trim().is_empty());
+            if !has_legacy_group && config.pvd_vector_groups.is_empty() {
                 return Err(ConfigError::MissingRequired {
-                    field: "pvd_vector_coordinator_url".to_string(),
+                    field: "pvd_vector_coordinator_url or pvd_vector_groups".to_string(),
                 });
+            }
+            let mut group_ids = std::collections::HashSet::new();
+            for group in &config.pvd_vector_groups {
+                if group.id.trim().is_empty() || group.coordinator_url.trim().is_empty() {
+                    return Err(ConfigError::ValidationFailed {
+                        reason: "PVD vector group id and coordinator URL must be non-empty"
+                            .to_string(),
+                    });
+                }
+                if !group_ids.insert(group.id.as_str()) {
+                    return Err(ConfigError::ValidationFailed {
+                        reason: format!("duplicate PVD vector group id: {}", group.id),
+                    });
+                }
             }
         }
 
@@ -903,6 +917,34 @@ mod tests {
             Some("http://vector-coordinator:9000".to_string());
 
         assert!(ConfigValidator::validate(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_pvd_mode_with_multiple_vector_groups() {
+        let mut config = RouterConfig::new(
+            RoutingMode::PrefillDecode {
+                prefill_urls: vec![("http://prefill:8000".to_string(), None)],
+                decode_urls: vec!["http://decode:8000".to_string()],
+                prefill_policy: Some(PolicyConfig::RoundRobin),
+                decode_policy: Some(PolicyConfig::RoundRobin),
+            },
+            PolicyConfig::RoundRobin,
+        );
+        config.pvd_disaggregation = true;
+        config.pvd_vector_groups = vec![
+            PvdVectorGroupConfig {
+                id: "vector-0".to_string(),
+                coordinator_url: "http://v0:9100".to_string(),
+            },
+            PvdVectorGroupConfig {
+                id: "vector-1".to_string(),
+                coordinator_url: "http://v1:9100".to_string(),
+            },
+        ];
+        assert!(ConfigValidator::validate(&config).is_ok());
+
+        config.pvd_vector_groups[1].id = "vector-0".to_string();
+        assert!(ConfigValidator::validate(&config).is_err());
     }
 
     #[test]

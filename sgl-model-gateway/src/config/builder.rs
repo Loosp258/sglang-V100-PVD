@@ -3,7 +3,8 @@ use smg_mcp::McpConfig;
 use super::{
     CircuitBreakerConfig, ConfigError, ConfigResult, DiscoveryConfig, HealthCheckConfig,
     HistoryBackend, MetricsConfig, OracleConfig, PolicyConfig, PostgresConfig, RedisConfig,
-    RetryConfig, RouterConfig, RoutingMode, TokenizerCacheConfig, TraceConfig,
+    PvdVectorGroupConfig, RetryConfig, RouterConfig, RoutingMode, TokenizerCacheConfig,
+    TraceConfig,
 };
 use crate::core::ConnectionMode;
 
@@ -503,6 +504,11 @@ impl RouterConfigBuilder {
         url: Option<impl Into<String>>,
     ) -> Self {
         self.config.pvd_vector_coordinator_url = url.map(Into::into);
+        self
+    }
+
+    pub fn pvd_vector_groups(mut self, groups: Vec<PvdVectorGroupConfig>) -> Self {
+        self.config.pvd_vector_groups = groups;
         self
     }
 

@@ -1,9 +1,18 @@
 import asyncio
 import time
 import unittest
+from types import SimpleNamespace
 
 import torch
 
+from sglang.srt.arg_groups.pvd_disaggregation_hook import (
+    _build_vector_group_map,
+)
+
+from sglang.srt.disaggregation.pvd.conn import (
+    PVDConnectionError,
+    PVDKVManager,
+)
 from sglang.srt.disaggregation.pvd.coordinator import (
     CoordinatorError,
     LocalShardClient,
@@ -45,6 +54,50 @@ from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
 
 PAGE_BYTES = 16
 ENTRY_BYTES = 32
+
+
+def test_vector_group_registry_supports_legacy_and_multiple_groups():
+    legacy = SimpleNamespace(
+        pvd_vector_coordinator_url="http://v0:9100/",
+        pvd_vector_groups=None,
+    )
+    assert _build_vector_group_map(legacy) == {
+        "default": "http://v0:9100"
+    }
+
+    multiple = SimpleNamespace(
+        pvd_vector_coordinator_url=None,
+        pvd_vector_groups=[
+            "vector-0=http://v0:9100/",
+            "vector-1=http://v1:9100",
+        ],
+    )
+    assert _build_vector_group_map(multiple) == {
+        "vector-0": "http://v0:9100",
+        "vector-1": "http://v1:9100",
+    }
+
+    duplicate = SimpleNamespace(
+        pvd_vector_coordinator_url="http://v0:9100",
+        pvd_vector_groups=["default=http://v1:9100"],
+    )
+    with unittest.TestCase().assertRaisesRegex(ValueError, "duplicate"):
+        _build_vector_group_map(duplicate)
+
+
+def test_request_vector_group_must_be_in_trusted_registry():
+    manager = object.__new__(PVDKVManager)
+    manager.clients = {"vector-0": object(), "vector-1": object()}
+    assert (
+        manager.vector_group_for(SimpleNamespace(pvd_vector_group_id="vector-1"))
+        == "vector-1"
+    )
+    with unittest.TestCase().assertRaisesRegex(
+        PVDConnectionError, "unknown vector group"
+    ):
+        manager.vector_group_for(
+            SimpleNamespace(pvd_vector_group_id="untrusted-vector")
+        )
 
 
 def make_manifest(req_id: str = "req-1") -> KVEntryManifest:
