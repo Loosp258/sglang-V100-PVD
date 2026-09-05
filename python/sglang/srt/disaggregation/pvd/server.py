@@ -17,7 +17,6 @@ import signal
 from typing import List, Sequence
 
 from aiohttp import web
-
 from sglang.srt.disaggregation.pvd.control_server import (
     HttpShardClient,
     create_coordinator_app,
@@ -27,14 +26,12 @@ from sglang.srt.disaggregation.pvd.coordinator import (
     LocalShardClient,
     VectorCoordinator,
 )
-from sglang.srt.disaggregation.pvd.mooncake_engine import MooncakePVDTransferEngine
 from sglang.srt.disaggregation.pvd.preflight import (
     run_rank_preflight,
     validate_rank_rail_names,
 )
 from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
-
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="devices",
         default="0,1",
         help=(
-            "process-local CUDA device id for each V shard in group mode; "
-            "default: 0,1"
+            "process-local CUDA device id for each V shard in group mode; default: 0,1"
         ),
     )
     parser.add_argument(
@@ -158,7 +154,9 @@ def _parse_device_ids(value: str, world_size: int) -> List[int]:
     try:
         devices = [int(item.strip()) for item in value.split(",") if item.strip()]
     except ValueError as exc:
-        raise ValueError("--pvd-rank-devices must contain CUDA device integers") from exc
+        raise ValueError(
+            "--pvd-rank-devices must contain CUDA device integers"
+        ) from exc
     if len(devices) != world_size:
         raise ValueError(
             f"--pvd-rank-devices requires {world_size} entries, got {devices}"
@@ -246,6 +244,10 @@ def _create_store(
     shard_port = args.shard_port_base + rank
     endpoint = f"{args.advertise_host}:{shard_port}"
     if args.transfer_backend == "mooncake":
+        from sglang.srt.disaggregation.pvd.mooncake_engine import (
+            MooncakePVDTransferEngine,
+        )
+
         engine = MooncakePVDTransferEngine(
             hostname=args.advertise_host,
             gpu_id=local_rank,
@@ -326,9 +328,7 @@ async def _serve_rank(args: argparse.Namespace) -> None:
         )
         coordinator_runner = web.AppRunner(create_coordinator_app(coordinator))
         await coordinator_runner.setup()
-        await web.TCPSite(
-            coordinator_runner, args.host, args.coordinator_port
-        ).start()
+        await web.TCPSite(coordinator_runner, args.host, args.coordinator_port).start()
         runners.append(coordinator_runner)
 
     stop = asyncio.Event()
@@ -371,13 +371,9 @@ async def _serve_group(args: argparse.Namespace) -> None:
             preflights.append(preflight)
 
         for rank, store in enumerate(stores):
-            runner = web.AppRunner(
-                create_shard_app(store, preflight=preflights[rank])
-            )
+            runner = web.AppRunner(create_shard_app(store, preflight=preflights[rank]))
             await runner.setup()
-            await web.TCPSite(
-                runner, args.host, args.shard_port_base + rank
-            ).start()
+            await web.TCPSite(runner, args.host, args.shard_port_base + rank).start()
             runners.append(runner)
 
         coordinator = VectorCoordinator(
@@ -390,9 +386,7 @@ async def _serve_group(args: argparse.Namespace) -> None:
         )
         coordinator_runner = web.AppRunner(create_coordinator_app(coordinator))
         await coordinator_runner.setup()
-        await web.TCPSite(
-            coordinator_runner, args.host, args.coordinator_port
-        ).start()
+        await web.TCPSite(coordinator_runner, args.host, args.coordinator_port).start()
         runners.append(coordinator_runner)
 
         logger.info(

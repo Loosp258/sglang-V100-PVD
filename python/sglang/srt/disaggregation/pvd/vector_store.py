@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import dataclasses
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import torch
-
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryKey,
@@ -18,15 +16,15 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVShardManifest,
     RemoteRegionDescriptor,
 )
-from sglang.srt.disaggregation.pvd.sharding import (
-    layout_from_destination,
-    source_rank_and_head_offset,
-)
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
     DeliveryState,
     EntryShardState,
     transition,
+)
+from sglang.srt.disaggregation.pvd.sharding import (
+    layout_from_destination,
+    source_rank_and_head_offset,
 )
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
@@ -208,7 +206,9 @@ class VectorKVStore:
         if device == "cpu" and not allow_cpu_for_tests:
             raise RuntimeError("PVD V storage cannot silently fall back to CPU")
         if device.startswith("cuda") and not torch.cuda.is_available():
-            raise RuntimeError(f"CUDA device {device} requested but CUDA is unavailable")
+            raise RuntimeError(
+                f"CUDA device {device} requested but CUDA is unavailable"
+            )
 
         self.rank = rank
         self.world_size = world_size
@@ -221,7 +221,9 @@ class VectorKVStore:
         self.delivery_timeout_secs = delivery_timeout_secs
         self.metrics = metrics or PVDMetrics()
         self.allocator = ContiguousPageAllocator(total_pages)
-        self.pool = torch.empty(total_pages * page_bytes, dtype=torch.uint8, device=device)
+        self.pool = torch.empty(
+            total_pages * page_bytes, dtype=torch.uint8, device=device
+        )
         self.registration: RegisteredMemory = transfer_engine.register_memory(
             self.pool,
             endpoint=endpoint,
@@ -230,6 +232,7 @@ class VectorKVStore:
             metadata={"role": "vector", "page_bytes": page_bytes},
         )
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
+        self._fenced_deliveries = set()
         self._lock = threading.RLock()
         self._refresh_metrics()
 
@@ -268,7 +271,9 @@ class VectorKVStore:
                     existing.layout_fingerprint != manifest.layout.fingerprint
                     or existing.manifest != shard
                 ):
-                    raise EntryConflictError("entry key already exists with a different manifest")
+                    raise EntryConflictError(
+                        "entry key already exists with a different manifest"
+                    )
                 return existing
 
             allocation = self.allocator.allocate(shard.page_count)
@@ -304,7 +309,9 @@ class VectorKVStore:
             entry = self._entry(key)
             if entry.state == EntryShardState.STORED:
                 if entry.received_bytes != received_bytes:
-                    raise EntryConflictError("idempotent commit has a different byte count")
+                    raise EntryConflictError(
+                        "idempotent commit has a different byte count"
+                    )
                 return entry
             if received_bytes != entry.manifest.expected_bytes:
                 self._fail_entry_locked(
@@ -318,7 +325,9 @@ class VectorKVStore:
             entry.expires_at = entry.stored_at + self.entry_ttl_secs
             for delivery in entry.deliveries.values():
                 if delivery.state == DeliveryState.WAITING_SOURCE:
-                    delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
+                    delivery.state = transition(
+                        delivery.state, DeliveryState.D_RESERVED
+                    )
             self.metrics.increment("vector_p_to_v_bytes", received_bytes)
             self.metrics.increment("vector_entries_stored")
             return entry
@@ -334,6 +343,8 @@ class VectorKVStore:
                 f"rank {self.rank} requires rail {self.rail}, destination uses {destination.rail}"
             )
         with self._lock:
+            if (key, delivery_id) in self._fenced_deliveries:
+                raise EntryConflictError("delivery has been fenced")
             entry = self._entry(key)
             if entry.resources_released:
                 raise EntryConflictError("entry resources have already been released")
@@ -365,6 +376,8 @@ class VectorKVStore:
 
     def start_delivery(self, key: KVEntryKey, delivery_id: str) -> DeliveryShardRecord:
         with self._lock:
+            if (key, delivery_id) in self._fenced_deliveries:
+                raise EntryConflictError("delivery has been fenced")
             entry = self._entry(key)
             delivery = entry.deliveries[delivery_id]
             if delivery.state == DeliveryState.DELIVERED:
@@ -403,12 +416,15 @@ class VectorKVStore:
                         f"{source_rank}, not V rank {self.rank}"
                     )
                 token_count = entry.manifest.page_count * entry.layout.page_size
-                expected_destination_bytes = sum(
-                    int(value)
-                    for value in destination_layout.extra[
-                        "component_bytes_per_token"
-                    ]
-                ) * token_count
+                expected_destination_bytes = (
+                    sum(
+                        int(value)
+                        for value in destination_layout.extra[
+                            "component_bytes_per_token"
+                        ]
+                    )
+                    * token_count
+                )
                 if delivery.destination.length != expected_destination_bytes:
                     raise EntryConflictError(
                         f"D rank {delivery.destination.rank} registered "
@@ -428,9 +444,7 @@ class VectorKVStore:
                 else:
                     source_bytes = [
                         int(value)
-                        for value in entry.layout.extra[
-                            "component_bytes_per_token"
-                        ]
+                        for value in entry.layout.extra["component_bytes_per_token"]
                     ]
                     destination_bytes = [
                         int(value)
@@ -447,18 +461,13 @@ class VectorKVStore:
                     for source_bpt, destination_bpt in zip(
                         source_bytes, destination_bytes
                     ):
-                        bytes_per_head = (
-                            source_bpt // entry.layout.kv_heads_per_rank
-                        )
+                        bytes_per_head = source_bpt // entry.layout.kv_heads_per_rank
                         byte_start = source_head_offset * bytes_per_head
                         component = source_region[
-                            component_base : component_base
-                            + token_count * source_bpt
+                            component_base : component_base + token_count * source_bpt
                         ].reshape(token_count, source_bpt)
                         chunks.append(
-                            component[
-                                :, byte_start : byte_start + destination_bpt
-                            ]
+                            component[:, byte_start : byte_start + destination_bpt]
                             .contiguous()
                             .reshape(-1)
                         )
@@ -546,6 +555,17 @@ class VectorKVStore:
             self.metrics.increment("vector_deliveries_cancelled")
             return delivery
 
+    def fence_delivery(self, key: KVEntryKey, delivery_id: str):
+        # start_delivery holds this lock across the synchronous PUT. Taking it
+        # proves all earlier writes have drained; the tombstone rejects later
+        # reserve/start messages, including a reserve delayed by HTTP timeout.
+        with self._lock:
+            self._fenced_deliveries.add((key, delivery_id))
+            entry = self.entries.get(key)
+            if entry is not None and delivery_id in entry.deliveries:
+                self.cancel_delivery(key, delivery_id, "Decode fenced retrieval")
+            return {"delivery_id": delivery_id, "fenced": True}
+
     def release_entry(self, key: KVEntryKey) -> None:
         with self._lock:
             entry = self._entry(key)
@@ -615,7 +635,9 @@ class VectorKVStore:
                     ):
                         if delivery.transfer_handle is not None:
                             self.transfer_engine.abort(delivery.transfer_handle)
-                        delivery.state = transition(delivery.state, DeliveryState.EXPIRED)
+                        delivery.state = transition(
+                            delivery.state, DeliveryState.EXPIRED
+                        )
                         delivery.error = "delivery timeout"
                         entry.active_delivery_count -= 1
                         expired_deliveries += 1

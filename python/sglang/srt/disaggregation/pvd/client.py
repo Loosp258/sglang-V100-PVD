@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import aiohttp
-
 from sglang.srt.disaggregation.pvd.protocol import (
     FirstTokenMetadata,
     KVEntryKey,
@@ -53,6 +52,27 @@ class PVDCoordinatorClient:
     async def create_entry(self, manifest: KVEntryManifest) -> Dict[str, Any]:
         return await self._request("/v1/entries", {"manifest": manifest.to_dict()})
 
+    async def admit_request(self, request: Mapping[str, Any]) -> Dict[str, Any]:
+        return await self._request("/v1/requests", request)
+
+    async def retrieve(self, sequences) -> Dict[str, Any]:
+        return await self._request("/v1/retrieve", {"sequences": sequences})
+
+    async def fence_retrieval(self, delivery_id: str) -> Dict[str, Any]:
+        return await self._request("/v1/retrievals/fence", {"delivery_id": delivery_id})
+
+    async def renew_consumer(self, key: KVEntryKey, consumer_id: str) -> Dict[str, Any]:
+        return await self._request(
+            "/v1/consumers/renew", {"key": key.to_dict(), "consumer_id": consumer_id}
+        )
+
+    async def release_consumer(
+        self, key: KVEntryKey, consumer_id: str
+    ) -> Dict[str, Any]:
+        return await self._request(
+            "/v1/consumers/release", {"key": key.to_dict(), "consumer_id": consumer_id}
+        )
+
     async def commit_shard(
         self,
         key: KVEntryKey,
@@ -93,27 +113,19 @@ class PVDCoordinatorClient:
         )
 
     async def start_delivery(self, delivery_id: str) -> Dict[str, Any]:
-        return await self._request(
-            "/v1/deliveries/start", {"delivery_id": delivery_id}
-        )
+        return await self._request("/v1/deliveries/start", {"delivery_id": delivery_id})
 
     async def ack_delivery(self, delivery_id: str) -> Dict[str, Any]:
-        return await self._request(
-            "/v1/deliveries/ack", {"delivery_id": delivery_id}
-        )
+        return await self._request("/v1/deliveries/ack", {"delivery_id": delivery_id})
 
-    async def cancel_delivery(
-        self, delivery_id: str, reason: str
-    ) -> Dict[str, Any]:
+    async def cancel_delivery(self, delivery_id: str, reason: str) -> Dict[str, Any]:
         return await self._request(
             "/v1/deliveries/cancel",
             {"delivery_id": delivery_id, "reason": reason},
         )
 
     async def release_entry(self, key: KVEntryKey) -> Dict[str, Any]:
-        return await self._request(
-            "/v1/entries/release", {"key": key.to_dict()}
-        )
+        return await self._request("/v1/entries/release", {"key": key.to_dict()})
 
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> Dict[str, Any]:
         return await self._request(

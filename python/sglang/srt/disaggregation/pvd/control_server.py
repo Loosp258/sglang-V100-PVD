@@ -13,7 +13,6 @@ from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
 from aiohttp import web
-
 from sglang.srt.disaggregation.pvd.coordinator import (
     CoordinatorError,
     ShardClient,
@@ -166,6 +165,16 @@ class HttpShardClient(ShardClient):
             {"key": key.to_dict(), "reason": reason},
         )
 
+    async def fence_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
+        return await self._request(
+            "POST",
+            "/internal/v1/deliveries/fence",
+            {
+                "key": key.to_dict(),
+                "delivery_id": delivery_id,
+            },
+        )
+
     async def release_entry(self, key: KVEntryKey) -> None:
         await self._request(
             "POST", "/internal/v1/entries/release", {"key": key.to_dict()}
@@ -237,6 +246,13 @@ def create_shard_app(
         store.cancel_entry(_key(data), str(data.get("reason", "")))
         return web.json_response({"ok": True})
 
+    async def fence_delivery(request):
+        data = await _payload(request)
+        result = await asyncio.to_thread(
+            store.fence_delivery, _key(data), str(data["delivery_id"])
+        )
+        return web.json_response(result)
+
     async def release_entry(request):
         data = await _payload(request)
         store.release_entry(_key(data))
@@ -256,6 +272,7 @@ def create_shard_app(
             web.post("/internal/v1/deliveries/start", start_delivery),
             web.post("/internal/v1/deliveries/ack", ack_delivery),
             web.post("/internal/v1/deliveries/cancel", cancel_delivery),
+            web.post("/internal/v1/deliveries/fence", fence_delivery),
             web.post("/internal/v1/entries/cancel", cancel_entry),
             web.post("/internal/v1/entries/release", release_entry),
             web.get("/internal/health", health),
@@ -265,7 +282,40 @@ def create_shard_app(
 
 
 def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
-    app = web.Application(middlewares=[pvd_error_middleware])
+    # Router admissions carry original long prompts; the default 1 MiB would
+    # reject them before P can tokenize. KV tensor bytes still never use HTTP.
+    app = web.Application(
+        middlewares=[pvd_error_middleware], client_max_size=64 * 1024 * 1024
+    )
+
+    async def admit_request(request):
+        return web.json_response(
+            await coordinator.admit_request(await _payload(request))
+        )
+
+    async def retrieve(request):
+        data = await _payload(request)
+        if not isinstance(data["sequences"], list):
+            raise ValueError("sequences must be a list")
+        return web.json_response(
+            {"results": await coordinator.retrieve(data["sequences"])}
+        )
+
+    async def fence_retrieval(request):
+        data = await _payload(request)
+        return web.json_response(await coordinator.fence_retrieval(data["delivery_id"]))
+
+    async def renew_consumer(request):
+        data = await _payload(request)
+        return web.json_response(
+            await coordinator.renew_consumer(_key(data), data["consumer_id"])
+        )
+
+    async def release_consumer(request):
+        data = await _payload(request)
+        return web.json_response(
+            await coordinator.release_consumer(_key(data), data["consumer_id"])
+        )
 
     async def create_entry(request):
         data = await _payload(request)
@@ -323,9 +373,7 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
 
     async def cancel_entry(request):
         data = await _payload(request)
-        result = await coordinator.cancel_entry(
-            _key(data), str(data.get("reason", ""))
-        )
+        result = await coordinator.cancel_entry(_key(data), str(data.get("reason", "")))
         return web.json_response(result.to_dict())
 
     async def release_entry(request):
@@ -338,6 +386,11 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
 
     app.add_routes(
         [
+            web.post("/v1/requests", admit_request),
+            web.post("/v1/retrieve", retrieve),
+            web.post("/v1/retrievals/fence", fence_retrieval),
+            web.post("/v1/consumers/renew", renew_consumer),
+            web.post("/v1/consumers/release", release_consumer),
             web.post("/v1/entries", create_entry),
             web.post("/v1/entries/commit", commit_entry),
             web.post("/v1/select", select),

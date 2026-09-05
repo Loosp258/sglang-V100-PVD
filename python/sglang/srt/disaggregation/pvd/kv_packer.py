@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Sequence
 
 import torch
 
-
 PVD_TENSOR_LAYOUT = "sglang-pvd-v1/component-page-token-major"
 
 
@@ -142,6 +141,7 @@ def unpack_full_prompt_kv(
     page_indices: Sequence[int] | torch.Tensor,
     *,
     page_size: int,
+    prompt_token_count: int | None = None,
 ) -> None:
     if not packed.is_contiguous():
         raise ValueError("packed PVD KV tensor must be contiguous")
@@ -149,18 +149,38 @@ def unpack_full_prompt_kv(
     pages = torch.as_tensor(page_indices, dtype=torch.long)
     if pages.numel() == 0:
         raise ValueError("destination requires at least one page")
+    tokens = pages.numel() * page_size
+    valid_tokens = tokens if prompt_token_count is None else prompt_token_count
+    if page_size <= 0 or not 0 < valid_tokens <= tokens:
+        raise ValueError("invalid prompt token count or page size")
+    if (
+        prompt_token_count is not None
+        and (valid_tokens + page_size - 1) // page_size != pages.numel()
+    ):
+        raise ValueError("prompt token count does not match destination pages")
     byte_view = packed.view(torch.uint8).reshape(-1)
+    expected_bytes = sum(tokens * c[0].numel() * c.element_size() for c in components)
+    if byte_view.numel() != expected_bytes:
+        raise ValueError("packed PVD KV byte count does not match destination layout")
+    # Validate every destination before modifying any component.
+    indices = [
+        _page_token_indices(pages, page_size, device=c.device)[:valid_tokens]
+        for c in components
+    ]
+    for c, token_indices in zip(components, indices):
+        if token_indices.min().item() < 0 or token_indices.max().item() >= c.shape[0]:
+            raise ValueError("prompt destination is outside the KV pool")
     offset = 0
-    for component in components:
-        tokens = pages.numel() * page_size
+    for component, token_indices in zip(components, indices):
         element_count = tokens * component[0].numel()
         length = element_count * component.element_size()
         if offset + length > byte_view.numel():
             raise ValueError("packed PVD KV is shorter than the destination layout")
         selected = byte_view[offset : offset + length].view(component.dtype)
         selected = selected.reshape(tokens, *component.shape[1:])
-        token_indices = _page_token_indices(pages, page_size, device=component.device)
-        component.index_copy_(0, token_indices, selected)
+        # Consume the padded source stride, but never overwrite generated KV in
+        # the final prompt page. This matters on every periodic refresh.
+        component.index_copy_(0, token_indices, selected[:valid_tokens])
         offset += length
     if offset != byte_view.numel():
         raise ValueError("packed PVD KV has trailing bytes not described by layout")

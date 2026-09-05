@@ -22,6 +22,7 @@ from sglang.srt.disaggregation.pvd.request_state import (
     EntryState,
     transition,
 )
+from sglang.srt.disaggregation.pvd.retrieval import RetrievalRequest
 from sglang.srt.disaggregation.pvd.selector import PassThroughSelector
 from sglang.srt.disaggregation.pvd.sharding import (
     layout_from_destination,
@@ -74,9 +75,14 @@ class ShardClient(abc.ABC):
     @abc.abstractmethod
     async def health(self) -> Mapping: ...
 
+    @abc.abstractmethod
+    async def fence_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping: ...
+
 
 class LocalShardClient(ShardClient):
-    def __init__(self, store: VectorKVStore, *, preflight: Optional[Mapping] = None) -> None:
+    def __init__(
+        self, store: VectorKVStore, *, preflight: Optional[Mapping] = None
+    ) -> None:
         self.store = store
         self.rank = store.rank
         self.preflight = dict(preflight or {})
@@ -113,6 +119,9 @@ class LocalShardClient(ShardClient):
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> None:
         self.store.cancel_entry(key, reason)
 
+    async def fence_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
+        return await asyncio.to_thread(self.store.fence_delivery, key, delivery_id)
+
     async def release_entry(self, key: KVEntryKey) -> None:
         self.store.release_entry(key)
 
@@ -133,6 +142,8 @@ class EntryRecord:
     first_token: Optional[FirstTokenMetadata] = None
     active_delivery_count: int = 0
     error: Optional[str] = None
+
+    consumer_leases: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self):
         return {
@@ -212,6 +223,129 @@ class VectorCoordinator:
         self._delivery_reserve_locks: Dict[str, asyncio.Lock] = {}
         self._delivery_start_locks: Dict[str, asyncio.Lock] = {}
         self.selector = PassThroughSelector(self.entry_state)
+        self.admissions = {}
+        self._retrieval_locks = {}
+        self._fenced_retrievals = set()
+
+    async def fence_retrieval(self, delivery_id: str) -> Mapping:
+        """Drain active writes and reject delayed/retried starts for this ID."""
+        if not isinstance(delivery_id, str) or not delivery_id.strip():
+            raise ValueError("delivery_id must be non-empty")
+        lock = self._retrieval_locks.setdefault(delivery_id, asyncio.Lock())
+        async with lock:
+            self._fenced_retrievals.add(delivery_id)
+            if delivery_id in self.deliveries:
+                delivery = self.deliveries[delivery_id]
+                ranks = sorted(delivery.destinations)
+                replies = await asyncio.gather(
+                    *(
+                        self.shards[delivery.source_shards[rank]].fence_delivery(
+                            delivery.entry_key, self._subdelivery_id(delivery_id, rank)
+                        )
+                        for rank in ranks
+                    ),
+                    return_exceptions=True,
+                )
+                for rank, reply in zip(ranks, replies):
+                    if isinstance(reply, BaseException):
+                        raise CoordinatorError(f"V shard fence unconfirmed: {reply}")
+                    if reply.get("fenced") is not True or reply.get(
+                        "delivery_id"
+                    ) != self._subdelivery_id(delivery_id, rank):
+                        raise CoordinatorError(
+                            "V shard returned an invalid fence acknowledgement"
+                        )
+                await self.cancel_delivery(delivery_id, "Decode fenced retrieval")
+        return {"delivery_id": delivery_id, "fenced": True}
+
+    async def admit_request(self, request: Mapping) -> Mapping:
+        """Register Router dispatch; precise allocation follows P's manifest."""
+        fields = [
+            request[name]
+            for name in ("pvd_transfer_id", "pvd_delivery_id", "pvd_vector_group_id")
+        ]
+        fields = [v if isinstance(v, list) else [v] for v in fields]
+        if not fields[0] or len({len(v) for v in fields}) != 1:
+            raise ValueError(
+                "PVD admission identity arrays must have equal nonzero length"
+            )
+        identities = list(zip(*fields))
+        if any(
+            not isinstance(v, str) or not v.strip() for row in identities for v in row
+        ):
+            raise ValueError("PVD admission identities must be non-empty strings")
+        if len({row[0] for row in identities}) != len(identities):
+            raise ValueError("duplicate transfer ID in PVD admission")
+        async with self._lock:
+            for transfer_id, delivery_id, group_id in identities:
+                previous = self.admissions.get(transfer_id)
+                if previous and previous[0] != (delivery_id, group_id):
+                    raise CoordinatorError("conflicting Router admission identity")
+            for transfer_id, delivery_id, group_id in identities:
+                self.admissions[transfer_id] = (
+                    (delivery_id, group_id),
+                    time.monotonic() + self.entry_ttl_secs,
+                )
+        return {"accepted": [row[0] for row in identities]}
+
+    async def renew_consumer(self, key: KVEntryKey, consumer_id: str) -> Mapping:
+        if not isinstance(consumer_id, str) or not consumer_id.strip():
+            raise ValueError("consumer ID must be non-empty")
+        async with self._lock:
+            entry = self.entries[key]
+            if entry.state != EntryState.STORED:
+                raise CoordinatorError("consumer requires a STORED Entry")
+            duration = max(3.0, self.entry_ttl_secs)
+            entry.consumer_leases[consumer_id] = time.monotonic() + duration
+            return {"renew_after_seconds": duration / 3}
+
+    async def release_consumer(self, key: KVEntryKey, consumer_id: str) -> Mapping:
+        async with self._lock:
+            entry = self.entries[key]
+            entry.consumer_leases.pop(consumer_id, None)
+            entry.expires_at = time.monotonic() + self.entry_ttl_secs
+        return {"ok": True}
+
+    async def retrieve(self, sequences: List[Mapping]) -> List[Mapping]:
+        # Parse the whole batch before initiating any remote writes.
+        requests = [RetrievalRequest.from_dict(value) for value in sequences]
+        if len({r.delivery_id for r in requests}) != len(requests):
+            raise ValueError("duplicate delivery ID in retrieval batch")
+
+        async def one_locked(request):
+            result = {
+                "sequence_id": request.sequence_id,
+                "delivery_id": request.delivery_id,
+                "selection": request.selection,
+                "key": request.key.to_dict(),
+            }
+            try:
+                if request.delivery_id in self._fenced_retrievals:
+                    raise CoordinatorError("retrieval has been fenced")
+                entry = self.entries[request.key]
+                if entry.state != EntryState.STORED:
+                    raise CoordinatorError("retrieval requires KV_READY/STORED Entry")
+                await self.reserve_delivery(
+                    key=request.key,
+                    delivery_id=request.delivery_id,
+                    destinations=request.destinations,
+                )
+                delivered = await self.start_delivery(request.delivery_id)
+                result.update(
+                    state=delivered.state.value,
+                    error=delivered.error,
+                    token_ranges=[[0, entry.manifest.prompt_token_count]],
+                )
+            except Exception as exc:
+                result.update(state="failed", error=str(exc))
+            return result
+
+        async def one(request):
+            lock = self._retrieval_locks.setdefault(request.delivery_id, asyncio.Lock())
+            async with lock:
+                return await one_locked(request)
+
+        return await asyncio.gather(*(one(request) for request in requests))
 
     def entry_state(self, key: KVEntryKey) -> Optional[EntryState]:
         entry = self.entries.get(key)
@@ -591,6 +725,11 @@ class VectorCoordinator:
     async def release_entry(self, key: KVEntryKey) -> EntryRecord:
         async with self._lock:
             entry = self.entries[key]
+            if any(
+                deadline > time.monotonic()
+                for deadline in entry.consumer_leases.values()
+            ):
+                raise CoordinatorError("entry has active consumer leases")
             if entry.active_delivery_count:
                 raise CoordinatorError(
                     f"entry has {entry.active_delivery_count} active deliveries"
@@ -598,9 +737,7 @@ class VectorCoordinator:
             if entry.state == EntryState.RELEASED:
                 return entry
             entry.state = transition(entry.state, EntryState.RELEASING)
-        await asyncio.gather(
-            *(self.shards[rank].release_entry(key) for rank in (0, 1))
-        )
+        await asyncio.gather(*(self.shards[rank].release_entry(key) for rank in (0, 1)))
         async with self._lock:
             entry.state = transition(entry.state, EntryState.RELEASED)
             self.metrics.increment("coordinator_entries_released")
@@ -614,6 +751,13 @@ class VectorCoordinator:
         return {
             "healthy": all(not isinstance(item, Exception) for item in shard_health),
             "role": "pvd-vector-coordinator",
+            "pvd_framework_version": 3,
+            "capabilities": [
+                "request_admission",
+                "full_prompt_retrieval",
+                "consumer_leases",
+                "retrieval_fencing",
+            ],
             "world_size": 2,
             "shards": [
                 {"error": str(item)} if isinstance(item, Exception) else item
@@ -626,6 +770,15 @@ class VectorCoordinator:
         """Expire coordinator records first, then release both V shards atomically."""
         now = time.monotonic() if now is None else now
         async with self._lock:
+            self.admissions = {
+                key: value for key, value in self.admissions.items() if value[1] > now
+            }
+            for entry in self.entries.values():
+                entry.consumer_leases = {
+                    key: deadline
+                    for key, deadline in entry.consumer_leases.items()
+                    if deadline > now
+                }
             delivery_ids = [
                 delivery_id
                 for delivery_id, delivery in self.deliveries.items()
@@ -640,6 +793,7 @@ class VectorCoordinator:
                 key
                 for key, entry in self.entries.items()
                 if entry.active_delivery_count == 0
+                and not entry.consumer_leases
                 and entry.expires_at <= now
                 and entry.state == EntryState.STORED
             ]

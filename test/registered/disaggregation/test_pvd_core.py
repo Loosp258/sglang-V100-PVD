@@ -322,6 +322,9 @@ def test_full_prompt_entry_can_feed_multiple_deliveries():
 def test_bounded_descriptor_uses_pool_base_offset():
     engine = FakeTransferEngine()
     store = make_store(0, engine)
+    # torch.empty is intentionally uninitialized; use a sentinel to detect
+    # writes outside the second Entry rather than assuming allocator contents.
+    store.pool.fill_(23)
     first = make_manifest("first")
     second = make_manifest("second")
     first_entry = store.create_entry(first)
@@ -332,7 +335,7 @@ def test_bounded_descriptor_uses_pool_base_offset():
     registration = put_tensor(engine, source, second_entry.target_region, rank=0)
     try:
         offset = int(second_entry.target_region.backend_metadata["base_offset"])
-        assert torch.count_nonzero(store.pool[:offset]) == 0
+        assert torch.all(store.pool[:offset] == 23)
         assert torch.equal(store.pool[offset : offset + ENTRY_BYTES], source)
         assert first_entry.target_region.region_id == second_entry.target_region.region_id
     finally:

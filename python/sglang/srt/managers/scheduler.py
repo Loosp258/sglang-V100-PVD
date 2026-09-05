@@ -2943,6 +2943,17 @@ class Scheduler(
         if batch.is_empty():
             return batch
 
+        # PVD 3.0 refreshes only selected, non-retracted requests. Do this before
+        # allocating the next generated token so failure cleanup has no extra
+        # uncommitted Decode slot, and before any attention reads Prompt KV.
+        if (
+            self.server_args.disaggregation_topology == "pvd"
+            and self.disaggregation_mode == DisaggregationMode.DECODE
+        ):
+            self.refresh_pvd_running_batch(batch)
+            if batch.is_empty():
+                return batch
+
         # Update batch tensors
         batch.prepare_for_decode()
         return batch
@@ -3640,6 +3651,10 @@ class Scheduler(
             self.ipc_channels.send_to_tokenizer.send_output(AbortReq(rid=req.rid), req)
             # For disaggregation decode mode, the request in the waiting queue has KV cache allocated.
             if self.disaggregation_mode == DisaggregationMode.DECODE:
+                if self.server_args.disaggregation_topology == "pvd":
+                    self.disagg_decode_prealloc_queue.kv_manager.decode_refresher.release_request(
+                        req
+                    )
                 release_kv_cache(req, self.tree_cache)
             # For disaggregation prefill mode, free the metadata buffer index
             if self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -3697,6 +3712,10 @@ class Scheduler(
                     if recv_req.abort_all or decode_req.rid.startswith(recv_req.rid):
                         assert hasattr(decode_req, "kv_cache_cpu")
                         del decode_req.kv_cache_cpu
+                        if self.server_args.disaggregation_topology == "pvd":
+                            self.disagg_decode_prealloc_queue.kv_manager.decode_refresher.release_request(
+                                decode_req
+                            )
                         self.ipc_channels.send_to_tokenizer.send_output(
                             AbortReq(rid=decode_req.rid), decode_req
                         )

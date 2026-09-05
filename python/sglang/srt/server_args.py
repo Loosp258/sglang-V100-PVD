@@ -824,6 +824,7 @@ class ServerArgs:
     pvd_model_instance_id: Optional[str] = None
     pvd_rank_rails: str = "mlx5_0,mlx5_1"
     pvd_strict_rdma_preflight: bool = True
+    pvd_kv_refresh_interval: int = 16
     disaggregation_transfer_backend: str = "mooncake"
     disaggregation_bootstrap_port: int = 8998
     disaggregation_ib_device: Optional[str] = None
@@ -6918,6 +6919,12 @@ class ServerArgs:
                 "Request-selectable PVD vector worker group. May be repeated. "
                 "The legacy coordinator URL creates a group named 'default'."
             ),
+        )
+        parser.add_argument(
+            "--pvd-kv-refresh-interval",
+            type=int,
+            default=ServerArgs.pvd_kv_refresh_interval,
+            help="PVD 3.0: retrieve full Prompt KV before the first Decode forward and every M Decode tokens (M > 0).",
         )
         parser.add_argument(
             "--pvd-model-instance-id",

@@ -18,24 +18,24 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.distributed
-
-from sglang.srt.disaggregation.base.conn import KVTransferMetric, KVPoll
+from sglang.srt.disaggregation.base.conn import KVPoll, KVTransferMetric
 from sglang.srt.disaggregation.pvd.client import PVDCoordinatorClient
+from sglang.srt.disaggregation.pvd.decode_refresh import (
+    PVDDecodeRefresher,
+    PVDDecodeSession,
+)
 from sglang.srt.disaggregation.pvd.kv_packer import (
     PVD_TENSOR_LAYOUT,
     describe_kv_layout,
     pack_full_prompt_kv,
     pack_full_prompt_kv_head_shard,
-    unpack_full_prompt_kv,
 )
-from sglang.srt.disaggregation.pvd.mooncake_engine import MooncakePVDTransferEngine
 from sglang.srt.disaggregation.pvd.protocol import (
     FirstTokenMetadata,
     KVEntryKey,
     KVEntryManifest,
     KVLayoutSignature,
     KVShardManifest,
-    RemoteRegionDescriptor,
 )
 from sglang.srt.disaggregation.pvd.runtime import (
     PVDDecodeRuntime,
@@ -43,7 +43,6 @@ from sglang.srt.disaggregation.pvd.runtime import (
     PVDPrefillRuntime,
 )
 from sglang.srt.disaggregation.pvd.sharding import validate_compute_layout
-from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
 
 
 class PVDConnectionError(RuntimeError):
@@ -81,6 +80,11 @@ class PVDKVManager:
         tp_size: int,
         gloo_group,
     ) -> None:
+        from sglang.srt.disaggregation.pvd.mooncake_engine import (
+            MooncakePVDTransferEngine,
+        )
+        from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
+
         if tp_size not in (1, 2, 4):
             raise PVDConnectionError("PVD 2.0 currently supports compute TP 1, 2 or 4")
         if scheduler.ps.pp_size != 1:
@@ -114,7 +118,9 @@ class PVDKVManager:
         self.tp_size = tp_size
         self.gloo_group = gloo_group
         self.page_size = kv_pool.page_size
-        self.rails = [item.strip() for item in scheduler.server_args.pvd_rank_rails.split(",")]
+        self.rails = [
+            item.strip() for item in scheduler.server_args.pvd_rank_rails.split(",")
+        ]
         if len(self.rails) != self.tp_size:
             raise PVDConnectionError(
                 f"PVD requires one rail per compute rank; got {len(self.rails)} "
@@ -157,6 +163,15 @@ class PVDKVManager:
         self.kv_args = SimpleNamespace(state_types=[])
         self.is_dummy_cp_rank = False
         self._layout_description = describe_kv_layout(kv_pool)
+        self.decode_sessions = {}
+        self.decode_refresher = PVDDecodeRefresher(self)
+        if (
+            scheduler.server_args.disaggregation_mode == "decode"
+            and scheduler.enable_overlap
+        ):
+            raise PVDConnectionError(
+                "PVD 3.0 KV refresh requires overlap scheduling disabled"
+            )
 
     def key_for(self, req) -> KVEntryKey:
         transfer_id = getattr(req, "pvd_transfer_id", None)
@@ -200,7 +215,9 @@ class PVDKVManager:
         getter = getattr(model_config, "get_total_num_kv_heads", None)
         if getter is not None:
             return int(getter())
-        return int(self._layout_description["component_token_shapes"][0][0]) * self.tp_size
+        return (
+            int(self._layout_description["component_token_shapes"][0][0]) * self.tp_size
+        )
 
     def layout(self) -> KVLayoutSignature:
         """Return this P/D compute rank group's layout."""
@@ -271,9 +288,7 @@ class PVDKVManager:
 
     def local_shard_manifest(self, prompt_tokens: int) -> KVShardManifest:
         page_count = math.ceil(prompt_tokens / self.page_size)
-        bytes_per_token = sum(
-            self._layout_description["component_bytes_per_token"]
-        )
+        bytes_per_token = sum(self._layout_description["component_bytes_per_token"])
         start_layer = int(getattr(self.kv_pool, "start_layer", 0))
         end_layer_value = getattr(self.kv_pool, "end_layer", None)
         end_layer = int(
@@ -316,9 +331,7 @@ class PVDKVManager:
 
     def gather_rank_objects(self, local: Dict[str, Any]) -> List[Dict[str, Any]]:
         gathered: List[Optional[Dict[str, Any]]] = [None] * self.tp_size
-        torch.distributed.all_gather_object(
-            gathered, local, group=self.gloo_group
-        )
+        torch.distributed.all_gather_object(gathered, local, group=self.gloo_group)
         result = [item for item in gathered if item is not None]
         expected = list(range(self.tp_size))
         if sorted(int(item["rank"]) for item in result) != expected:
@@ -341,7 +354,9 @@ class PVDKVManager:
             if match.get("found") and state == "stored":
                 return match["entry"]
             if state in ("failed", "cancelled", "released"):
-                raise PVDConnectionError(f"PVD Entry became terminal before delivery: {match}")
+                raise PVDConnectionError(
+                    f"PVD Entry became terminal before delivery: {match}"
+                )
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"timed out waiting for PVD Entry {key}")
             await asyncio.sleep(0.01)
@@ -431,9 +446,7 @@ class PVDKVSender:
         except BaseException as exc:
             self._error = exc
             self.conclude_state = KVPoll.Failed
-            self.kv_mgr.control.submit(
-                self.client.cancel_entry(self.key, str(exc))
-            )
+            self.kv_mgr.control.submit(self.client.cancel_entry(self.key, str(exc)))
 
     def _send(self, kv_indices, state_indices: Optional[List] = None):
         if state_indices and any(item is not None for item in state_indices):
@@ -548,17 +561,15 @@ class PVDKVReceiver:
         self._error: Optional[BaseException] = None
         self._entry_record: Optional[Dict[str, Any]] = None
         self._entry_future: Optional[concurrent.futures.Future] = None
-        self._delivery_future: Optional[concurrent.futures.Future] = None
-        self._ack_future: Optional[concurrent.futures.Future] = None
-        self._registration = None
-        self._staging: Optional[torch.Tensor] = None
-        self._page_indices = None
-        self._unpacked = False
-        self._started_at: Optional[float] = None
+        self._admitted = False
+        self.session = PVDDecodeSession(mgr, req)
+        if self.key in mgr.decode_sessions:
+            raise PVDConnectionError("duplicate active PVD Decode transfer identity")
+        mgr.decode_sessions[self.key] = self.session
 
     def init(self, prefill_dp_rank: int):
         self._entry_future = self.kv_mgr.control.submit(
-            self.kv_mgr.wait_for_stored_entry(self.key, self.decode_runtime)
+            self.session.initialize(self.decode_runtime)
         )
 
     def _validate_entry(self, record: Dict[str, Any]) -> KVEntryManifest:
@@ -570,7 +581,9 @@ class PVDKVReceiver:
                 f"PVD Entry layout does not match Decode KV layout: {exc}"
             ) from exc
         if manifest.prompt_token_count != len(self.req.origin_input_ids):
-            raise PVDConnectionError("PVD Entry prompt length does not match Decode request")
+            raise PVDConnectionError(
+                "PVD Entry prompt length does not match Decode request"
+            )
         return manifest
 
     def _write_first_token_metadata(self, aux_index: int) -> None:
@@ -585,9 +598,13 @@ class PVDKVReceiver:
         buffers.cached_tokens[aux_index, 2] = metadata.cached_tokens_host
         buffers.cached_tokens[aux_index, 3] = metadata.cached_tokens_storage
         if metadata.output_token_logprob is not None:
-            buffers.output_token_logprobs_val[aux_index, 0] = metadata.output_token_logprob
+            buffers.output_token_logprobs_val[aux_index, 0] = (
+                metadata.output_token_logprob
+            )
         if metadata.output_token_logprob_index is not None:
-            buffers.output_token_logprobs_idx[aux_index, 0] = metadata.output_token_logprob_index
+            buffers.output_token_logprobs_idx[aux_index, 0] = (
+                metadata.output_token_logprob_index
+            )
         if metadata.output_top_logprobs_values:
             values = torch.tensor(
                 metadata.output_top_logprobs_values,
@@ -620,7 +637,7 @@ class PVDKVReceiver:
             )
         except BaseException as exc:
             self._error = exc
-            self._release_registration()
+            self.session.schedule_close()
             self.conclude_state = KVPoll.Failed
 
     def _send_metadata(
@@ -645,41 +662,10 @@ class PVDKVReceiver:
                 f"Decode allocated {len(kv_indices)} pages, Entry requires "
                 f"{local_shard.page_count}"
             )
-        self._page_indices = kv_indices
-        self._staging = torch.empty(
-            local_shard.expected_bytes,
-            dtype=torch.uint8,
-            device=f"cuda:{self.kv_mgr.scheduler.ps.gpu_id}",
-        )
-        self._registration = self.kv_mgr.transfer_engine.register_memory(
-            self._staging,
-            endpoint="pvd-decode",
-            rank=self.kv_mgr.tp_rank,
-            rail=self.kv_mgr.rail,
-            metadata={
-                "delivery_id": self.delivery_id,
-                "pvd_layout": self.kv_mgr.layout().to_dict(),
-            },
-        )
-        gathered = self.kv_mgr.gather_rank_objects(
-            {
-                "rank": self.kv_mgr.tp_rank,
-                "destination": self._registration.descriptor.to_dict(),
-            }
-        )
-        destinations = {
-            int(item["rank"]): RemoteRegionDescriptor.from_dict(item["destination"])
-            for item in gathered
-        }
         self._write_first_token_metadata(aux_index)
-        self._started_at = time.monotonic()
-        self._delivery_future = self.kv_mgr.control.submit(
-            self.decode_runtime.deliver(
-                key=self.key,
-                destinations=destinations,
-                delivery_id=self.delivery_id,
-            )
-        )
+        # KV_READY admission only. The selected continuous batch owns the first
+        # retrieval; no RDMA destination is exposed while this request waits.
+        self._admitted = True
 
     def poll(self) -> int:
         if self.conclude_state is not None:
@@ -691,49 +677,22 @@ class PVDKVReceiver:
                 self._entry_record = self._entry_future.result()
                 self._validate_entry(self._entry_record)
                 return KVPoll.WaitingForInput
-            if self._delivery_future is None:
+            if not self._admitted:
                 return KVPoll.WaitingForInput
-            if not self._delivery_future.done():
-                return KVPoll.Transferring
-            self._delivery_future.result()
-            if not self._unpacked:
-                torch.cuda.synchronize(self._staging.device)
-                unpack_full_prompt_kv(
-                    self._staging,
-                    self.kv_mgr.kv_pool,
-                    self._page_indices,
-                    page_size=self.kv_mgr.page_size,
-                )
-                self._unpacked = True
-                self._ack_future = self.kv_mgr.control.submit(
-                    self.decode_runtime.ack(self.delivery_id)
-                )
-                return KVPoll.Transferring
-            if not self._ack_future.done():
-                return KVPoll.Transferring
-            self._ack_future.result()
-            self._release_registration()
             self.conclude_state = KVPoll.Success
         except BaseException as exc:
             self._error = exc
-            self._release_registration()
+            self.session.schedule_close()
             self.conclude_state = KVPoll.Failed
         return self.conclude_state
-
-    def _release_registration(self) -> None:
-        if self._registration is not None:
-            self.kv_mgr.transfer_engine.release_memory(self._registration)
-            self._registration = None
 
     def failure_exception(self):
         raise PVDConnectionError(str(self._error or "unknown PVD Decode failure"))
 
     def abort(self):
         self.conclude_state = KVPoll.Failed
-        self.kv_mgr.control.submit(
-            self.client.cancel_delivery(self.delivery_id, "Decode request aborted")
-        )
-        self._release_registration()
+        self.session.schedule_close()
 
     def clear(self):
-        self._release_registration()
+        if self.conclude_state != KVPoll.Success:
+            self.session.schedule_close()

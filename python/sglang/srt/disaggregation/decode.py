@@ -1613,6 +1613,22 @@ class DecodeTransferQueue:
 
 
 class SchedulerDisaggregationDecodeMixin:
+    def refresh_pvd_running_batch(self: Scheduler, batch: ScheduleBatch):
+        manager = self.disagg_decode_prealloc_queue.kv_manager
+        failures = manager.decode_refresher.refresh(batch.reqs)
+        for req, error in failures:
+            logger.error("PVD refresh failed for %s: %s", req.rid, error)
+            prepare_abort(
+                req,
+                f"PVD KV refresh failed: {error}",
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            self.output_streamer.stream_output([req], req.return_logprob)
+            release_kv_cache(req, self.tree_cache, is_insert=False)
+        if failures:
+            batch.filter_batch()
+            manager.decode_refresher.cleanup_finished()
+
     @torch.no_grad()
     def event_loop_normal_disagg_decode(self: Scheduler):
         """A normal scheduler loop for decode worker in disaggregation mode."""
@@ -1803,6 +1819,8 @@ class SchedulerDisaggregationDecodeMixin:
         return new_batch
 
     def process_decode_queue(self: Scheduler):
+        if self.server_args.disaggregation_topology == "pvd":
+            self.disagg_decode_prealloc_queue.kv_manager.decode_refresher.cleanup_finished()
         if self.server_args.disaggregation_decode_enable_offload_kvcache:
             self.decode_offload_manager.check_offload_progress()
 

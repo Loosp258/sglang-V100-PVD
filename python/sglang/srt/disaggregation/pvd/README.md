@@ -1,7 +1,86 @@
-# PVD disaggregation
+# PVD 3.0 disaggregation
 
 PVD is opt-in. The existing PD path remains the default when
 `--disaggregation-topology` is omitted.
+
+## PVD 3.0 request flow
+
+The accepted design is recorded in
+[the design specification](../../../../../docs/superpowers/specs/2026-09-05-pvd3-design.md).
+The Gateway chooses P, V and D, registers the identity-bearing prompt request
+with V (`POST /v1/requests`), then dispatches the same identities to P and D.
+The V coordinator accepts control request bodies up to 64 MiB.
+V does not tokenize this announcement or build an index. P supplies the precise
+token count and layout in its Entry manifest; V reserves the actual GPU bytes
+and returns the registered receive regions before P writes Prompt KV.
+
+After all P shard writes complete, `STORED` means `KV_READY`. D polls that
+control state and obtains P's first-token metadata, then enters its waiting
+queue without a V-to-D KV transfer. Once continuous batching selects the
+request, D rank 0 submits a list of sequences and per-rank registered receive
+regions to `POST /v1/retrieve`. V returns **the entire Prompt KV**. There is no
+index construction (diagram step 7) or CAGRA search (step 12).
+
+Before the first D forward, and after every M completed D-generated tokens,
+all D ranks wait for transfer completion, overwrite only valid Prompt token
+slots, synchronize the local GPU copy, and ACK that round's Delivery. P's
+sampled first token is not counted in M. Each round has a unique Delivery ID;
+late/mismatched replies cannot advance the refresh clock. D-generated KV stays
+local, including generated tokens sharing the final Prompt page.
+
+Add this option to the **D** launch command to select M (default 16):
+
+```bash
+--pvd-kv-refresh-interval 16
+```
+
+The receive staging allocation is reused across rounds. This first
+implementation uses a synchronous batch barrier and automatically disables
+D overlap scheduling; continuous batching still admits and removes requests.
+It does **not** hide network latency or reduce Prompt KV memory on D. Budget
+for Prompt KV, generated KV, and one full-prompt receive staging per active
+sequence/rank. A future selector can replace `selection="full_prompt"` and
+return logical `token_ranges`; D currently rejects unsupported selection/ranges.
+
+D maintains renewable consumer leases while requests wait or run, preventing
+Entry TTL eviction between refresh rounds. Finishing/aborting a request releases
+its lease and staging, but does not destroy an Entry used by another consumer.
+On an uncertain transfer timeout, D retains its staging until the coordinator
+and every involved V shard confirm that writes are fenced. V rejects delayed
+reserve/start messages for fenced IDs. If V stays unreachable, the receive
+buffer remains retained until confirmation or process restart.
+
+Upgrade the Gateway, P, V (both shards) and D together. The binary KV layout
+remains protocol v2; the new control endpoints require this PVD 3.0 revision.
+
+### Verification
+
+The isolated CPU tests use real PyTorch tensors, HTTP handlers, coordinator
+and stores with FakeTransferEngine. The TP test uses thread barriers, not
+CUDA/NCCL or real Gloo networking:
+
+```bash
+python test/registered/disaggregation/run_pvd_cpu_tests.py \
+  test/registered/disaggregation/test_pvd_core.py \
+  test/registered/disaggregation/test_pvd3.py -q
+```
+
+On an RDMA machine, start V, P, D and the rebuilt Gateway using the commands
+below, adding `--pvd-kv-refresh-interval 4` and `--log-level debug` to D. Verify:
+
+1. A deterministic request with `max_new_tokens=18`, EOS ignored, generates
+   17 D tokens and logs five refresh rounds (at D counts 0, 4, 8, 12, 16).
+2. Test non-page-aligned prompt lengths and compare token IDs against an
+   equivalent full-KV baseline; the generated tail must survive refreshes.
+3. Run concurrent short/long requests to exercise batch membership changes.
+4. Exercise P TP1 → V TP2 → D TP4 and the existing TP2 balanced topology with
+   the configured rail mapping; repeat with an explicit single rail if needed.
+5. Cancel waiting/running requests and interrupt V connectivity during a
+   refresh; D must not run attention against incomplete KV or free an RDMA
+   destination before fencing. Restore V and check retained buffers are released.
+6. Run a request longer than V's Entry TTL and verify lease renewal keeps the
+   Entry available. Measure throughput/ITL separately: CPU tests do not establish
+   real GPU correctness, RDMA performance or network/compute overlap.
 
 ## Current data-plane topology
 
@@ -191,6 +270,10 @@ ID that is absent from their startup registry; request data is never accepted
 as an arbitrary coordinator URL. An Entry and all of its Deliveries remain
 bound to the selected V group. A retry creates fresh IDs and may select another
 V group.
+
+The same identity-bearing request is first announced to that V coordinator;
+an admission failure prevents P/D dispatch for that attempt. The original
+`pvd_delivery_id` is the Decode consumer identity and prefix for per-round IDs.
 
 The fake transport and CPU storage switches are test-only and require both
 `--allow-fake-transport` and `--no-strict-rdma-preflight`. The Gateway's strict

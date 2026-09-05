@@ -399,6 +399,30 @@ impl PDRouter {
         Ok(&self.pvd_vector_groups[index])
     }
 
+    async fn admit_pvd_request(
+        &self,
+        group: &PvdVectorGroupConfig,
+        request: &Value,
+    ) -> Result<(), String> {
+        let response = self.client
+            .post(format!("{}/v1/requests", group.coordinator_url.trim_end_matches('/')))
+            .timeout(std::time::Duration::from_secs(30))
+            .json(request)
+            .send().await
+            .map_err(|e| format!("PVD V admission failed for {}: {e}", group.id))?;
+        if !response.status().is_success() {
+            return Err(format!("PVD V admission rejected by {}: {}", group.id, response.status()));
+        }
+        let response: Value = response.json().await
+            .map_err(|e| format!("Invalid PVD V admission response: {e}"))?;
+        let ids = &request[Self::PVD_TRANSFER_ID_KEY];
+        let expected = if ids.is_array() { ids.clone() } else { json!([ids]) };
+        if response.get("accepted") != Some(&expected) {
+            return Err("PVD V admission acknowledged different transfer IDs".to_string());
+        }
+        Ok(())
+    }
+
     fn inject_bootstrap_into_value(
         mut original: Value,
         prefill_worker: &dyn Worker,
@@ -545,6 +569,14 @@ impl PDRouter {
                                 Ok(v) => v,
                                 Err(e) => return Self::handle_serialization_error(e),
                             };
+                            // Register the identical request on V before P/D can
+                            // race to allocate or wait on this transfer identity.
+                            if let Err(e) = self.admit_pvd_request(
+                                vector_group.expect("PVD vector group must be selected"),
+                                &json_request,
+                            ).await {
+                                return Self::handle_server_selection_error(e);
+                            }
                         }
 
                         let ctx_is_stream = context.is_stream;
@@ -1826,6 +1858,42 @@ mod tests {
         assert_eq!(router.select_pvd_vector_group().unwrap().id, "vector-0");
         assert_eq!(router.select_pvd_vector_group().unwrap().id, "vector-1");
         assert_eq!(router.select_pvd_vector_group().unwrap().id, "vector-0");
+    }
+
+    #[tokio::test]
+    async fn test_pvd_admission_sends_same_identity_and_prompt_to_vector() {
+        use axum::{routing::post, Json, Router};
+        let app = Router::new().route(
+            "/v1/requests",
+            post(|Json(value): Json<Value>| async move {
+                assert_eq!(value["prompt"], "hello PVD3");
+                assert_eq!(value["pvd_vector_group_id"], "v3");
+                assert!(value["pvd_delivery_id"].is_string());
+                Json(json!({"accepted": [value["pvd_transfer_id"].clone()]}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let group = PvdVectorGroupConfig { id: "v3".into(), coordinator_url: format!("http://{address}") };
+        let request = PDRouter::inject_pvd_identity_into_value(json!({"prompt": "hello PVD3"}), None, "v3").unwrap();
+        let result = create_test_pd_router().admit_pvd_request(&group, &request).await;
+        server.abort();
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_pvd_admission_rejects_wrong_transfer_ack() {
+        use axum::{routing::post, Json, Router};
+        let app = Router::new().route("/v1/requests", post(|| async { Json(json!({"accepted": ["wrong"]})) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let group = PvdVectorGroupConfig { id: "v3".into(), coordinator_url: format!("http://{address}") };
+        let request = PDRouter::inject_pvd_identity_into_value(json!({"prompt": "hello"}), None, "v3").unwrap();
+        let result = create_test_pd_router().admit_pvd_request(&group, &request).await;
+        server.abort();
+        assert!(result.is_err());
     }
 
     #[tokio::test]

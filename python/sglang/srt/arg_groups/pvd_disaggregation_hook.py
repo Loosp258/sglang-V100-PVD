@@ -30,9 +30,7 @@ def _build_vector_group_map(server_args: "ServerArgs") -> dict[str, str]:
 
     for spec in server_args.pvd_vector_groups or []:
         if "=" not in spec:
-            raise ValueError(
-                f"--pvd-vector-group must use ID=URL syntax, got {spec!r}"
-            )
+            raise ValueError(f"--pvd-vector-group must use ID=URL syntax, got {spec!r}")
         group_id, url = (part.strip() for part in spec.split("=", 1))
         if not group_id or not url:
             raise ValueError(
@@ -52,6 +50,18 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         raise ValueError(f"invalid disaggregation topology: {topology!r}")
     if topology == "pd":
         return
+    if (
+        isinstance(server_args.pvd_kv_refresh_interval, bool)
+        or not isinstance(server_args.pvd_kv_refresh_interval, int)
+        or server_args.pvd_kv_refresh_interval <= 0
+    ):
+        raise ValueError("--pvd-kv-refresh-interval must be a positive integer")
+    if server_args.disaggregation_mode == "decode":
+        server_args.disable_overlap_schedule = True
+        logger.info(
+            "PVD 3.0 uses a synchronous KV refresh barrier every %s Decode tokens",
+            server_args.pvd_kv_refresh_interval,
+        )
 
     if server_args.disaggregation_mode not in ("prefill", "decode"):
         raise ValueError(
@@ -65,9 +75,7 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         )
     server_args.pvd_vector_coordinator_map = vector_groups
 
-    supported_tp = (
-        (1, 2) if server_args.disaggregation_mode == "prefill" else (2, 4)
-    )
+    supported_tp = (1, 2) if server_args.disaggregation_mode == "prefill" else (2, 4)
     if server_args.tp_size not in supported_tp:
         raise ValueError(
             f"PVD 2.0 {server_args.disaggregation_mode} currently supports "
