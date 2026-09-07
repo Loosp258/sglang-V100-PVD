@@ -87,8 +87,12 @@ below, adding `--pvd-kv-refresh-interval 4` and `--log-level debug` to D. Verify
 - Gateway may route over independently sized pools of P and D worker groups.
   V is one physical node running both GPU storage shards and its coordinator
   in one Python process.
-- Production dual rail: `P0 -> V0 -> D0` uses `mlx5_0`, and
-  `P1 -> V1 -> D1` uses `mlx5_1`.
+- The legacy TP2 default uses `mlx5_0` for rank 0 and `mlx5_1` for rank 1.
+  HCA names and order are configurable on P/V/D;
+  for example, `--disaggregation-ib-device mlx5_2,mlx5_3` binds rank 0 to
+  `mlx5_2` and rank 1 to `mlx5_3`. Configure matching names on corresponding
+  transfer paths: the existing transport still checks local/remote rail-name
+  equality, in addition to requiring end-to-end RDMA connectivity.
 - CloudLab single-rail debug: both rank-local paths use `mlx5_0`, selected
   explicitly with `mlx5_0,mlx5_0`. This preserves rank sharding but provides
   neither rail redundancy nor aggregate dual-rail bandwidth.
@@ -126,7 +130,7 @@ one selected worker group, not the number of physical P or D workers.
 
 All roles require Linux, CUDA, Mooncake, CUDA memory registration, and a
 successful GPU-memory transfer preflight. Production dual-rail mode requires
-both HCAs to be active. Single-rail debug mode requires `mlx5_0` to be active
+both configured HCAs to be active. Single-rail debug mode requires its selected HCA to be active
 and runs the same strict registration/transfer check for both ranks. A process
 exits before serving traffic if its configured rank/rail check fails.
 
@@ -186,9 +190,38 @@ For the CloudLab single-rail debug topology, append the following option to
 ```
 
 The P/D launcher then generates the Mooncake GPU mapping
-`{"0":"mlx5_0","1":"mlx5_0"}`. The PVD argument validator accepts only the
-production `mlx5_0,mlx5_1` mapping or an explicit all-`mlx5_0` debug mapping,
-and logs a warning for the latter.
+`{"0":"mlx5_0","1":"mlx5_0"}`. A shared HCA emits a single-rail warning
+regardless of its name. The same configuration can be written as
+`--disaggregation-ib-device mlx5_0` on P, V, and D.
+
+### Configurable HCA selection
+
+All three roles accept `--disaggregation-ib-device`. In **PVD topology**:
+
+- One name shares that HCA across every local group rank, e.g. `mlx5_2`.
+- A comma-separated list has exactly one HCA per rank, in rank order.
+  TP2 / V example: `mlx5_2,mlx5_3`; D TP4 binding example:
+  `mlx5_2,mlx5_3,mlx5_2,mlx5_3`. Entries are not deduplicated.
+- `--pvd-rank-rails` remains supported (V also accepts `--rails`), and
+  requires exactly one entry per rank. If both flags are explicit, their
+  resolved mappings must agree; otherwise startup fails.
+- When neither flag is supplied, the legacy TP2 default remains
+  `mlx5_0,mlx5_1`. For TP1 / TP4, explicitly configure the desired mapping.
+- The common flag also accepts a JSON object or `.json` file containing
+  exactly string rank keys `0` through `world_size - 1`, with one HCA per
+  value. This matches the generated Mooncake mapping with the default
+  rank-to-local-GPU numbering; it is not a list of candidate HCAs per GPU.
+- Empty names, malformed mappings, or incorrect entry counts fail early.
+  Device presence, ACTIVE ports, and GPU registration/transfer preflight
+  remain mandatory for real transport. Different names alone do not prove
+  independent physical rails or cross-host GPUDirect RDMA capability.
+
+These list semantics apply only to PVD; original PD/Mooncake selection is
+unchanged. This change does not expand the supported P/V/D GPU counts or
+remove the transport's existing matching-rail-name checks. For heterogeneous
+TP configurations involving cross-rank transfers, continue to use one common
+HCA name on all ranks/hosts; accepting a multi-rail list does not by itself
+enable arbitrary cross-rail transfers.
 
 For the P TP1 to D TP4 single-rail topology, use one rail value on P and four
 on D. The V command remains the same two-GPU command shown above:

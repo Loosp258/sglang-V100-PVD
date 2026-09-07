@@ -85,20 +85,23 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         raise ValueError("PVD requires one TP group (dp-size=1, DP attention off)")
     if server_args.pp_size != 1:
         raise ValueError("PVD requires --pp-size 1")
-    rails = [item.strip() for item in server_args.pvd_rank_rails.split(",")]
-    if len(rails) != server_args.tp_size:
-        raise ValueError(
-            "PVD requires exactly one --pvd-rank-rails value per TP rank; "
-            f"got {len(rails)} values for TP={server_args.tp_size}"
-        )
-    from sglang.srt.disaggregation.pvd.preflight import validate_rank_rail_names
+    from sglang.srt.disaggregation.pvd.preflight import (
+        resolve_rank_rails,
+        validate_rank_rail_names,
+    )
 
+    rails = resolve_rank_rails(
+        server_args.pvd_rank_rails,
+        getattr(server_args, "disaggregation_ib_device", None),
+        server_args.tp_size,
+    )
     rail_mode = validate_rank_rail_names(rails)
     server_args.pvd_rank_rails = ",".join(rails)
     if rail_mode == "single-rail-debug":
         logger.warning(
-            "PVD single-rail debug mode is active: all TP ranks use mlx5_0; "
-            "this mode has no rail redundancy or dual-rail bandwidth"
+            "PVD single-rail debug mode is active: all TP ranks use %s; "
+            "this mode has no rail redundancy or dual-rail bandwidth",
+            rails[0],
         )
     if server_args.disaggregation_transfer_backend != "mooncake":
         raise ValueError("PVD currently requires the mooncake transfer backend")

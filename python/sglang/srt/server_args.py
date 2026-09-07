@@ -822,7 +822,7 @@ class ServerArgs:
     # PVD argument hook; it is intentionally not a public request field.
     pvd_vector_coordinator_map: Optional[Dict[str, str]] = None
     pvd_model_instance_id: Optional[str] = None
-    pvd_rank_rails: str = "mlx5_0,mlx5_1"
+    pvd_rank_rails: Optional[str] = None
     pvd_strict_rdma_preflight: bool = True
     pvd_kv_refresh_interval: int = 16
     disaggregation_transfer_backend: str = "mooncake"
@@ -6935,8 +6935,9 @@ class ServerArgs:
             "--pvd-rank-rails",
             default=ServerArgs.pvd_rank_rails,
             help=(
-                "Comma-separated rank-to-RDMA-rail mapping. Use mlx5_0,mlx5_1 "
-                "for production or mlx5_0,mlx5_0 for single-rail debug mode."
+                "One HCA per TP rank, e.g. mlx5_2,mlx5_3. Must agree with "
+                "--disaggregation-ib-device if both are supplied. Defaults to "
+                "mlx5_0,mlx5_1 only when neither flag is supplied."
             ),
         )
         parser.add_argument(
@@ -6964,7 +6965,9 @@ class ServerArgs:
             default=ServerArgs.disaggregation_ib_device,
             help="The InfiniBand devices for disaggregation transfer, accepts single device (e.g., --disaggregation-ib-device mlx5_0) "
             "or multiple comma-separated devices (e.g., --disaggregation-ib-device mlx5_0,mlx5_1). "
-            "Default is None, which triggers automatic device detection when mooncake backend is enabled.",
+            "In PVD topology, a single device is shared by all TP ranks; a list maps one device per TP rank in order. "
+            "With neither HCA flag set, PVD retains the TP2 mlx5_0,mlx5_1 default. "
+            "In PD topology, None triggers automatic device detection when mooncake backend is enabled.",
         )
         parser.add_argument(
             "--disaggregation-decode-enable-radix-cache",

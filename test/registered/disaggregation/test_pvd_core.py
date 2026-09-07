@@ -176,8 +176,9 @@ def test_rank_rail_modes_are_explicit_and_bounded():
     assert (
         validate_rank_rail_names(["mlx5_0"] * 4) == "single-rail-debug"
     )
+    assert validate_rank_rail_names(["mlx5_1", "mlx5_1"]) == "single-rail-debug"
     with unittest.TestCase().assertRaises(PVDPreflightError):
-        validate_rank_rail_names(["mlx5_1", "mlx5_1"])
+        validate_rank_rail_names(["mlx5_1", ""])
 
 
 def test_v_launcher_defaults_to_single_process_group_mode():

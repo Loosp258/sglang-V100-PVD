@@ -27,6 +27,7 @@ from sglang.srt.disaggregation.pvd.coordinator import (
     VectorCoordinator,
 )
 from sglang.srt.disaggregation.pvd.preflight import (
+    resolve_rank_rails,
     run_rank_preflight,
     validate_rank_rail_names,
 )
@@ -81,10 +82,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--rails",
         "--pvd-rank-rails",
         dest="rails",
-        default="mlx5_0,mlx5_1",
+        default=None,
         help=(
-            "rank-to-rail mapping: mlx5_0,mlx5_1 for production or "
-            "mlx5_0,mlx5_0 for single-rail debug mode"
+            "One HCA per storage rank, e.g. mlx5_2,mlx5_3. "
+            "Defaults to mlx5_0,mlx5_1 if neither HCA flag is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--disaggregation-ib-device",
+        help=(
+            "One HCA shared by all storage ranks, or a comma-separated HCA "
+            "per rank, e.g. mlx5_2,mlx5_3. Must agree with --pvd-rank-rails "
+            "if both are supplied."
         ),
     )
     parser.add_argument(
@@ -119,17 +128,15 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         raise ValueError("PVD requires exactly 2 V storage ranks")
     if args.rank is not None and args.rank not in (0, 1):
         raise ValueError("PVD V rank must be 0 or 1")
-    rails = [value.strip() for value in args.rails.split(",") if value.strip()]
-    if len(rails) != args.world_size:
-        raise ValueError(
-            "V requires exactly one --pvd-rank-rails value per storage rank; "
-            f"got {len(rails)} values for world size {args.world_size}"
-        )
+    rails = resolve_rank_rails(
+        args.rails, args.disaggregation_ib_device, args.world_size
+    )
     rail_mode = validate_rank_rail_names(rails)
     if rail_mode == "single-rail-debug":
         logger.warning(
-            "PVD single-rail debug mode is active: both V ranks use mlx5_0; "
-            "there is no rail redundancy or aggregate dual-rail bandwidth"
+            "PVD single-rail debug mode is active: both V ranks use %s; "
+            "there is no rail redundancy or aggregate dual-rail bandwidth",
+            rails[0],
         )
     if args.rank == 0 and not args.rank1_shard_url:
         raise ValueError("rank 0 requires --rank1-shard-url")
