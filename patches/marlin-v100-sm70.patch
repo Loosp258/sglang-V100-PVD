@@ -51,7 +51,7 @@ new file mode 100644
 index 0000000..048bdcb
 --- /dev/null
 +++ b/csrc/sm70_bf16_compat.h
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,57 @@
 +#ifndef SM70_BF16_COMPAT_H
 +#define SM70_BF16_COMPAT_H
 +
@@ -87,31 +87,10 @@ index 0000000..048bdcb
 +
 +// --- Intrinsics gated to SM80+ in <cuda_bf16.h>, referenced on SM70 ---------
 +
-+__device__ __forceinline__ float2 __bfloat1622float2(__nv_bfloat162 v) {
-+    return __sm70_bf162_to_f2(v);
-+}
 +
-+__device__ __forceinline__ __nv_bfloat162 __float22bfloat162_rn(float2 f) {
-+    return __sm70_f2_to_bf162(f.x, f.y);
-+}
 +
-+__device__ __forceinline__ __nv_bfloat162 __hadd2(__nv_bfloat162 a, __nv_bfloat162 b) {
-+    float2 fa = __sm70_bf162_to_f2(a);
-+    float2 fb = __sm70_bf162_to_f2(b);
-+    return __sm70_f2_to_bf162(fa.x + fb.x, fa.y + fb.y);
-+}
 +
-+__device__ __forceinline__ __nv_bfloat162 __hsub2(__nv_bfloat162 a, __nv_bfloat162 b) {
-+    float2 fa = __sm70_bf162_to_f2(a);
-+    float2 fb = __sm70_bf162_to_f2(b);
-+    return __sm70_f2_to_bf162(fa.x - fb.x, fa.y - fb.y);
-+}
 +
-+__device__ __forceinline__ __nv_bfloat162 __hmul2(__nv_bfloat162 a, __nv_bfloat162 b) {
-+    float2 fa = __sm70_bf162_to_f2(a);
-+    float2 fb = __sm70_bf162_to_f2(b);
-+    return __sm70_f2_to_bf162(fa.x * fb.x, fa.y * fb.y);
-+}
 +
 +__device__ __forceinline__ __nv_bfloat162 __hfma2(
 +    __nv_bfloat162 a, __nv_bfloat162 b, __nv_bfloat162 c) {
@@ -121,32 +100,12 @@ index 0000000..048bdcb
 +    return __sm70_f2_to_bf162(fa.x * fb.x + fc.x, fa.y * fb.y + fc.y);
 +}
 +
-+__device__ __forceinline__ __nv_bfloat162 __hneg2(__nv_bfloat162 a) {
-+    float2 fa = __sm70_bf162_to_f2(a);
-+    return __sm70_f2_to_bf162(-fa.x, -fa.y);
-+}
 +
-+__device__ __forceinline__ __nv_bfloat162 __hmax2(__nv_bfloat162 a, __nv_bfloat162 b) {
-+    float2 fa = __sm70_bf162_to_f2(a);
-+    float2 fb = __sm70_bf162_to_f2(b);
-+    return __sm70_f2_to_bf162(fmaxf(fa.x, fb.x), fmaxf(fa.y, fb.y));
-+}
 +
-+__device__ __forceinline__ __nv_bfloat162 __hmin2(__nv_bfloat162 a, __nv_bfloat162 b) {
-+    float2 fa = __sm70_bf162_to_f2(a);
-+    float2 fb = __sm70_bf162_to_f2(b);
-+    return __sm70_f2_to_bf162(fminf(fa.x, fb.x), fminf(fa.y, fb.y));
-+}
 +
 +// Scalar comparisons (cuda_bf16.h provides these only on SM80+; the scalar
 +// conversion __bfloat162float is available on SM70 so we can lean on it).
-+__device__ __forceinline__ __nv_bfloat16 __hmax(__nv_bfloat16 a, __nv_bfloat16 b) {
-+    return __bfloat162float(a) >= __bfloat162float(b) ? a : b;
-+}
 +
-+__device__ __forceinline__ __nv_bfloat16 __hmin(__nv_bfloat16 a, __nv_bfloat16 b) {
-+    return __bfloat162float(a) <= __bfloat162float(b) ? a : b;
-+}
 +
 +#endif  // __CUDA_ARCH__ < 800
 +#endif  // SM70_BF16_COMPAT_H
