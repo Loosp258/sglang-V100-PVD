@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping, Optional
 import torch
 
 from sglang.srt.disaggregation.pvd.protocol import RemoteRegionDescriptor
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 
 
 class TransferStatus(str, enum.Enum):
@@ -48,6 +49,7 @@ class TransferHandle:
     transferred_bytes: int = 0
     error: Optional[str] = None
     backend_handle: Any = None
+    transport_state: TransportState = TransportState.NOT_SUBMITTED
 
 
 class TransferEngine(abc.ABC):
