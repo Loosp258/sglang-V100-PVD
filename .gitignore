@@ -278,3 +278,4 @@ sgl-kernel/csrc/**/*_musa/
 artifacts/
 .claude/scheduled_tasks.lock
 .humanize/
+.worktrees/
