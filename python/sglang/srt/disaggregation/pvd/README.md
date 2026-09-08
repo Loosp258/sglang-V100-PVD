@@ -311,3 +311,125 @@ an admission failure prevents P/D dispatch for that attempt. The original
 The fake transport and CPU storage switches are test-only and require both
 `--allow-fake-transport` and `--no-strict-rdma-preflight`. The Gateway's strict
 PVD startup gate intentionally rejects such a V group.
+
+## Mooncake remote-MR metadata consistency (PVD 3.0)
+
+PVD now requires **classic `mooncake-transfer-engine==0.3.13.post1`** for its
+first-stage, correctness-first metadata policy. This is the verified wheel
+version, not a minimum-version claim; other versions and custom/TENT builds
+need separate validation. Ordinary PD does not acquire this version restriction.
+
+Both P/D shared-engine initialization and V standalone-engine initialization
+set `MC_DISABLE_METACACHE=1` **before importing native Mooncake code**. It applies
+to the entire process (including both V ranks), not to one endpoint or one
+request. No additional PVD launch flag is necessary. It disables **remote MR
+descriptor caching**, not Prompt KV storage or the CUDA allocator cache. It
+adds metadata traffic and may reduce performance. It also covers P-to-V writes,
+not only V-to-D retrievals.
+
+The verified upstream behavior is:
+
+- [config.cpp](https://github.com/kvcache-ai/Mooncake/blob/719735896c86b56fabec6cf3e825fb2ea640597a/mooncake-transfer-engine/src/config.cpp):
+  `loadGlobalConfig()` disables metacache if the environment variable **exists**;
+  even `MC_DISABLE_METACACHE=0` disables it. `globalConfig()` uses `call_once`.
+- [transfer_metadata.cpp](https://github.com/kvcache-ai/Mooncake/blob/719735896c86b56fabec6cf3e825fb2ea640597a/mooncake-transfer-engine/src/transfer_metadata.cpp):
+  with metacache off, `getSegmentDescByID()` fetches a fresh remote descriptor
+  rather than returning the cached snapshot; a failed fetch does not fall back
+  to the old snapshot.
+
+A PVD `region_id` is still an application registration identity, **not an rkey**.
+There is no Python `seen_region_ids` shortcut and no fabricated refresh API.
+Mooncake resolves the address/rkey from its fresh descriptor inside the transfer
+path. Received PVD descriptors alone are not treated as evidence of MR freshness.
+
+An already-loaded, unverified Mooncake engine cannot be retrofitted: PVD fails
+startup and asks for a fresh process. An `export` in a shell after service startup
+does not change the native configuration. Start PVD before other components that
+load Mooncake in the same process. Do not hot-switch PD/PVD in a live engine.
+
+### Deployment and acceptance checks
+
+1. Stop test traffic and let requests finish. Restart P, V and D with the updated
+   code, using the same model, TP sizes, HCA mapping, refresh interval and workload.
+   Preserve the old logs separately. Verify package version on **all three nodes**:
+
+   ```bash
+   python -m pip show mooncake-transfer-engine
+   git rev-parse HEAD
+   ```
+
+2. Each P/D worker process and the V process should report:
+
+   ```text
+   PVD Mooncake metadata policy=fresh, version=0.3.13.post1,
+   MC_DISABLE_METACACHE=1 set before native import;
+   scope=process, verification=version-pinned-pre-init
+   ```
+
+   V shard health (`GET /health` on each private shard port, or the coordinator's
+   shard health records) includes these fields under `transport`:
+
+   ```json
+   {
+     "metadata_policy": "fresh",
+     "metadata_policy_verification": "version-pinned-pre-init",
+     "mooncake_version": "0.3.13.post1"
+   }
+   ```
+
+   These fields attest to the verified initialization path, **not** native config
+   readback or a successful cross-node RDMA test. The binding has no metacache
+   getter. Unknown versions fail closed; do not bypass that check by editing
+   package version metadata.
+
+3. Add `--log-level debug` to V and D for diagnostic runs. Correlate `PVD MR
+   registered`, `PVD MR unregistered`, `PVD PUT submit`, `PVD PUT return` and
+   `PVD refresh complete` by session, region, transfer and sequence IDs. PUT
+   logs do not expose native rkeys and a negative return does not prove NIC drain.
+
+4. Run the same three workloads before/after: one 1024-output-token request;
+   50 serial 1024-input/32-output requests; the same 50 requests with concurrency
+   16. Confirm that the long request has multiple completed refresh rounds.
+   Compare **first-attempt remote access errors**, reconnects, completed requests,
+   refresh counts and latency. A successful benchmark alone is insufficient:
+   internal retries can hide transport errors. Use a unique JSONL filename per
+   run, or read its **last** nonempty record; the benchmark appends results.
+
+5. For data-plane acceptance, use an isolated two-node MR-reuse test on each rail:
+   keep the receiver CUDA tensor allocated; register, publish its descriptor,
+   write a round-specific byte pattern, confirm transfer completion, synchronize
+   and compare the receiver bytes. Only then unregister and re-register the
+   **same tensor** for the next round, retaining the sender engine/session.
+   Repeat at least 100 rounds per rail. Require byte-exact results and no
+   first-attempt remote access errors. CPU doubles cannot establish this result.
+
+For a controlled A/B/A test, use the original revision for A/A' and this revision
+for B, with fresh processes and otherwise identical configurations. Unsetting
+the variable does not disable this revision's PVD safety policy: startup sets it
+again. There is intentionally no unsafe production opt-out.
+
+### Lifecycle scope and remaining limitations
+
+This change does **not** replace the existing Delivery tombstones and D's
+per-request receive-MR fence. Fresh metadata must not make a cancelled Delivery
+eligible to write a newly reused address. Tests cover late-delivery rejection
+after address reuse and retaining D's MR while fence confirmation times out or
+identifies the wrong Delivery.
+
+Native synchronous-transfer timeout/drain semantics remain a separate limitation:
+the Python binding's negative return does not necessarily establish that all
+posted NIC work has stopped. The existing software fence is not proof of native
+timeout drain. This patch does not claim to solve that failure mode; resolving
+it requires a verified cancellation/drain primitive or explicit quarantine and
+backpressure. No MR lifetime is shortened by this metadata change, and no
+unbounded "never unregister" pool is introduced.
+
+CPU regression suite (torch, pytest, aiohttp, psutil and pyzmq required):
+
+```bash
+python test/registered/disaggregation/run_pvd_cpu_tests.py \
+  test/registered/disaggregation/test_pvd_core.py \
+  test/registered/disaggregation/test_pvd3.py \
+  test/registered/disaggregation/test_pvd_rails.py \
+  test/registered/disaggregation/test_pvd_mooncake_metadata.py -q
+```

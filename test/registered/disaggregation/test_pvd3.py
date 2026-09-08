@@ -502,6 +502,107 @@ def test_shard_fence_blocks_a_delayed_reserve():
     asyncio.run(scenario())
 
 
+def test_fenced_old_delivery_cannot_write_a_reregistered_destination():
+    async def scenario():
+        engine, stores, coordinator = make_vector()
+        key = await make_ready_entry(coordinator, engine, "reuse-after-fence")
+        buffer = torch.full((32,), 77, dtype=torch.uint8)
+        old = engine.register_memory(buffer, endpoint="d", rank=0, rail="mlx5_0")
+        stores[0].reserve_delivery(key, "old:d0", old.descriptor)
+        stores[0].fence_delivery(key, "old:d0")
+        engine.release_memory(old)
+        new = engine.register_memory(buffer, endpoint="d", rank=0, rail="mlx5_0")
+        try:
+            assert new.descriptor.address == old.descriptor.address
+            assert new.descriptor.region_id != old.descriptor.region_id
+            with pytest.raises(Exception, match="fenced"):
+                stores[0].start_delivery(key, "old:d0")
+            assert torch.all(buffer == 77)
+        finally:
+            engine.release_memory(new)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["timeout", "wrong-delivery"])
+def test_decode_retains_mr_until_matching_fence_confirmation(failure):
+    from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
+    from sglang.srt.disaggregation.pvd.protocol import KVEntryKey
+    from sglang.srt.disaggregation.pvd.transfer_engine import (
+        FakeTransferEngine,
+        MemorySlice,
+        TransferStatus,
+    )
+
+    async def scenario():
+        waiting = asyncio.Event()
+        allow_fence = asyncio.Event()
+
+        class Client:
+            calls = 0
+
+            async def fence_retrieval(self, delivery_id):
+                self.calls += 1
+                if self.calls == 1:
+                    if failure == "timeout":
+                        raise TimeoutError("V has not confirmed completion")
+                    return {"delivery_id": "wrong", "fenced": True}
+                waiting.set()
+                await allow_fence.wait()
+                return {"delivery_id": delivery_id, "fenced": True}
+
+            async def release_consumer(self, key, consumer_id):
+                return None
+
+        client = Client()
+        engine = FakeTransferEngine()
+        manager = SimpleNamespace(
+            key_for=lambda r: KVEntryKey("model", "fence", "fence"),
+            client_for=lambda r: client,
+            transfer_engine=engine,
+            tp_rank=0,
+            scheduler=SimpleNamespace(
+                server_args=SimpleNamespace(pvd_kv_refresh_interval=4)
+            ),
+        )
+        session = PVDDecodeSession(manager, SimpleNamespace(pvd_delivery_id="d"))
+        buffer = torch.zeros(16, dtype=torch.uint8)
+        registration = engine.register_memory(
+            buffer, endpoint="d", rank=0, rail="mlx5_0"
+        )
+        session.staging, session.registration = buffer, registration
+        session.clock.begin(0)
+        closing = asyncio.create_task(session.close())
+        try:
+            await asyncio.wait_for(waiting.wait(), timeout=5)
+            assert not closing.done()
+            assert session.registration is registration
+            # Still a live MR, not merely a retained Python tensor reference.
+            assert (
+                engine.submit_put(
+                    MemorySlice(registration, 0, 16), registration.descriptor
+                ).status
+                == TransferStatus.SUCCESS
+            )
+            allow_fence.set()
+            await asyncio.wait_for(closing, timeout=5)
+            assert session.registration is None
+            assert (
+                engine.submit_put(
+                    MemorySlice(registration, 0, 16), registration.descriptor
+                ).status
+                == TransferStatus.FAILED
+            )
+        finally:
+            allow_fence.set()
+            if not closing.done():
+                closing.cancel()
+            await asyncio.gather(closing, return_exceptions=True)
+            engine.release_memory(registration)
+
+    asyncio.run(scenario())
+
+
 def test_decode_admission_does_not_start_kv_delivery():
     from sglang.srt.disaggregation.base.conn import KVPoll
     from sglang.srt.disaggregation.pvd.conn import PVDKVReceiver

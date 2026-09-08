@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from typing import Any, Dict, Mapping, Optional
 
 import torch
-
 from sglang.srt.disaggregation.pvd.protocol import RemoteRegionDescriptor
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
@@ -20,6 +20,8 @@ from sglang.srt.distributed.device_communicators.mooncake_transfer_engine import
     MooncakeTransferEngine,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class MooncakePVDTransferEngine(TransferEngine):
     """Synchronous Mooncake writes behind the role-neutral PVD API."""
@@ -29,7 +31,10 @@ class MooncakePVDTransferEngine(TransferEngine):
     def __init__(self, *, hostname: str, gpu_id: int, rail: str) -> None:
         self.rail = rail
         self._engine = MooncakeTransferEngine(
-            hostname=hostname, gpu_id=gpu_id, ib_device=rail
+            hostname=hostname,
+            gpu_id=gpu_id,
+            ib_device=rail,
+            require_fresh_metadata=True,
         )
         self._registrations: Dict[str, RegisteredMemory] = {}
         self._handles: Dict[str, TransferHandle] = {}
@@ -39,6 +44,7 @@ class MooncakePVDTransferEngine(TransferEngine):
     def from_existing(
         cls, engine: MooncakeTransferEngine, *, rail: str
     ) -> "MooncakePVDTransferEngine":
+        engine.require_pvd_metadata_policy()
         adapter = cls.__new__(cls)
         adapter.rail = rail
         adapter._engine = engine
@@ -61,7 +67,9 @@ class MooncakePVDTransferEngine(TransferEngine):
         if not buffer.is_contiguous():
             raise ValueError("registered buffers must be contiguous")
         if rail != self.rail:
-            raise RuntimeError(f"engine rail is {self.rail}, registration requested {rail}")
+            raise RuntimeError(
+                f"engine rail is {self.rail}, registration requested {rail}"
+            )
         length = buffer.numel() * buffer.element_size()
         ptr = int(buffer.data_ptr())
         ret = self._engine.engine.register_memory(ptr, length)
@@ -83,13 +91,20 @@ class MooncakePVDTransferEngine(TransferEngine):
         registration = RegisteredMemory(descriptor=descriptor, buffer=buffer)
         with self._lock:
             self._registrations[region_id] = registration
+        logger.debug(
+            "PVD MR registered: session=%s region=%s rank=%s rail=%s address=%#x bytes=%s",
+            descriptor.endpoint,
+            region_id,
+            rank,
+            rail,
+            ptr,
+            length,
+        )
         return registration
 
     def release_memory(self, registration: RegisteredMemory) -> None:
         with self._lock:
-            existing = self._registrations.pop(
-                registration.descriptor.region_id, None
-            )
+            existing = self._registrations.pop(registration.descriptor.region_id, None)
         if existing is not None:
             ret = self._engine.engine.unregister_memory(
                 existing.descriptor.address
@@ -97,6 +112,13 @@ class MooncakePVDTransferEngine(TransferEngine):
             )
             if ret != 0:
                 raise RuntimeError(f"Mooncake memory deregistration failed: {ret}")
+            logger.debug(
+                "PVD MR unregistered: session=%s region=%s rail=%s address=%#x",
+                existing.descriptor.endpoint,
+                existing.descriptor.region_id,
+                self.rail,
+                existing.descriptor.address,
+            )
 
     def submit_put(
         self,
@@ -127,6 +149,20 @@ class MooncakePVDTransferEngine(TransferEngine):
 
         local_address = local.registration.descriptor.address + local.offset
         remote_address = remote.address + remote_offset
+        # region_id is a PVD identity, NOT a Mooncake rkey. Fresh descriptor
+        # resolution happens inside classic Mooncake on every remote lookup,
+        # enabled before its first native import. No 'seen region' shortcut.
+        self._engine.require_pvd_metadata_policy()
+        logger.debug(
+            "PVD PUT submit: transfer=%s peer=%s region=%s rail=%s address=%#x "
+            "bytes=%s metadata_policy=fresh",
+            handle.transfer_id,
+            remote.endpoint,
+            remote.region_id,
+            self.rail,
+            remote_address,
+            local.length,
+        )
         ret = self._engine.transfer_sync(
             remote.endpoint, local_address, remote_address, local.length
         )
@@ -136,6 +172,13 @@ class MooncakePVDTransferEngine(TransferEngine):
         else:
             handle.status = TransferStatus.SUCCESS
             handle.transferred_bytes = local.length
+        logger.debug(
+            "PVD PUT return: transfer=%s peer=%s region=%s result=%s",
+            handle.transfer_id,
+            remote.endpoint,
+            remote.region_id,
+            ret,
+        )
         with self._lock:
             self._handles[handle.transfer_id] = handle
         return handle
@@ -156,4 +199,7 @@ class MooncakePVDTransferEngine(TransferEngine):
             "rail": self.rail,
             "session_id": self._engine.get_session_id(),
             "registered_regions": registrations,
+            "metadata_policy": "fresh",
+            "metadata_policy_verification": "version-pinned-pre-init",
+            "mooncake_version": self._engine.pvd_metadata_version,
         }

@@ -47,6 +47,12 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch a PVD V worker group")
     parser.add_argument(
+        "--log-level",
+        choices=["debug", "info", "warning", "error"],
+        default="info",
+        help="Use debug to trace PVD MR registration and PUT lifecycles",
+    )
+    parser.add_argument(
         "--rank",
         type=int,
         default=None,
@@ -426,6 +432,11 @@ async def _serve_group(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = build_parser().parse_args()
+    level = getattr(logging, args.log_level.upper())
+    logging.basicConfig(
+        level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    logging.getLogger().setLevel(level)
     if args.rank is None:
         asyncio.run(_serve_group(args))
     else:

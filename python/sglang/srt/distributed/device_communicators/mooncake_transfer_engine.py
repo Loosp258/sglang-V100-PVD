@@ -1,6 +1,9 @@
+import importlib.metadata
 import json
 import logging
 import os
+import sys
+import threading
 from typing import Dict, List, Optional, Union
 
 from sglang.srt.environ import envs
@@ -10,6 +13,77 @@ logger = logging.getLogger(__name__)
 
 # Module-level shared engine instance, set by init_mooncake_transfer_engine().
 _mooncake_transfer_engine: Optional["MooncakeTransferEngine"] = None
+
+# Classic Mooncake v0.3.13.post1 reads MC_DISABLE_METACACHE by *presence*
+# in loadGlobalConfig(), once per process. With metacache=false its
+# getSegmentDescByID() fetches a fresh descriptor for remote transfers.
+# Source: kvcache-ai/Mooncake tag v0.3.13.post1, src/config.cpp:320,836 and
+# src/transfer_metadata.cpp:1314 (under mooncake-transfer-engine).
+# Do not widen this set without checking those semantics and the RDMA test.
+_PVD_VERIFIED_MOONCAKE_VERSIONS = frozenset({"0.3.13.post1"})
+_mooncake_init_lock = threading.RLock()
+_mooncake_native_loaded = False
+_pvd_metadata_version: Optional[str] = None
+
+
+def _new_native_engine(require_fresh_metadata: bool):
+    """Configure PVD before loading native code; never retrofit a live engine.
+
+    This is process-wide, including both ranks of a single-process V. Regular
+    PD callers neither set the variable nor impose a Mooncake version pin.
+    The Python binding has no runtime metacache getter: the guarantee here is
+    verified-version + pre-import configuration, not a hardware readback.
+    """
+    global _mooncake_native_loaded, _pvd_metadata_version
+    with _mooncake_init_lock:
+        if require_fresh_metadata:
+            if _pvd_metadata_version is None:
+                if _mooncake_native_loaded or any(
+                    name.startswith("mooncake.") for name in tuple(sys.modules)
+                ):
+                    raise RuntimeError(
+                        "PVD metadata policy must be configured before Mooncake "
+                        "is loaded; restart the process through the PVD launcher."
+                    )
+                try:
+                    version = importlib.metadata.version("mooncake-transfer-engine")
+                except importlib.metadata.PackageNotFoundError as exc:
+                    raise RuntimeError(
+                        "PVD requires the verified mooncake-transfer-engine "
+                        "version 0.3.13.post1."
+                    ) from exc
+                if version not in _PVD_VERIFIED_MOONCAKE_VERSIONS:
+                    raise RuntimeError(
+                        f"PVD fresh metadata policy is not verified for Mooncake "
+                        f"version {version}; use mooncake-transfer-engine==0.3.13.post1."
+                    )
+                os.environ["MC_DISABLE_METACACHE"] = "1"
+                _pvd_metadata_version = version
+                logger.info(
+                    "PVD Mooncake metadata policy=fresh, version=%s, "
+                    "MC_DISABLE_METACACHE=1 set before native import; "
+                    "scope=process, verification=version-pinned-pre-init",
+                    version,
+                )
+        if (
+            _pvd_metadata_version is not None
+            and os.environ.get("MC_DISABLE_METACACHE") != "1"
+        ):
+            raise RuntimeError(
+                "PVD metadata environment changed after configuration; "
+                "restart the process instead of reconfiguring live engines."
+            )
+
+        try:
+            from mooncake.engine import TransferEngine
+        except ImportError as exc:
+            raise ImportError(
+                "Please install mooncake by following the instructions at "
+                "https://kvcache-ai.github.io/Mooncake/getting_started/build.html "
+                "to run SGLang with MooncakeTransferEngine."
+            ) from exc
+        _mooncake_native_loaded = True
+        return TransferEngine(), _pvd_metadata_version
 
 
 def parse_ib_device_config(
@@ -104,17 +178,12 @@ class MooncakeTransferEngine:
         hostname: str,
         gpu_id: Optional[int] = None,
         ib_device: Optional[str] = None,
+        *,
+        require_fresh_metadata: bool = False,
     ):
-        try:
-            from mooncake.engine import TransferEngine
-        except ImportError as e:
-            raise ImportError(
-                "Please install mooncake by following the instructions at "
-                "https://kvcache-ai.github.io/Mooncake/getting_started/build.html "
-                "to run SGLang with MooncakeTransferEngine."
-            ) from e
-
-        self.engine = TransferEngine()
+        self.engine, self.pvd_metadata_version = _new_native_engine(
+            require_fresh_metadata
+        )
         self.hostname = hostname
         self.gpu_id = gpu_id if gpu_id is not None else 0
         # MC_FORCE_TCP=1 makes mooncake install TcpTransport instead of RDMA,
@@ -131,6 +200,14 @@ class MooncakeTransferEngine:
         self.session_id = NetworkAddress(
             self.hostname, self.engine.get_rpc_port()
         ).to_host_port_str()
+
+    def require_pvd_metadata_policy(self) -> None:
+        """Validate captured initialization policy, not today's environment."""
+        if self.pvd_metadata_version not in _PVD_VERIFIED_MOONCAKE_VERSIONS:
+            raise RuntimeError(
+                "Mooncake engine was not initialized with PVD fresh metadata "
+                "policy; restart with require_fresh_metadata=True."
+            )
 
     def register(self, ptr, length):
         try:
@@ -276,6 +353,8 @@ def init_mooncake_transfer_engine(
     hostname: str,
     gpu_id: Optional[int] = None,
     ib_device: Optional[str] = None,
+    *,
+    require_fresh_metadata: bool = False,
 ) -> MooncakeTransferEngine:
     """
     Initialize the shared MooncakeTransferEngine. Note: if already
@@ -284,12 +363,18 @@ def init_mooncake_transfer_engine(
     mooncake transfer is needed.
     """
     global _mooncake_transfer_engine
-    if _mooncake_transfer_engine is not None:
+    with _mooncake_init_lock:
+        if _mooncake_transfer_engine is not None:
+            if require_fresh_metadata:
+                _mooncake_transfer_engine.require_pvd_metadata_policy()
+            return _mooncake_transfer_engine
+        _mooncake_transfer_engine = MooncakeTransferEngine(
+            hostname=hostname,
+            gpu_id=gpu_id,
+            ib_device=ib_device,
+            require_fresh_metadata=require_fresh_metadata,
+        )
         return _mooncake_transfer_engine
-    _mooncake_transfer_engine = MooncakeTransferEngine(
-        hostname=hostname, gpu_id=gpu_id, ib_device=ib_device
-    )
-    return _mooncake_transfer_engine
 
 
 def get_mooncake_transfer_engine() -> Optional[MooncakeTransferEngine]:
