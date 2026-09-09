@@ -199,15 +199,13 @@ external `release_memory()` retry owns a callback.  The manager previously
 treated that return as completion, released the slot, and forgot the transfer;
 if the external callback then failed, a later terminal poll could not retry.
 
-`ResourceGuard.release_pending` now reports a requested callback that has not
-successfully finished.  `TransferLifecycleManager.complete` first makes the
-business/transport terminal transition under the handle lock, then calls
-`unpin` outside both the handle and manager locks.  It retains the tracked
-record and slot whenever cleanup is pending or the callback raises.  It drops
-them only after observing no pending callback outcome.  `MooncakePVDTransferEngine.poll`
-records a native terminal state under the handle lock, but calls lifecycle
-cleanup after releasing that lock, so a blocking deregistration callback cannot
-hold the poll lock.
+The first iteration used a pending-release indicator and moved
+`TransferLifecycleManager.complete`'s `unpin` outside both the handle and
+manager locks.  The atomic outcome that replaces that indicator is documented
+in fix round 2 below.  `MooncakePVDTransferEngine.poll` records a native
+terminal state under the handle lock, but calls lifecycle cleanup after
+releasing that lock, so a blocking deregistration callback cannot hold the poll
+lock.
 
 ### RED
 
@@ -256,3 +254,73 @@ Result: `70 passed in 2.38s`.
 Amended existing regression used the command recorded above and passed:
 `86 passed in 4.37s`.  The exact Ruff scope above reported `All checks passed!`;
 `git diff --check` passed with only CRLF-conversion advisories.
+
+## Fix round 2: shared source owners
+
+### Review finding and fix
+
+The round-1 pending indicator conflated two different cases: a callback owned
+by another thread is genuinely unresolved, while another transfer still
+pinning the same guard is safe and must not retain this terminal transfer's
+slot.  That leaked owner A's slot when A and B shared a registration, release
+was requested, A completed first, and only B later released the guard.
+
+`ResourceGuard.unpin` now returns an atomic `GuardUnpinOutcome` captured under
+the guard lock: `OWNERS_REMAIN`, `RELEASE_NOT_REQUESTED`,
+`RELEASE_IN_PROGRESS`, or `RELEASED`.  The manager retains the record only for
+`RELEASE_IN_PROGRESS` (or an exception from a callback it started); it releases
+the current transfer's capacity for the other outcomes.  This keeps the
+event-gated external callback race from round 1 safe while allowing a terminal
+owner to free its own slot as soon as another owner remains.  The callback is
+still invoked outside manager and handle locks.
+
+### RED
+
+Before this change, the deterministic multi-owner test ran:
+
+```powershell
+& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' `
+  'test\registered\disaggregation\run_pvd_cpu_tests.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py::test_terminal_owner_releases_its_slot_while_another_owner_remains' -q
+```
+
+Expected failure observed:
+
+```text
+assert 2 == 1
+```
+
+The old code kept both slots after owner A completed, even though owner B was
+the only remaining source pin.
+
+### GREEN and regression evidence
+
+The multi-owner test and the event-gated external-release-race test passed
+together after the atomic outcome change:
+
+```powershell
+& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' `
+  'test\registered\disaggregation\run_pvd_cpu_tests.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py::test_terminal_owner_releases_its_slot_while_another_owner_remains' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py::test_terminal_poll_retains_capacity_while_release_retry_is_running' -q
+```
+
+Result: `2 passed in 1.65s`.
+
+Focused lifecycle/adapter/metadata suite (including
+`test_pvd_transfer_lifecycle.py`) passed:
+
+```powershell
+& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' `
+  'test\registered\disaggregation\run_pvd_cpu_tests.py' `
+  'test\registered\disaggregation\test_pvd_transfer_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_metadata.py' -q
+```
+
+Result: `71 passed in 2.39s`.
+
+Existing regression used the previously recorded four-suite command and
+passed: `86 passed in 4.33s`.  The exact Ruff scope recorded above again
+reported `All checks passed!`; `git diff --check` found no whitespace errors
+and emitted only CRLF-conversion advisories.

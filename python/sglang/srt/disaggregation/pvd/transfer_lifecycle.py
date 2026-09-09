@@ -24,6 +24,15 @@ class TransportState(str, enum.Enum):
         }
 
 
+class GuardUnpinOutcome(str, enum.Enum):
+    """Atomic post-unpin ownership and release-callback state."""
+
+    OWNERS_REMAIN = "owners_remain"
+    RELEASE_NOT_REQUESTED = "release_not_requested"
+    RELEASE_IN_PROGRESS = "release_in_progress"
+    RELEASED = "released"
+
+
 class ResourceGuard:
     """Keep a resource alive until release is requested and all owners unpin."""
 
@@ -41,24 +50,28 @@ class ResourceGuard:
         with self._lock:
             return self._value
 
-    @property
-    def release_pending(self) -> bool:
-        """Whether a requested callback still needs a successful outcome."""
-        with self._lock:
-            return self._release_requested and not self._released
-
     def pin(self, owner: str) -> None:
         with self._lock:
             if self._release_requested or self._releasing or self._released:
                 raise RuntimeError("resource release has already begun")
             self._owners.add(owner)
 
-    def unpin(self, owner: str) -> None:
+    def unpin(self, owner: str) -> GuardUnpinOutcome:
         with self._lock:
             self._owners.discard(owner)
-            should_release = self._begin_release_locked()
+            if self._released:
+                return GuardUnpinOutcome.RELEASED
+            if self._releasing:
+                return GuardUnpinOutcome.RELEASE_IN_PROGRESS
+            if self._owners:
+                return GuardUnpinOutcome.OWNERS_REMAIN
+            if not self._release_requested:
+                return GuardUnpinOutcome.RELEASE_NOT_REQUESTED
+            self._releasing = True
+            should_release = True
         if should_release:
             self._run_release()
+        return GuardUnpinOutcome.RELEASED
 
     def request_release(self) -> None:
         with self._lock:
@@ -283,8 +296,8 @@ class TransferLifecycleManager:
         # The callback can block and can race a caller retrying release_memory.
         # Do not retain the handle or manager lock while it runs.  A returning
         # unpin is not enough: another callback may still be in progress.
-        guard.unpin(handle.transfer_id)
-        if guard.release_pending:
+        unpin_outcome = guard.unpin(handle.transfer_id)
+        if unpin_outcome == GuardUnpinOutcome.RELEASE_IN_PROGRESS:
             return
 
         # Failed deregistration keeps the record and its capacity until a

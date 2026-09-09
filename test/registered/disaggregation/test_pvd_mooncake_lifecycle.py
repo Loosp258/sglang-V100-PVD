@@ -314,6 +314,25 @@ def test_terminal_poll_retains_capacity_while_release_retry_is_running(transport
     assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
 
 
+def test_terminal_owner_releases_its_slot_while_another_owner_remains(transport):
+    native = NativeStub(statuses=[1, 1])
+    adapter, local, remote = make_adapter_with_source(
+        transport, native, budget=TransferBudget(64, 2)
+    )
+    first = adapter.submit_put(local, remote)
+    second = adapter.submit_put(local, remote)
+    adapter.release_memory(local.registration)
+
+    adapter.poll(first)
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 1
+    assert adapter.lifecycle_manager.snapshot()["tracked_transfers"] == 1
+
+    adapter.poll(second)
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
+    assert adapter.lifecycle_manager.snapshot()["tracked_transfers"] == 0
+    assert native.unregister_calls == [4096]
+
+
 @pytest.mark.parametrize("fault", ["rail", "bounds", "identity", "released", "cuda", "budget"])
 def test_pre_submit_failures_never_enter_native_or_pin_source(transport, monkeypatch, fault):
     native = NativeStub()
