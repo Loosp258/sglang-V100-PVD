@@ -19,6 +19,29 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+
+
+def pvd_budget():
+    return TransferBudget(staging_bytes=64, max_inflight=4)
+
+
+class CudaBuffer:
+    is_cuda = True
+    device = "cuda:0"
+
+    def is_contiguous(self):
+        return True
+
+    def numel(self):
+        return 16
+
+    def element_size(self):
+        return 1
+
+    def data_ptr(self):
+        return 4096
+
 
 @pytest.fixture
 def transport(monkeypatch):
@@ -64,6 +87,22 @@ def transport(monkeypatch):
             state.writes.append((endpoint, destination, key, length))
             return 0 if key is not None and key == state.live[destination] else -1
 
+        def register_memory(self, address, length):
+            return 0
+
+        def unregister_memory(self, address):
+            return 0
+
+        def transfer_submit_write(self, endpoint, source, destination, length):
+            native_id = len(self.cached) + len(state.writes) + 1
+            self._async_results = getattr(self, "_async_results", {})
+            result = self.transfer_sync_write(endpoint, source, destination, length)
+            self._async_results[native_id] = 1 if result == 0 else -1
+            return native_id
+
+        def transfer_check_status(self, native_id):
+            return self._async_results[native_id]
+
     native = types.ModuleType("mooncake.engine")
     native.TransferEngine = NativeEngine
     original_import = builtins.__import__
@@ -97,24 +136,21 @@ def put(adapter, region_id):
     from sglang.srt.disaggregation.pvd.protocol import RemoteRegionDescriptor
     from sglang.srt.disaggregation.pvd.transfer_engine import (
         MemorySlice,
-        RegisteredMemory,
     )
 
-    source = RemoteRegionDescriptor("v:1", "source", 4096, 16, "cuda:0", 0, "mlx5_2")
     target = RemoteRegionDescriptor("d:2", region_id, 8192, 16, "cuda:0", 0, "mlx5_2")
-    return adapter.submit_put(
-        MemorySlice(
-            RegisteredMemory(source, torch.zeros(16, dtype=torch.uint8)), 0, 16
-        ),
-        target,
-    )
+    source = adapter.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
+    handle = adapter.submit_put(MemorySlice(source, 0, 16), target)
+    adapter.poll(handle)
+    adapter.release_memory(source)
+    return handle
 
 
 def test_same_address_new_registration_uses_new_key_on_first_write(transport):
     from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
 
     adapter = transport.adapter.MooncakePVDTransferEngine(
-        hostname="v", gpu_id=0, rail="mlx5_2"
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
     )
     transport.state.live[8192] = 101
     assert put(adapter, "old-registration").status == TransferStatus.SUCCESS
@@ -127,7 +163,7 @@ def test_metadata_lookup_failure_does_not_post_cached_write(transport):
     from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
 
     adapter = transport.adapter.MooncakePVDTransferEngine(
-        hostname="v", gpu_id=0, rail="mlx5_2"
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
     )
     transport.state.live[8192] = 101
     assert put(adapter, "first").status == TransferStatus.SUCCESS
@@ -163,7 +199,9 @@ def test_pvd_rejects_unverified_mooncake_version_before_native_init(
 
 def test_two_v_ranks_share_preinit_policy_and_report_it(transport):
     ranks = [
-        transport.adapter.MooncakePVDTransferEngine(hostname="v", gpu_id=i, rail=rail)
+        transport.adapter.MooncakePVDTransferEngine(
+            hostname="v", gpu_id=i, rail=rail, budget=pvd_budget()
+        )
         for i, rail in enumerate(("mlx5_2", "mlx5_3"))
     ]
     for adapter in ranks:
@@ -186,7 +224,7 @@ def test_shared_pvd_initialization_and_reuse_enforce_policy(transport):
         "d", gpu_id=0, ib_device="mlx5_2", require_fresh_metadata=True
     )
     adapter = transport.adapter.MooncakePVDTransferEngine.from_existing(
-        engine, rail="mlx5_2"
+        engine, rail="mlx5_2", budget=pvd_budget()
     )
     assert adapter.health()["metadata_policy"] == "fresh"
     assert (
@@ -218,7 +256,7 @@ def test_preexisting_env_is_normalized_before_native_load(
 ):
     monkeypatch.setenv("MC_DISABLE_METACACHE", value)
     adapter = transport.adapter.MooncakePVDTransferEngine(
-        hostname="v", gpu_id=0, rail="mlx5_2"
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
     )
     transport.state.live[8192] = 101
     put(adapter, "one")
@@ -328,7 +366,11 @@ def test_model_runner_initializes_policy_before_shared_engine(
             pvd_strict_rdma_preflight=True,
         ),
     )
-    namespace["init_shared_mooncake_transfer_engine"](runner)
+    if topology == "pvd":
+        with pytest.raises(ValueError, match="explicit transfer budget"):
+            namespace["init_shared_mooncake_transfer_engine"](runner)
+    else:
+        namespace["init_shared_mooncake_transfer_engine"](runner)
     engine = transport.shared.get_mooncake_transfer_engine()
     assert engine is not None
     if topology == "pvd":

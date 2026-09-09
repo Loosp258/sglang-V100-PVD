@@ -1,5 +1,7 @@
 import dataclasses
+import gc
 import threading
+import weakref
 
 import pytest
 
@@ -10,6 +12,56 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferCapacityError,
     TransportState,
 )
+
+
+def test_released_guard_drops_callback_capture():
+    class Source:
+        pass
+
+    source = Source()
+    collected = []
+    _reference = weakref.ref(source, lambda _: collected.append(True))
+    guard = ResourceGuard(source, lambda captured=source: None)
+    del source
+    guard.request_release()
+    gc.collect()
+    assert _reference() is None
+
+
+def test_failed_guard_release_retains_callback_capture_until_retry_succeeds():
+    class Source:
+        pass
+
+    source = Source()
+    collected = []
+    _reference = weakref.ref(source, lambda _: collected.append(True))
+    attempt_count = 0
+
+    def release(captured=source):
+        nonlocal attempt_count
+        attempt_count += 1
+        if attempt_count == 1:
+            raise RuntimeError("release failed")
+
+    guard = ResourceGuard(source, release)
+    del source, release
+    with pytest.raises(RuntimeError, match="release failed"):
+        guard.request_release()
+    gc.collect()
+    assert collected == []
+    guard.request_release()
+    gc.collect()
+    assert collected == [True]
+
+
+@pytest.mark.parametrize("first,second", [((8, 0), (1, 0)), ((0, 1), (0, 1))])
+def test_budget_rejects_independent_dimension_overflow(first, second):
+    budget = TransferBudget(8, 1)
+    budget.reserve("first", *first)
+    with pytest.raises(TransferCapacityError):
+        budget.reserve("second", *second)
+    assert budget.snapshot()["used_staging_bytes"] == first[0]
+    assert budget.snapshot()["used_inflight"] == first[1]
 
 
 def test_guard_retains_source_until_transport_unpins():

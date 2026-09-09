@@ -49,6 +49,7 @@ class TransferHandle:
     transferred_bytes: int = 0
     error: Optional[str] = None
     backend_handle: Any = None
+    _lock: Any = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
     transport_state: TransportState = TransportState.NOT_SUBMITTED
 
 
@@ -174,10 +175,12 @@ class FakeTransferEngine(TransferEngine):
             destination.copy_(source, non_blocking=False)
             handle.transferred_bytes = local.length
             handle.status = TransferStatus.SUCCESS
+            handle.transport_state = TransportState.TERMINAL_SUCCESS
             self.total_put_bytes += local.length
         except Exception as exc:
             handle.status = TransferStatus.FAILED
             handle.error = str(exc)
+            handle.transport_state = TransportState.TERMINAL_FAILED
         return handle
 
     def poll(self, handle: TransferHandle) -> TransferStatus:

@@ -83,6 +83,7 @@ class ResourceGuard:
             self._released = True
             self._releasing = False
             self._value = None
+            self._release = None
 
 
 class TransferCapacityError(RuntimeError):
@@ -139,3 +140,157 @@ class TransferBudget:
                 "used_inflight": self._used_inflight,
                 "reservations": len(self._reservations),
             }
+
+
+class TransferLifecycleManager:
+    """Shared native-write ownership, independent of business cancellation.
+
+    This manager charges transfer slots only. Staging allocations must reserve
+    bytes separately, under their allocation owner, before allocating memory.
+    A byte count here is the PUT size, not the size/lifetime of its allocation.
+    """
+
+    def __init__(self, budget: TransferBudget) -> None:
+        self.budget = budget
+        self._transfers = {}
+        # Native submit and a transition to UNKNOWN share this gate.  A lost
+        # native handle requires process-level quarantine, so no admitted
+        # transfer may slip through to native submission after that point.
+        self._lock = threading.RLock()
+        self._quarantine_reason: Optional[str] = None
+
+    def attach(self, handle, source_guard: ResourceGuard, byte_count: int) -> None:
+        if byte_count <= 0:
+            raise ValueError("transfer size must be positive")
+        with handle._lock:
+            with self._lock:
+                if self._quarantine_reason is not None:
+                    raise RuntimeError(
+                        "PVD native transport is quarantined: "
+                        f"{self._quarantine_reason}"
+                    )
+                if handle.transfer_id in self._transfers:
+                    raise ValueError("transfer is already attached")
+                self.budget.reserve(handle.transfer_id, 0, 1)
+                try:
+                    source_guard.pin(handle.transfer_id)
+                except Exception:
+                    self.budget.release(handle.transfer_id)
+                    raise
+                self._transfers[handle.transfer_id] = (handle, source_guard, byte_count)
+
+    def submit_native(self, handle, submit: Callable[[], Any]) -> None:
+        """Invoke native submission under the quarantine gate.
+
+        ``attach`` reserves a slot before this method, but an earlier
+        submission can become untrackable before this handle reaches native.
+        Holding the gate across both calls makes that race fail locally with
+        ``NOT_SUBMITTED`` rather than creating another unsafe native write.
+        """
+        from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
+
+        with handle._lock:
+            with self._lock:
+                record = self._transfers.get(handle.transfer_id)
+                if record is None:
+                    raise RuntimeError("transfer was not attached")
+                if self._quarantine_reason is not None:
+                    self._discard_unsubmitted_locked(handle, record)
+                    handle.status = TransferStatus.FAILED
+                    handle.error = (
+                        "PVD native transport is quarantined: "
+                        f"{self._quarantine_reason}"
+                    )
+                    return
+                try:
+                    native_id = submit()
+                except Exception as exc:
+                    self._mark_unknown_locked(handle, record, f"native submit raised: {exc}")
+                    return
+                if not isinstance(native_id, int) or native_id <= 0:
+                    self._mark_unknown_locked(
+                        handle, record, "native submit returned no trackable handle"
+                    )
+                    return
+                handle.backend_handle = native_id
+                handle.transport_state = TransportState.IN_FLIGHT
+
+    def mark_unknown(self, handle, reason: str) -> None:
+        with handle._lock:
+            with self._lock:
+                record = self._transfers.get(handle.transfer_id)
+                self._mark_unknown_locked(handle, record, reason)
+
+    def _mark_unknown_locked(self, handle, record, reason: str) -> None:
+        from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
+
+        if handle.transport_state in (
+            TransportState.TERMINAL_SUCCESS, TransportState.TERMINAL_FAILED
+        ):
+            return
+        handle.transport_state = TransportState.UNKNOWN
+        handle.error = reason
+        if handle.status == TransferStatus.PENDING:
+            handle.status = TransferStatus.FAILED
+        if self._quarantine_reason is None:
+            self._quarantine_reason = reason
+        if record is not None:
+            # This pins an untrackable source forever (until coordinated
+            # restart) while also rejecting later source owners immediately.
+            record[1].request_release()
+
+    def _discard_unsubmitted_locked(self, handle, record) -> None:
+        """Undo an admission that lost the race to process quarantine."""
+        _, guard, _ = record
+        guard.unpin(handle.transfer_id)
+        self.budget.release(handle.transfer_id)
+        self._transfers.pop(handle.transfer_id, None)
+
+    def complete(self, handle, success: bool) -> None:
+        from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
+
+        with handle._lock:
+            if handle.transport_state == TransportState.UNKNOWN:
+                return
+            with self._lock:
+                record = self._transfers.get(handle.transfer_id)
+            if record is None:
+                return
+            _, guard, byte_count = record
+            if handle.transport_state not in (
+                TransportState.TERMINAL_SUCCESS, TransportState.TERMINAL_FAILED
+            ):
+                handle.transport_state = (
+                    TransportState.TERMINAL_SUCCESS if success
+                    else TransportState.TERMINAL_FAILED
+                )
+                if success:
+                    handle.transferred_bytes = byte_count
+                if handle.status == TransferStatus.PENDING:
+                    handle.status = TransferStatus.SUCCESS if success else TransferStatus.FAILED
+                if not success:
+                    handle.error = "Mooncake native transfer failed"
+            # Failed deregistration preserves this record and its capacity so
+            # later terminal polls can retry cleanup without querying native.
+            guard.unpin(handle.transfer_id)
+            self.budget.release(handle.transfer_id)
+            with self._lock:
+                self._transfers.pop(handle.transfer_id, None)
+
+    def request_cancel(self, handle) -> None:
+        from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
+
+        with handle._lock:
+            if handle.status == TransferStatus.PENDING:
+                handle.status = TransferStatus.CANCELLED
+
+    def snapshot(self) -> dict:
+        result = self.budget.snapshot()
+        with self._lock:
+            result["tracked_transfers"] = len(self._transfers)
+            result["unknown_transfers"] = sum(
+                handle.transport_state == TransportState.UNKNOWN
+                for handle, _, _ in self._transfers.values()
+            )
+            result["quarantined"] = self._quarantine_reason is not None
+        return result
