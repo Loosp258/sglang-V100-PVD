@@ -41,6 +41,12 @@ class ResourceGuard:
         with self._lock:
             return self._value
 
+    @property
+    def release_pending(self) -> bool:
+        """Whether a requested callback still needs a successful outcome."""
+        with self._lock:
+            return self._release_requested and not self._released
+
     def pin(self, owner: str) -> None:
         with self._lock:
             if self._release_requested or self._releasing or self._released:
@@ -264,18 +270,30 @@ class TransferLifecycleManager:
                     TransportState.TERMINAL_SUCCESS if success
                     else TransportState.TERMINAL_FAILED
                 )
-                if success:
-                    handle.transferred_bytes = byte_count
-                if handle.status == TransferStatus.PENDING:
-                    handle.status = TransferStatus.SUCCESS if success else TransferStatus.FAILED
-                if not success:
-                    handle.error = "Mooncake native transfer failed"
-            # Failed deregistration preserves this record and its capacity so
-            # later terminal polls can retry cleanup without querying native.
-            guard.unpin(handle.transfer_id)
+            terminal_success = handle.transport_state == TransportState.TERMINAL_SUCCESS
+            if terminal_success:
+                handle.transferred_bytes = byte_count
+            if handle.status == TransferStatus.PENDING:
+                handle.status = (
+                    TransferStatus.SUCCESS if terminal_success else TransferStatus.FAILED
+                )
+            if not terminal_success:
+                handle.error = "Mooncake native transfer failed"
+
+        # The callback can block and can race a caller retrying release_memory.
+        # Do not retain the handle or manager lock while it runs.  A returning
+        # unpin is not enough: another callback may still be in progress.
+        guard.unpin(handle.transfer_id)
+        if guard.release_pending:
+            return
+
+        # Failed deregistration keeps the record and its capacity until a
+        # later terminal poll sees the callback finish successfully.
+        with self._lock:
+            if self._transfers.get(handle.transfer_id) is not record:
+                return
             self.budget.release(handle.transfer_id)
-            with self._lock:
-                self._transfers.pop(handle.transfer_id, None)
+            self._transfers.pop(handle.transfer_id, None)
 
     def request_cancel(self, handle) -> None:
         from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus

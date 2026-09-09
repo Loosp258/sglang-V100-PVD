@@ -265,6 +265,55 @@ def test_unregister_failure_retains_tensor_and_can_retry_without_native_poll(tra
     assert adapter.health()["registered_regions"] == 0
 
 
+def test_terminal_poll_retains_capacity_while_release_retry_is_running(transport):
+    class RetryNative(NativeStub):
+        def __init__(self):
+            super().__init__(statuses=[1])
+            self.retry_started = threading.Event()
+            self.allow_retry_to_fail = threading.Event()
+
+        def unregister_memory(self, address):
+            self.unregister_calls.append(address)
+            if len(self.unregister_calls) == 2:
+                self.retry_started.set()
+                assert self.allow_retry_to_fail.wait(timeout=5)
+            return -1 if len(self.unregister_calls) < 3 else 0
+
+    native = RetryNative()
+    adapter, local, remote = make_adapter_with_source(transport, native)
+    handle = adapter.submit_put(local, remote)
+    adapter.release_memory(local.registration)
+    adapter.poll(handle)
+    assert native.unregister_calls == [4096]
+
+    retry_errors = []
+
+    def retry_release():
+        try:
+            adapter.release_memory(local.registration)
+        except RuntimeError as exc:
+            retry_errors.append(exc)
+
+    retry_thread = threading.Thread(target=retry_release)
+    retry_thread.start()
+    assert native.retry_started.wait(timeout=5)
+
+    adapter.poll(handle)
+    snapshot = adapter.lifecycle_manager.snapshot()
+    assert snapshot["used_inflight"] == 1
+    assert snapshot["tracked_transfers"] == 1
+
+    native.allow_retry_to_fail.set()
+    retry_thread.join(timeout=5)
+    assert not retry_thread.is_alive()
+    assert len(retry_errors) == 1
+
+    adapter.poll(handle)
+    assert native.check_calls == [7]
+    assert native.unregister_calls == [4096, 4096, 4096]
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
+
+
 @pytest.mark.parametrize("fault", ["rail", "bounds", "identity", "released", "cuda", "budget"])
 def test_pre_submit_failures_never_enter_native_or_pin_source(transport, monkeypatch, fault):
     native = NativeStub()

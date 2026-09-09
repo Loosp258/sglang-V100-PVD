@@ -219,6 +219,7 @@ class MooncakePVDTransferEngine(TransferEngine):
         return handle
 
     def poll(self, handle: TransferHandle) -> TransferStatus:
+        terminal_success = None
         with handle._lock:
             if handle.transport_state in (TransportState.IN_FLIGHT, TransportState.DRAINING):
                 try:
@@ -227,13 +228,20 @@ class MooncakePVDTransferEngine(TransferEngine):
                     self.lifecycle_manager.mark_unknown(handle, f"native poll raised: {exc}")
                 else:
                     if result in (1, -1):
-                        self._complete(handle, result == 1)
+                        terminal_success = result == 1
+                        handle.transport_state = (
+                            TransportState.TERMINAL_SUCCESS
+                            if terminal_success
+                            else TransportState.TERMINAL_FAILED
+                        )
                     elif result == -2:
                         handle.transport_state = TransportState.DRAINING
                     elif result != 0:
                         self.lifecycle_manager.mark_unknown(handle, f"unexpected native status {result}")
             elif handle.transport_state in (TransportState.TERMINAL_SUCCESS, TransportState.TERMINAL_FAILED):
-                self._complete(handle, handle.transport_state == TransportState.TERMINAL_SUCCESS)
+                terminal_success = handle.transport_state == TransportState.TERMINAL_SUCCESS
+        if terminal_success is not None:
+            self._complete(handle, terminal_success)
         return handle.status
 
     def _complete(self, handle: TransferHandle, success: bool) -> None:

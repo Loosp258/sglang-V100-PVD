@@ -144,11 +144,18 @@ Result: `86 passed in 4.30s`.
 Ruff syntax/undefined-name gate:
 
 ```powershell
-& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' -m ruff check --select E9,F821 ...
+& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' -m ruff check --select E9,F821 `
+  'python\sglang\srt\disaggregation\pvd\mooncake_engine.py' `
+  'python\sglang\srt\disaggregation\pvd\transfer_engine.py' `
+  'python\sglang\srt\disaggregation\pvd\transfer_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_transfer_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_metadata.py'
 ```
 
-Result: `All checks passed!`  `git diff --check` also passed (only CRLF
-advisories were emitted).
+Result: `All checks passed!`  `git diff --check` found no whitespace errors;
+Git did emit CRLF-conversion advisories for modified files, so its output was
+not otherwise pristine.
 
 ## Files changed
 
@@ -182,3 +189,70 @@ It must not make ordinary PD require those PVD settings.
 - Checked cancellation does not overwrite business status on late success.
 - No hardware/RDMA validation was run; CPU doubles do not substitute for that
   external acceptance test.
+
+## Fix round 1: release retry race
+
+### Review finding and fix
+
+The review correctly found that `ResourceGuard.unpin()` can return while an
+external `release_memory()` retry owns a callback.  The manager previously
+treated that return as completion, released the slot, and forgot the transfer;
+if the external callback then failed, a later terminal poll could not retry.
+
+`ResourceGuard.release_pending` now reports a requested callback that has not
+successfully finished.  `TransferLifecycleManager.complete` first makes the
+business/transport terminal transition under the handle lock, then calls
+`unpin` outside both the handle and manager locks.  It retains the tracked
+record and slot whenever cleanup is pending or the callback raises.  It drops
+them only after observing no pending callback outcome.  `MooncakePVDTransferEngine.poll`
+records a native terminal state under the handle lock, but calls lifecycle
+cleanup after releasing that lock, so a blocking deregistration callback cannot
+hold the poll lock.
+
+### RED
+
+Before this fix, the new deterministic event-gated test ran:
+
+```powershell
+& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' `
+  'test\registered\disaggregation\run_pvd_cpu_tests.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py::test_terminal_poll_retains_capacity_while_release_retry_is_running' -q
+```
+
+Expected failure observed:
+
+```text
+assert 0 == 1
+```
+
+The asserted value was `used_inflight` while a second, event-blocked
+deregistration callback was running; the old manager had prematurely released
+the slot and transfer record.
+
+### GREEN and regression evidence
+
+The same focused test passed after the fix:
+
+```text
+1 passed in 1.63s
+```
+
+It covers first deregistration failure, an event-gated external retry, a
+concurrent terminal poll that must retain the record/capacity, retry failure,
+and a final terminal-poll retry.  It verifies only one native status check.
+
+Amended focused suite:
+
+```powershell
+& 'D:\code\sglang-V100-PVD\.venv\Scripts\python.exe' `
+  'test\registered\disaggregation\run_pvd_cpu_tests.py' `
+  'test\registered\disaggregation\test_pvd_transfer_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_lifecycle.py' `
+  'test\registered\disaggregation\test_pvd_mooncake_metadata.py' -q
+```
+
+Result: `70 passed in 2.38s`.
+
+Amended existing regression used the command recorded above and passed:
+`86 passed in 4.37s`.  The exact Ruff scope above reported `All checks passed!`;
+`git diff --check` passed with only CRLF-conversion advisories.
