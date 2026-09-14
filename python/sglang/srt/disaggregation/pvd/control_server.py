@@ -15,6 +15,7 @@ import aiohttp
 from aiohttp import web
 from sglang.srt.disaggregation.pvd.coordinator import (
     CoordinatorError,
+    LocalShardClient,
     ShardClient,
     VectorCoordinator,
 )
@@ -24,6 +25,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryManifest,
     ProtocolValidationError,
     RemoteRegionDescriptor,
+    WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.request_state import InvalidStateTransition
 from sglang.srt.disaggregation.pvd.vector_store import (
@@ -165,14 +167,11 @@ class HttpShardClient(ShardClient):
             {"key": key.to_dict(), "reason": reason},
         )
 
-    async def fence_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
+    async def fence_delivery(self, identity: WriteIdentity) -> Mapping:
         return await self._request(
             "POST",
             "/internal/v1/deliveries/fence",
-            {
-                "key": key.to_dict(),
-                "delivery_id": delivery_id,
-            },
+            {"identity": identity.to_dict()},
         )
 
     async def release_entry(self, key: KVEntryKey) -> None:
@@ -248,8 +247,8 @@ def create_shard_app(
 
     async def fence_delivery(request):
         data = await _payload(request)
-        result = await asyncio.to_thread(
-            store.fence_delivery, _key(data), str(data["delivery_id"])
+        result = await LocalShardClient(store).fence_delivery(
+            WriteIdentity.from_dict(data["identity"])
         )
         return web.json_response(result)
 
@@ -303,7 +302,11 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
 
     async def fence_retrieval(request):
         data = await _payload(request)
-        return web.json_response(await coordinator.fence_retrieval(data["delivery_id"]))
+        if not isinstance(data["identities"], list):
+            raise ValueError("identities must be a list")
+        return web.json_response(
+            await coordinator.fence_retrieval(data["delivery_id"], data["identities"])
+        )
 
     async def renew_consumer(request):
         data = await _payload(request)

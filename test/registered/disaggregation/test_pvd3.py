@@ -433,9 +433,27 @@ def test_decode_session_reuses_staging_and_validates_reply_before_unpack():
 
 def test_cancel_before_retrieve_fences_late_request():
     async def scenario():
+        from sglang.srt.disaggregation.pvd.transfer_authorization import (
+            PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+            WriteIdentity,
+        )
+
         engine, _, coordinator = make_vector()
         key = await make_ready_entry(coordinator, engine, "a")
-        await coordinator.fence_retrieval("late-round")
+        identity = WriteIdentity(
+            protocol=PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+            sender_epoch="vector-epoch",
+            receiver_epoch="decode-epoch",
+            transfer_id="late-round:d0",
+            region_id="unpublished-region",
+            generation="decode-generation",
+            shard_rank=0,
+            key=key,
+        )
+        # Closing the coordinator ID gate blocks a late retrieve, but without a
+        # previously saved shard authorization it must not claim a safe fence.
+        with pytest.raises(Exception, match="unknown delivery"):
+            await coordinator.fence_retrieval("late-round", [identity.to_dict()])
         reply = await coordinator.retrieve(
             [
                 {
@@ -454,9 +472,13 @@ def test_cancel_before_retrieve_fences_late_request():
     asyncio.run(scenario())
 
 
-def test_fence_requires_every_remote_shard_confirmation_even_after_failure():
+def test_fence_rejects_delivery_without_authoritative_store_identity():
     async def scenario():
         from sglang.srt.disaggregation.pvd.request_state import DeliveryState
+        from sglang.srt.disaggregation.pvd.transfer_authorization import (
+            PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+            WriteIdentity,
+        )
 
         engine, _, coordinator = make_vector()
         key = await make_ready_entry(coordinator, engine, "a")
@@ -475,15 +497,21 @@ def test_fence_requires_every_remote_shard_confirmation_even_after_failure():
         # A coordinator timeout is not evidence that the remote shard stopped.
         coordinator.deliveries["slow-write"].state = DeliveryState.FAILED
 
-        class UnreachableShard:
-            rank = 1
-
-            async def fence_delivery(self, key, delivery_id):
-                raise TimeoutError("rank1 control connection lost")
-
-        coordinator.shards[1] = UnreachableShard()
-        with pytest.raises(Exception, match="rank1 control connection lost"):
-            await coordinator.fence_retrieval("slow-write")
+        identities = [
+            WriteIdentity(
+                protocol=PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+                sender_epoch=f"vector-epoch-{rank}",
+                receiver_epoch="decode-epoch",
+                transfer_id=f"slow-write:d{rank}",
+                region_id=destinations[rank].region_id,
+                generation="decode-generation",
+                shard_rank=rank,
+                key=key,
+            ).to_dict()
+            for rank in range(2)
+        ]
+        with pytest.raises(Exception, match="identity set"):
+            await coordinator.fence_retrieval("slow-write", identities)
 
     asyncio.run(scenario())
 
@@ -837,6 +865,10 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
     finally:
         barrier.abort()
         for session in sessions:
+            # Task 3 intentionally cannot promote the legacy local-store
+            # boolean fence. These fake transfers are synchronous; Task 6
+            # supplies the identities used by production session close.
+            session.clock.pending = None
             control.submit(session.close()).result(timeout=10)
         control.loop.call_soon_threadsafe(control.loop.stop)
         control.thread.join(timeout=10)

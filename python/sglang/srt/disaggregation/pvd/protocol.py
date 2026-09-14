@@ -13,8 +13,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
-
 PVD_PROTOCOL_VERSION = 2
+PVD_TRANSFER_LIFECYCLE_PROTOCOL = "pvd_transfer_lifecycle_v1"
+PVD_RECEIVER_EPOCH_METADATA_KEY = "pvd_receiver_epoch"
+PVD_GENERATION_METADATA_KEY = "pvd_generation"
 
 
 class ProtocolValidationError(ValueError):
@@ -57,6 +59,134 @@ class KVEntryKey:
             req_id=str(value["req_id"]),
             transfer_id=str(value["transfer_id"]),
         )
+
+
+def _require_identity_string(name: str, value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ProtocolValidationError(f"{name} must be a non-empty string")
+    return value
+
+
+@dataclass(frozen=True)
+class WriteIdentity:
+    """Complete incarnation and destination identity for one remote write."""
+
+    protocol: str
+    sender_epoch: str
+    receiver_epoch: str
+    transfer_id: str
+    region_id: str
+    generation: str
+    shard_rank: int
+    key: KVEntryKey
+
+    _FIELDS = frozenset(
+        {
+            "protocol",
+            "sender_epoch",
+            "receiver_epoch",
+            "transfer_id",
+            "region_id",
+            "generation",
+            "shard_rank",
+            "key",
+        }
+    )
+    _KEY_FIELDS = frozenset({"model_instance_id", "req_id", "transfer_id"})
+
+    def __post_init__(self) -> None:
+        if self.protocol != PVD_TRANSFER_LIFECYCLE_PROTOCOL:
+            raise ProtocolValidationError(
+                f"unsupported write authorization protocol {self.protocol!r}"
+            )
+        for name in (
+            "sender_epoch",
+            "receiver_epoch",
+            "transfer_id",
+            "region_id",
+            "generation",
+        ):
+            _require_identity_string(name, getattr(self, name))
+        if isinstance(self.shard_rank, bool) or not isinstance(self.shard_rank, int):
+            raise ProtocolValidationError("shard_rank must be an integer")
+        if self.shard_rank < 0:
+            raise ProtocolValidationError("shard_rank must be non-negative")
+        if not isinstance(self.key, KVEntryKey):
+            raise ProtocolValidationError("key must be a KVEntryKey")
+        for name in self._KEY_FIELDS:
+            _require_identity_string(f"key.{name}", getattr(self.key, name))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "protocol": self.protocol,
+            "sender_epoch": self.sender_epoch,
+            "receiver_epoch": self.receiver_epoch,
+            "transfer_id": self.transfer_id,
+            "region_id": self.region_id,
+            "generation": self.generation,
+            "shard_rank": self.shard_rank,
+            "key": self.key.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "WriteIdentity":
+        if not isinstance(value, Mapping) or set(value) != cls._FIELDS:
+            raise ProtocolValidationError(
+                "write identity must contain exactly its required fields"
+            )
+        key_value = value["key"]
+        if not isinstance(key_value, Mapping) or set(key_value) != cls._KEY_FIELDS:
+            raise ProtocolValidationError(
+                "key must contain exactly its identity fields"
+            )
+        key = KVEntryKey(
+            model_instance_id=_require_identity_string(
+                "key.model_instance_id", key_value["model_instance_id"]
+            ),
+            req_id=_require_identity_string("key.req_id", key_value["req_id"]),
+            transfer_id=_require_identity_string(
+                "key.transfer_id", key_value["transfer_id"]
+            ),
+        )
+        return cls(
+            protocol=_require_identity_string("protocol", value["protocol"]),
+            sender_epoch=_require_identity_string(
+                "sender_epoch", value["sender_epoch"]
+            ),
+            receiver_epoch=_require_identity_string(
+                "receiver_epoch", value["receiver_epoch"]
+            ),
+            transfer_id=_require_identity_string("transfer_id", value["transfer_id"]),
+            region_id=_require_identity_string("region_id", value["region_id"]),
+            generation=_require_identity_string("generation", value["generation"]),
+            shard_rank=value["shard_rank"],
+            key=key,
+        )
+
+    def validate_destination(self, destination: "RemoteRegionDescriptor") -> None:
+        """Check the identity fields owned by the destination worker."""
+        if self.region_id != destination.region_id:
+            raise ProtocolValidationError(
+                "write identity region does not match destination"
+            )
+        if self.shard_rank != destination.rank:
+            raise ProtocolValidationError(
+                "write identity rank does not match destination"
+            )
+        if (
+            destination.backend_metadata.get(PVD_RECEIVER_EPOCH_METADATA_KEY)
+            != self.receiver_epoch
+        ):
+            raise ProtocolValidationError(
+                "write identity receiver epoch does not match destination"
+            )
+        if (
+            destination.backend_metadata.get(PVD_GENERATION_METADATA_KEY)
+            != self.generation
+        ):
+            raise ProtocolValidationError(
+                "write identity generation does not match destination"
+            )
 
 
 @dataclass(frozen=True)
@@ -249,7 +379,9 @@ class KVEntryManifest:
         try:
             return next(shard for shard in self.shards if shard.rank == rank)
         except StopIteration as exc:
-            raise ProtocolValidationError(f"manifest has no shard for rank {rank}") from exc
+            raise ProtocolValidationError(
+                f"manifest has no shard for rank {rank}"
+            ) from exc
 
     def to_dict(self) -> Dict[str, Any]:
         return {

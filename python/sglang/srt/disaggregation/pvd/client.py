@@ -10,6 +10,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryKey,
     KVEntryManifest,
     RemoteRegionDescriptor,
+    WriteIdentity,
 )
 
 
@@ -58,8 +59,45 @@ class PVDCoordinatorClient:
     async def retrieve(self, sequences) -> Dict[str, Any]:
         return await self._request("/v1/retrieve", {"sequences": sequences})
 
-    async def fence_retrieval(self, delivery_id: str) -> Dict[str, Any]:
-        return await self._request("/v1/retrievals/fence", {"delivery_id": delivery_id})
+    async def fence_retrieval(
+        self, delivery_id: str, identities: list[dict]
+    ) -> Dict[str, Any]:
+        if not isinstance(delivery_id, str) or not delivery_id.strip():
+            raise ValueError("delivery_id must be non-empty")
+        expected = self._fence_identities(identities)
+        if any(
+            identity.transfer_id != f"{delivery_id}:d{rank}"
+            for rank, identity in expected.items()
+        ):
+            raise ValueError("write identity does not belong to delivery")
+        reply = await self._request(
+            "/v1/retrievals/fence",
+            {
+                "delivery_id": delivery_id,
+                "identities": [identity.to_dict() for identity in expected.values()],
+            },
+        )
+        try:
+            if (
+                not isinstance(reply, Mapping)
+                or reply.get("delivery_id") != delivery_id
+                or type(reply.get("fenced")) is not bool
+                or self._fence_identities(reply.get("identities")) != expected
+            ):
+                raise ValueError("reply does not match expected write identities")
+        except ValueError as exc:
+            raise PVDControlPlaneError(f"invalid retrieval fence reply: {exc}") from exc
+        return reply
+
+    @staticmethod
+    def _fence_identities(values) -> Dict[int, WriteIdentity]:
+        if not isinstance(values, list) or not values:
+            raise ValueError("fence identities must be a non-empty list")
+        identities = [WriteIdentity.from_dict(value) for value in values]
+        by_rank = {identity.shard_rank: identity for identity in identities}
+        if len(by_rank) != len(identities):
+            raise ValueError("fence identities have duplicate ranks")
+        return by_rank
 
     async def renew_consumer(self, key: KVEntryKey, consumer_id: str) -> Dict[str, Any]:
         return await self._request(

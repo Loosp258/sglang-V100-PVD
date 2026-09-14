@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import copy
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional
 
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
+    PVD_GENERATION_METADATA_KEY,
+    PVD_RECEIVER_EPOCH_METADATA_KEY,
     FirstTokenMetadata,
     KVEntryKey,
     KVEntryManifest,
     RemoteRegionDescriptor,
+    WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
@@ -76,7 +80,7 @@ class ShardClient(abc.ABC):
     async def health(self) -> Mapping: ...
 
     @abc.abstractmethod
-    async def fence_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping: ...
+    async def fence_delivery(self, identity: WriteIdentity) -> Mapping: ...
 
 
 class LocalShardClient(ShardClient):
@@ -119,8 +123,15 @@ class LocalShardClient(ShardClient):
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> None:
         self.store.cancel_entry(key, reason)
 
-    async def fence_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
-        return await asyncio.to_thread(self.store.fence_delivery, key, delivery_id)
+    async def fence_delivery(self, identity: WriteIdentity) -> Mapping:
+        # Do not invoke the legacy cancellation path: it may reclaim V pages
+        # without native terminal proof. Task 4 replaces this non-mutating
+        # fail-closed bridge with the store's authoritative authorization gate.
+        return {
+            **identity.to_dict(),
+            "fenced": False,
+            "reason": "transport_terminal_unverified",
+        }
 
     async def release_entry(self, key: KVEntryKey) -> None:
         self.store.release_entry(key)
@@ -173,6 +184,7 @@ class DeliveryRecord:
     state: DeliveryState
     created_at: float
     deadline: float
+    write_identities: Dict[int, WriteIdentity] = field(default_factory=dict)
     shard_states: Dict[int, DeliveryState] = field(default_factory=dict)
     error: Optional[str] = None
 
@@ -187,6 +199,10 @@ class DeliveryRecord:
             "source_shards": {
                 str(rank): source_rank
                 for rank, source_rank in self.source_shards.items()
+            },
+            "write_identities": {
+                str(rank): identity.to_dict()
+                for rank, identity in self.write_identities.items()
             },
             "state": self.state.value,
             "created_at": self.created_at,
@@ -227,36 +243,95 @@ class VectorCoordinator:
         self._retrieval_locks = {}
         self._fenced_retrievals = set()
 
-    async def fence_retrieval(self, delivery_id: str) -> Mapping:
+    async def fence_retrieval(
+        self, delivery_id: str, identities: List[Mapping]
+    ) -> Mapping:
         """Drain active writes and reject delayed/retried starts for this ID."""
         if not isinstance(delivery_id, str) or not delivery_id.strip():
             raise ValueError("delivery_id must be non-empty")
+        if not isinstance(identities, list) or not identities:
+            raise ValueError("write identities must be a non-empty list")
+        try:
+            supplied = [WriteIdentity.from_dict(value) for value in identities]
+        except ValueError as exc:
+            raise CoordinatorError(f"invalid write identity: {exc}") from exc
+        supplied_ranks = [identity.shard_rank for identity in supplied]
+        if len(set(supplied_ranks)) != len(supplied_ranks):
+            raise CoordinatorError("write identity set has duplicate shard ranks")
         lock = self._retrieval_locks.setdefault(delivery_id, asyncio.Lock())
         async with lock:
-            self._fenced_retrievals.add(delivery_id)
-            if delivery_id in self.deliveries:
-                delivery = self.deliveries[delivery_id]
-                ranks = sorted(delivery.destinations)
-                replies = await asyncio.gather(
-                    *(
-                        self.shards[delivery.source_shards[rank]].fence_delivery(
-                            delivery.entry_key, self._subdelivery_id(delivery_id, rank)
-                        )
-                        for rank in ranks
-                    ),
-                    return_exceptions=True,
+            delivery = self.deliveries.get(delivery_id)
+            if delivery is None:
+                # Block a delayed reservation, but never infer NOT_SUBMITTED
+                # merely from the absence of a coordinator record.
+                self._fenced_retrievals.add(delivery_id)
+                raise CoordinatorError(
+                    "write identity cannot be confirmed for an unknown delivery"
                 )
-                for rank, reply in zip(ranks, replies):
-                    if isinstance(reply, BaseException):
-                        raise CoordinatorError(f"V shard fence unconfirmed: {reply}")
-                    if reply.get("fenced") is not True or reply.get(
-                        "delivery_id"
-                    ) != self._subdelivery_id(delivery_id, rank):
-                        raise CoordinatorError(
-                            "V shard returned an invalid fence acknowledgement"
-                        )
+            ranks = sorted(delivery.destinations)
+            expected = delivery.write_identities
+            if sorted(expected) != ranks or sorted(supplied_ranks) != ranks:
+                raise CoordinatorError("write identity set does not match destinations")
+            supplied_by_rank = {identity.shard_rank: identity for identity in supplied}
+            for rank in ranks:
+                identity = expected[rank]
+                if identity.key != delivery.entry_key:
+                    raise CoordinatorError("stored write identity has a mismatched key")
+                if identity.transfer_id != self._subdelivery_id(delivery_id, rank):
+                    raise CoordinatorError(
+                        "stored write identity has a mismatched transfer ID"
+                    )
+                try:
+                    identity.validate_destination(delivery.destinations[rank])
+                except ValueError as exc:
+                    raise CoordinatorError(
+                        f"stored write identity does not match destination: {exc}"
+                    ) from exc
+                if supplied_by_rank[rank] != identity:
+                    raise CoordinatorError(
+                        "supplied write identity does not match stored authorization"
+                    )
+            self._fenced_retrievals.add(delivery_id)
+            replies = await asyncio.gather(
+                *(
+                    self.shards[delivery.source_shards[rank]].fence_delivery(
+                        expected[rank]
+                    )
+                    for rank in ranks
+                ),
+                return_exceptions=True,
+            )
+            all_fenced = True
+            for rank, reply in zip(ranks, replies):
+                if isinstance(reply, BaseException):
+                    raise CoordinatorError(f"V shard fence unconfirmed: {reply}")
+                if (
+                    not isinstance(reply, Mapping)
+                    or type(reply.get("fenced")) is not bool
+                ):
+                    raise CoordinatorError(
+                        "V shard returned an invalid identity fence acknowledgement"
+                    )
+                try:
+                    reply_identity = WriteIdentity.from_dict(
+                        {name: reply[name] for name in expected[rank].to_dict()}
+                    )
+                except (KeyError, ValueError, TypeError) as exc:
+                    raise CoordinatorError(
+                        "V shard returned an invalid identity fence acknowledgement"
+                    ) from exc
+                if reply_identity != expected[rank]:
+                    raise CoordinatorError(
+                        "V shard returned a mismatched write identity"
+                    )
+                all_fenced = all_fenced and reply["fenced"]
+            if all_fenced:
                 await self.cancel_delivery(delivery_id, "Decode fenced retrieval")
-        return {"delivery_id": delivery_id, "fenced": True}
+        return {
+            "delivery_id": delivery_id,
+            "identities": [expected[rank].to_dict() for rank in ranks],
+            "fenced": all_fenced,
+        }
 
     async def admit_request(self, request: Mapping) -> Mapping:
         """Register Router dispatch; precise allocation follows P's manifest."""
@@ -484,7 +559,12 @@ class VectorCoordinator:
         delivery_id: str,
         destinations: Dict[int, RemoteRegionDescriptor],
     ) -> DeliveryRecord:
+        # Freeze caller-owned maps (including nested layout metadata) before
+        # the first await. Retries must compare against the original descriptor.
+        destinations = copy.deepcopy(destinations)
         async with self._lock:
+            if delivery_id in self._fenced_retrievals:
+                raise CoordinatorError("retrieval has been fenced")
             entry = self.entries.get(key)
             if entry is None:
                 raise CoordinatorError("cannot reserve delivery for an unknown entry")
@@ -548,11 +628,57 @@ class VectorCoordinator:
             results = await asyncio.gather(
                 *(
                     self.shards[source_shards[rank]].reserve_delivery(
-                        key, self._subdelivery_id(delivery_id, rank), destinations[rank]
+                        key,
+                        self._subdelivery_id(delivery_id, rank),
+                        copy.deepcopy(destinations[rank]),
                     )
                     for rank in destination_ranks
                 )
             )
+            identity_values = [result.get("write_identity") for result in results]
+            requires_identity = any(
+                PVD_RECEIVER_EPOCH_METADATA_KEY in destination.backend_metadata
+                or PVD_GENERATION_METADATA_KEY in destination.backend_metadata
+                for destination in destinations.values()
+            )
+            if requires_identity or any(value is not None for value in identity_values):
+                if any(value is None for value in identity_values):
+                    raise CoordinatorError(
+                        "V shards returned an incomplete write identity set"
+                    )
+                write_identities = {}
+                for rank, result, value in zip(
+                    destination_ranks, results, identity_values
+                ):
+                    try:
+                        returned_destination = RemoteRegionDescriptor.from_dict(
+                            result["destination"]
+                        )
+                        identity = WriteIdentity.from_dict(value)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise CoordinatorError(
+                            f"V shard {rank} returned an invalid write identity: {exc}"
+                        ) from exc
+                    if returned_destination != destinations[rank]:
+                        raise CoordinatorError(
+                            f"V shard {rank} substituted the authorized destination"
+                        )
+                    if identity.key != key:
+                        raise CoordinatorError(
+                            f"V shard {rank} returned a write identity with the wrong key"
+                        )
+                    if identity.transfer_id != self._subdelivery_id(delivery_id, rank):
+                        raise CoordinatorError(
+                            f"V shard {rank} returned a mismatched write transfer ID"
+                        )
+                    try:
+                        identity.validate_destination(destinations[rank])
+                    except ValueError as exc:
+                        raise CoordinatorError(
+                            f"V shard {rank} write identity does not match destination: {exc}"
+                        ) from exc
+                    write_identities[rank] = identity
+                record.write_identities = write_identities
         except Exception as exc:
             await self.cancel_delivery(delivery_id, f"reserve failed: {exc}")
             raise
@@ -574,6 +700,8 @@ class VectorCoordinator:
 
     async def _start_delivery_once(self, delivery_id: str) -> DeliveryRecord:
         async with self._lock:
+            if delivery_id in self._fenced_retrievals:
+                raise CoordinatorError("retrieval has been fenced")
             delivery = self.deliveries[delivery_id]
             entry = self.entries[delivery.entry_key]
             if delivery.state == DeliveryState.DELIVERED:
