@@ -153,6 +153,9 @@ class PVDCoordinatorClient:
     async def start_delivery(self, delivery_id: str) -> Dict[str, Any]:
         return await self._request("/v1/deliveries/start", {"delivery_id": delivery_id})
 
+    async def poll_delivery(self, delivery_id: str) -> Dict[str, Any]:
+        return await self._request("/v1/deliveries/poll", {"delivery_id": delivery_id})
+
     async def ack_delivery(self, delivery_id: str) -> Dict[str, Any]:
         return await self._request("/v1/deliveries/ack", {"delivery_id": delivery_id})
 

@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import copy
+import logging
 import threading
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 import torch
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
+    PVD_GENERATION_METADATA_KEY,
+    PVD_RECEIVER_EPOCH_METADATA_KEY,
+    PVD_TRANSFER_LIFECYCLE_PROTOCOL,
     KVEntryKey,
     KVEntryManifest,
     KVLayoutSignature,
     KVShardManifest,
     RemoteRegionDescriptor,
+    WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
@@ -26,6 +33,7 @@ from sglang.srt.disaggregation.pvd.sharding import (
     layout_from_destination,
     source_rank_and_head_offset,
 )
+from sglang.srt.disaggregation.pvd.transfer_authorization import WriteAuthorization
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
     RegisteredMemory,
@@ -34,6 +42,12 @@ from sglang.srt.disaggregation.pvd.transfer_engine import (
     TransferStatus,
     descriptor_with_slice,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    ResourceGuard,
+    TransportState,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ResourceExhaustedError(RuntimeError):
@@ -128,6 +142,14 @@ class DeliveryShardRecord:
     deadline: float
     transfer_handle: Optional[TransferHandle] = None
     error: Optional[str] = None
+    source_guard: Optional[ResourceGuard] = field(default=None, repr=False)
+    authorization: Optional[WriteAuthorization] = field(default=None, repr=False)
+    staging_guard: Optional[ResourceGuard] = field(default=None, repr=False)
+    owner: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
+    submitting: bool = False
+    authorization_begun: bool = False
+    local_terminal: Optional[TransportState] = None
+    progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def to_dict(self):
         return {
@@ -138,6 +160,16 @@ class DeliveryShardRecord:
             "created_at": self.created_at,
             "deadline": self.deadline,
             "error": self.error,
+            "write_identity": self.authorization.identity.to_dict()
+            if self.authorization
+            else None,
+            "transport_state": (
+                self.transfer_handle.transport_state.value
+                if self.transfer_handle
+                else self.local_terminal.value
+                if self.local_terminal
+                else "preparing"
+            ),
         }
 
 
@@ -158,6 +190,10 @@ class EntryShardRecord:
     resources_released: bool = False
     error: Optional[str] = None
     deliveries: Dict[str, DeliveryShardRecord] = field(default_factory=dict)
+    allocation_guard: Optional[ResourceGuard] = field(default=None, repr=False)
+    upload_pending: bool = True
+    release_requested: bool = False
+    pool_owner: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
 
     def to_dict(self):
         return {
@@ -174,6 +210,8 @@ class EntryShardRecord:
             "received_bytes": self.received_bytes,
             "active_delivery_count": self.active_delivery_count,
             "resources_released": self.resources_released,
+            "upload_pending": self.upload_pending,
+            "release_requested": self.release_requested,
             "error": self.error,
         }
 
@@ -232,6 +270,13 @@ class VectorKVStore:
             metadata={"role": "vector", "page_bytes": page_bytes},
         )
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
+        self.worker_epoch = uuid.uuid4().hex
+        self._closed = False
+        self._isolated_reason = None
+        self._pool_guard = ResourceGuard(
+            self.registration,
+            lambda: self.transfer_engine.release_memory(self.registration),
+        )
         self._fenced_deliveries = set()
         self._lock = threading.RLock()
         self._refresh_metrics()
@@ -265,6 +310,8 @@ class VectorKVStore:
             )
 
         with self._lock:
+            if self._closed or self._isolated_reason:
+                raise EntryConflictError("V store is closed or isolated")
             existing = self.entries.get(manifest.key)
             if existing is not None:
                 if (
@@ -281,6 +328,14 @@ class VectorKVStore:
             target_region = descriptor_with_slice(
                 self.registration, offset=offset, length=shard.expected_bytes
             )
+            target_region = replace(
+                target_region,
+                backend_metadata={
+                    **target_region.backend_metadata,
+                    PVD_RECEIVER_EPOCH_METADATA_KEY: self.worker_epoch,
+                    PVD_GENERATION_METADATA_KEY: uuid.uuid4().hex,
+                },
+            )
             now = time.monotonic()
             record = EntryShardRecord(
                 key=manifest.key,
@@ -293,6 +348,13 @@ class VectorKVStore:
                 created_at=now,
                 expires_at=now + self.entry_ttl_secs,
             )
+            record.allocation_guard = ResourceGuard(
+                allocation, lambda: self._free_allocation(record)
+            )
+            # Publishing a destination grants a potential remote writer. Never
+            # infer that no write exists merely because begin/commit is absent.
+            record.allocation_guard.pin("upload")
+            self._pool_guard.pin(record.pool_owner)
             self.entries[manifest.key] = record
             self.metrics.increment("vector_entries_created")
             self._refresh_metrics()
@@ -300,13 +362,19 @@ class VectorKVStore:
 
     def begin_p_write(self, key: KVEntryKey) -> EntryShardRecord:
         with self._lock:
+            if self._closed:
+                raise EntryConflictError("V store is closed")
             entry = self._entry(key)
+            if entry.release_requested:
+                raise EntryConflictError("entry release requested")
             entry.state = transition(entry.state, EntryShardState.P_WRITING)
             return entry
 
     def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> EntryShardRecord:
         with self._lock:
             entry = self._entry(key)
+            if entry.release_requested:
+                raise EntryConflictError("entry release requested")
             if entry.state == EntryShardState.STORED:
                 if entry.received_bytes != received_bytes:
                     raise EntryConflictError(
@@ -330,7 +398,11 @@ class VectorKVStore:
                     )
             self.metrics.increment("vector_p_to_v_bytes", received_bytes)
             self.metrics.increment("vector_entries_stored")
-            return entry
+            # Legacy successful commit is an explicit completion report, not a
+            # timeout inference. Task 5 binds this report to the P upload gate.
+            entry.upload_pending = False
+        entry.allocation_guard.unpin("upload")
+        return entry
 
     def reserve_delivery(
         self,
@@ -338,15 +410,18 @@ class VectorKVStore:
         delivery_id: str,
         destination: RemoteRegionDescriptor,
     ) -> DeliveryShardRecord:
+        destination = copy.deepcopy(destination)
         if destination.rail != self.rail:
             raise EntryConflictError(
                 f"rank {self.rank} requires rail {self.rail}, destination uses {destination.rail}"
             )
         with self._lock:
+            if self._closed or self._isolated_reason:
+                raise EntryConflictError("V store is closed or isolated")
             if (key, delivery_id) in self._fenced_deliveries:
                 raise EntryConflictError("delivery has been fenced")
             entry = self._entry(key)
-            if entry.resources_released:
+            if entry.resources_released or entry.release_requested:
                 raise EntryConflictError("entry resources have already been released")
             existing = entry.deliveries.get(delivery_id)
             if existing is not None:
@@ -369,6 +444,28 @@ class VectorKVStore:
                 created_at=now,
                 deadline=now + self.delivery_timeout_secs,
             )
+            delivery.source_guard = entry.allocation_guard
+            metadata = destination.backend_metadata
+            if (
+                PVD_RECEIVER_EPOCH_METADATA_KEY in metadata
+                or PVD_GENERATION_METADATA_KEY in metadata
+            ):
+                identity = WriteIdentity(
+                    protocol=PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+                    sender_epoch=self.worker_epoch,
+                    receiver_epoch=metadata.get(PVD_RECEIVER_EPOCH_METADATA_KEY),
+                    transfer_id=delivery_id,
+                    region_id=destination.region_id,
+                    generation=metadata.get(PVD_GENERATION_METADATA_KEY),
+                    shard_rank=destination.rank,
+                    key=key,
+                )
+                delivery.authorization = WriteAuthorization(
+                    identity, entry.allocation_guard
+                )
+            else:
+                # Staged legacy callers receive no lifecycle-v1 fence proof.
+                entry.allocation_guard.pin(delivery.owner)
             entry.deliveries[delivery_id] = delivery
             entry.active_delivery_count += 1
             self.metrics.increment("vector_deliveries_created")
@@ -376,156 +473,238 @@ class VectorKVStore:
 
     def start_delivery(self, key: KVEntryKey, delivery_id: str) -> DeliveryShardRecord:
         with self._lock:
+            if self._closed or self._isolated_reason:
+                raise EntryConflictError("V store is closed or isolated")
             if (key, delivery_id) in self._fenced_deliveries:
                 raise EntryConflictError("delivery has been fenced")
             entry = self._entry(key)
             delivery = entry.deliveries[delivery_id]
-            if delivery.state == DeliveryState.DELIVERED:
+            if delivery.state in DELIVERY_TERMINAL_STATES or delivery.state in (
+                DeliveryState.DELIVERED,
+                DeliveryState.V_WRITING,
+            ):
                 return delivery
-            if delivery.state == DeliveryState.WAITING_SOURCE:
-                if entry.state != EntryShardState.STORED:
-                    return delivery
-                delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
+            if entry.release_requested:
+                raise EntryConflictError("entry release requested")
+            if entry.state != EntryShardState.STORED:
+                return delivery
+            delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
             delivery.state = transition(delivery.state, DeliveryState.V_WRITING)
+            delivery.submitting = True
 
-            allocation_offset = entry.allocation.start_page * self.page_bytes
-            destination_layout_value = delivery.destination.backend_metadata.get(
-                "pvd_layout"
+        attempted = False
+        packing_safe = True
+        try:
+            # The reservation already pins Entry pages. Packing and native
+            # calls deliberately run without the store's business lock.
+            try:
+                local = self._prepare_delivery_source(entry, delivery)
+            finally:
+                # Cancellation can win before the adapter's own CUDA fence.
+                # Even then, packing kernels must finish reading Entry pages
+                # before a NOT_SUBMITTED path may release their source pin.
+                if self.pool.is_cuda:
+                    try:
+                        torch.cuda.synchronize(self.pool.device)
+                    except Exception:
+                        packing_safe = False
+                        raise
+            with self._lock:
+                if delivery.state in DELIVERY_TERMINAL_STATES:
+                    delivery.local_terminal = TransportState.NOT_SUBMITTED
+                    return delivery
+                if delivery.authorization:
+                    delivery.authorization.begin(delivery.authorization.identity)
+                    delivery.authorization_begun = True
+                attempted = True
+            handle = self.transfer_engine.submit_put(local, delivery.destination)
+            with self._lock:
+                delivery.transfer_handle = handle
+        except Exception as exc:
+            with self._lock:
+                delivery.local_terminal = (
+                    TransportState.UNKNOWN
+                    if attempted or not packing_safe
+                    else TransportState.NOT_SUBMITTED
+                )
+                if attempted or not packing_safe:
+                    self._isolated_reason = (
+                        "V submission or GPU packing safety is unknown"
+                    )
+                self._cancel_delivery_locked(
+                    entry, delivery, str(exc), DeliveryState.FAILED
+                )
+        finally:
+            with self._lock:
+                delivery.submitting = False
+            self._progress_delivery(entry, delivery)
+            self._progress_releases()
+        return delivery
+
+    def _prepare_delivery_source(self, entry, delivery) -> MemorySlice:
+        allocation_offset = entry.allocation.start_page * self.page_bytes
+        local = MemorySlice(
+            self.registration, allocation_offset, entry.manifest.expected_bytes
+        )
+        layout_value = delivery.destination.backend_metadata.get("pvd_layout")
+        if layout_value is None:
+            if delivery.destination.rank != self.rank:
+                raise EntryConflictError(
+                    "legacy delivery requires matching V and D ranks"
+                )
+            return local
+        destination_layout = layout_from_destination(delivery.destination)
+        source_rank, source_head_offset = source_rank_and_head_offset(
+            entry.layout, destination_layout, delivery.destination.rank
+        )
+        if source_rank != self.rank:
+            raise EntryConflictError("destination belongs to another V shard")
+        token_count = entry.manifest.page_count * entry.layout.page_size
+        destination_bytes = [
+            int(v) for v in destination_layout.extra["component_bytes_per_token"]
+        ]
+        if delivery.destination.length != sum(destination_bytes) * token_count:
+            raise EntryConflictError("destination byte count does not match layout")
+        if destination_layout.fingerprint == entry.layout.fingerprint:
+            return local
+        source_bytes = [int(v) for v in entry.layout.extra["component_bytes_per_token"]]
+        source_region = self.pool[
+            allocation_offset : allocation_offset + entry.manifest.expected_bytes
+        ]
+        # Task 7 must account for the packing peak, not only final tensor bytes.
+        chunks = []
+        component_base = 0
+        for source_bpt, destination_bpt in zip(source_bytes, destination_bytes):
+            bytes_per_head = source_bpt // entry.layout.kv_heads_per_rank
+            byte_start = source_head_offset * bytes_per_head
+            component = source_region[
+                component_base : component_base + token_count * source_bpt
+            ]
+            component = component.reshape(token_count, source_bpt)
+            chunks.append(
+                component[:, byte_start : byte_start + destination_bpt]
+                .contiguous()
+                .reshape(-1)
             )
-            if destination_layout_value is None:
-                if delivery.destination.rank != self.rank:
-                    raise EntryConflictError(
-                        "legacy delivery requires matching V and D ranks"
+            component_base += token_count * source_bpt
+        staging = torch.cat(chunks).contiguous()
+        registration = self.transfer_engine.register_memory(
+            staging,
+            endpoint="pvd-vector-slice",
+            rank=self.rank,
+            rail=self.rail,
+            metadata={"delivery_id": delivery.delivery_id},
+        )
+        guard = ResourceGuard(
+            registration, lambda: self.transfer_engine.release_memory(registration)
+        )
+        guard.pin(delivery.owner)
+        with self._lock:
+            delivery.staging_guard = guard
+        guard.request_release()
+        return MemorySlice(registration, 0, staging.numel())
+
+    def _progress_delivery(self, entry, delivery) -> None:
+        # One poll owner per delivery, including fencers and TTL/close callers.
+        # Do not wait for another native poll under the store lock.
+        if not delivery.progress_lock.acquire(blocking=False):
+            return
+        try:
+            with self._lock:
+                if delivery.submitting:
+                    return
+                handle = delivery.transfer_handle
+                terminal = delivery.local_terminal
+                cancelled = delivery.state in DELIVERY_TERMINAL_STATES
+            if handle is not None:
+                if handle.transport_state != TransportState.UNKNOWN:
+                    try:
+                        if cancelled:
+                            self.transfer_engine.abort(handle)
+                        self.transfer_engine.poll(handle)
+                    except Exception as exc:
+                        # A lost native status/handle is not terminal evidence.
+                        # Do not repeatedly touch a handle whose safety is lost.
+                        with handle._lock:
+                            handle.transport_state = TransportState.UNKNOWN
+                            handle.status = TransferStatus.FAILED
+                            handle.error = f"V native polling failed: {exc}"
+                terminal = handle.transport_state
+            with self._lock:
+                if terminal == TransportState.UNKNOWN:
+                    self._isolated_reason = "V transport terminal state is unknown"
+                if delivery.state == DeliveryState.V_WRITING and handle is not None:
+                    if (
+                        terminal == TransportState.TERMINAL_SUCCESS
+                        and handle.status == TransferStatus.SUCCESS
+                    ):
+                        delivery.state = transition(
+                            delivery.state, DeliveryState.DELIVERED
+                        )
+                        self.metrics.increment(
+                            "vector_v_to_d_bytes", handle.transferred_bytes
+                        )
+                        self.metrics.increment("vector_deliveries_completed")
+                    elif handle.status in (
+                        TransferStatus.FAILED,
+                        TransferStatus.CANCELLED,
+                    ):
+                        self._cancel_delivery_locked(
+                            entry,
+                            delivery,
+                            handle.error or handle.status.value,
+                            DeliveryState.FAILED,
+                        )
+                safe = terminal is not None and terminal.is_locally_safe_to_release
+                if safe and delivery.authorization:
+                    delivery.authorization.close()
+            if safe:
+                if delivery.authorization:
+                    # begin consumed the sender gate, but the adapter may have
+                    # rejected locally before native submission. That is a safe
+                    # failed gate, not a claim that begin never happened.
+                    auth_terminal = (
+                        TransportState.TERMINAL_FAILED
+                        if terminal == TransportState.NOT_SUBMITTED
+                        and delivery.authorization_begun
+                        else terminal
                     )
-                local = MemorySlice(
-                    registration=self.registration,
-                    offset=allocation_offset,
-                    length=entry.manifest.expected_bytes,
-                )
-                handle = self.transfer_engine.submit_put(
-                    local, delivery.destination, remote_offset=0
-                )
-            else:
-                destination_layout = layout_from_destination(delivery.destination)
-                source_rank, source_head_offset = source_rank_and_head_offset(
-                    entry.layout, destination_layout, delivery.destination.rank
-                )
-                if source_rank != self.rank:
-                    raise EntryConflictError(
-                        f"D rank {delivery.destination.rank} belongs to V rank "
-                        f"{source_rank}, not V rank {self.rank}"
-                    )
-                token_count = entry.manifest.page_count * entry.layout.page_size
-                expected_destination_bytes = (
-                    sum(
-                        int(value)
-                        for value in destination_layout.extra[
-                            "component_bytes_per_token"
-                        ]
-                    )
-                    * token_count
-                )
-                if delivery.destination.length != expected_destination_bytes:
-                    raise EntryConflictError(
-                        f"D rank {delivery.destination.rank} registered "
-                        f"{delivery.destination.length} bytes, expected "
-                        f"{expected_destination_bytes}"
-                    )
-                if destination_layout.fingerprint == entry.layout.fingerprint:
-                    handle = self.transfer_engine.submit_put(
-                        MemorySlice(
-                            registration=self.registration,
-                            offset=allocation_offset,
-                            length=entry.manifest.expected_bytes,
-                        ),
-                        delivery.destination,
-                        remote_offset=0,
+                    delivery.authorization.observe_terminal(
+                        delivery.authorization.identity, auth_terminal
                     )
                 else:
-                    source_bytes = [
-                        int(value)
-                        for value in entry.layout.extra["component_bytes_per_token"]
-                    ]
-                    destination_bytes = [
-                        int(value)
-                        for value in destination_layout.extra[
-                            "component_bytes_per_token"
-                        ]
-                    ]
-                    source_region = self.pool[
-                        allocation_offset : allocation_offset
-                        + entry.manifest.expected_bytes
-                    ]
-                    chunks = []
-                    component_base = 0
-                    for source_bpt, destination_bpt in zip(
-                        source_bytes, destination_bytes
-                    ):
-                        bytes_per_head = source_bpt // entry.layout.kv_heads_per_rank
-                        byte_start = source_head_offset * bytes_per_head
-                        component = source_region[
-                            component_base : component_base + token_count * source_bpt
-                        ].reshape(token_count, source_bpt)
-                        chunks.append(
-                            component[:, byte_start : byte_start + destination_bpt]
-                            .contiguous()
-                            .reshape(-1)
-                        )
-                        component_base += token_count * source_bpt
-                    staging = torch.cat(chunks).contiguous()
-                    registration = self.transfer_engine.register_memory(
-                        staging,
-                        endpoint="pvd-vector-slice",
-                        rank=self.rank,
-                        rail=self.rail,
-                        metadata={"delivery_id": delivery.delivery_id},
-                    )
-                    try:
-                        handle = self.transfer_engine.submit_put(
-                            MemorySlice(
-                                registration=registration,
-                                offset=0,
-                                length=staging.numel(),
-                            ),
-                            delivery.destination,
-                            remote_offset=0,
-                        )
-                    finally:
-                        # Both supported PVD engines complete submit_put
-                        # synchronously, so the staging registration can be
-                        # released immediately after the call returns.
-                        self.transfer_engine.release_memory(registration)
-            delivery.transfer_handle = handle
-            status = self.transfer_engine.poll(handle)
-            if status == TransferStatus.SUCCESS:
-                delivery.state = transition(delivery.state, DeliveryState.DELIVERED)
-                self.metrics.increment("vector_v_to_d_bytes", handle.transferred_bytes)
-                self.metrics.increment("vector_deliveries_completed")
-            elif status in (TransferStatus.FAILED, TransferStatus.CANCELLED):
-                delivery.state = transition(delivery.state, DeliveryState.FAILED)
-                delivery.error = handle.error or status.value
-                entry.active_delivery_count -= 1
-                self.metrics.increment("vector_delivery_failures")
-            return delivery
+                    delivery.source_guard.unpin(delivery.owner)
+                if delivery.staging_guard is not None:
+                    delivery.staging_guard.unpin(delivery.owner)
+        except Exception as exc:
+            # Native adapter exceptions are normally mapped to UNKNOWN there.
+            # Preserve all ownership here, including failed cleanup callbacks.
+            logger.warning(
+                "V transfer progress retained resources: %s: %s",
+                delivery.delivery_id,
+                exc,
+            )
+        finally:
+            delivery.progress_lock.release()
+
+    def progress_transfers(self) -> None:
+        with self._lock:
+            records = [
+                (entry, delivery)
+                for entry in self.entries.values()
+                for delivery in entry.deliveries.values()
+            ]
+        for entry, delivery in records:
+            self._progress_delivery(entry, delivery)
+        self._progress_releases()
 
     def poll_delivery(self, key: KVEntryKey, delivery_id: str) -> DeliveryShardRecord:
         with self._lock:
             entry = self._entry(key)
             delivery = entry.deliveries[delivery_id]
-            handle = delivery.transfer_handle
-            if delivery.state != DeliveryState.V_WRITING or handle is None:
-                return delivery
-            status = self.transfer_engine.poll(handle)
-            if status == TransferStatus.SUCCESS:
-                delivery.state = transition(delivery.state, DeliveryState.DELIVERED)
-                self.metrics.increment("vector_v_to_d_bytes", handle.transferred_bytes)
-                self.metrics.increment("vector_deliveries_completed")
-            elif status in (TransferStatus.FAILED, TransferStatus.CANCELLED):
-                delivery.state = transition(delivery.state, DeliveryState.FAILED)
-                delivery.error = handle.error or status.value
-                entry.active_delivery_count -= 1
-                self.metrics.increment("vector_delivery_failures")
-            return delivery
+        self._progress_delivery(entry, delivery)
+        self._progress_releases()
+        return delivery
 
     def ack_delivery(self, key: KVEntryKey, delivery_id: str) -> DeliveryShardRecord:
         with self._lock:
@@ -539,32 +718,63 @@ class VectorKVStore:
             self.metrics.increment("vector_deliveries_acked")
             return delivery
 
+    def _cancel_delivery_locked(
+        self, entry, delivery, reason, state=DeliveryState.CANCELLED
+    ):
+        if delivery.state not in DELIVERY_TERMINAL_STATES:
+            delivery.state = transition(delivery.state, state)
+            delivery.error = reason
+            entry.active_delivery_count -= 1
+        self._fenced_deliveries.add((entry.key, delivery.delivery_id))
+        if delivery.authorization:
+            delivery.authorization.close()
+        if (
+            not delivery.submitting
+            and delivery.transfer_handle is None
+            and delivery.local_terminal is None
+        ):
+            delivery.local_terminal = TransportState.NOT_SUBMITTED
+
     def cancel_delivery(
         self, key: KVEntryKey, delivery_id: str, reason: str
     ) -> DeliveryShardRecord:
         with self._lock:
             entry = self._entry(key)
             delivery = entry.deliveries[delivery_id]
-            if delivery.state in DELIVERY_TERMINAL_STATES:
-                return delivery
-            if delivery.transfer_handle is not None:
-                self.transfer_engine.abort(delivery.transfer_handle)
-            delivery.state = transition(delivery.state, DeliveryState.CANCELLED)
-            delivery.error = reason
-            entry.active_delivery_count -= 1
-            self.metrics.increment("vector_deliveries_cancelled")
-            return delivery
+            self._cancel_delivery_locked(entry, delivery, reason)
+        self._progress_delivery(entry, delivery)
+        self._progress_releases()
+        return delivery
+
+    def fence_write(self, identity: WriteIdentity):
+        with self._lock:
+            entry = self._entry(identity.key)
+            delivery = entry.deliveries.get(identity.transfer_id)
+            if delivery is None or delivery.authorization is None:
+                raise EntryConflictError("unknown write authorization")
+            if (
+                identity != delivery.authorization.identity
+                or identity.sender_epoch != self.worker_epoch
+            ):
+                raise EntryConflictError("write authorization identity mismatch")
+            identity.validate_destination(delivery.destination)
+            self._cancel_delivery_locked(entry, delivery, "Decode fenced retrieval")
+        self._progress_delivery(entry, delivery)
+        self._progress_releases()
+        return delivery.authorization.fence(identity)
 
     def fence_delivery(self, key: KVEntryKey, delivery_id: str):
-        # start_delivery holds this lock across the synchronous PUT. Taking it
-        # proves all earlier writes have drained; the tombstone rejects later
-        # reserve/start messages, including a reserve delayed by HTTP timeout.
+        # Legacy ID-only callers can close a gate, never establish MR safety.
         with self._lock:
             self._fenced_deliveries.add((key, delivery_id))
             entry = self.entries.get(key)
-            if entry is not None and delivery_id in entry.deliveries:
-                self.cancel_delivery(key, delivery_id, "Decode fenced retrieval")
-            return {"delivery_id": delivery_id, "fenced": True}
+            delivery = entry.deliveries.get(delivery_id) if entry else None
+            if delivery:
+                self._cancel_delivery_locked(entry, delivery, "legacy fence")
+        if delivery:
+            self._progress_delivery(entry, delivery)
+            self._progress_releases()
+        return {"delivery_id": delivery_id, "fenced": False}
 
     def release_entry(self, key: KVEntryKey) -> None:
         with self._lock:
@@ -573,35 +783,33 @@ class VectorKVStore:
                 raise EntryConflictError(
                     f"entry has {entry.active_delivery_count} active deliveries"
                 )
-            if entry.resources_released:
-                return
             if entry.state == EntryShardState.STORED:
                 entry.state = transition(entry.state, EntryShardState.RELEASING)
-                self._release_resources_locked(entry)
-                entry.state = transition(entry.state, EntryShardState.RELEASED)
-            else:
-                self._release_resources_locked(entry)
-            self.metrics.increment("vector_entries_released")
+            self._release_resources_locked(entry)
+        self.progress_transfers()
 
     def cancel_entry(self, key: KVEntryKey, reason: str) -> None:
         with self._lock:
             entry = self._entry(key)
-            for delivery_id in list(entry.deliveries):
-                delivery = entry.deliveries[delivery_id]
-                if delivery.state not in DELIVERY_TERMINAL_STATES:
-                    self.cancel_delivery(key, delivery_id, reason)
-            if entry.state not in (
-                EntryShardState.RELEASED,
-                EntryShardState.FAILED,
-                EntryShardState.CANCELLED,
-                EntryShardState.EXPIRED,
-            ):
-                entry.state = transition(entry.state, EntryShardState.CANCELLED)
-            entry.error = reason
-            self._release_resources_locked(entry)
-            self.metrics.increment("vector_entries_cancelled")
+            self._cancel_entry_locked(entry, reason)
+        self.progress_transfers()
+
+    def _cancel_entry_locked(self, entry, reason):
+        for delivery in entry.deliveries.values():
+            self._cancel_delivery_locked(entry, delivery, reason)
+        if entry.state not in (
+            EntryShardState.RELEASED,
+            EntryShardState.FAILED,
+            EntryShardState.CANCELLED,
+            EntryShardState.EXPIRED,
+        ):
+            entry.state = transition(entry.state, EntryShardState.CANCELLED)
+        entry.error = reason
+        self._release_resources_locked(entry)
 
     def _fail_entry_locked(self, entry: EntryShardRecord, reason: str) -> None:
+        for delivery in entry.deliveries.values():
+            self._cancel_delivery_locked(entry, delivery, reason)
         if entry.state not in (
             EntryShardState.RELEASED,
             EntryShardState.FAILED,
@@ -614,18 +822,42 @@ class VectorKVStore:
         self.metrics.increment("vector_entry_failures")
 
     def _release_resources_locked(self, entry: EntryShardRecord) -> None:
-        if entry.resources_released:
-            return
-        self.allocator.free(entry.allocation)
-        entry.resources_released = True
-        self._refresh_metrics()
+        # Never execute unregister callbacks while holding the store lock.
+        entry.release_requested = True
+
+    def _free_allocation(self, entry):
+        with self._lock:
+            if not entry.resources_released:
+                self.allocator.free(entry.allocation)
+                entry.resources_released = True
+                if entry.state == EntryShardState.RELEASING:
+                    entry.state = transition(entry.state, EntryShardState.RELEASED)
+                self._refresh_metrics()
+
+    def _progress_releases(self):
+        with self._lock:
+            entries = list(self.entries.values())
+        for entry in entries:
+            try:
+                if entry.release_requested:
+                    entry.allocation_guard.request_release()
+                if entry.resources_released:
+                    self._pool_guard.unpin(entry.pool_owner)
+            except Exception as exc:
+                logger.warning(
+                    "V allocation release retained resources: %s: %s", entry.key, exc
+                )
+        if self._closed:
+            try:
+                self._pool_guard.request_release()
+            except Exception as exc:
+                logger.warning("V pool unregister will be retried: %s", exc)
 
     def reap_expired(
         self, now: Optional[float] = None, *, reap_entries: bool = True
     ) -> Dict[str, int]:
         now = time.monotonic() if now is None else now
-        expired_deliveries = 0
-        expired_entries = 0
+        expired_deliveries = expired_entries = 0
         with self._lock:
             for entry in self.entries.values():
                 for delivery in entry.deliveries.values():
@@ -633,31 +865,24 @@ class VectorKVStore:
                         delivery.state not in DELIVERY_TERMINAL_STATES
                         and delivery.deadline <= now
                     ):
-                        if delivery.transfer_handle is not None:
-                            self.transfer_engine.abort(delivery.transfer_handle)
-                        delivery.state = transition(
-                            delivery.state, DeliveryState.EXPIRED
+                        self._cancel_delivery_locked(
+                            entry, delivery, "delivery timeout", DeliveryState.EXPIRED
                         )
-                        delivery.error = "delivery timeout"
-                        entry.active_delivery_count -= 1
                         expired_deliveries += 1
                 if (
                     reap_entries
-                    and not entry.resources_released
+                    and not entry.release_requested
                     and entry.active_delivery_count == 0
                     and entry.expires_at <= now
-                    and entry.state
-                    not in (
-                        EntryShardState.RELEASED,
-                        EntryShardState.FAILED,
-                        EntryShardState.CANCELLED,
-                        EntryShardState.EXPIRED,
-                    )
                 ):
-                    entry.state = transition(entry.state, EntryShardState.EXPIRED)
+                    # An ALLOCATED target may already be visible to P even
+                    # before begin_p_write. Its upload pin remains intact.
+                    if entry.state != EntryShardState.ALLOCATED:
+                        entry.state = transition(entry.state, EntryShardState.EXPIRED)
                     entry.error = "entry TTL expired"
                     self._release_resources_locked(entry)
                     expired_entries += 1
+        self.progress_transfers()
         if expired_deliveries:
             self.metrics.increment("vector_deliveries_expired", expired_deliveries)
         if expired_entries:
@@ -672,22 +897,27 @@ class VectorKVStore:
     def snapshot(self) -> Dict[str, object]:
         with self._lock:
             self._refresh_metrics()
-            return {
+            snapshot = {
                 "rank": self.rank,
                 "world_size": self.world_size,
                 "rail": self.rail,
                 "device": self.device,
                 "page_bytes": self.page_bytes,
+                "worker_epoch": self.worker_epoch,
+                "closed": self._closed,
+                "isolated_reason": self._isolated_reason,
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],
-                "transport": self.transfer_engine.health(),
                 "metrics": self.metrics.snapshot(),
             }
+        # Engine health may acquire the native submission manager's lock.
+        snapshot["transport"] = self.transfer_engine.health()
+        return snapshot
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             for entry in self.entries.values():
-                if not entry.resources_released:
-                    self._release_resources_locked(entry)
-            self.transfer_engine.release_memory(self.registration)
+                self._cancel_entry_locked(entry, "V store closing")
+        self.progress_transfers()

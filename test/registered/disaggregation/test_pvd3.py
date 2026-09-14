@@ -523,7 +523,8 @@ def test_shard_fence_blocks_a_delayed_reserve():
         destination = engine.register_memory(
             torch.zeros(32, dtype=torch.uint8), endpoint="d", rank=0, rail="mlx5_0"
         ).descriptor
-        assert stores[0].fence_delivery(key, "late:d0")["fenced"]
+        # An ID-only tombstone stops late reservation, but is not MR proof.
+        assert stores[0].fence_delivery(key, "late:d0")["fenced"] is False
         with pytest.raises(Exception, match="fenced"):
             stores[0].reserve_delivery(key, "late:d0", destination)
 

@@ -63,6 +63,9 @@ class ShardClient(abc.ABC):
     async def start_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping: ...
 
     @abc.abstractmethod
+    async def poll_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping: ...
+
+    @abc.abstractmethod
     async def ack_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping: ...
 
     @abc.abstractmethod
@@ -112,21 +115,29 @@ class LocalShardClient(ShardClient):
         result = await asyncio.to_thread(self.store.start_delivery, key, delivery_id)
         return result.to_dict()
 
+    async def poll_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
+        result = await asyncio.to_thread(self.store.poll_delivery, key, delivery_id)
+        return result.to_dict()
+
     async def ack_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
         return self.store.ack_delivery(key, delivery_id).to_dict()
 
     async def cancel_delivery(
         self, key: KVEntryKey, delivery_id: str, reason: str
     ) -> Mapping:
-        return self.store.cancel_delivery(key, delivery_id, reason).to_dict()
+        result = await asyncio.to_thread(
+            self.store.cancel_delivery, key, delivery_id, reason
+        )
+        return result.to_dict()
 
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> None:
-        self.store.cancel_entry(key, reason)
+        await asyncio.to_thread(self.store.cancel_entry, key, reason)
 
     async def fence_delivery(self, identity: WriteIdentity) -> Mapping:
-        # Do not invoke the legacy cancellation path: it may reclaim V pages
-        # without native terminal proof. Task 4 replaces this non-mutating
-        # fail-closed bridge with the store's authoritative authorization gate.
+        if isinstance(self.store, VectorKVStore):
+            return await asyncio.to_thread(self.store.fence_write, identity)
+        # Non-store legacy/test adapters cannot manufacture lifecycle proof by
+        # echoing an ID-only cancellation reply. Keep that bridge fail-closed.
         return {
             **identity.to_dict(),
             "fenced": False,
@@ -134,10 +145,10 @@ class LocalShardClient(ShardClient):
         }
 
     async def release_entry(self, key: KVEntryKey) -> None:
-        self.store.release_entry(key)
+        await asyncio.to_thread(self.store.release_entry, key)
 
     async def health(self) -> Mapping:
-        snapshot = self.store.snapshot()
+        snapshot = await asyncio.to_thread(self.store.snapshot)
         snapshot["preflight"] = self.preflight
         return snapshot
 
@@ -387,7 +398,7 @@ class VectorCoordinator:
         if len({r.delivery_id for r in requests}) != len(requests):
             raise ValueError("duplicate delivery ID in retrieval batch")
 
-        async def one_locked(request):
+        async def one(request):
             result = {
                 "sequence_id": request.sequence_id,
                 "delivery_id": request.delivery_id,
@@ -408,6 +419,10 @@ class VectorCoordinator:
                 delivered = await self.start_delivery(request.delivery_id)
                 result.update(
                     state=delivered.state.value,
+                    write_identities={
+                        str(rank): identity.to_dict()
+                        for rank, identity in delivered.write_identities.items()
+                    },
                     error=delivered.error,
                     token_ranges=[[0, entry.manifest.prompt_token_count]],
                 )
@@ -415,11 +430,9 @@ class VectorCoordinator:
                 result.update(state="failed", error=str(exc))
             return result
 
-        async def one(request):
-            lock = self._retrieval_locks.setdefault(request.delivery_id, asyncio.Lock())
-            async with lock:
-                return await one_locked(request)
-
+        # Reserve/start have their own idempotency locks and each rechecks the
+        # closed gate. Do not hold the fence lock over submission RPCs: fence
+        # must be able to close a worker gate while native submission is slow.
         return await asyncio.gather(*(one(request) for request in requests))
 
     def entry_state(self, key: KVEntryKey) -> Optional[EntryState]:
@@ -723,39 +736,73 @@ class VectorCoordinator:
             ),
             return_exceptions=True,
         )
+        return await self._collect_delivery_results(
+            delivery, destination_ranks, results
+        )
+
+    async def poll_delivery(self, delivery_id: str) -> DeliveryRecord:
         async with self._lock:
-            failures = []
-            for rank, result in zip(destination_ranks, results):
-                if isinstance(result, Exception):
-                    failures.append(f"rank {rank}: {result}")
-                else:
-                    state = DeliveryState(result["state"])
-                    delivery.shard_states[rank] = state
-                    if state == DeliveryState.FAILED:
-                        failures.append(f"rank {rank}: {result.get('error')}")
-            if failures:
-                await asyncio.gather(
-                    *(
-                        self.shards[delivery.source_shards[rank]].cancel_delivery(
-                            delivery.entry_key,
-                            self._subdelivery_id(delivery.delivery_id, rank),
-                            "; ".join(failures),
-                        )
-                        for rank in destination_ranks
-                    ),
-                    return_exceptions=True,
+            delivery = self.deliveries[delivery_id]
+            ranks = sorted(delivery.destinations)
+        # Poll even logically cancelled deliveries: native resources may still
+        # be draining. No coordinator business lock is held across shard RPCs.
+        results = await asyncio.gather(
+            *(
+                self.shards[delivery.source_shards[rank]].poll_delivery(
+                    delivery.entry_key, self._subdelivery_id(delivery_id, rank)
                 )
+                for rank in ranks
+            ),
+            return_exceptions=True,
+        )
+        return await self._collect_delivery_results(delivery, ranks, results)
+
+    async def _collect_delivery_results(self, delivery, ranks, results):
+        failures = []
+        async with self._lock:
+            for rank, result in zip(ranks, results):
+                if isinstance(result, BaseException):
+                    failures.append(f"rank {rank}: {result}")
+                    continue
+                try:
+                    state = DeliveryState(result["state"])
+                except (KeyError, ValueError, TypeError):
+                    failures.append(f"rank {rank}: malformed delivery reply")
+                    continue
+                delivery.shard_states[rank] = state
+                if (
+                    state in DELIVERY_TERMINAL_STATES
+                    and state != DeliveryState.RELEASED
+                ):
+                    failures.append(
+                        f"rank {rank}: {result.get('error') or state.value}"
+                    )
+            if delivery.state in DELIVERY_TERMINAL_STATES:
+                return delivery
+            if failures:
                 delivery.state = transition(delivery.state, DeliveryState.FAILED)
                 delivery.error = "; ".join(failures)
                 self.entries[delivery.entry_key].active_delivery_count -= 1
                 self.metrics.increment("coordinator_delivery_failures")
-            elif all(
+            elif delivery.state == DeliveryState.V_WRITING and all(
                 delivery.shard_states.get(rank) == DeliveryState.DELIVERED
-                for rank in destination_ranks
+                for rank in ranks
             ):
                 delivery.state = transition(delivery.state, DeliveryState.DELIVERED)
                 self.metrics.increment("coordinator_deliveries_completed")
-            return delivery
+        if failures:
+            await asyncio.gather(
+                *(
+                    self.shards[delivery.source_shards[rank]].cancel_delivery(
+                        delivery.entry_key,
+                        self._subdelivery_id(delivery.delivery_id, rank),
+                        delivery.error,
+                    )
+                    for rank in ranks
+                ),
+                return_exceptions=True,
+            )
+        return delivery
 
     async def ack_delivery(self, delivery_id: str) -> DeliveryRecord:
         async with self._lock:

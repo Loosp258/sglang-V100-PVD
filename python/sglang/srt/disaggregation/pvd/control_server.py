@@ -140,6 +140,13 @@ class HttpShardClient(ShardClient):
             {"key": key.to_dict(), "delivery_id": delivery_id},
         )
 
+    async def poll_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
+        return await self._request(
+            "POST",
+            "/internal/v1/deliveries/poll",
+            {"key": key.to_dict(), "delivery_id": delivery_id},
+        )
+
     async def ack_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
         return await self._request(
             "POST",
@@ -226,6 +233,13 @@ def create_shard_app(
         )
         return web.json_response(result.to_dict())
 
+    async def poll_delivery(request):
+        data = await _payload(request)
+        result = await asyncio.to_thread(
+            store.poll_delivery, _key(data), str(data["delivery_id"])
+        )
+        return web.json_response(result.to_dict())
+
     async def ack_delivery(request):
         data = await _payload(request)
         return web.json_response(
@@ -234,15 +248,19 @@ def create_shard_app(
 
     async def cancel_delivery(request):
         data = await _payload(request)
-        return web.json_response(
-            store.cancel_delivery(
-                _key(data), str(data["delivery_id"]), str(data.get("reason", ""))
-            ).to_dict()
+        result = await asyncio.to_thread(
+            store.cancel_delivery,
+            _key(data),
+            str(data["delivery_id"]),
+            str(data.get("reason", "")),
         )
+        return web.json_response(result.to_dict())
 
     async def cancel_entry(request):
         data = await _payload(request)
-        store.cancel_entry(_key(data), str(data.get("reason", "")))
+        await asyncio.to_thread(
+            store.cancel_entry, _key(data), str(data.get("reason", ""))
+        )
         return web.json_response({"ok": True})
 
     async def fence_delivery(request):
@@ -254,11 +272,11 @@ def create_shard_app(
 
     async def release_entry(request):
         data = await _payload(request)
-        store.release_entry(_key(data))
+        await asyncio.to_thread(store.release_entry, _key(data))
         return web.json_response({"ok": True})
 
     async def health(_request):
-        snapshot = store.snapshot()
+        snapshot = await asyncio.to_thread(store.snapshot)
         snapshot["preflight"] = dict(preflight or {})
         return web.json_response(snapshot)
 
@@ -269,6 +287,7 @@ def create_shard_app(
             web.post("/internal/v1/entries/commit", commit_entry),
             web.post("/internal/v1/deliveries", reserve_delivery),
             web.post("/internal/v1/deliveries/start", start_delivery),
+            web.post("/internal/v1/deliveries/poll", poll_delivery),
             web.post("/internal/v1/deliveries/ack", ack_delivery),
             web.post("/internal/v1/deliveries/cancel", cancel_delivery),
             web.post("/internal/v1/deliveries/fence", fence_delivery),
@@ -362,6 +381,11 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
         result = await coordinator.start_delivery(str(data["delivery_id"]))
         return web.json_response(result.to_dict())
 
+    async def poll_delivery(request):
+        data = await _payload(request)
+        result = await coordinator.poll_delivery(str(data["delivery_id"]))
+        return web.json_response(result.to_dict())
+
     async def ack_delivery(request):
         data = await _payload(request)
         result = await coordinator.ack_delivery(str(data["delivery_id"]))
@@ -399,6 +423,7 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             web.post("/v1/select", select),
             web.post("/v1/deliveries", reserve_delivery),
             web.post("/v1/deliveries/start", start_delivery),
+            web.post("/v1/deliveries/poll", poll_delivery),
             web.post("/v1/deliveries/ack", ack_delivery),
             web.post("/v1/deliveries/cancel", cancel_delivery),
             web.post("/v1/entries/cancel", cancel_entry),
