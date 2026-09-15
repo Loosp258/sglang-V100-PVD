@@ -28,6 +28,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.request_state import InvalidStateTransition
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 from sglang.srt.disaggregation.pvd.vector_store import (
     EntryConflictError,
     EntryNotFoundError,
@@ -69,6 +70,26 @@ def _key(value: Mapping[str, Any]) -> KVEntryKey:
     return KVEntryKey.from_dict(value["key"])
 
 
+def _transport_state(value: object) -> TransportState:
+    """Parse a transport state name strictly.
+
+    An unrecognised or non-string value is rejected rather than coerced: a
+    malformed report must never be read as a terminal state.
+    """
+    if not isinstance(value, str):
+        raise ValueError("transport state must be a string")
+    try:
+        return TransportState(value)
+    except ValueError as exc:
+        raise ValueError(f"unknown transport state {value!r}") from exc
+
+
+def _closed_flag(value: object) -> bool:
+    if type(value) is not bool:
+        raise ValueError("closed must be a boolean")
+    return value
+
+
 class HttpShardClient(ShardClient):
     """Rank-0 client for the other rank's private control service."""
 
@@ -100,14 +121,33 @@ class HttpShardClient(ShardClient):
                 )
             return body
 
-    async def create_entry(self, manifest: KVEntryManifest) -> Mapping:
-        return await self._request(
-            "POST", "/internal/v1/entries", {"manifest": manifest.to_dict()}
-        )
+    async def create_entry(
+        self, manifest: KVEntryManifest, *, uploader_epoch: Optional[str] = None
+    ) -> Mapping:
+        payload = {"manifest": manifest.to_dict()}
+        if uploader_epoch is not None:
+            payload["uploader_epoch"] = uploader_epoch
+        return await self._request("POST", "/internal/v1/entries", payload)
 
-    async def begin_p_write(self, key: KVEntryKey) -> Mapping:
+    async def begin_p_write(
+        self, key: KVEntryKey, identity: Optional[WriteIdentity] = None
+    ) -> Mapping:
+        payload = {"key": key.to_dict()}
+        if identity is not None:
+            payload["identity"] = identity.to_dict()
+        return await self._request("POST", "/internal/v1/entries/begin", payload)
+
+    async def sync_upload(
+        self, identity: WriteIdentity, state: TransportState, closed: bool
+    ) -> Mapping:
         return await self._request(
-            "POST", "/internal/v1/entries/begin", {"key": key.to_dict()}
+            "POST",
+            "/internal/v1/uploads/sync",
+            {
+                "identity": identity.to_dict(),
+                "state": state.value,
+                "closed": bool(closed),
+            },
         )
 
     async def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> Mapping:
@@ -202,13 +242,35 @@ def create_shard_app(
 
     async def create_entry(request):
         data = await _payload(request)
+        uploader_epoch = data.get("uploader_epoch")
+        if uploader_epoch is not None and not isinstance(uploader_epoch, str):
+            raise ValueError("uploader_epoch must be a string")
         return web.json_response(
-            store.create_entry(KVEntryManifest.from_dict(data["manifest"])).to_dict()
+            store.create_entry(
+                KVEntryManifest.from_dict(data["manifest"]),
+                uploader_epoch=uploader_epoch,
+            ).to_dict()
         )
 
     async def begin_entry(request):
         data = await _payload(request)
-        return web.json_response(store.begin_p_write(_key(data)).to_dict())
+        identity = data.get("identity")
+        return web.json_response(
+            store.begin_p_write(
+                _key(data),
+                WriteIdentity.from_dict(identity) if identity is not None else None,
+            ).to_dict()
+        )
+
+    async def sync_upload(request):
+        data = await _payload(request)
+        result = await asyncio.to_thread(
+            store.sync_upload,
+            WriteIdentity.from_dict(data["identity"]),
+            _transport_state(data["state"]),
+            _closed_flag(data["closed"]),
+        )
+        return web.json_response(result)
 
     async def commit_entry(request):
         data = await _payload(request)
@@ -285,6 +347,7 @@ def create_shard_app(
             web.post("/internal/v1/entries", create_entry),
             web.post("/internal/v1/entries/begin", begin_entry),
             web.post("/internal/v1/entries/commit", commit_entry),
+            web.post("/internal/v1/uploads/sync", sync_upload),
             web.post("/internal/v1/deliveries", reserve_delivery),
             web.post("/internal/v1/deliveries/start", start_delivery),
             web.post("/internal/v1/deliveries/poll", poll_delivery),
@@ -341,10 +404,24 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
 
     async def create_entry(request):
         data = await _payload(request)
+        uploader_epoch = data.get("uploader_epoch")
+        if uploader_epoch is not None and not isinstance(uploader_epoch, str):
+            raise ValueError("uploader_epoch must be a string")
         result = await coordinator.create_entry(
-            KVEntryManifest.from_dict(data["manifest"])
+            KVEntryManifest.from_dict(data["manifest"]),
+            uploader_epoch=uploader_epoch,
         )
         return web.json_response(result.to_dict())
+
+    async def sync_upload(request):
+        data = await _payload(request)
+        return web.json_response(
+            await coordinator.sync_upload(
+                WriteIdentity.from_dict(data["identity"]),
+                _transport_state(data["state"]),
+                _closed_flag(data["closed"]),
+            )
+        )
 
     async def commit_entry(request):
         data = await _payload(request)
@@ -420,6 +497,7 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             web.post("/v1/consumers/release", release_consumer),
             web.post("/v1/entries", create_entry),
             web.post("/v1/entries/commit", commit_entry),
+            web.post("/v1/uploads/sync", sync_upload),
             web.post("/v1/select", select),
             web.post("/v1/deliveries", reserve_delivery),
             web.post("/v1/deliveries/start", start_delivery),

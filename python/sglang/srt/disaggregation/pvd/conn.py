@@ -43,6 +43,8 @@ from sglang.srt.disaggregation.pvd.runtime import (
     PVDPrefillRuntime,
 )
 from sglang.srt.disaggregation.pvd.sharding import validate_compute_layout
+from sglang.srt.disaggregation.pvd.upload_manager import PVDUploadManager
+from sglang.srt.disaggregation.pvd.worker_epoch import worker_epoch
 
 
 class PVDConnectionError(RuntimeError):
@@ -145,11 +147,20 @@ class PVDKVManager:
         self.transfer_engine = MooncakePVDTransferEngine.from_existing(
             shared_engine, rail=self.rail
         )
+        # One incarnation per worker process, shared by every group's runtime.
+        # A P compute rank with TP1 uploads to both V storage shards under this
+        # epoch; the two writes stay distinct through their write identities.
+        self.worker_epoch = worker_epoch()
+        # Upload records outlive their senders, so the manager is owned here.
+        self.upload_manager = PVDUploadManager()
+        self._upload_progress_future: Optional[concurrent.futures.Future] = None
         self.prefill_runtimes = {
             group_id: PVDPrefillRuntime(
                 model_instance_id=self.model_instance_id,
                 coordinator=client,
                 transfer_engine=self.transfer_engine,
+                upload_manager=self.upload_manager,
+                worker_epoch=self.worker_epoch,
             )
             for group_id, client in self.clients.items()
         }
@@ -172,6 +183,30 @@ class PVDKVManager:
             raise PVDConnectionError(
                 "PVD 3.0 KV refresh requires overlap scheduling disabled"
             )
+
+    def progress_uploads(self) -> Optional[concurrent.futures.Future]:
+        """Trigger one bounded upload progress step.
+
+        This is a convenience trigger, not the owner of the work: records live
+        in ``self.upload_manager`` and keep their pins whether or not anyone
+        calls this. Task 7 adds the bounded autonomous driver; until then a
+        worker that stops triggering retains resources instead of releasing
+        them, and a test can call ``upload_manager.progress()`` directly.
+        """
+        if self.upload_manager.outstanding() == 0:
+            return None
+        future = self._upload_progress_future
+        if future is not None and not future.done():
+            return future
+        self._upload_progress_future = self.control.submit(
+            self.upload_manager.progress()
+        )
+        return self._upload_progress_future
+
+    def abandon_uploads(self, key: KVEntryKey, reason: str) -> None:
+        """Stop future submissions for an entry without releasing anything."""
+        self.upload_manager.abandon_key(key, reason)
+        self.progress_uploads()
 
     def key_for(self, req) -> KVEntryKey:
         transfer_id = getattr(req, "pvd_transfer_id", None)
@@ -507,6 +542,10 @@ class PVDKVSender:
             )
 
     def poll(self) -> int:
+        # Progress is triggered here for live requests, but the manager owns
+        # the records: a sender that is never polled again must not strand an
+        # upload. See PVDKVManager.progress_uploads.
+        self.kv_mgr.progress_uploads()
         if self.conclude_state is not None:
             return self.conclude_state
         try:
@@ -536,12 +575,20 @@ class PVDKVSender:
 
     def abort(self):
         self.conclude_state = KVPoll.Failed
+        # Forbid any further submission under these identities first, then ask
+        # V to cancel. V records a close request; it does not release the
+        # destination pages, and neither does this call.
+        self.kv_mgr.abandon_uploads(self.key, "Prefill request aborted")
         self.kv_mgr.control.submit(
             self.client.cancel_entry(self.key, "Prefill request aborted")
         )
 
     def clear(self):
-        pass
+        # The scheduler is done with this request object. Any upload that never
+        # reached native submission is now provably never going to; one that
+        # did keeps its handle, its source pin and its pending terminal report
+        # inside the manager until V acknowledges a terminal state.
+        self.kv_mgr.abandon_uploads(self.key, "Prefill sender cleared")
 
 
 class PVDKVReceiver:

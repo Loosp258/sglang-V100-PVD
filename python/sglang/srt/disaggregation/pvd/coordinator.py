@@ -21,6 +21,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
+    ENTRY_TERMINAL_STATES,
     DeliveryState,
     EntryShardState,
     EntryState,
@@ -32,6 +33,7 @@ from sglang.srt.disaggregation.pvd.sharding import (
     layout_from_destination,
     source_rank_and_head_offset,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
 
 
@@ -43,10 +45,19 @@ class ShardClient(abc.ABC):
     rank: int
 
     @abc.abstractmethod
-    async def create_entry(self, manifest: KVEntryManifest) -> Mapping: ...
+    async def create_entry(
+        self, manifest: KVEntryManifest, *, uploader_epoch: Optional[str] = None
+    ) -> Mapping: ...
 
     @abc.abstractmethod
-    async def begin_p_write(self, key: KVEntryKey) -> Mapping: ...
+    async def begin_p_write(
+        self, key: KVEntryKey, identity: Optional[WriteIdentity] = None
+    ) -> Mapping: ...
+
+    @abc.abstractmethod
+    async def sync_upload(
+        self, identity: WriteIdentity, state: TransportState, closed: bool
+    ) -> Mapping: ...
 
     @abc.abstractmethod
     async def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> Mapping: ...
@@ -94,11 +105,28 @@ class LocalShardClient(ShardClient):
         self.rank = store.rank
         self.preflight = dict(preflight or {})
 
-    async def create_entry(self, manifest: KVEntryManifest) -> Mapping:
-        return self.store.create_entry(manifest).to_dict()
+    async def create_entry(
+        self, manifest: KVEntryManifest, *, uploader_epoch: Optional[str] = None
+    ) -> Mapping:
+        return self.store.create_entry(
+            manifest, uploader_epoch=uploader_epoch
+        ).to_dict()
 
-    async def begin_p_write(self, key: KVEntryKey) -> Mapping:
-        return self.store.begin_p_write(key).to_dict()
+    async def begin_p_write(
+        self, key: KVEntryKey, identity: Optional[WriteIdentity] = None
+    ) -> Mapping:
+        return self.store.begin_p_write(key, identity).to_dict()
+
+    async def sync_upload(
+        self, identity: WriteIdentity, state: TransportState, closed: bool
+    ) -> Mapping:
+        sync = getattr(self.store, "sync_upload", None)
+        if not callable(sync):
+            # A non-store adapter cannot manufacture upload drain proof.
+            raise CoordinatorError(
+                "V shard does not implement the PVD upload lifecycle protocol"
+            )
+        return await asyncio.to_thread(sync, identity, state, closed)
 
     async def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> Mapping:
         return self.store.commit_p_write(key, received_bytes).to_dict()
@@ -164,6 +192,8 @@ class EntryRecord:
     first_token: Optional[FirstTokenMetadata] = None
     active_delivery_count: int = 0
     error: Optional[str] = None
+    uploader_epoch: Optional[str] = None
+    upload_identities: Dict[int, WriteIdentity] = field(default_factory=dict)
 
     consumer_leases: Dict[str, float] = field(default_factory=dict)
 
@@ -182,6 +212,11 @@ class EntryRecord:
             },
             "first_token": self.first_token.to_dict() if self.first_token else None,
             "active_delivery_count": self.active_delivery_count,
+            "uploader_epoch": self.uploader_epoch,
+            "upload_identities": {
+                str(rank): identity.to_dict()
+                for rank, identity in self.upload_identities.items()
+            },
             "error": self.error,
         }
 
@@ -439,21 +474,32 @@ class VectorCoordinator:
         entry = self.entries.get(key)
         return entry.state if entry is not None else None
 
-    async def create_entry(self, manifest: KVEntryManifest) -> EntryRecord:
+    async def create_entry(
+        self,
+        manifest: KVEntryManifest,
+        *,
+        uploader_epoch: Optional[str] = None,
+    ) -> EntryRecord:
         async with self._lock:
             create_lock = self._entry_create_locks.setdefault(
                 manifest.key, asyncio.Lock()
             )
         async with create_lock:
-            return await self._create_entry_once(manifest)
+            return await self._create_entry_once(manifest, uploader_epoch)
 
-    async def _create_entry_once(self, manifest: KVEntryManifest) -> EntryRecord:
+    async def _create_entry_once(
+        self, manifest: KVEntryManifest, uploader_epoch: Optional[str] = None
+    ) -> EntryRecord:
         async with self._lock:
             existing = self.entries.get(manifest.key)
             if existing is not None:
                 if existing.manifest != manifest:
                     raise CoordinatorError(
                         "entry key already exists with a different global manifest"
+                    )
+                if existing.uploader_epoch != uploader_epoch:
+                    raise CoordinatorError(
+                        "entry key already exists with a different uploader epoch"
                     )
                 return existing
             now = time.monotonic()
@@ -468,10 +514,25 @@ class VectorCoordinator:
 
         try:
             created = await asyncio.gather(
-                *(self.shards[rank].create_entry(manifest) for rank in (0, 1))
+                *(
+                    self.shards[rank].create_entry(
+                        manifest, uploader_epoch=uploader_epoch
+                    )
+                    for rank in (0, 1)
+                )
+            )
+            targets = {
+                rank: RemoteRegionDescriptor.from_dict(created[rank]["target_region"])
+                for rank in (0, 1)
+            }
+            identities = self._upload_identities(
+                manifest, created, targets, uploader_epoch
             )
             begun = await asyncio.gather(
-                *(self.shards[rank].begin_p_write(manifest.key) for rank in (0, 1))
+                *(
+                    self.shards[rank].begin_p_write(manifest.key, identities.get(rank))
+                    for rank in (0, 1)
+                )
             )
         except Exception as exc:
             await self.cancel_entry(manifest.key, f"shard allocation failed: {exc}")
@@ -482,13 +543,153 @@ class VectorCoordinator:
             record.shard_states = {
                 rank: EntryShardState(begun[rank]["state"]) for rank in (0, 1)
             }
-            record.target_regions = {
-                rank: RemoteRegionDescriptor.from_dict(created[rank]["target_region"])
-                for rank in (0, 1)
-            }
+            record.target_regions = targets
+            record.uploader_epoch = uploader_epoch
+            record.upload_identities = identities
             record.state = transition(record.state, EntryState.P_WRITING)
             self.metrics.increment("coordinator_entries_created")
             return record
+
+    @staticmethod
+    def _upload_identities(
+        manifest: KVEntryManifest,
+        created: List[Mapping],
+        targets: Dict[int, RemoteRegionDescriptor],
+        uploader_epoch: Optional[str],
+    ) -> Dict[int, WriteIdentity]:
+        """Adopt each shard's published upload identity, or refuse the batch.
+
+        Identities come from the configured trusted shard endpoints, never from
+        a caller. Once any shard publishes lifecycle metadata, a missing or
+        mismatched identity on another shard cannot fall back to legacy
+        reservation semantics.
+        """
+        published = [value.get("upload_identity") for value in created]
+        if uploader_epoch is None:
+            if any(item is not None for item in published):
+                raise CoordinatorError(
+                    "V shard published an upload identity without an uploader epoch"
+                )
+            return {}
+        identities: Dict[int, WriteIdentity] = {}
+        for rank in (0, 1):
+            value = published[rank]
+            if value is None:
+                raise CoordinatorError(
+                    f"V shard {rank} did not publish an upload write identity"
+                )
+            identity = WriteIdentity.from_dict(value)
+            if identity.sender_epoch != uploader_epoch:
+                raise CoordinatorError(
+                    f"V shard {rank} bound the upload to a different sender epoch"
+                )
+            if identity.key != manifest.key:
+                raise CoordinatorError(
+                    f"V shard {rank} bound the upload to a different entry key"
+                )
+            if identity.shard_rank != rank:
+                raise CoordinatorError(
+                    f"V shard {rank} published an identity for rank "
+                    f"{identity.shard_rank}"
+                )
+            identity.validate_destination(targets[rank])
+            identities[rank] = identity
+        if len({identity.transfer_id for identity in identities.values()}) != len(
+            identities
+        ):
+            raise CoordinatorError("V shards published duplicate upload transfer ids")
+        return identities
+
+    async def sync_upload(
+        self, identity: WriteIdentity, state: TransportState, closed: bool
+    ) -> Mapping:
+        """Relay one P upload transport report to the owning V shard.
+
+        The shard RPC deliberately runs outside the coordinator business lock:
+        a slow or unreachable shard must not block cancellation or fencing.
+        """
+        if not isinstance(identity, WriteIdentity):
+            raise CoordinatorError("upload sync requires a write identity")
+        if not isinstance(state, TransportState):
+            raise CoordinatorError("upload sync requires a transport state")
+        if not isinstance(closed, bool):
+            raise CoordinatorError("upload sync requires a boolean closed flag")
+        rank = identity.shard_rank
+        if rank not in self.shards:
+            raise CoordinatorError(f"unknown V shard rank {rank}")
+        async with self._lock:
+            entry = self.entries.get(identity.key)
+            if entry is None:
+                raise CoordinatorError("unknown entry for upload sync")
+            expected = entry.upload_identities.get(rank)
+            if expected is None:
+                raise CoordinatorError(
+                    "entry has no lifecycle upload authorization for this shard"
+                )
+            if expected != identity:
+                raise CoordinatorError(
+                    "upload write identity does not match this entry"
+                )
+
+        reply = await self.shards[rank].sync_upload(identity, state, closed)
+        if not isinstance(reply, Mapping):
+            raise CoordinatorError("invalid upload sync reply")
+        try:
+            returned = WriteIdentity.from_dict(reply["identity"])
+        except (KeyError, ValueError) as exc:
+            raise CoordinatorError(
+                f"invalid upload sync reply identity: {exc}"
+            ) from exc
+        if returned != identity:
+            raise CoordinatorError("upload sync reply identity does not match")
+        if (
+            type(reply.get("close_requested")) is not bool
+            or type(reply.get("terminal_ack")) is not bool
+        ):
+            raise CoordinatorError("upload sync reply is missing typed flags")
+
+        shard_state = reply.get("entry_state")
+        if shard_state is not None:
+            async with self._lock:
+                entry = self.entries.get(identity.key)
+                if entry is not None:
+                    entry.shard_states[rank] = EntryShardState(shard_state)
+                    self._publish_entry_locked(entry)
+        return reply
+
+    def _publish_entry_locked(
+        self, entry: EntryRecord, *, strict: bool = False
+    ) -> None:
+        """Promote an entry to STORED once every shard reports STORED.
+
+        Also reached from sync_upload, because a lifecycle shard becomes STORED
+        only when both its byte-complete commit and its transport terminal have
+        arrived, in whichever order. ``strict`` preserves commit_shard's
+        original behaviour of letting an impossible transition raise; the
+        sync_upload path instead ignores an already-terminal entry, because a
+        late transport terminal arriving after cancellation is expected.
+        """
+        if entry.state == EntryState.STORED:
+            return
+        if not strict and entry.state in ENTRY_TERMINAL_STATES:
+            return
+        if not all(
+            entry.shard_states.get(shard_rank) == EntryShardState.STORED
+            for shard_rank in (0, 1)
+        ):
+            return
+        if entry.first_token is None:
+            # Not an error here: rank-0 may simply not have committed yet.
+            return
+        entry.state = transition(entry.state, EntryState.STORED)
+        entry.expires_at = time.monotonic() + self.entry_ttl_secs
+        self.metrics.increment("coordinator_entries_stored")
+        for delivery in self.deliveries.values():
+            if (
+                delivery.entry_key == entry.manifest.key
+                and delivery.state == DeliveryState.WAITING_SOURCE
+            ):
+                delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
 
     async def commit_shard(
         self,
@@ -523,17 +724,7 @@ class VectorCoordinator:
                     raise CoordinatorError(
                         "rank-0 commit must include first-token metadata before STORED"
                     )
-                entry.state = transition(entry.state, EntryState.STORED)
-                entry.expires_at = time.monotonic() + self.entry_ttl_secs
-                self.metrics.increment("coordinator_entries_stored")
-                for delivery in self.deliveries.values():
-                    if (
-                        delivery.entry_key == key
-                        and delivery.state == DeliveryState.WAITING_SOURCE
-                    ):
-                        delivery.state = transition(
-                            delivery.state, DeliveryState.D_RESERVED
-                        )
+                self._publish_entry_locked(entry, strict=True)
             return entry
 
     async def select(self, keys: List[KVEntryKey]):

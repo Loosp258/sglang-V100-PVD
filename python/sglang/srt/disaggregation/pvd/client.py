@@ -12,6 +12,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     RemoteRegionDescriptor,
     WriteIdentity,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 
 
 class PVDControlPlaneError(RuntimeError):
@@ -50,8 +51,58 @@ class PVDCoordinatorClient:
                 )
             return body
 
-    async def create_entry(self, manifest: KVEntryManifest) -> Dict[str, Any]:
-        return await self._request("/v1/entries", {"manifest": manifest.to_dict()})
+    async def create_entry(
+        self,
+        manifest: KVEntryManifest,
+        *,
+        uploader_epoch: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"manifest": manifest.to_dict()}
+        if uploader_epoch is not None:
+            if not isinstance(uploader_epoch, str) or not uploader_epoch.strip():
+                raise ValueError("uploader_epoch must be a non-empty string")
+            payload["uploader_epoch"] = uploader_epoch
+        return await self._request("/v1/entries", payload)
+
+    async def sync_upload(
+        self,
+        identity: WriteIdentity,
+        state: TransportState,
+        closed: bool,
+    ) -> Dict[str, Any]:
+        """Report this upload's transport state and collect V's close request.
+
+        The reply is validated here as well as on V: a reply that does not echo
+        the exact identity, or that omits typed flags, is not allowed to look
+        like a terminal acknowledgement to the caller.
+        """
+        if not isinstance(identity, WriteIdentity):
+            raise ValueError("identity must be a WriteIdentity")
+        if not isinstance(state, TransportState):
+            raise ValueError("state must be a TransportState")
+        if type(closed) is not bool:
+            raise ValueError("closed must be a boolean")
+        reply = await self._request(
+            "/v1/uploads/sync",
+            {
+                "identity": identity.to_dict(),
+                "state": state.value,
+                "closed": closed,
+            },
+        )
+        try:
+            if not isinstance(reply, Mapping):
+                raise ValueError("reply must be an object")
+            if WriteIdentity.from_dict(reply["identity"]) != identity:
+                raise ValueError("reply identity does not match")
+            if (
+                type(reply.get("close_requested")) is not bool
+                or type(reply.get("terminal_ack")) is not bool
+            ):
+                raise ValueError("reply is missing typed lifecycle flags")
+        except (KeyError, ValueError) as exc:
+            raise PVDControlPlaneError(f"invalid upload sync reply: {exc}") from exc
+        return reply
 
     async def admit_request(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._request("/v1/requests", request)

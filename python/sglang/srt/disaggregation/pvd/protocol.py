@@ -189,6 +189,30 @@ class WriteIdentity:
             )
 
 
+def upload_transfer_id(key: "KVEntryKey", storage_shard_rank: int) -> str:
+    """Write id for one P -> V shard upload.
+
+    ``key.req_id`` identifies the request; ``key.transfer_id`` identifies the
+    Entry/transfer instance and is what scopes an upload.  The rank suffix is
+    the *storage* shard rank -- the V rank that owns the destination allocation
+    -- not the P compute rank, because one P compute rank with TP1 uploads to
+    both V storage shards and those two writes must not share an identity.
+
+    The string is a readable handle only.  Uniqueness and authorization are
+    established by the complete ``WriteIdentity``: both process incarnations,
+    the destination region and its allocation generation, the shard rank and
+    the Entry key.  Never authorize on the transfer id alone.
+    """
+    if not isinstance(key, KVEntryKey):
+        raise ProtocolValidationError("upload transfer id requires a KVEntryKey")
+    if isinstance(storage_shard_rank, bool) or not isinstance(storage_shard_rank, int):
+        raise ProtocolValidationError("storage shard rank must be an integer")
+    if storage_shard_rank < 0:
+        raise ProtocolValidationError("storage shard rank must be non-negative")
+    _require_identity_string("key.transfer_id", key.transfer_id)
+    return f"upload:{key.transfer_id}:v{storage_shard_rank}"
+
+
 @dataclass(frozen=True)
 class KVLayoutSignature:
     """Fields that must match on P, every V shard and D before RDMA starts."""

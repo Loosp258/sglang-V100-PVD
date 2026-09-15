@@ -22,9 +22,11 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVShardManifest,
     RemoteRegionDescriptor,
     WriteIdentity,
+    upload_transfer_id,
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
+    ENTRY_SHARD_TERMINAL_STATES,
     DeliveryState,
     EntryShardState,
     transition,
@@ -48,6 +50,21 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Owner token for the pre-lifecycle upload pin.  Legacy callers that create an
+# Entry without an uploader epoch keep the old behaviour: the pin is taken when
+# the destination descriptor is published and dropped by a successful
+# commit_p_write.  That report is a completion claim, not transport-terminal
+# proof, so it can never be used by a lifecycle-v1 upload.
+_LEGACY_UPLOAD_OWNER = "upload"
+
+_UPLOAD_TERMINAL_STATES = frozenset(
+    {
+        TransportState.NOT_SUBMITTED,
+        TransportState.TERMINAL_SUCCESS,
+        TransportState.TERMINAL_FAILED,
+    }
+)
 
 
 class ResourceExhaustedError(RuntimeError):
@@ -194,6 +211,16 @@ class EntryShardRecord:
     upload_pending: bool = True
     release_requested: bool = False
     pool_owner: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
+    # Lifecycle-v1 upload state.  ``upload_authorization`` holds the only pin
+    # that a lifecycle upload may drop, and only through a matching closed
+    # terminal report.  ``upload_close_requested`` is a request to the sender,
+    # never a release.
+    upload_identity: Optional[WriteIdentity] = field(default=None, repr=False)
+    upload_authorization: Optional[WriteAuthorization] = field(default=None, repr=False)
+    upload_close_requested: bool = False
+    upload_begun: bool = False
+    upload_terminal: Optional[TransportState] = None
+    upload_committed_bytes: Optional[int] = None
 
     def to_dict(self):
         return {
@@ -212,6 +239,13 @@ class EntryShardRecord:
             "resources_released": self.resources_released,
             "upload_pending": self.upload_pending,
             "release_requested": self.release_requested,
+            "upload_identity": (
+                self.upload_identity.to_dict() if self.upload_identity else None
+            ),
+            "upload_close_requested": self.upload_close_requested,
+            "upload_terminal": (
+                self.upload_terminal.value if self.upload_terminal else None
+            ),
             "error": self.error,
         }
 
@@ -292,7 +326,12 @@ class VectorKVStore:
             raise EntryNotFoundError(key)
         return entry
 
-    def create_entry(self, manifest: KVEntryManifest) -> EntryShardRecord:
+    def create_entry(
+        self,
+        manifest: KVEntryManifest,
+        *,
+        uploader_epoch: Optional[str] = None,
+    ) -> EntryShardRecord:
         shard = manifest.shard(self.rank)
         if manifest.layout.tp_size != self.world_size:
             raise EntryConflictError(
@@ -320,6 +359,18 @@ class VectorKVStore:
                 ):
                     raise EntryConflictError(
                         "entry key already exists with a different manifest"
+                    )
+                # An Entry has exactly one uploader incarnation. A second P
+                # incarnation, or a legacy caller arriving after lifecycle
+                # metadata exists, must not inherit the first one's pin.
+                existing_epoch = (
+                    existing.upload_identity.sender_epoch
+                    if existing.upload_identity
+                    else None
+                )
+                if existing_epoch != uploader_epoch:
+                    raise EntryConflictError(
+                        "entry key already exists with a different uploader epoch"
                     )
                 return existing
 
@@ -353,24 +404,70 @@ class VectorKVStore:
             )
             # Publishing a destination grants a potential remote writer. Never
             # infer that no write exists merely because begin/commit is absent.
-            record.allocation_guard.pin("upload")
+            # The pin is taken here, before the descriptor leaves this method.
+            if uploader_epoch is None:
+                record.allocation_guard.pin(_LEGACY_UPLOAD_OWNER)
+            else:
+                identity = WriteIdentity(
+                    protocol=PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+                    sender_epoch=uploader_epoch,
+                    receiver_epoch=self.worker_epoch,
+                    transfer_id=upload_transfer_id(manifest.key, self.rank),
+                    region_id=target_region.region_id,
+                    generation=target_region.backend_metadata[
+                        PVD_GENERATION_METADATA_KEY
+                    ],
+                    shard_rank=target_region.rank,
+                    key=manifest.key,
+                )
+                identity.validate_destination(target_region)
+                record.upload_identity = identity
+                # Constructing the authorization is what pins the allocation in
+                # lifecycle mode; no separate legacy owner token is taken, so
+                # commit_p_write alone can never drop it.
+                record.upload_authorization = WriteAuthorization(
+                    identity, record.allocation_guard
+                )
             self._pool_guard.pin(record.pool_owner)
             self.entries[manifest.key] = record
             self.metrics.increment("vector_entries_created")
             self._refresh_metrics()
             return record
 
-    def begin_p_write(self, key: KVEntryKey) -> EntryShardRecord:
+    def begin_p_write(
+        self,
+        key: KVEntryKey,
+        identity: Optional[WriteIdentity] = None,
+    ) -> EntryShardRecord:
         with self._lock:
             if self._closed:
                 raise EntryConflictError("V store is closed")
             entry = self._entry(key)
             if entry.release_requested:
                 raise EntryConflictError("entry release requested")
+            authorization = entry.upload_authorization
+            if authorization is not None:
+                # Lifecycle metadata exists, so there is no legacy fallback.
+                if identity is None:
+                    raise EntryConflictError(
+                        "upload requires a lifecycle write identity"
+                    )
+                if identity != entry.upload_identity:
+                    raise EntryConflictError(
+                        "upload write identity does not match this entry"
+                    )
+                if entry.upload_close_requested:
+                    raise EntryConflictError("upload authorization is closing")
+                # One-shot gate: a retry, or a second sender, is rejected here.
+                authorization.begin(identity)
+                entry.upload_begun = True
+            elif identity is not None:
+                raise EntryConflictError("entry has no lifecycle upload authorization")
             entry.state = transition(entry.state, EntryShardState.P_WRITING)
             return entry
 
     def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> EntryShardRecord:
+        legacy_unpin = False
         with self._lock:
             entry = self._entry(key)
             if entry.release_requested:
@@ -387,22 +484,144 @@ class VectorKVStore:
                     f"received {received_bytes} KV bytes, expected {entry.manifest.expected_bytes}",
                 )
                 raise EntryConflictError(entry.error)
-            entry.state = transition(entry.state, EntryShardState.STORED)
-            entry.received_bytes = received_bytes
-            entry.stored_at = time.monotonic()
-            entry.expires_at = entry.stored_at + self.entry_ttl_secs
-            for delivery in entry.deliveries.values():
-                if delivery.state == DeliveryState.WAITING_SOURCE:
-                    delivery.state = transition(
-                        delivery.state, DeliveryState.D_RESERVED
-                    )
-            self.metrics.increment("vector_p_to_v_bytes", received_bytes)
-            self.metrics.increment("vector_entries_stored")
-            # Legacy successful commit is an explicit completion report, not a
-            # timeout inference. Task 5 binds this report to the P upload gate.
-            entry.upload_pending = False
-        entry.allocation_guard.unpin("upload")
+            entry.upload_committed_bytes = received_bytes
+            if entry.upload_authorization is None:
+                # Legacy successful commit is an explicit completion report, not
+                # a timeout inference, but it is still not transport-terminal
+                # proof. Lifecycle uploads below never take this branch.
+                self._publish_stored_locked(entry, received_bytes)
+                entry.upload_pending = False
+                legacy_unpin = True
+            else:
+                if entry.upload_close_requested:
+                    raise EntryConflictError("upload authorization is closing")
+                # A byte-complete report alone does not publish STORED: the
+                # sender must also have reached a successful native terminal.
+                self._try_publish_stored_locked(entry)
+        if legacy_unpin:
+            entry.allocation_guard.unpin(_LEGACY_UPLOAD_OWNER)
         return entry
+
+    def _publish_stored_locked(
+        self, entry: EntryShardRecord, received_bytes: int
+    ) -> None:
+        entry.state = transition(entry.state, EntryShardState.STORED)
+        entry.received_bytes = received_bytes
+        entry.stored_at = time.monotonic()
+        entry.expires_at = entry.stored_at + self.entry_ttl_secs
+        for delivery in entry.deliveries.values():
+            if delivery.state == DeliveryState.WAITING_SOURCE:
+                delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
+        self.metrics.increment("vector_p_to_v_bytes", received_bytes)
+        self.metrics.increment("vector_entries_stored")
+
+    def _try_publish_stored_locked(self, entry: EntryShardRecord) -> None:
+        """Publish STORED only when business and transport both succeeded.
+
+        A late native success after business cancellation, TTL expiry or close
+        permits reclamation only. It must never resurrect the request.
+        """
+        if entry.release_requested or entry.state == EntryShardState.STORED:
+            return
+        if entry.upload_committed_bytes is None:
+            return
+        if entry.upload_terminal != TransportState.TERMINAL_SUCCESS:
+            return
+        self._publish_stored_locked(entry, entry.upload_committed_bytes)
+
+    def sync_upload(
+        self,
+        identity: WriteIdentity,
+        state: TransportState,
+        closed: bool,
+    ) -> Dict[str, object]:
+        """Exchange upload transport state with the owning P incarnation.
+
+        This is the only path that can release a lifecycle upload's hold on the
+        destination allocation, and only for a matching identity whose sender
+        reports a closed authorization together with a transport terminal
+        state. Timeout, HTTP failure, TTL expiry, a missing report or a P
+        restart are never accepted as completion proof.
+        """
+        if not isinstance(identity, WriteIdentity):
+            raise EntryConflictError("upload sync requires a write identity")
+        if not isinstance(state, TransportState):
+            raise EntryConflictError("upload sync requires a transport state")
+        if not isinstance(closed, bool):
+            raise EntryConflictError("upload sync requires a boolean closed flag")
+
+        observation = None
+        with self._lock:
+            entry = self._entry(identity.key)
+            authorization = entry.upload_authorization
+            if authorization is None or entry.upload_identity is None:
+                raise EntryConflictError("entry has no lifecycle upload authorization")
+            if identity != entry.upload_identity:
+                raise EntryConflictError(
+                    "upload write identity does not match this entry"
+                )
+            # Region id, allocation generation, receiver epoch and rank are
+            # re-checked against the live destination, so a retried report can
+            # never close a different allocation generation.
+            identity.validate_destination(entry.target_region)
+
+            if state == TransportState.UNKNOWN:
+                self._isolated_reason = "P upload transport terminal state is unknown"
+                entry.upload_close_requested = True
+                return self._upload_sync_reply_locked(entry, terminal_ack=False)
+
+            if not closed:
+                return self._upload_sync_reply_locked(
+                    entry, terminal_ack=entry.upload_terminal is not None
+                )
+
+            if state not in _UPLOAD_TERMINAL_STATES:
+                raise EntryConflictError(
+                    "a closed upload report requires a transport terminal state"
+                )
+            effective = state
+            if state == TransportState.NOT_SUBMITTED and entry.upload_begun:
+                # begin consumed the one-shot gate. A proven pre-native
+                # rejection is a safe failed gate, not a claim that the
+                # authorization never began.
+                effective = TransportState.TERMINAL_FAILED
+            if entry.upload_terminal is not None and entry.upload_terminal != effective:
+                raise EntryConflictError(
+                    "upload already reported a different terminal state"
+                )
+            entry.upload_terminal = effective
+            entry.upload_pending = False
+            observation = (authorization, identity, effective)
+            if effective == TransportState.TERMINAL_SUCCESS:
+                self._try_publish_stored_locked(entry)
+            elif entry.state not in ENTRY_SHARD_TERMINAL_STATES:
+                self._fail_entry_locked(
+                    entry, "P upload did not reach a successful transport terminal"
+                )
+
+        if observation is not None:
+            authorization, identity, effective = observation
+            # Closing and unpinning run outside the store lock: the unpin can
+            # invoke the allocation release callback.
+            authorization.close()
+            authorization.observe_terminal(identity, effective)
+        self._progress_releases()
+        with self._lock:
+            return self._upload_sync_reply_locked(entry, terminal_ack=True)
+
+    def _upload_sync_reply_locked(
+        self, entry: EntryShardRecord, *, terminal_ack: bool
+    ) -> Dict[str, object]:
+        return {
+            "identity": entry.upload_identity.to_dict(),
+            "close_requested": bool(entry.upload_close_requested),
+            "terminal_ack": bool(terminal_ack),
+            "entry_state": entry.state.value,
+            "upload_terminal": (
+                entry.upload_terminal.value if entry.upload_terminal else None
+            ),
+            "resources_released": bool(entry.resources_released),
+        }
 
     def reserve_delivery(
         self,
@@ -824,6 +1043,10 @@ class VectorKVStore:
     def _release_resources_locked(self, entry: EntryShardRecord) -> None:
         # Never execute unregister callbacks while holding the store lock.
         entry.release_requested = True
+        # Cancel, failure, TTL and close ask the sender to stop and report.
+        # They never release a lifecycle upload's hold on the destination.
+        if entry.upload_authorization is not None and entry.upload_terminal is None:
+            entry.upload_close_requested = True
 
     def _free_allocation(self, entry):
         with self._lock:
