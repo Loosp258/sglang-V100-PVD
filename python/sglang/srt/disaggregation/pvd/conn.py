@@ -175,6 +175,10 @@ class PVDKVManager:
         self.is_dummy_cp_rank = False
         self._layout_description = describe_kv_layout(kv_pool)
         self.decode_sessions = {}
+        # Sessions whose receive buffer could not be fenced yet. They are owned
+        # by this manager, not by any request, so an aborted or finished
+        # request can never take its unfenced destination away with it.
+        self.pending_decode_closes = []
         self.decode_refresher = PVDDecodeRefresher(self)
         if (
             scheduler.server_args.disaggregation_mode == "decode"
@@ -183,6 +187,22 @@ class PVDKVManager:
             raise PVDConnectionError(
                 "PVD 3.0 KV refresh requires overlap scheduling disabled"
             )
+
+    def retain_pending_close(self, session) -> None:
+        """Keep an unfenced Decode receive buffer alive under manager ownership.
+
+        Called when a close could not prove that remote writes stopped. The
+        session keeps its registration, its pin and its saved identities; only
+        a later successful fence releases them.
+        """
+        if session not in self.pending_decode_closes:
+            self.pending_decode_closes.append(session)
+
+    def progress_decode_closes(self) -> Optional[concurrent.futures.Future]:
+        """Trigger one bounded step over retained Decode closes."""
+        if not self.pending_decode_closes:
+            return None
+        return self.control.submit(self.decode_refresher.progress_pending_closes())
 
     def progress_uploads(self) -> Optional[concurrent.futures.Future]:
         """Trigger one bounded upload progress step.

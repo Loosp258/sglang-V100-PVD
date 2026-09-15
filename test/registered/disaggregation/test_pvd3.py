@@ -378,6 +378,19 @@ def test_http_admission_lease_and_retrieval_contract():
     asyncio.run(scenario())
 
 
+def _with_close_retention(manager):
+    """Give a fake manager the Task 6 retention API.
+
+    An undrained Decode close is owned by the manager, not by the request, so
+    every fake that drives a session close needs somewhere to hand it.
+    """
+    manager.pending_decode_closes = []
+    manager.retain_pending_close = lambda session: manager.pending_decode_closes.append(
+        session
+    )
+    return manager
+
+
 def test_decode_session_reuses_staging_and_validates_reply_before_unpack():
     from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
     from sglang.srt.disaggregation.pvd.protocol import KVEntryKey
@@ -401,9 +414,13 @@ def test_decode_session_reuses_staging_and_validates_reply_before_unpack():
             server_args=SimpleNamespace(pvd_kv_refresh_interval=4)
         ),
     )
+    _with_close_retention(manager)
     session = PVDDecodeSession(manager, req)
     first = session.prepare([1, 2])
     ptr = session.staging.data_ptr()
+    # The destination is pinned from the moment its descriptor is published.
+    assert first["destination"]["backend_metadata"]["pvd_receiver_epoch"]
+    assert first["destination"]["backend_metadata"]["pvd_generation"]
     source = SimpleNamespace(
         k_buffer=[torch.arange(8, dtype=torch.float32).reshape(8, 1, 1)], v_buffer=[]
     )
@@ -420,12 +437,22 @@ def test_decode_session_reuses_staging_and_validates_reply_before_unpack():
         session.unpack({**reply, "delivery_id": "old"})
     assert torch.all(pool.k_buffer[0] == -9)
     session.unpack(reply)
+    # Staging may not be reused while the previous refresh is still pinned.
+    with pytest.raises(RuntimeError, match="unfenced"):
+        session.prepare([1, 2])
+    session.release_refresh()
     session.clock.complete(reply["delivery_id"])
     assert pool.k_buffer[0][4:9].flatten().tolist() == [0, 1, 2, 3, 4]
     pool.k_buffer[0][9:] = 88
     req.output_ids.extend([1, 2, 3, 4])
     second = session.prepare([1, 2])
     assert second["delivery_id"] != first["delivery_id"]
+    # A new generation per refresh: a late write from the first one cannot be
+    # accepted as belonging to the second.
+    assert (
+        second["destination"]["backend_metadata"]["pvd_generation"]
+        != first["destination"]["backend_metadata"]["pvd_generation"]
+    )
     assert session.staging.data_ptr() == ptr
     session.unpack({**reply, "delivery_id": second["delivery_id"]})
     assert pool.k_buffer[0][9:].flatten().tolist() == [88] * 7
@@ -553,8 +580,9 @@ def test_fenced_old_delivery_cannot_write_a_reregistered_destination():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["timeout", "wrong-delivery"])
+@pytest.mark.parametrize("failure", ["timeout", "wrong-delivery", "unfenced"])
 def test_decode_retains_mr_until_matching_fence_confirmation(failure):
+    """An unproven fence must retain the MR, never release it."""
     from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
     from sglang.srt.disaggregation.pvd.protocol import KVEntryKey
     from sglang.srt.disaggregation.pvd.transfer_engine import (
@@ -564,70 +592,91 @@ def test_decode_retains_mr_until_matching_fence_confirmation(failure):
     )
 
     async def scenario():
-        waiting = asyncio.Event()
-        allow_fence = asyncio.Event()
+        key = KVEntryKey("model", "fence", "fence")
 
         class Client:
             calls = 0
+            allow = False
 
-            async def fence_retrieval(self, delivery_id):
-                self.calls += 1
-                if self.calls == 1:
-                    if failure == "timeout":
-                        raise TimeoutError("V has not confirmed completion")
-                    return {"delivery_id": "wrong", "fenced": True}
-                waiting.set()
-                await allow_fence.wait()
-                return {"delivery_id": delivery_id, "fenced": True}
+            async def fence_retrieval(self, delivery_id, identities):
+                Client.calls += 1
+                if Client.allow:
+                    return {
+                        "delivery_id": delivery_id,
+                        "fenced": True,
+                        "identities": identities,
+                    }
+                if failure == "timeout":
+                    raise TimeoutError("V has not confirmed completion")
+                if failure == "wrong-delivery":
+                    return {
+                        "delivery_id": "wrong",
+                        "fenced": True,
+                        "identities": identities,
+                    }
+                return {
+                    "delivery_id": delivery_id,
+                    "fenced": False,
+                    "identities": identities,
+                }
+
+            async def poll_delivery(self, delivery_id):
+                raise AssertionError("identities were already saved")
 
             async def release_consumer(self, key, consumer_id):
                 return None
 
         client = Client()
         engine = FakeTransferEngine()
-        manager = SimpleNamespace(
-            key_for=lambda r: KVEntryKey("model", "fence", "fence"),
-            client_for=lambda r: client,
-            transfer_engine=engine,
-            tp_rank=0,
-            scheduler=SimpleNamespace(
-                server_args=SimpleNamespace(pvd_kv_refresh_interval=4)
-            ),
+        pool = SimpleNamespace(k_buffer=[torch.full((16, 1, 1), -9.0)], v_buffer=[])
+        req = SimpleNamespace(
+            origin_input_ids=list(range(5)), output_ids=[7], pvd_delivery_id="d"
         )
-        session = PVDDecodeSession(manager, SimpleNamespace(pvd_delivery_id="d"))
-        buffer = torch.zeros(16, dtype=torch.uint8)
-        registration = engine.register_memory(
-            buffer, endpoint="d", rank=0, rail="mlx5_0"
+        manager = _with_close_retention(
+            SimpleNamespace(
+                key_for=lambda r: key,
+                client_for=lambda r: client,
+                kv_pool=pool,
+                page_size=4,
+                tp_rank=0,
+                rail="mlx5_0",
+                transfer_engine=engine,
+                layout=lambda: SimpleNamespace(to_dict=lambda: {}),
+                scheduler=SimpleNamespace(
+                    server_args=SimpleNamespace(pvd_kv_refresh_interval=4)
+                ),
+            )
         )
-        session.staging, session.registration = buffer, registration
-        session.clock.begin(0)
-        closing = asyncio.create_task(session.close())
-        try:
-            await asyncio.wait_for(waiting.wait(), timeout=5)
-            assert not closing.done()
-            assert session.registration is registration
-            # Still a live MR, not merely a retained Python tensor reference.
-            assert (
+        session = PVDDecodeSession(manager, req)
+        session.prepare([1, 2])
+        registration = session.registration
+        session.identities = {0: session.expected_identity(0, "v-worker-epoch")}
+
+        def mr_is_live():
+            return (
                 engine.submit_put(
                     MemorySlice(registration, 0, 16), registration.descriptor
                 ).status
                 == TransferStatus.SUCCESS
             )
-            allow_fence.set()
-            await asyncio.wait_for(closing, timeout=5)
-            assert session.registration is None
-            assert (
-                engine.submit_put(
-                    MemorySlice(registration, 0, 16), registration.descriptor
-                ).status
-                == TransferStatus.FAILED
-            )
-        finally:
-            allow_fence.set()
-            if not closing.done():
-                closing.cancel()
-            await asyncio.gather(closing, return_exceptions=True)
-            engine.release_memory(registration)
+
+        assert await session.progress_close() is False
+        assert session.registration is registration
+        assert mr_is_live()
+
+        drained = await session.close()
+        assert drained is False
+        # Ownership moved to the manager, not away from the process.
+        assert session in manager.pending_decode_closes
+        assert session.registration is registration
+        assert mr_is_live()
+
+        Client.allow = True
+        assert await session.progress_close() is True
+        assert mr_is_live(), "fencing alone must not deregister the MR"
+        assert await session.close() is True
+        assert session.registration is None
+        assert not mr_is_live()
 
     asyncio.run(scenario())
 
@@ -790,6 +839,7 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
             key_for=lambda r: key,
             client_for=lambda r: client,
             vector_group_for=lambda r: "v",
+            pending_decode_closes=[],
             clients={"v": client},
             kv_pool=SimpleNamespace(
                 k_buffer=[torch.full((16, heads, 1), -9, dtype=torch.float16)],
@@ -811,6 +861,7 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
         )
         session = PVDDecodeSession(manager, req)
         manager.decode_sessions = {key: session}
+        _with_close_retention(manager)
         managers.append(manager)
         sessions.append(session)
         refreshers.append(PVDDecodeRefresher(manager))
@@ -866,11 +917,13 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
     finally:
         barrier.abort()
         for session in sessions:
-            # Task 3 intentionally cannot promote the legacy local-store
-            # boolean fence. These fake transfers are synchronous; Task 6
-            # supplies the identities used by production session close.
-            session.clock.pending = None
-            control.submit(session.close()).result(timeout=10)
+            # Task 6 closes through the identity fence. A session whose refresh
+            # never reached V cannot be drained, and must keep its buffer
+            # rather than release an unfenced destination.
+            drained = control.submit(session.close()).result(timeout=10)
+            if not drained:
+                assert session in session.manager.pending_decode_closes
+                assert session.registration is not None
         control.loop.call_soon_threadsafe(control.loop.stop)
         control.thread.join(timeout=10)
         control.loop.close()

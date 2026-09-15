@@ -323,9 +323,13 @@ class PVDDecodeRuntime:
         *,
         coordinator: PVDCoordinatorClient,
         transfer_engine: Optional[TransferEngine] = None,
+        delivery_poll_attempts: int = 200,
+        delivery_poll_interval_seconds: float = 0.005,
     ) -> None:
         self.coordinator = coordinator
         self.transfer_engine = transfer_engine
+        self.delivery_poll_attempts = delivery_poll_attempts
+        self.delivery_poll_interval_seconds = delivery_poll_interval_seconds
 
     def prepare_shard(
         self,
@@ -366,6 +370,13 @@ class PVDDecodeRuntime:
         delivery_id = delivery_id or uuid.uuid4().hex
         await self.coordinator.reserve_delivery(key, delivery_id, destinations)
         result = await self.coordinator.start_delivery(delivery_id)
+        # A delivery still on the wire reports v_writing. That is in flight,
+        # not failed: poll it to a terminal state instead of tearing it down.
+        for _ in range(self.delivery_poll_attempts):
+            if result.get("state") != "v_writing":
+                break
+            await asyncio.sleep(self.delivery_poll_interval_seconds)
+            result = await self.coordinator.poll_delivery(delivery_id)
         if result.get("state") != "delivered":
             raise PVDDataPlaneError(
                 f"V delivery {delivery_id} did not complete: {result}"
