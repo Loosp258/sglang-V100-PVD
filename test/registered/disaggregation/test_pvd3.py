@@ -120,6 +120,8 @@ def test_pd_config_is_unchanged_and_pvd_decode_disables_overlap():
         enable_prefill_context_parallel=False,
         disaggregation_decode_enable_radix_cache=False,
         pvd_model_instance_id="model",
+        pvd_transfer_staging_budget_bytes=1 << 30,
+        pvd_transfer_max_inflight=64,
     )
     handle_pvd_disaggregation(args)
     assert args.disable_overlap_schedule

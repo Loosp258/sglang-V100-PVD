@@ -161,6 +161,17 @@ class TransferBudget:
             }
 
 
+def budget_of(engine) -> Optional["TransferBudget"]:
+    """Return the shared budget an engine's lifecycle manager enforces.
+
+    ``None`` means the engine has no budget, which is only the case for the
+    in-process test transport: every production adapter is constructed with
+    one, because admission has to be decided before any staging tensor exists.
+    """
+    manager = getattr(engine, "lifecycle_manager", None)
+    return getattr(manager, "budget", None)
+
+
 class TransferLifecycleManager:
     """Shared native-write ownership, independent of business cancellation.
 
@@ -224,7 +235,9 @@ class TransferLifecycleManager:
                 try:
                     native_id = submit()
                 except Exception as exc:
-                    self._mark_unknown_locked(handle, record, f"native submit raised: {exc}")
+                    self._mark_unknown_locked(
+                        handle, record, f"native submit raised: {exc}"
+                    )
                     return
                 if not isinstance(native_id, int) or native_id <= 0:
                     self._mark_unknown_locked(
@@ -244,7 +257,8 @@ class TransferLifecycleManager:
         from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
 
         if handle.transport_state in (
-            TransportState.TERMINAL_SUCCESS, TransportState.TERMINAL_FAILED
+            TransportState.TERMINAL_SUCCESS,
+            TransportState.TERMINAL_FAILED,
         ):
             return
         handle.transport_state = TransportState.UNKNOWN
@@ -277,10 +291,12 @@ class TransferLifecycleManager:
                 return
             _, guard, byte_count = record
             if handle.transport_state not in (
-                TransportState.TERMINAL_SUCCESS, TransportState.TERMINAL_FAILED
+                TransportState.TERMINAL_SUCCESS,
+                TransportState.TERMINAL_FAILED,
             ):
                 handle.transport_state = (
-                    TransportState.TERMINAL_SUCCESS if success
+                    TransportState.TERMINAL_SUCCESS
+                    if success
                     else TransportState.TERMINAL_FAILED
                 )
             terminal_success = handle.transport_state == TransportState.TERMINAL_SUCCESS
@@ -288,7 +304,9 @@ class TransferLifecycleManager:
                 handle.transferred_bytes = byte_count
             if handle.status == TransferStatus.PENDING:
                 handle.status = (
-                    TransferStatus.SUCCESS if terminal_success else TransferStatus.FAILED
+                    TransferStatus.SUCCESS
+                    if terminal_success
+                    else TransferStatus.FAILED
                 )
             if not terminal_success:
                 handle.error = "Mooncake native transfer failed"

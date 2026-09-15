@@ -84,11 +84,20 @@ class UploadRecord:
 class PVDUploadManager:
     """Per-worker registry of uploads that outlives individual senders."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_tombstone_domains: int = 1024) -> None:
+        if max_tombstone_domains <= 0:
+            raise ValueError("max_tombstone_domains must be positive")
         self._records: Dict[str, UploadRecord] = {}
         self._lock = threading.Lock()
         self._retired = 0
+        # Tombstones are grouped by Entry key, which is the closed
+        # authorization domain: every upload under one Entry shares it.
         self._tombstones: Dict[str, str] = {}
+        self._tombstone_domains: Dict[str, set] = {}
+        self._domain_of: Dict[str, str] = {}
+        self._closed_domains: set = set()
+        self.max_tombstone_domains = max_tombstone_domains
+        self._rejected_domains = 0
 
     # -- registry -----------------------------------------------------------
 
@@ -99,6 +108,11 @@ class PVDUploadManager:
             reason = self._tombstones.get(identity.transfer_id)
             if reason is not None:
                 raise RuntimeError(f"upload {identity.transfer_id} is closed: {reason}")
+            if identity.key.transfer_id in self._closed_domains:
+                raise RuntimeError(
+                    f"upload domain {identity.key.transfer_id} is closed; "
+                    "a late start is refused"
+                )
             existing = self._records.get(identity.transfer_id)
             if existing is not None:
                 if existing.identity != identity:
@@ -106,8 +120,27 @@ class PVDUploadManager:
                         "upload transfer id already has a different identity"
                     )
                 return existing
+            domain = identity.key.transfer_id
+            if domain in self._closed_domains:
+                raise RuntimeError(
+                    f"upload domain {domain} is closed; a late start is refused"
+                )
+            if (
+                domain not in self._tombstone_domains
+                and len(self._tombstone_domains) >= self.max_tombstone_domains
+            ):
+                # Refuse a new domain rather than delete records that still
+                # have to reject late requests. Dropping them would let a
+                # retired identity be submitted again.
+                self._rejected_domains += 1
+                raise RuntimeError(
+                    "PVD upload tombstone capacity is exhausted; refusing a new "
+                    "authorization domain"
+                )
             record = UploadRecord(identity=identity, coordinator=coordinator)
             self._records[identity.transfer_id] = record
+            self._domain_of[identity.transfer_id] = domain
+            self._tombstone_domains.setdefault(domain, set())
             return record
 
     def get(self, transfer_id: str) -> Optional[UploadRecord]:
@@ -187,6 +220,10 @@ class PVDUploadManager:
             "outstanding": len(records),
             "retired": retired,
             "tombstones": tombstones,
+            "tombstone_domains": len(self._tombstone_domains),
+            "closed_domains": len(self._closed_domains),
+            "max_tombstone_domains": self.max_tombstone_domains,
+            "rejected_domains": self._rejected_domains,
             "records": [record.snapshot() for record in records],
         }
 
@@ -278,3 +315,33 @@ class PVDUploadManager:
             # A retired identity must never be submitted again, even if a stale
             # caller still holds the lease that produced it.
             self._tombstones[record.transfer_id] = reason
+            domain = self._domain_of.get(
+                record.transfer_id, record.identity.key.transfer_id
+            )
+            self._tombstone_domains.setdefault(domain, set()).add(record.transfer_id)
+
+    def close_domain(self, key: KVEntryKey) -> int:
+        """Close an Entry's authorization domain and compact its tombstones.
+
+        Only safe once the domain itself rejects every request: the domain id
+        is remembered, so a late start is still refused after the per-identity
+        tombstones are dropped. A domain with live records is never compacted,
+        and no tombstone is removed on a timer.
+        """
+        domain = key.transfer_id
+        with self._lock:
+            live = [
+                transfer_id
+                for transfer_id, record in self._records.items()
+                if self._domain_of.get(transfer_id) == domain
+            ]
+            if live:
+                raise RuntimeError(
+                    f"upload domain {domain} still has {len(live)} live records"
+                )
+            self._closed_domains.add(domain)
+            removed = self._tombstone_domains.pop(domain, set())
+            for transfer_id in removed:
+                self._tombstones.pop(transfer_id, None)
+                self._domain_of.pop(transfer_id, None)
+            return len(removed)

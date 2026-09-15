@@ -32,8 +32,6 @@ from typing import Any, Callable, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
-from torch import nn
-
 from sglang.jit_kernel.ngram_embedding import update_token_table
 from sglang.srt.configs import (
     BailingHybridConfig,
@@ -232,6 +230,7 @@ from sglang.srt.weight_sync.tensor_bucket import (
     FlattenedTensorBucket,
     FlattenedTensorMetadata,
 )
+from torch import nn
 
 _is_hip = is_hip()
 _is_npu = is_npu()
@@ -597,9 +596,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
 
         if self.pp_size > 1:
-            assert (
-                self.support_pp
-            ), "Pipeline Parallel is not compatible with this model."
+            assert self.support_pp, (
+                "Pipeline Parallel is not compatible with this model."
+            )
 
         # For weight updates
         self._model_update_group = {}
@@ -1292,8 +1291,24 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                         f"PVD rank {rank} expected {expected_rail}, Mooncake selected "
                         f"{mooncake_engine.get_ib_device()}"
                     )
+                from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+                    TransferBudget,
+                )
+
+                budget_bytes = self.server_args.pvd_transfer_staging_budget_bytes
+                max_inflight = self.server_args.pvd_transfer_max_inflight
+                if budget_bytes is None or max_inflight is None:
+                    raise RuntimeError(
+                        "PVD requires --pvd-transfer-staging-budget-bytes and "
+                        "--pvd-transfer-max-inflight"
+                    )
                 adapter = MooncakePVDTransferEngine.from_existing(
-                    mooncake_engine, rail=expected_rail
+                    mooncake_engine,
+                    rail=expected_rail,
+                    budget=TransferBudget(
+                        staging_bytes=int(budget_bytes),
+                        max_inflight=int(max_inflight),
+                    ),
                 )
                 self.pvd_preflight_report = run_rank_preflight(
                     rank=rank,
@@ -1759,15 +1774,15 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         group_name,
         backend="nccl",
     ):
-        assert (
-            torch.distributed.is_initialized()
-        ), "Default torch process group must be initialized"
+        assert torch.distributed.is_initialized(), (
+            "Default torch process group must be initialized"
+        )
         assert group_name != "", "Group name cannot be empty"
 
         ports_list = ports.split(",")
-        assert (
-            len(ports_list) == self.tp_size
-        ), f"Expected {self.tp_size} ports, but got {len(ports_list)} ports."
+        assert len(ports_list) == self.tp_size, (
+            f"Expected {self.tp_size} ports, but got {len(ports_list)} ports."
+        )
         group_port = ports_list[self.tp_rank]
         group_name = f"{group_name}_{group_port}_{self.tp_rank}"
 
@@ -1805,15 +1820,15 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         ports,
         group_name,
     ):
-        assert (
-            torch.distributed.is_initialized()
-        ), "Default torch process group must be initialized"
+        assert torch.distributed.is_initialized(), (
+            "Default torch process group must be initialized"
+        )
         assert group_name != "", "Group name cannot be empty"
 
         ports_list = ports.split(",")
-        assert (
-            len(ports_list) == self.tp_size
-        ), f"Expected {self.tp_size} ports, but got {len(ports_list)} ports."
+        assert len(ports_list) == self.tp_size, (
+            f"Expected {self.tp_size} ports, but got {len(ports_list)} ports."
+        )
         group_port = ports_list[self.tp_rank]
         group_name = f"{group_name}_{group_port}_{self.tp_rank}"
 
@@ -1866,9 +1881,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         weights/parameters online, and broadcasts them to the inference
         engine through the `_model_update_group` process group.
         """
-        assert (
-            torch.distributed.is_initialized()
-        ), "Default torch process group must be initialized"
+        assert torch.distributed.is_initialized(), (
+            "Default torch process group must be initialized"
+        )
         assert group_name != "", "Group name cannot be empty"
 
         rank = rank_offset + self.tp_rank
@@ -2438,9 +2453,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 # of one and the existing two-request shape before readiness.
                 max_warmup_bs = self.server_args.max_running_requests
                 warmup_batch_sizes = (
-                    bs
-                    for bs in (1, 2)
-                    if max_warmup_bs is None or bs <= max_warmup_bs
+                    bs for bs in (1, 2) if max_warmup_bs is None or bs <= max_warmup_bs
                 )
                 for warmup_bs in warmup_batch_sizes:
                     self._warmup_prefill_kernels_extends(warmup_bs)
@@ -2482,9 +2495,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             dtype=torch.int32,
             device=self.device,
         )
-        dist.all_reduce(
-            status, op=dist.ReduceOp.MIN, group=self.tp_group.device_group
-        )
+        dist.all_reduce(status, op=dist.ReduceOp.MIN, group=self.tp_group.device_group)
         if not status.item():
             raise RuntimeError(
                 "SM70 FlashInfer sampling warmup failed"
@@ -2496,9 +2507,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             except Exception as exc:
                 warmup_error = exc
         status.fill_(0 if warmup_error is not None else 1)
-        dist.all_reduce(
-            status, op=dist.ReduceOp.MIN, group=self.tp_group.device_group
-        )
+        dist.all_reduce(status, op=dist.ReduceOp.MIN, group=self.tp_group.device_group)
         if not status.item():
             raise RuntimeError(
                 "SM70 FlashInfer sampling module failed to load"
@@ -3025,9 +3034,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 device=self.device,
             )
             chunked_prefill_size = self.server_args.chunked_prefill_size
-            assert (
-                chunked_prefill_size is not None and chunked_prefill_size > 0
-            ), "Ngram embedding requires chunked prefill to be enabled (chunked_prefill_size > 0)"
+            assert chunked_prefill_size is not None and chunked_prefill_size > 0, (
+                "Ngram embedding requires chunked prefill to be enabled (chunked_prefill_size > 0)"
+            )
             for module in self.model.modules():
                 if isinstance(module, NgramEmbedding):
                     module.init_buffers(

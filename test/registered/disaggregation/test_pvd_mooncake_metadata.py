@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
@@ -139,7 +138,9 @@ def put(adapter, region_id):
     )
 
     target = RemoteRegionDescriptor("d:2", region_id, 8192, 16, "cuda:0", 0, "mlx5_2")
-    source = adapter.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
+    source = adapter.register_memory(
+        CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2"
+    )
     handle = adapter.submit_put(MemorySlice(source, 0, 16), target)
     adapter.poll(handle)
     adapter.release_memory(source)
@@ -305,6 +306,10 @@ def test_v_launcher_accepts_debug_logging_for_mr_diagnostics():
         [
             "--advertise-host",
             "v",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
             "--total-pages",
             "8",
             "--page-bytes",
@@ -363,14 +368,26 @@ def test_model_runner_initializes_policy_before_shared_engine(
             disaggregation_ib_device="mlx5_2",
             mooncake_ib_device=None,
             pvd_rank_rails="mlx5_2,mlx5_3",
+            pvd_transfer_staging_budget_bytes=1 << 30,
+            pvd_transfer_max_inflight=64,
             pvd_strict_rdma_preflight=True,
         ),
     )
     if topology == "pvd":
-        with pytest.raises(ValueError, match="explicit transfer budget"):
-            namespace["init_shared_mooncake_transfer_engine"](runner)
-    else:
-        namespace["init_shared_mooncake_transfer_engine"](runner)
+        # Task 7 supplies the budget from server args, so the PVD adapter now
+        # constructs. Omitting either value must still fail startup rather than
+        # fall back to an unbounded engine.
+        for missing in (
+            "pvd_transfer_staging_budget_bytes",
+            "pvd_transfer_max_inflight",
+        ):
+            kept = getattr(runner.server_args, missing)
+            setattr(runner.server_args, missing, None)
+            with pytest.raises(RuntimeError, match="pvd-transfer"):
+                namespace["init_shared_mooncake_transfer_engine"](runner)
+            setattr(runner.server_args, missing, kept)
+            transport.shared._mooncake_transfer_engine = None
+    namespace["init_shared_mooncake_transfer_engine"](runner)
     engine = transport.shared.get_mooncake_transfer_engine()
     assert engine is not None
     if topology == "pvd":

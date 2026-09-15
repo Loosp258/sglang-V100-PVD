@@ -43,6 +43,22 @@ def _build_vector_group_map(server_args: "ServerArgs") -> dict[str, str]:
     return groups
 
 
+def _require_positive_int(name: str, value: object) -> int:
+    """Accept only an explicit positive integer.
+
+    ``None`` means the operator did not choose a budget, and PVD will not guess
+    one. ``bool`` is rejected explicitly because it is an ``int`` subclass and
+    ``--flag true`` must not silently become a budget of 1.
+    """
+    if value is None:
+        raise ValueError(f"{name} is required with --disaggregation-topology pvd")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be a positive integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
 def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     """Keep legacy PD untouched unless ``--disaggregation-topology pvd`` is set."""
     topology = server_args.disaggregation_topology
@@ -62,6 +78,15 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
             "PVD 3.0 uses a synchronous KV refresh barrier every %s Decode tokens",
             server_args.pvd_kv_refresh_interval,
         )
+
+    # Reserve-before-allocate needs a budget before any staging tensor exists.
+    server_args.pvd_transfer_staging_budget_bytes = _require_positive_int(
+        "--pvd-transfer-staging-budget-bytes",
+        server_args.pvd_transfer_staging_budget_bytes,
+    )
+    server_args.pvd_transfer_max_inflight = _require_positive_int(
+        "--pvd-transfer-max-inflight", server_args.pvd_transfer_max_inflight
+    )
 
     if server_args.disaggregation_mode not in ("prefill", "decode"):
         raise ValueError(

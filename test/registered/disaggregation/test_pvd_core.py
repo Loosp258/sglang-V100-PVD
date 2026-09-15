@@ -4,11 +4,9 @@ import unittest
 from types import SimpleNamespace
 
 import torch
-
 from sglang.srt.arg_groups.pvd_disaggregation_hook import (
     _build_vector_group_map,
 )
-
 from sglang.srt.disaggregation.pvd.conn import (
     PVDConnectionError,
     PVDKVManager,
@@ -23,16 +21,16 @@ from sglang.srt.disaggregation.pvd.kv_packer import (
     pack_full_prompt_kv_head_shard,
     unpack_full_prompt_kv,
 )
+from sglang.srt.disaggregation.pvd.preflight import (
+    PVDPreflightError,
+    validate_rank_rail_names,
+)
 from sglang.srt.disaggregation.pvd.protocol import (
     FirstTokenMetadata,
     KVEntryKey,
     KVEntryManifest,
     KVLayoutSignature,
     KVShardManifest,
-)
-from sglang.srt.disaggregation.pvd.preflight import (
-    PVDPreflightError,
-    validate_rank_rail_names,
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DeliveryState,
@@ -51,7 +49,6 @@ from sglang.srt.disaggregation.pvd.transfer_engine import (
 )
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
 
-
 PAGE_BYTES = 16
 ENTRY_BYTES = 32
 
@@ -61,9 +58,7 @@ def test_vector_group_registry_supports_legacy_and_multiple_groups():
         pvd_vector_coordinator_url="http://v0:9100/",
         pvd_vector_groups=None,
     )
-    assert _build_vector_group_map(legacy) == {
-        "default": "http://v0:9100"
-    }
+    assert _build_vector_group_map(legacy) == {"default": "http://v0:9100"}
 
     multiple = SimpleNamespace(
         pvd_vector_coordinator_url=None,
@@ -153,9 +148,7 @@ def make_store(rank: int, engine: FakeTransferEngine) -> VectorKVStore:
     )
 
 
-def put_tensor(
-    engine: FakeTransferEngine, tensor: torch.Tensor, target, rank: int
-):
+def put_tensor(engine: FakeTransferEngine, tensor: torch.Tensor, target, rank: int):
     registration = engine.register_memory(
         tensor, endpoint=f"source-{rank}", rank=rank, rail=f"mlx5_{rank}"
     )
@@ -168,14 +161,9 @@ def put_tensor(
 
 def test_rank_rail_modes_are_explicit_and_bounded():
     assert validate_rank_rail_names(["mlx5_0", "mlx5_1"]) == "dual-rail"
-    assert (
-        validate_rank_rail_names(["mlx5_0", "mlx5_0"])
-        == "single-rail-debug"
-    )
+    assert validate_rank_rail_names(["mlx5_0", "mlx5_0"]) == "single-rail-debug"
     assert validate_rank_rail_names(["mlx5_0"]) == "single-rail-debug"
-    assert (
-        validate_rank_rail_names(["mlx5_0"] * 4) == "single-rail-debug"
-    )
+    assert validate_rank_rail_names(["mlx5_0"] * 4) == "single-rail-debug"
     assert validate_rank_rail_names(["mlx5_1", "mlx5_1"]) == "single-rail-debug"
     with unittest.TestCase().assertRaises(PVDPreflightError):
         validate_rank_rail_names(["mlx5_1", ""])
@@ -186,6 +174,10 @@ def test_v_launcher_defaults_to_single_process_group_mode():
         [
             "--advertise-host",
             "127.0.0.1",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
             "--total-pages",
             "8",
             "--page-bytes",
@@ -206,6 +198,10 @@ def test_v_launcher_keeps_legacy_rank_mode_and_validates_group_devices():
             "1",
             "--advertise-host",
             "127.0.0.1",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
             "--total-pages",
             "8",
             "--page-bytes",
@@ -222,6 +218,10 @@ def test_v_launcher_keeps_legacy_rank_mode_and_validates_group_devices():
         [
             "--advertise-host",
             "127.0.0.1",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
             "--total-pages",
             "8",
             "--page-bytes",
@@ -240,6 +240,10 @@ def test_v_group_builds_two_local_shards_in_one_process():
             [
                 "--advertise-host",
                 "127.0.0.1",
+                "--transfer-staging-budget-bytes",
+                "1073741824",
+                "--transfer-max-inflight",
+                "64",
                 "--total-pages",
                 "8",
                 "--page-bytes",
@@ -298,9 +302,7 @@ def test_full_prompt_entry_can_feed_multiple_deliveries():
             d_buffers.append(d_buffer)
             d_registrations.append(d_registration)
             delivery_id = f"delivery-{index}"
-            store.reserve_delivery(
-                manifest.key, delivery_id, d_registration.descriptor
-            )
+            store.reserve_delivery(manifest.key, delivery_id, d_registration.descriptor)
             delivery = store.start_delivery(manifest.key, delivery_id)
             assert delivery.state == DeliveryState.DELIVERED
 
@@ -338,7 +340,9 @@ def test_bounded_descriptor_uses_pool_base_offset():
         offset = int(second_entry.target_region.backend_metadata["base_offset"])
         assert torch.all(store.pool[:offset] == 23)
         assert torch.equal(store.pool[offset : offset + ENTRY_BYTES], source)
-        assert first_entry.target_region.region_id == second_entry.target_region.region_id
+        assert (
+            first_entry.target_region.region_id == second_entry.target_region.region_id
+        )
     finally:
         engine.release_memory(registration)
         store.close()
@@ -467,8 +471,14 @@ def test_v_tp2_slices_one_entry_into_decode_tp4():
             entry = await coordinator.create_entry(manifest)
             # Component-major: four tokens x two heads, then V with +10.
             sources = [
-                torch.tensor([0, 1, 0, 1, 0, 1, 0, 1, 10, 11, 10, 11, 10, 11, 10, 11], dtype=torch.uint8),
-                torch.tensor([2, 3, 2, 3, 2, 3, 2, 3, 12, 13, 12, 13, 12, 13, 12, 13], dtype=torch.uint8),
+                torch.tensor(
+                    [0, 1, 0, 1, 0, 1, 0, 1, 10, 11, 10, 11, 10, 11, 10, 11],
+                    dtype=torch.uint8,
+                ),
+                torch.tensor(
+                    [2, 3, 2, 3, 2, 3, 2, 3, 12, 13, 12, 13, 12, 13, 12, 13],
+                    dtype=torch.uint8,
+                ),
             ]
             for rank in (0, 1):
                 registrations.append(
@@ -523,7 +533,7 @@ def test_coordinator_requires_rank0_first_token_and_returns_two_targets():
             entry = await coordinator.create_entry(manifest)
             assert entry.state == EntryState.P_WRITING
             assert sorted(entry.target_regions) == [0, 1]
-            with unittest.TestCase().assertRaisesRegex(CoordinatorError, 'rank 0'):
+            with unittest.TestCase().assertRaisesRegex(CoordinatorError, "rank 0"):
                 await coordinator.commit_shard(
                     manifest.key,
                     1,
@@ -631,7 +641,9 @@ def test_coordinator_owns_entry_ttl():
             result = await coordinator.reap_expired(time.monotonic() + 1.0)
             assert result["entries"] == 1
             assert coordinator.entries[manifest.key].state == EntryState.RELEASED
-            assert all(store.entries[manifest.key].resources_released for store in stores)
+            assert all(
+                store.entries[manifest.key].resources_released for store in stores
+            )
         finally:
             for store in stores:
                 store.close()
@@ -639,7 +651,7 @@ def test_coordinator_owns_entry_ttl():
     asyncio.run(scenario())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     suite = unittest.TestSuite(
         unittest.FunctionTestCase(test)
         for test in (

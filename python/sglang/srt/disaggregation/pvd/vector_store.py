@@ -47,7 +47,9 @@ from sglang.srt.disaggregation.pvd.transfer_engine import (
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransportState,
+    budget_of,
 )
+from sglang.srt.disaggregation.pvd.transfer_progress import PVD_TRANSFER_CAPABILITY
 
 logger = logging.getLogger(__name__)
 
@@ -790,7 +792,14 @@ class VectorKVStore:
         source_region = self.pool[
             allocation_offset : allocation_offset + entry.manifest.expected_bytes
         ]
-        # Task 7 must account for the packing peak, not only final tensor bytes.
+        # Reserve the packing PEAK before allocating anything: the per-component
+        # chunks and the final concatenation are live at the same moment, so the
+        # peak is twice the destination size, not the final tensor alone.
+        final_bytes = sum(destination_bytes) * token_count
+        budget = budget_of(self.transfer_engine)
+        budget_owner = f"v-repack:{delivery.delivery_id}"
+        if budget is not None:
+            budget.reserve(budget_owner, final_bytes * 2, 0)
         chunks = []
         component_base = 0
         for source_bpt, destination_bpt in zip(source_bytes, destination_bytes):
@@ -814,9 +823,15 @@ class VectorKVStore:
             rail=self.rail,
             metadata={"delivery_id": delivery.delivery_id},
         )
-        guard = ResourceGuard(
-            registration, lambda: self.transfer_engine.release_memory(registration)
-        )
+
+        def _release_staging():
+            self.transfer_engine.release_memory(registration)
+            if budget is not None:
+                # Refunded only once the registration is actually gone, so a
+                # retried unregister cannot free budget it still occupies.
+                budget.release(budget_owner)
+
+        guard = ResourceGuard(registration, _release_staging)
         guard.pin(delivery.owner)
         with self._lock:
             delivery.staging_guard = guard
@@ -1122,6 +1137,9 @@ class VectorKVStore:
             self._refresh_metrics()
             snapshot = {
                 "rank": self.rank,
+                "capabilities": [PVD_TRANSFER_CAPABILITY],
+                "ready": not self._closed and self._isolated_reason is None,
+                "draining": self._closed and not self.allocator.allocated_pages == 0,
                 "world_size": self.world_size,
                 "rail": self.rail,
                 "device": self.device,

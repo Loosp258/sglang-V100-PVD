@@ -34,6 +34,8 @@ def model_args(**overrides):
         enable_prefill_context_parallel=False,
         disaggregation_decode_enable_radix_cache=False,
         pvd_model_instance_id="model",
+        pvd_transfer_staging_budget_bytes=1 << 30,
+        pvd_transfer_max_inflight=64,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -106,6 +108,10 @@ def test_v_accepts_ib_device_flag(devices, expected):
         [
             "--advertise-host",
             "127.0.0.1",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
             "--total-pages",
             "8",
             "--page-bytes",
@@ -123,6 +129,10 @@ def test_v_rejects_conflicting_flags():
         [
             "--advertise-host",
             "127.0.0.1",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
             "--total-pages",
             "8",
             "--page-bytes",

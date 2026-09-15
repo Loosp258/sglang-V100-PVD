@@ -110,6 +110,20 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--transfer-staging-budget-bytes",
+        type=_positive_int,
+        required=True,
+        help="Byte budget for this V rank's repacking staging allocations. "
+        "No default is guessed.",
+    )
+    parser.add_argument(
+        "--transfer-max-inflight",
+        type=_positive_int,
+        required=True,
+        help="Maximum PVD transfers this V rank may have in flight, including "
+        "draining and quarantined ones.",
+    )
     parser.add_argument("--total-pages", type=_positive_int, required=True)
     parser.add_argument("--page-bytes", type=_positive_int, required=True)
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
@@ -260,11 +274,16 @@ def _create_store(
         from sglang.srt.disaggregation.pvd.mooncake_engine import (
             MooncakePVDTransferEngine,
         )
+        from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
         engine = MooncakePVDTransferEngine(
             hostname=args.advertise_host,
             gpu_id=local_rank,
             rail=rails[rank],
+            budget=TransferBudget(
+                staging_bytes=args.transfer_staging_budget_bytes,
+                max_inflight=args.transfer_max_inflight,
+            ),
         )
         preflight = run_rank_preflight(
             rank=rank,

@@ -21,7 +21,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.retrieval import RefreshClock
-from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard, budget_of
 from sglang.srt.disaggregation.pvd.worker_epoch import worker_epoch
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,8 @@ class PVDDecodeSession:
         # refresh publishes its own generation. A late write from an earlier
         # refresh therefore cannot be mistaken for the current one.
         self.receive_guard = None
+        self._budget = None
+        self._budget_owner = None
         self.generation = None
         self.identities = {}
         self._refresh_owner = None
@@ -107,6 +109,19 @@ class PVDDecodeSession:
                 "the staging buffer cannot be reused yet"
             )
         if self.staging is None:
+            # Reserve before allocating. An over-budget refresh must be refused
+            # while torch.empty has not been called, not after the allocation
+            # has already pushed the worker past its limit.
+            budget = getattr(self.manager, "transfer_budget", None) or budget_of(
+                self.manager.transfer_engine
+            )
+            budget_owner = (
+                f"decode-staging:{self.key.transfer_id}:{self.manager.tp_rank}"
+            )
+            if budget is not None:
+                budget.reserve(budget_owner, size, 0)
+            self._budget = budget
+            self._budget_owner = budget_owner
             self.staging = torch.empty(
                 size, dtype=torch.uint8, device=components[0].device
             )
@@ -118,11 +133,15 @@ class PVDDecodeSession:
                 metadata={"pvd_layout": self.manager.layout().to_dict()},
             )
             self.registration = registration
+
+            def _release_receive():
+                self.manager.transfer_engine.release_memory(registration)
+                if budget is not None:
+                    # Refund only after the MR is really gone.
+                    budget.release(budget_owner)
+
             # Deregistration is a release request, never an immediate action.
-            self.receive_guard = ResourceGuard(
-                registration,
-                lambda: self.manager.transfer_engine.release_memory(registration),
-            )
+            self.receive_guard = ResourceGuard(registration, _release_receive)
         elif self.staging.numel() != size:
             raise ValueError("immutable Prompt KV changed size during Decode")
         delivery_id = self.clock.begin(self.decode_tokens)

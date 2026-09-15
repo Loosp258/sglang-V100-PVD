@@ -43,6 +43,11 @@ from sglang.srt.disaggregation.pvd.runtime import (
     PVDPrefillRuntime,
 )
 from sglang.srt.disaggregation.pvd.sharding import validate_compute_layout
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+from sglang.srt.disaggregation.pvd.transfer_progress import (
+    PVD_TRANSFER_CAPABILITY,
+    TransferProgress,
+)
 from sglang.srt.disaggregation.pvd.upload_manager import PVDUploadManager
 from sglang.srt.disaggregation.pvd.worker_epoch import worker_epoch
 
@@ -144,13 +149,27 @@ class PVDKVManager:
             group_id: PVDCoordinatorClient(url, timeout_seconds=300.0)
             for group_id, url in coordinator_map.items()
         }
+        # Explicit budget: admission is decided before any staging tensor is
+        # allocated, and the same limits are shared by every adapter hanging
+        # off this worker's Mooncake engine.
+        budget_bytes = scheduler.server_args.pvd_transfer_staging_budget_bytes
+        max_inflight = scheduler.server_args.pvd_transfer_max_inflight
+        if budget_bytes is None or max_inflight is None:
+            raise PVDConnectionError(
+                "PVD requires --pvd-transfer-staging-budget-bytes and "
+                "--pvd-transfer-max-inflight"
+            )
+        self.transfer_budget = TransferBudget(
+            staging_bytes=int(budget_bytes), max_inflight=int(max_inflight)
+        )
         self.transfer_engine = MooncakePVDTransferEngine.from_existing(
-            shared_engine, rail=self.rail
+            shared_engine, rail=self.rail, budget=self.transfer_budget
         )
         # One incarnation per worker process, shared by every group's runtime.
         # A P compute rank with TP1 uploads to both V storage shards under this
         # epoch; the two writes stay distinct through their write identities.
         self.worker_epoch = worker_epoch()
+        self.capabilities = [PVD_TRANSFER_CAPABILITY]
         # Upload records outlive their senders, so the manager is owned here.
         self.upload_manager = PVDUploadManager()
         self._upload_progress_future: Optional[concurrent.futures.Future] = None
@@ -180,6 +199,13 @@ class PVDKVManager:
         # request can never take its unfenced destination away with it.
         self.pending_decode_closes = []
         self.decode_refresher = PVDDecodeRefresher(self)
+        # One bounded driver per worker. It never creates a task per failed
+        # request; it advances the owners that already hold the resources.
+        self.transfer_progress = TransferProgress(
+            upload_manager=self.upload_manager,
+            decode_owner=self,
+            decode_refresher=self.decode_refresher,
+        )
         if (
             scheduler.server_args.disaggregation_mode == "decode"
             and scheduler.enable_overlap
@@ -202,7 +228,16 @@ class PVDKVManager:
         """Trigger one bounded step over retained Decode closes."""
         if not self.pending_decode_closes:
             return None
-        return self.control.submit(self.decode_refresher.progress_pending_closes())
+        return self.control.submit(self.transfer_progress.tick_control())
+
+    def transfer_health(self) -> Dict[str, Any]:
+        """Worker-level readiness, capability and transfer accounting."""
+        snapshot = self.transfer_progress.snapshot()
+        snapshot["worker_epoch"] = self.worker_epoch
+        snapshot["capabilities"] = list(self.capabilities)
+        snapshot["budget"] = self.transfer_budget.snapshot()
+        snapshot["transport"] = self.transfer_engine.health()
+        return snapshot
 
     def progress_uploads(self) -> Optional[concurrent.futures.Future]:
         """Trigger one bounded upload progress step.
@@ -213,13 +248,17 @@ class PVDKVManager:
         worker that stops triggering retains resources instead of releasing
         them, and a test can call ``upload_manager.progress()`` directly.
         """
-        if self.upload_manager.outstanding() == 0:
+        if self.transfer_progress.outstanding() == 0:
             return None
+        # Native observation is cheap and synchronous, so do it on the caller's
+        # thread: a handle reaches its terminal state even while the control
+        # plane is backing off.
+        self.transfer_progress.tick()
         future = self._upload_progress_future
         if future is not None and not future.done():
             return future
         self._upload_progress_future = self.control.submit(
-            self.upload_manager.progress()
+            self.transfer_progress.tick_control()
         )
         return self._upload_progress_future
 
