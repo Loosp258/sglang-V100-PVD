@@ -424,12 +424,78 @@ it requires a verified cancellation/drain primitive or explicit quarantine and
 backpressure. No MR lifetime is shortened by this metadata change, and no
 unbounded "never unregister" pool is introduced.
 
-CPU regression suite (torch, pytest, aiohttp, psutil and pyzmq required):
+CPU regression suite (torch, pytest, aiohttp, numpy, psutil and pyzmq
+required):
 
 ```bash
-python test/registered/disaggregation/run_pvd_cpu_tests.py \
-  test/registered/disaggregation/test_pvd_core.py \
-  test/registered/disaggregation/test_pvd3.py \
-  test/registered/disaggregation/test_pvd_rails.py \
-  test/registered/disaggregation/test_pvd_mooncake_metadata.py -q
+T=test/registered/disaggregation
+python $T/run_pvd_cpu_tests.py \
+  $T/test_pvd_core.py $T/test_pvd3.py $T/test_pvd_rails.py \
+  $T/test_pvd_mooncake_metadata.py $T/test_pvd_transfer_lifecycle.py \
+  $T/test_pvd_mooncake_lifecycle.py $T/test_pvd_transfer_authorization.py \
+  $T/test_pvd_vector_lifecycle.py $T/test_pvd_upload_lifecycle.py \
+  $T/test_pvd_decode_lifecycle.py $T/test_pvd_transfer_admission.py -q
 ```
+
+## Transfer lifecycle and required capacity configuration
+
+Every PVD role must be given an explicit transfer budget. There is no default,
+because a staging budget that fits one GPU can be fatal on another, and
+admission is decided *before* any staging tensor is allocated.
+
+P and D model servers:
+
+```bash
+--pvd-transfer-staging-budget-bytes 1073741824 \
+--pvd-transfer-max-inflight 64
+```
+
+V launcher:
+
+```bash
+--transfer-staging-budget-bytes 1073741824 \
+--transfer-max-inflight 64
+```
+
+`None`, `0`, negative values, booleans and floats are rejected at startup.
+Ordinary PD (`--disaggregation-topology pd`) is unaffected.
+
+What the budget covers today: the D receive buffer and the V repacking peak
+(charged at twice the destination size, because the per-component chunks and
+the final concatenation are live at the same moment). P packing bytes are not
+yet charged; only the transfer slot is. Active, draining and quarantined
+resources are all counted, and no state change refunds a reservation that still
+occupies memory.
+
+### Lifetime rules
+
+- A receiver pins its destination before publishing the descriptor. Cancel,
+  TTL expiry, close and HTTP failure record a *close request*; they never
+  release.
+- A pin is dropped only on a matching, closed write authorization carrying
+  either a proven pre-native rejection or an observed native terminal state.
+- A late successful WRITE after business cancellation permits reclamation only.
+  It never republishes the request, never publishes STORED and never publishes
+  KV_READY.
+
+### Health
+
+The V shard snapshot and `PVDKVManager.transfer_health()` report
+`capabilities`, `ready`, `draining`, `worker_epoch`, `isolated_reason`, and a
+transport block carrying budget usage, in-flight, unknown and quarantine state.
+
+### Recovery from UNKNOWN
+
+A transfer whose native status is lost quarantines that worker's engine: no new
+PVD transfer is admitted and the isolated resources are never refunded. First
+version recovery is a coordinated restart of the affected P/V/D workers after
+stopping the senders. Restarting only D, or shortening a TTL, is not a recovery
+procedure.
+
+### Verification status
+
+`docs/superpowers/verification/2026-09-09-pvd-transfer-lifecycle.md` records
+what has actually been executed. In short: 303 CPU tests pass with a fake
+native transport and a simulated CUDA boundary. **No GPU, RDMA, GPUDirect,
+link-failure or soak validation has been run.** Do not treat the CPU suite as
+hardware acceptance.
