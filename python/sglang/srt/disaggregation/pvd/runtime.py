@@ -6,7 +6,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, FrozenSet, Mapping, Optional
 
 import torch
 from sglang.srt.disaggregation.pvd.client import PVDCoordinatorClient
@@ -18,6 +18,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVShardManifest,
     RemoteRegionDescriptor,
     WriteIdentity,
+    normalize_uploader_epochs,
 )
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
@@ -41,6 +42,7 @@ class PVDEntryLease:
     # One complete write identity per V storage shard rank. Empty for legacy
     # (non-lifecycle) entries; a lifecycle entry always has one per shard.
     upload_identities: Dict[int, WriteIdentity] = field(default_factory=dict)
+    owned_shard_ranks: FrozenSet[int] = field(default_factory=frozenset)
 
 
 @dataclass
@@ -90,6 +92,8 @@ class PVDPrefillRuntime:
         layout: KVLayoutSignature,
         prompt_token_count: int,
         shards: Mapping[int, KVShardManifest],
+        uploader_epochs: Optional[Mapping[int, str]] = None,
+        owned_shard_ranks: Optional[set[int]] = None,
     ) -> PVDEntryLease:
         key = KVEntryKey(
             model_instance_id=self.model_instance_id,
@@ -102,9 +106,36 @@ class PVDPrefillRuntime:
             prompt_token_count=prompt_token_count,
             shards=[shards[rank] for rank in range(layout.tp_size)],
         )
-        result = await self.coordinator.create_entry(
-            manifest, uploader_epoch=self.worker_epoch
+        if not self.lifecycle_enabled and (
+            uploader_epochs is not None or owned_shard_ranks is not None
+        ):
+            raise PVDDataPlaneError("uploader mapping requires upload lifecycle")
+        epochs = normalize_uploader_epochs(
+            shards,
+            uploader_epoch=self.worker_epoch if uploader_epochs is None else None,
+            uploader_epochs=uploader_epochs,
         )
+        owned = frozenset(
+            rank for rank, epoch in epochs.items() if epoch == self.worker_epoch
+        )
+        if self.lifecycle_enabled:
+            if not owned:
+                raise PVDDataPlaneError("this uploader epoch owns no storage shards")
+            if owned_shard_ranks is not None and (
+                any(type(rank) is not int for rank in owned_shard_ranks)
+                or set(owned_shard_ranks) != owned
+            ):
+                raise PVDDataPlaneError(
+                    "owned shards do not match the uploader epoch mapping"
+                )
+        if uploader_epochs is None:
+            result = await self.coordinator.create_entry(
+                manifest, uploader_epoch=self.worker_epoch
+            )
+        else:
+            result = await self.coordinator.create_entry(
+                manifest, uploader_epochs=epochs
+            )
         targets = {
             int(rank): RemoteRegionDescriptor.from_dict(value)
             for rank, value in result["target_regions"].items()
@@ -115,27 +146,20 @@ class PVDPrefillRuntime:
             identities[int(rank)] = identity
         if self.lifecycle_enabled:
             # V pinned its destination pages before returning the descriptor and
-            # the coordinator has already consumed each begin gate. Take
-            # ownership of every identity here, before anything can fail: a
-            # request aborted between create_entry and publish_shard must still
-            # have a record that can report a terminal state, or V would hold
-            # those pages with nothing left to ask.
-            opened = [
-                self.upload_manager.open(
-                    identity=identity, coordinator=self.coordinator
-                )
-                for identity in identities.values()
-            ]
+            # the coordinator has already consumed each begin gate. Retain
+            # valid local authorizations before returning the lease, even if
+            # the request is aborted before publish_shard. Foreign identities
+            # are never ours to drain; malformed replies fail closed on V.
+            opened = []
             try:
-                # V must have bound every shard to this process incarnation
-                # before P writes anything. A partial or foreign binding is not
-                # usable.
-                if set(identities) != set(targets):
+                # Every shard must match the agreed map, not necessarily this
+                # process: TP2 has a different sender incarnation per shard.
+                if set(identities) != set(shards) or set(targets) != set(shards):
                     raise PVDDataPlaneError(
                         "V did not publish an upload identity for every shard"
                     )
                 for rank, identity in identities.items():
-                    if identity.sender_epoch != self.worker_epoch:
+                    if identity.sender_epoch != epochs[rank]:
                         raise PVDDataPlaneError(
                             f"V bound shard {rank} to a different uploader epoch"
                         )
@@ -143,7 +167,20 @@ class PVDPrefillRuntime:
                         raise PVDDataPlaneError(
                             f"V bound shard {rank} to a different entry key"
                         )
+                    if identity.shard_rank != rank:
+                        raise PVDDataPlaneError(
+                            "V upload identity has a different shard rank"
+                        )
                     identity.validate_destination(targets[rank])
+                    # Never own or report terminal for another P process. In
+                    # particular, clear()/abort() must not turn its live WRITE
+                    # into our local NOT_SUBMITTED report.
+                    if rank in owned:
+                        opened.append(
+                            self.upload_manager.open(
+                                identity=identity, coordinator=self.coordinator
+                            )
+                        )
                 if len({i.transfer_id for i in identities.values()}) != len(identities):
                     raise PVDDataPlaneError("V published duplicate upload transfer ids")
             except Exception:
@@ -164,6 +201,7 @@ class PVDPrefillRuntime:
             manifest=manifest,
             target_regions=targets,
             upload_identities=identities,
+            owned_shard_ranks=owned,
         )
 
     async def publish_shard(
@@ -190,6 +228,13 @@ class PVDPrefillRuntime:
             if identity is None:
                 raise PVDDataPlaneError(
                     f"lifecycle upload for shard {rank} has no write identity"
+                )
+            if (
+                rank not in lease.owned_shard_ranks
+                or identity.sender_epoch != self.worker_epoch
+            ):
+                raise PVDDataPlaneError(
+                    f"this process does not own upload shard {rank}"
                 )
             record = self.upload_manager.open(
                 identity=identity, coordinator=self.coordinator

@@ -67,6 +67,51 @@ def _require_identity_string(name: str, value: object) -> str:
     return value
 
 
+def normalize_uploader_epochs(
+    shard_ranks,
+    *,
+    uploader_epoch: Optional[str] = None,
+    uploader_epochs: Optional[Mapping] = None,
+) -> Dict[int, str]:
+    """Snapshot a complete storage-shard -> sender incarnation mapping.
+
+    The scalar spelling remains a TP1 compatibility input. Never infer missing
+    ranks or mix it with a map: that would grant another process's write gate.
+    JSON rank keys must be canonical decimal strings; Python callers may use
+    integers. Missing lifecycle metadata remains the legacy test path.
+    """
+    ranks = set(shard_ranks)
+    if uploader_epoch is not None:
+        if uploader_epochs is not None:
+            raise ProtocolValidationError(
+                "use uploader_epoch or uploader_epochs, not both"
+            )
+        epoch = _require_identity_string("uploader_epoch", uploader_epoch)
+        return {rank: epoch for rank in ranks}
+    if uploader_epochs is None:
+        return {}
+    if not isinstance(uploader_epochs, Mapping):
+        raise ProtocolValidationError("uploader_epochs must be a mapping")
+    result = {}
+    for key, epoch in uploader_epochs.items():
+        if type(key) is int:
+            rank = key
+        elif isinstance(key, str) and key.isascii() and key.isdecimal():
+            rank = int(key)
+            if str(rank) != key:
+                raise ProtocolValidationError("uploader epoch rank must be canonical")
+        else:
+            raise ProtocolValidationError("uploader epoch rank must be an integer")
+        if rank in result:
+            raise ProtocolValidationError("duplicate uploader epoch rank")
+        result[rank] = _require_identity_string("uploader epoch", epoch)
+    if set(result) != ranks:
+        raise ProtocolValidationError(
+            "uploader epochs must cover every storage shard exactly"
+        )
+    return result
+
+
 @dataclass(frozen=True)
 class WriteIdentity:
     """Complete incarnation and destination identity for one remote write."""

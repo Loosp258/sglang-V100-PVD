@@ -43,7 +43,6 @@ from sglang.srt.disaggregation.pvd.runtime import (
     PVDPrefillRuntime,
 )
 from sglang.srt.disaggregation.pvd.sharding import validate_compute_layout
-from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from sglang.srt.disaggregation.pvd.transfer_progress import (
     PVD_TRANSFER_CAPABILITY,
     TransferProgress,
@@ -159,12 +158,22 @@ class PVDKVManager:
                 "PVD requires --pvd-transfer-staging-budget-bytes and "
                 "--pvd-transfer-max-inflight"
             )
-        self.transfer_budget = TransferBudget(
-            staging_bytes=int(budget_bytes), max_inflight=int(max_inflight)
-        )
+        # ModelRunner's preflight already installed the worker-level manager.
+        # Reuse its accounting object, not another budget with equal limits.
         self.transfer_engine = MooncakePVDTransferEngine.from_existing(
-            shared_engine, rail=self.rail, budget=self.transfer_budget
+            shared_engine, rail=self.rail
         )
+        self.transfer_budget = self.transfer_engine.lifecycle_manager.budget
+        limits = self.transfer_budget.snapshot()
+        if (limits["staging_bytes"], limits["max_inflight"]) != (
+            int(budget_bytes),
+            int(max_inflight),
+        ):
+            raise PVDConnectionError(
+                "PVD worker budget does not match this rank's configuration: "
+                f"engine={limits['staging_bytes']}/{limits['max_inflight']}, "
+                f"configured={budget_bytes}/{max_inflight}"
+            )
         # One incarnation per worker process, shared by every group's runtime.
         # A P compute rank with TP1 uploads to both V storage shards under this
         # epoch; the two writes stay distinct through their write identities.
@@ -480,15 +489,23 @@ class PVDKVSender:
                 )
                 for rank in range(2)
             }
+            uploader_epochs = {rank: mgr.worker_epoch for rank in shards}
+            owned_shard_ranks = set(shards)
         else:
             local_shard = mgr.local_shard_manifest(len(req.origin_input_ids))
             gathered = mgr.gather_rank_objects(
-                {"rank": mgr.tp_rank, "shard": local_shard.to_dict()}
+                {
+                    "rank": mgr.tp_rank,
+                    "shard": local_shard.to_dict(),
+                    "epoch": mgr.worker_epoch,
+                }
             )
             shards = {
                 int(item["rank"]): KVShardManifest.from_dict(item["shard"])
                 for item in gathered
             }
+            uploader_epochs = {int(item["rank"]): item["epoch"] for item in gathered}
+            owned_shard_ranks = {mgr.tp_rank}
         self._create_future = mgr.control.submit(
             self.prefill_runtime.create_entry(
                 req_id=self.key.req_id,
@@ -496,6 +513,8 @@ class PVDKVSender:
                 layout=storage_layout,
                 prompt_token_count=len(req.origin_input_ids),
                 shards=shards,
+                uploader_epochs=uploader_epochs,
+                owned_shard_ranks=owned_shard_ranks,
             )
         )
         self._expected_pages = next(iter(shards.values())).page_count

@@ -10,6 +10,7 @@ synchronization boundary do not prove GPUDirect/RDMA ordering on real hardware.
 import asyncio
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -60,10 +61,13 @@ class DirectCoordinatorClient:
         self.sync_failures = 0
         self.sync_calls = []
 
-    async def create_entry(self, manifest, *, uploader_epoch=None):
-        record = await self.coordinator.create_entry(
-            manifest, uploader_epoch=uploader_epoch
-        )
+    async def create_entry(
+        self, manifest, *, uploader_epoch=None, uploader_epochs=None
+    ):
+        kwargs = {"uploader_epoch": uploader_epoch}
+        if uploader_epochs is not None:
+            kwargs["uploader_epochs"] = uploader_epochs
+        record = await self.coordinator.create_entry(manifest, **kwargs)
         return record.to_dict()
 
     async def commit_shard(self, key, rank, received_bytes, first_token=None):
@@ -202,6 +206,256 @@ async def make_pair(**kwargs):
     pair = UploadPair(**kwargs)
     await pair.create()
     return pair
+
+
+async def make_tp2_pair():
+    """Two process incarnations, separate managers, one shared Entry."""
+    pair = UploadPair("tp2-upload", epoch="p-rank0")
+    managers = [pair.manager, PVDUploadManager()]
+    runtimes = [
+        pair.runtime,
+        PVDPrefillRuntime(
+            model_instance_id=MODEL_INSTANCE,
+            coordinator=pair.client,
+            transfer_engine=pair.engine,
+            upload_manager=managers[1],
+            worker_epoch="p-rank1",
+            poll_interval_seconds=0,
+        ),
+    ]
+    epochs = {0: "p-rank0", 1: "p-rank1"}
+    leases = await asyncio.gather(
+        *(
+            runtime.create_entry(
+                req_id=pair.manifest.key.req_id,
+                transfer_id=pair.manifest.key.transfer_id,
+                layout=pair.manifest.layout,
+                prompt_token_count=pair.manifest.prompt_token_count,
+                shards={s.rank: s for s in pair.manifest.shards},
+                uploader_epochs=epochs,
+                owned_shard_ranks={rank},
+            )
+            for rank, runtime in enumerate(runtimes)
+        )
+    )
+    return pair, managers, runtimes, leases
+
+
+def test_tp2_distinct_uploaders_publish_one_entry():
+    async def scenario():
+        pair, managers, runtimes, leases = await make_tp2_pair()
+        assert leases[0].upload_identities == leases[1].upload_identities
+        tasks = []
+        handles = []
+        for rank in (0, 1):
+            assert managers[rank].outstanding() == 1
+            assert (
+                managers[rank].get(upload_transfer_id(pair.manifest.key, 1 - rank))
+                is None
+            )
+            _, registration = pair._source(rank)
+            tasks.append(
+                asyncio.create_task(
+                    runtimes[rank].publish_shard(
+                        lease=leases[rank],
+                        rank=rank,
+                        local=MemorySlice(registration, 0, ENTRY_BYTES),
+                        first_token=FirstTokenMetadata(output_token_id=7)
+                        if rank == 0
+                        else None,
+                    )
+                )
+            )
+        await pair.settle()
+        for rank in (0, 1):
+            handle = (
+                managers[rank].get(upload_transfer_id(pair.manifest.key, rank)).handle
+            )
+            handles.append(handle)
+            assert handle.transport_state == TransportState.IN_FLIGHT
+        assert not pair.entry_is_stored()
+        for handle in handles:
+            pair.engine.finish(handle)
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+        assert pair.entry_is_stored()
+        assert all(manager.outstanding() == 0 for manager in managers)
+
+    asyncio.run(scenario())
+
+
+def test_tp2_cancel_one_sender_cannot_drain_other_sender():
+    async def scenario():
+        pair, managers, runtimes, leases = await make_tp2_pair()
+        _, registration = pair._source(1)
+        task = asyncio.create_task(
+            runtimes[1].publish_shard(
+                lease=leases[1],
+                rank=1,
+                local=MemorySlice(registration, 0, ENTRY_BYTES),
+            )
+        )
+        try:
+            await pair.settle()
+            handle = managers[1].get(upload_transfer_id(pair.manifest.key, 1)).handle
+            managers[0].abandon_key(pair.manifest.key, "rank0 cancelled before submit")
+            await pair.coordinator.cancel_entry(pair.manifest.key, "request cancelled")
+            await managers[0].progress()
+            assert pair.pages_reusable(0)
+            assert pair.entry(1).upload_terminal is None
+            assert not pair.pages_reusable(1)
+            assert handle.transport_state == TransportState.IN_FLIGHT
+            assert {call[0] for call in pair.client.sync_calls} == {
+                upload_transfer_id(pair.manifest.key, 0)
+            }
+            # A late native success only drains the cancelled Entry.
+            pair.engine.finish(handle)
+            await asyncio.gather(task, return_exceptions=True)
+            await managers[1].progress()
+            assert pair.pages_reusable(1)
+            assert not pair.entry_is_stored()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_tp2_cannot_submit_another_ranks_shard():
+    async def scenario():
+        pair, managers, runtimes, leases = await make_tp2_pair()
+        _, registration = pair._source(1)
+        with pytest.raises(PVDDataPlaneError, match="does not own"):
+            await runtimes[0].publish_shard(
+                lease=leases[0],
+                rank=1,
+                local=MemorySlice(registration, 0, ENTRY_BYTES),
+            )
+        assert managers[0].get(upload_transfer_id(pair.manifest.key, 1)) is None
+        assert managers[1].get(upload_transfer_id(pair.manifest.key, 1)).handle is None
+        assert pair.entry(1).upload_terminal is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "bad_map",
+    [
+        {},
+        {0: "p0"},
+        {0: "p0", 1: "p1", 2: "p2"},
+        {0: "p0", 1: ""},
+        {0: "p0", 1: 7},
+        {False: "p0", 1: "p1"},
+        {0.0: "p0", 1: "p1"},
+        {"00": "p0", "1": "p1"},
+        {0: "p0", "0": "p0", 1: "p1"},
+        ["p0", "p1"],
+    ],
+)
+def test_invalid_uploader_map_rejected_before_allocation(bad_map):
+    async def scenario():
+        pair = UploadPair()
+        with pytest.raises(ValueError):
+            await pair.coordinator.create_entry(pair.manifest, uploader_epochs=bad_map)
+        assert not pair.coordinator.entries
+        assert all(store.allocator.allocated_pages == 0 for store in pair.stores)
+
+    asyncio.run(scenario())
+
+
+def test_uploader_map_is_idempotent_but_cannot_change_owner():
+    async def scenario():
+        pair, _, _, _ = await make_tp2_pair()
+        epochs = {0: "p-rank0", 1: "p-rank1"}
+        entry = await pair.coordinator.create_entry(
+            pair.manifest, uploader_epochs=epochs
+        )
+        assert entry.uploader_epochs == epochs
+        # Caller mutation cannot change the stored authorization domain.
+        epochs[1] = "restarted-p-rank1"
+        with pytest.raises(CoordinatorError, match="uploader epoch"):
+            await pair.coordinator.create_entry(pair.manifest, uploader_epochs=epochs)
+        assert entry.uploader_epochs[1] == "p-rank1"
+        with pytest.raises(ValueError, match="not both"):
+            await pair.coordinator.create_entry(
+                pair.manifest,
+                uploader_epoch="p-rank0",
+                uploader_epochs=epochs,
+            )
+        with pytest.raises(CoordinatorError, match="uploader epoch"):
+            await pair.coordinator.create_entry(pair.manifest)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("tp_size", [1, 2])
+def test_real_sender_passes_uploader_map_and_owns_only_local_shards(tp_size):
+    from sglang.srt.disaggregation.pvd.conn import PVDKVSender
+
+    async def scenario():
+        pair = UploadPair("sender-wiring", epoch="p0")
+        manifest = pair.manifest
+        epochs = {rank: f"p{rank if tp_size == 2 else 0}" for rank in (0, 1)}
+        senders, managers = [], []
+        for rank in range(tp_size):
+            uploads = PVDUploadManager()
+            runtime = PVDPrefillRuntime(
+                model_instance_id=MODEL_INSTANCE,
+                coordinator=pair.client,
+                transfer_engine=pair.engine,
+                upload_manager=uploads,
+                worker_epoch=epochs[rank],
+            )
+
+            def gather(value, expected_rank=rank):
+                assert value["epoch"] == epochs[expected_rank]
+                return [
+                    {
+                        "rank": r,
+                        "epoch": epochs[r],
+                        "shard": manifest.shard(r).to_dict(),
+                    }
+                    for r in (0, 1)
+                ]
+
+            manager = SimpleNamespace(
+                tp_size=tp_size,
+                tp_rank=rank,
+                worker_epoch=epochs[rank],
+                key_for=lambda req: manifest.key,
+                client_for=lambda req: pair.client,
+                prefill_runtime_for=lambda req, rt=runtime: rt,
+                storage_layout=lambda: manifest.layout,
+                storage_shard_manifest=lambda n, r, layout: manifest.shard(r),
+                local_shard_manifest=lambda n, r=rank: manifest.shard(r),
+                gather_rank_objects=gather,
+                control=SimpleNamespace(submit=asyncio.create_task),
+                abandon_uploads=lambda key, reason, um=uploads: um.abandon_key(
+                    key, reason
+                ),
+            )
+            senders.append(
+                PVDKVSender(
+                    mgr=manager,
+                    req=SimpleNamespace(
+                        origin_input_ids=list(range(manifest.prompt_token_count)),
+                    ),
+                )
+            )
+            managers.append(uploads)
+        leases = await asyncio.gather(*(sender._create_future for sender in senders))
+        for rank, lease in enumerate(leases):
+            assert {
+                r: i.sender_epoch for r, i in lease.upload_identities.items()
+            } == epochs
+            assert lease.owned_shard_ranks == ({0, 1} if tp_size == 1 else {rank})
+        senders[0].clear()
+        await managers[0].progress()
+        if tp_size == 2:
+            assert pair.entry(1).upload_terminal is None
+            assert not managers[1].get(upload_transfer_id(manifest.key, 1)).abandoned
+
+    asyncio.run(scenario())
 
 
 # --------------------------------------------------------------------------
@@ -486,8 +740,8 @@ def test_abandoned_upload_that_never_submitted_reports_not_submitted():
     asyncio.run(scenario())
 
 
-def test_rejected_lease_abandons_every_opened_record():
-    """A lease P refuses must not leave V pinned with nobody to report."""
+def test_rejected_foreign_lease_never_reports_another_process_terminal():
+    """An invalid foreign lease cannot grant local ownership of its writes."""
 
     async def scenario():
         pair = UploadPair("rejected-lease")
@@ -502,15 +756,14 @@ def test_rejected_lease_abandons_every_opened_record():
         with pytest.raises(PVDDataPlaneError, match="uploader epoch"):
             await pair.create()
 
-        assert pair.manager.outstanding() == 2
-        for record in pair.manager.snapshot()["records"]:
-            assert record["abandoned"] is True
+        assert pair.manager.outstanding() == 0
         await pair.tick()
+        assert pair.client.sync_calls == []
         for rank in (0, 1):
             store = pair.stores[rank]
             entry = store.entries[pair.manifest.key]
-            assert entry.upload_terminal == TransportState.TERMINAL_FAILED
-            assert entry.resources_released
+            assert entry.upload_terminal is None
+            assert not entry.resources_released
 
     asyncio.run(scenario())
 
@@ -887,6 +1140,106 @@ def test_upload_sync_over_real_http():
             with pytest.raises(Exception):
                 await client.sync_upload(identities[1], TransportState.IN_FLIGHT, True)
             assert not stores[1].entries[manifest.key].resources_released
+
+    asyncio.run(scenario())
+
+
+def test_rejected_partial_lease_abandons_only_valid_local_authorizations():
+    async def scenario():
+        pair = UploadPair("partially-invalid-lease")
+        original_create = pair.client.create_entry
+
+        async def corrupt_one_identity(manifest, **kwargs):
+            reply = await original_create(manifest, **kwargs)
+            reply["upload_identities"]["1"]["sender_epoch"] = "foreign-process"
+            return reply
+
+        pair.client.create_entry = corrupt_one_identity
+        with pytest.raises(PVDDataPlaneError, match="uploader epoch"):
+            await pair.create()
+        assert pair.manager.outstanding() == 1
+        assert pair.record(0).abandoned
+        assert pair.record(1) is None
+        await pair.tick()
+        assert pair.pages_reusable(0)
+        assert not pair.pages_reusable(1)
+        assert pair.entry(1).upload_terminal is None
+
+    asyncio.run(scenario())
+
+
+def test_runtime_rejects_inconsistent_ownership_before_contacting_v():
+    async def scenario():
+        pair = UploadPair(epoch="p0")
+        with pytest.raises(PVDDataPlaneError, match="owned shards"):
+            await pair.runtime.create_entry(
+                req_id=pair.manifest.key.req_id,
+                transfer_id=pair.manifest.key.transfer_id,
+                layout=pair.manifest.layout,
+                prompt_token_count=pair.manifest.prompt_token_count,
+                shards={s.rank: s for s in pair.manifest.shards},
+                uploader_epochs={0: "p0", 1: "p1"},
+                owned_shard_ranks={0, 1},
+            )
+        assert not pair.coordinator.entries
+        assert pair.manager.outstanding() == 0
+
+    asyncio.run(scenario())
+
+
+def test_tp2_uploader_map_over_coordinator_and_shard_http():
+    async def scenario():
+        from aiohttp.test_utils import TestClient, TestServer
+        from sglang.srt.disaggregation.pvd.client import PVDCoordinatorClient
+        from sglang.srt.disaggregation.pvd.control_server import (
+            HttpShardClient,
+            create_coordinator_app,
+            create_shard_app,
+        )
+
+        engine = DelayedTransferEngine()
+        stores = [make_store(rank, engine) for rank in (0, 1)]
+        shard_server = TestServer(create_shard_app(stores[1]))
+        async with TestClient(shard_server) as shard_http:
+            coordinator = VectorCoordinator(
+                [
+                    LocalShardClient(stores[0]),
+                    HttpShardClient(
+                        1, str(shard_server.make_url("")), session=shard_http.session
+                    ),
+                ]
+            )
+            server = TestServer(create_coordinator_app(coordinator))
+            async with TestClient(server) as http:
+                client = PVDCoordinatorClient(
+                    str(server.make_url("")), session=http.session
+                )
+                manifest = make_manifest("http-tp2")
+                epochs = {0: "http-p0", 1: "http-p1"}
+                replies = await asyncio.gather(
+                    *(
+                        client.create_entry(manifest, uploader_epochs=epochs)
+                        for _ in (0, 1)
+                    )
+                )
+                assert replies[0] == replies[1]
+                assert replies[0]["uploader_epochs"] == {"0": "http-p0", "1": "http-p1"}
+                for rank in (0, 1):
+                    assert (
+                        stores[rank].entries[manifest.key].upload_identity.sender_epoch
+                        == epochs[rank]
+                    )
+                # Exercise server validation directly, bypassing client checks.
+                for invalid in ({"0": "p0"}, {"0": "p0", "1": ""}):
+                    response = await http.post(
+                        "/v1/entries",
+                        json={
+                            "manifest": make_manifest("bad-http").to_dict(),
+                            "uploader_epochs": invalid,
+                        },
+                    )
+                    assert response.status == 400
+                assert len(coordinator.entries) == 1
 
     asyncio.run(scenario())
 

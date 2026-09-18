@@ -11,6 +11,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryManifest,
     RemoteRegionDescriptor,
     WriteIdentity,
+    normalize_uploader_epochs,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 
@@ -56,12 +57,20 @@ class PVDCoordinatorClient:
         manifest: KVEntryManifest,
         *,
         uploader_epoch: Optional[str] = None,
+        uploader_epochs: Optional[Mapping[int, str]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"manifest": manifest.to_dict()}
+        epochs = normalize_uploader_epochs(
+            (s.rank for s in manifest.shards),
+            uploader_epoch=uploader_epoch,
+            uploader_epochs=uploader_epochs,
+        )
         if uploader_epoch is not None:
-            if not isinstance(uploader_epoch, str) or not uploader_epoch.strip():
-                raise ValueError("uploader_epoch must be a non-empty string")
             payload["uploader_epoch"] = uploader_epoch
+        elif uploader_epochs is not None:
+            payload["uploader_epochs"] = {
+                str(rank): epoch for rank, epoch in epochs.items()
+            }
         return await self._request("/v1/entries", payload)
 
     async def sync_upload(

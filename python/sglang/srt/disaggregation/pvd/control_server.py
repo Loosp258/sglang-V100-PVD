@@ -410,6 +410,7 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
         result = await coordinator.create_entry(
             KVEntryManifest.from_dict(data["manifest"]),
             uploader_epoch=uploader_epoch,
+            uploader_epochs=data.get("uploader_epochs"),
         )
         return web.json_response(result.to_dict())
 

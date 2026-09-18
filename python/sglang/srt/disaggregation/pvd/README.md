@@ -460,6 +460,11 @@ V launcher:
 `None`, `0`, negative values, booleans and floats are rejected at startup.
 Ordinary PD (`--disaggregation-topology pd`) is unaffected.
 
+P/D startup preflight creates the worker's shared transfer budget. The later
+`PVDKVManager` adopts that exact object and checks its limits against the rank's
+configuration; it must not construct a second independent accounting object.
+Missing preflight initialization or mismatched limits fail startup.
+
 What the budget covers today: the D receive buffer and the V repacking peak
 (charged at twice the destination size, because the per-component chunks and
 the final concatenation are live at the same moment). P packing bytes are not
@@ -484,6 +489,26 @@ The V shard snapshot and `PVDKVManager.transfer_health()` report
 `capabilities`, `ready`, `draining`, `worker_epoch`, `isolated_reason`, and a
 transport block carrying budget usage, in-flight, unknown and quarantine state.
 
+### Prefill upload ownership (TP1 and TP2)
+
+Entry creation carries `uploader_epochs`, a complete map from V storage shard
+rank to the P process incarnation that will write it. For TP1 both V shards
+have the same sender epoch; for TP2 each shard has its own P rank's epoch.
+P ranks exchange epochs together with their existing shard-manifest allgather
+and send the same map to V, making concurrent creation idempotent. An existing
+Entry cannot be rebound to a changed map or a restarted uploader.
+
+Each P runtime retains and closes only its own shard authorizations. Clearing
+one sender cannot report `NOT_SUBMITTED` for a different rank's live WRITE.
+Malformed or foreign authorizations are rejected, not used to claim that a
+remote writer stopped. Existing terminal/fence protection remains unchanged.
+
+The scalar `uploader_epoch` input remains supported for single-uploader callers;
+it cannot be combined with `uploader_epochs`. New production senders use the
+map even for TP1. Upgrade P and V together before starting new requests; mixed
+versions are not supported by this change. Stop/drain existing workers using
+the lifecycle recovery rules, rather than changing epochs under live writes.
+
 ### Recovery from UNKNOWN
 
 A transfer whose native status is lost quarantines that worker's engine: no new
@@ -495,7 +520,8 @@ procedure.
 ### Verification status
 
 `docs/superpowers/verification/2026-09-09-pvd-transfer-lifecycle.md` records
-what has actually been executed. In short: 303 CPU tests pass with a fake
+what has actually been executed. After the 2026-09-19 integration fixes,
+324 CPU tests pass with a fake
 native transport and a simulated CUDA boundary. **No GPU, RDMA, GPUDirect,
 link-failure or soak validation has been run.** Do not treat the CPU suite as
 hardware acceptance.

@@ -322,8 +322,9 @@ def test_v_launcher_accepts_debug_logging_for_mr_diagnostics():
 
 
 @pytest.mark.parametrize("topology", ["pvd", "pd"])
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
 def test_model_runner_initializes_policy_before_shared_engine(
-    transport, monkeypatch, topology
+    transport, monkeypatch, topology, mode
 ):
     # Execute the real ModelRunner method without importing its CUDA-only
     # frontend dependencies. Only its hardware preflight is replaced.
@@ -363,7 +364,7 @@ def test_model_runner_initializes_policy_before_shared_engine(
         tp_rank=0,
         server_args=SimpleNamespace(
             disaggregation_topology=topology,
-            disaggregation_mode="decode",
+            disaggregation_mode=mode,
             disaggregation_transfer_backend="mooncake",
             disaggregation_ib_device="mlx5_2",
             mooncake_ib_device=None,
@@ -393,5 +394,46 @@ def test_model_runner_initializes_policy_before_shared_engine(
     if topology == "pvd":
         engine.require_pvd_metadata_policy()
         assert os.environ["MC_DISABLE_METACACHE"] == "1"
+        # Continue the production startup sequence into the actual KV manager.
+        # No GPU frontend is needed: only the pool and distributed accessor
+        # are doubles, while both adapter construction sites are real.
+        from sglang.srt.disaggregation.pvd import conn
+
+        parallel = types.ModuleType("sglang.srt.distributed.parallel_state")
+        parallel.get_mooncake_transfer_engine = lambda: engine
+        monkeypatch.setitem(sys.modules, parallel.__name__, parallel)
+        monkeypatch.setattr(conn, "_AsyncControlLoop", lambda: None)
+        runner.server_args.pvd_model_instance_id = "test-model"
+        runner.server_args.pvd_vector_coordinator_map = {"default": "http://v:9100"}
+        scheduler = SimpleNamespace(
+            server_args=runner.server_args,
+            ps=SimpleNamespace(pp_size=1),
+            tp_worker=SimpleNamespace(is_hybrid_swa=False),
+            enable_overlap=False,
+        )
+        pool = SimpleNamespace(page_size=1, kv_buffer=torch.zeros((8, 2)))
+
+        def create_manager():
+            return conn.PVDKVManager(
+                scheduler=scheduler,
+                kv_pool=pool,
+                metadata_buffers=None,
+                tp_rank=0,
+                tp_size=2,
+                gloo_group=None,
+            )
+
+        manager = create_manager()
+        assert manager.transfer_budget is engine._pvd_lifecycle_manager.budget
+        assert (
+            manager.transfer_engine.lifecycle_manager is engine._pvd_lifecycle_manager
+        )
+        runner.server_args.pvd_transfer_max_inflight += 1
+        with pytest.raises(conn.PVDConnectionError, match="budget.*configuration"):
+            create_manager()
+        # Missing preflight cannot silently install an unbounded budget.
+        del engine._pvd_lifecycle_manager
+        with pytest.raises(ValueError, match="explicit transfer budget"):
+            create_manager()
     else:
         assert "MC_DISABLE_METACACHE" not in os.environ

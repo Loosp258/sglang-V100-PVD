@@ -18,6 +18,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryManifest,
     RemoteRegionDescriptor,
     WriteIdentity,
+    normalize_uploader_epochs,
 )
 from sglang.srt.disaggregation.pvd.request_state import (
     DELIVERY_TERMINAL_STATES,
@@ -192,7 +193,7 @@ class EntryRecord:
     first_token: Optional[FirstTokenMetadata] = None
     active_delivery_count: int = 0
     error: Optional[str] = None
-    uploader_epoch: Optional[str] = None
+    uploader_epochs: Dict[int, str] = field(default_factory=dict)
     upload_identities: Dict[int, WriteIdentity] = field(default_factory=dict)
 
     consumer_leases: Dict[str, float] = field(default_factory=dict)
@@ -212,7 +213,9 @@ class EntryRecord:
             },
             "first_token": self.first_token.to_dict() if self.first_token else None,
             "active_delivery_count": self.active_delivery_count,
-            "uploader_epoch": self.uploader_epoch,
+            "uploader_epochs": {
+                str(rank): epoch for rank, epoch in self.uploader_epochs.items()
+            },
             "upload_identities": {
                 str(rank): identity.to_dict()
                 for rank, identity in self.upload_identities.items()
@@ -479,16 +482,22 @@ class VectorCoordinator:
         manifest: KVEntryManifest,
         *,
         uploader_epoch: Optional[str] = None,
+        uploader_epochs: Optional[Mapping[int, str]] = None,
     ) -> EntryRecord:
+        epochs = normalize_uploader_epochs(
+            (s.rank for s in manifest.shards),
+            uploader_epoch=uploader_epoch,
+            uploader_epochs=uploader_epochs,
+        )
         async with self._lock:
             create_lock = self._entry_create_locks.setdefault(
                 manifest.key, asyncio.Lock()
             )
         async with create_lock:
-            return await self._create_entry_once(manifest, uploader_epoch)
+            return await self._create_entry_once(manifest, epochs)
 
     async def _create_entry_once(
-        self, manifest: KVEntryManifest, uploader_epoch: Optional[str] = None
+        self, manifest: KVEntryManifest, uploader_epochs: Dict[int, str]
     ) -> EntryRecord:
         async with self._lock:
             existing = self.entries.get(manifest.key)
@@ -497,7 +506,7 @@ class VectorCoordinator:
                     raise CoordinatorError(
                         "entry key already exists with a different global manifest"
                     )
-                if existing.uploader_epoch != uploader_epoch:
+                if existing.uploader_epochs != uploader_epochs:
                     raise CoordinatorError(
                         "entry key already exists with a different uploader epoch"
                     )
@@ -508,6 +517,7 @@ class VectorCoordinator:
                 state=EntryState.CREATED,
                 created_at=now,
                 expires_at=now + self.entry_ttl_secs,
+                uploader_epochs=dict(uploader_epochs),
             )
             record.state = transition(record.state, EntryState.ALLOCATING)
             self.entries[manifest.key] = record
@@ -516,7 +526,7 @@ class VectorCoordinator:
             created = await asyncio.gather(
                 *(
                     self.shards[rank].create_entry(
-                        manifest, uploader_epoch=uploader_epoch
+                        manifest, uploader_epoch=uploader_epochs.get(rank)
                     )
                     for rank in (0, 1)
                 )
@@ -526,7 +536,7 @@ class VectorCoordinator:
                 for rank in (0, 1)
             }
             identities = self._upload_identities(
-                manifest, created, targets, uploader_epoch
+                manifest, created, targets, uploader_epochs
             )
             begun = await asyncio.gather(
                 *(
@@ -544,7 +554,6 @@ class VectorCoordinator:
                 rank: EntryShardState(begun[rank]["state"]) for rank in (0, 1)
             }
             record.target_regions = targets
-            record.uploader_epoch = uploader_epoch
             record.upload_identities = identities
             record.state = transition(record.state, EntryState.P_WRITING)
             self.metrics.increment("coordinator_entries_created")
@@ -555,7 +564,7 @@ class VectorCoordinator:
         manifest: KVEntryManifest,
         created: List[Mapping],
         targets: Dict[int, RemoteRegionDescriptor],
-        uploader_epoch: Optional[str],
+        uploader_epochs: Mapping[int, str],
     ) -> Dict[int, WriteIdentity]:
         """Adopt each shard's published upload identity, or refuse the batch.
 
@@ -565,7 +574,7 @@ class VectorCoordinator:
         reservation semantics.
         """
         published = [value.get("upload_identity") for value in created]
-        if uploader_epoch is None:
+        if not uploader_epochs:
             if any(item is not None for item in published):
                 raise CoordinatorError(
                     "V shard published an upload identity without an uploader epoch"
@@ -579,7 +588,7 @@ class VectorCoordinator:
                     f"V shard {rank} did not publish an upload write identity"
                 )
             identity = WriteIdentity.from_dict(value)
-            if identity.sender_epoch != uploader_epoch:
+            if identity.sender_epoch != uploader_epochs[rank]:
                 raise CoordinatorError(
                     f"V shard {rank} bound the upload to a different sender epoch"
                 )

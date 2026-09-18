@@ -5,6 +5,11 @@ Design: `docs/superpowers/specs/2026-09-09-pvd-transfer-lifecycle-design.md`.
 Branch: `codex/pvd-upload-lifecycle`. Base: `2a66bc477`.
 Last updated: 2026-09-15.
 
+Follow-up: the 2026-09-19 integration verification is recorded in §8 below.
+The original 303-test result did not cover the complete preflight-to-KV-manager
+startup sequence or distinct P TP2 uploaders. Both paths had blockers in
+`488856615`; the configuration requirements below were not proof of startup.
+
 This record states what was executed and what was not. It is not a claim that
 the lifecycle bug is fixed on real hardware.
 
@@ -207,3 +212,57 @@ shortening a TTL, is not a recovery procedure.
   `worker_epoch()` helper.
 - TP1 Decode against TP2 storage is unsupported: compute-rank KV heads cross a
   V shard boundary.
+
+## 8. 2026-09-19 startup and TP2 uploader integration fixes
+
+Base: `pvd-disaggregation` at `488856615`. These changes do not implement a new
+transport, streaming protocol or retrieval algorithm.
+
+### Changes
+
+- P/D KV managers reuse the budget already installed by ModelRunner preflight
+  on the shared Mooncake engine and verify its configured limits. The adapter's
+  distinct-budget rejection remains intact; missing preflight still fails.
+- Entry creation normalizes a complete storage-shard-to-uploader-epoch map.
+  TP1 assigns both shards to one epoch; TP2 exchanges the two process epochs
+  along with the existing manifest collective. Each V store still receives
+  only its own uploader epoch, and full write identities remain mandatory.
+- P runtimes own only their assigned uploads, including during abort/clear.
+  They cannot submit another rank's shard or report its terminal state.
+- A prior test expected an invalid foreign-epoch lease to be reported as
+  NOT_SUBMITTED by the local process. That expectation was unsafe: the foreign
+  authorization now stays pinned on V rather than accepting a false drain
+  report. Valid local authorizations opened before a later validation failure
+  are still abandoned and drained by their actual owner.
+
+### Executed evidence
+
+Environment: local Windows CPU venv (`.venv/Scripts/python.exe`), no GPU/RDMA.
+The same eleven-file suite listed in §2 passed: **324 passed in 3.61s**.
+This includes real HTTP coordinator-to-shard control traffic and real PVD
+runtime/store code, but simulated native transport.
+
+Before the fix, extending the existing ModelRunner initialization test into
+the actual `PVDKVManager` constructor reproduced `ValueError: shared Mooncake
+engine already has a different budget`. New TP2-map tests initially failed
+because the runtime did not accept the map. After the fix the suite covers:
+
+- P and D preflight followed by actual KV-manager initialization, identity of
+  the shared accounting object, mismatched limits and missing initialization.
+- Two independent P runtimes/managers with distinct epochs creating the same
+  Entry concurrently, uploading separate shards, and publishing STORED.
+- Cancellation of P rank0 before submission while rank1's WRITE is in flight:
+  rank0's pages may drain, rank1's pages remain pinned until its native terminal;
+  late success does not revive the cancelled Entry.
+- Actual TP1/TP2 sender constructors forwarding the agreed map and local shard
+  ownership (the TP allgather is simulated, not a multi-process launch).
+- Map validation before allocation, mutation isolation, idempotency, changed
+  or stale uploader rejection, non-owned submission refusal, and HTTP map
+  propagation through the coordinator and a remote shard service.
+
+Focused Ruff checks (`E9,F401,F821,I`), Ruff format checks and `git diff --check`
+passed for the changed files. Hardware acceptance remains **NOT RUN**:
+these tests do not launch real TP worker processes or verify CUDA/GDR ordering,
+native Mooncake completion semantics, rail behavior, link faults or soak tests.
+The remaining boundaries in §7 still apply. Deploy matching P/V versions;
+this is not a rolling-upgrade protocol for workers with outstanding writes.
