@@ -111,13 +111,29 @@ Route source and destination data by layer, KV head, and token/page ownership, n
      request is skipped without consuming a batch slot. With the flag off nothing is ever
      skipped and the count is identical to the previous index comparison.
    - The pull itself is the existing synchronous `full_prompt` refresher.
-5. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, new-request isolation, the existing refresher's selection scope, and diagnostic behavior.
-6. Design and implementation-status documents.
+5. `prediction.py`: the draft/probe interfaces, with fakes and no model loading.
+   - `DraftConfig` takes a model name or local path, optional revision, device, dtype and
+     token budget. No model is defaulted; a missing revision records `local/unknown`
+     rather than an invented one.
+   - `CommittedPrefix` / `snapshot_committed` hand the prediction branch an immutable,
+     detached copy of committed state, so it cannot reach committed ids, positions or KV.
+   - `run_isolated` forks the torch RNG, so a sampling draft model cannot change what the
+     committed sampler produces next.
+   - `QueryVectors` carries an explicit vector space, version, layer, head range,
+     positions and valid length. `PredictionPipeline` refuses a query whose space is not
+     the configured target model, so draft-space Q can never be searched against target K.
+   - The pipeline also refuses a prediction for another request, one made against a stale
+     prefix, one over budget, and a probe returning unrequested or duplicate layers.
+   - `FakeDraftProvider` / `FakeTargetProbe` allow development without weights.
+6. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+   scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
+   refresher's selection scope, and diagnostic behavior.
+7. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
-- Actual configurable draft-model loading and provider integration.
-- Target-model probe execution, prefix realignment, and Q capture.
+- Actual draft-model **loading**. The configurable provider interface exists (see 5.2); no concrete `DraftProvider` loads weights, validates tokenizer compatibility or runs on a device.
+- Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
 - Server-side CAGRA index lifecycle and real-request search.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
@@ -307,8 +323,12 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-19, Linux/WSL venv against the Windows checkout, sixteen PVD CPU test files:
-  **445 passed in 6.6s** (377 baseline, +38 bootstrap-gating, +15 waiting-queue wiring,
+- 2026-09-19, Linux/WSL venv against the Windows checkout, seventeen PVD CPU test files:
+  **510 passed in 5.4s** (445 plus 65 draft/probe interface tests). Two mutations confirmed
+  those bite: dropping the vector-space check failed 1, and removing the RNG fork failed 2.
+  A third mutation (aliasing the snapshot token sequence) did **not** fail anything, because
+  `CommittedPrefix` already rejects a non-tuple; the copy test is redundant with that check.
+- 2026-09-19, intermediate, sixteen PVD CPU test files: **445 passed in 6.6s** (377 baseline, +38 bootstrap-gating, +15 waiting-queue wiring,
   +15 decode.py scheduler hooks). The scheduler-hook tests extract
   `get_new_prebuilt_batch` and `_pvd_enter_waiting_queue` from the shipped source with
   `ast` and execute them against fakes, so both decode.py edits are now covered. Three
@@ -458,6 +478,15 @@ For these decisions, propose a design and its tradeoffs, ask the user where nece
 - Architecture-specific probe execution and how predicted positions produce queries for the next window.
 - Token-level versus page-level indexing and independent versus shared selection across layers/heads.
 - Bootstrap is already decided: waiting-queue-triggered complete-KV pull, D-initiated, V-written, direct into the preallocated final pages. Do not ask whether to adopt it again; design the not-runnable gating and fair admission among concurrently pulling requests explicitly.
+- **Direct-to-final-page bootstrap delivery needs a decision.** It is recorded as decided in
+  section 6, but the current KV pool makes it non-trivial: `unpack_full_prompt_kv` scatters a
+  contiguous packed buffer into per-layer K and V components at token indices derived from
+  page indices that the allocator does not guarantee to be contiguous. One RDMA WRITE lands in
+  one contiguous range, so writing straight into the final pages requires either contiguous
+  whole-prompt page allocation, or one WRITE per (component x contiguous page run), which
+  multiplies transfer slots and authorized regions and therefore the budget. The bootstrap
+  currently reuses the existing staging-and-unpack path. Choose contiguous allocation,
+  scatter-gather, or keeping staging before this is implemented.
 - Index-not-ready, prediction-deviation, and failure policies for subsequent periodic retrieval.
 - Mandatory initial/recent-token retention and retrieval capacity limits.
 - Formal output-quality acceptance thresholds.
@@ -480,6 +509,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/runtime.py` | Upload and transfer lifecycle. |
 | `python/sglang/srt/disaggregation/pvd/coordinator.py` | Entry/Delivery coordination. |
 | `python/sglang/srt/disaggregation/pvd/vector_store.py` | V storage and delivery. |
+| `python/sglang/srt/disaggregation/pvd/prediction.py` | Draft/probe interfaces, snapshot and RNG isolation, vector-space enforcement; fakes only, no model loading. |
 | `python/sglang/srt/disaggregation/pvd/selector.py` | Current identity lookup, not a complete vector-search interface. |
 | `python/sglang/srt/disaggregation/pvd/kv_packer.py` | KV layout and packing. |
 | `scripts/pvd/check_cagra.py` | Inventory versus explicit GPU smoke testing. |

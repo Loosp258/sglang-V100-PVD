@@ -110,8 +110,20 @@ V 节点、V worker group、V rank/shard 不是同一概念。
      batch 构建改为统计已接纳请求数而非队列下标，跳过 not-runnable 请求且不占用 batch 名额。
      关闭该开关时不会跳过任何请求，计数与原先的下标比较完全一致。
    - 拉取本身仍是现有的同步 `full_prompt` refresher。
-5. CPU 测试：时钟、首轮门控、等待队列触发、新请求隔离、现有 refresher 选择范围、检测脚本行为。
-6. 完整目标和阶段记录文档。
+5. `prediction.py`：draft/probe 接口，含 fake，不加载任何模型。
+   - `DraftConfig` 接受模型名或本地路径、可选 revision、device、dtype 与 token 预算；
+     不设默认模型；缺少 revision 时记为 `local/unknown`，不伪造。
+   - `CommittedPrefix` / `snapshot_committed` 向预测分支交付不可变且已拷贝的正式状态，
+     使其无法触碰正式 id、位置或 KV。
+   - `run_isolated` fork torch RNG，采样型 draft 模型不会改变正式采样器的后续输出。
+   - `QueryVectors` 显式携带向量空间、版本、层、head 范围、位置与有效长度；
+     `PredictionPipeline` 拒绝空间不等于目标模型的 query，draft 空间 Q 永远无法用于检索 target K。
+   - 同时拒绝：属于其他请求的预测、基于过期 prefix 的预测、超预算预测、
+     probe 返回未请求或重复的层。
+   - `FakeDraftProvider` / `FakeTargetProbe` 支持无权重开发。
+6. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+   新请求隔离、现有 refresher 选择范围、检测脚本行为。
+7. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -309,8 +321,12 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 16 个 PVD CPU 测试文件：
-  445 passed in 6.6s（基线 377，首轮门控 +38，等待队列接线 +15，decode.py 调度钩子 +15）。
+- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 17 个 PVD CPU 测试文件：
+  510 passed in 5.4s（445 加 65 条 draft/probe 接口测试）。两处变异验证有效：
+  去掉向量空间检查失败 1 条；去掉 RNG fork 失败 2 条。
+  第三处变异（让快照别名化 token 序列）未导致失败，因为 `CommittedPrefix` 本身就拒绝非 tuple，
+  该拷贝测试与此校验重复。
+- 2026-09-19 中间结果：16 个 PVD CPU 测试文件，445 passed in 6.6s（基线 377，首轮门控 +38，等待队列接线 +15，decode.py 调度钩子 +15）。
   调度钩子测试用 `ast` 从实际源码中抽出 `get_new_prebuilt_batch` 与 `_pvd_enter_waiting_queue`
   并对 fake 协作者执行，decode.py 的两处改动现已覆盖。注入三处变异验证有效：
   按下标计数而非按接纳计数失败 1 条；去掉 not-runnable 守卫失败 4 条；
