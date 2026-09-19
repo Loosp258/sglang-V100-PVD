@@ -125,14 +125,26 @@ Route source and destination data by layer, KV head, and token/page ownership, n
    - The pipeline also refuses a prediction for another request, one made against a stale
      prefix, one over budget, and a probe returning unrequested or duplicate layers.
    - `FakeDraftProvider` / `FakeTargetProbe` allow development without weights.
-6. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+6. `draft_hf.py`: the first concrete `DraftProvider`, backed by a Hugging Face causal LM.
+   - `transformers` is imported lazily inside the loader, so it is not a new hard dependency,
+     and the loading step is injectable so everything below is testable without weights.
+   - `VocabularySignature` compares vocab size, BOS/EOS and a fingerprint of a fixed probe
+     encoding. A draft whose tokenizer disagrees with the target's is refused: predicted ids
+     would mean different text to the probe, and no translation step exists.
+   - Device and dtype are validated against what the model actually loaded as, not assumed.
+   - The token budget is enforced on what the model returns, not only on what it was asked
+     for, so a generate() that overshoots is still truncated.
+   - The revision the loader resolved is recorded; a local path with none reports
+     `local/unknown`.
+   - Nothing constructs it yet; it is opt-in and not wired into serving.
+7. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
-7. Design and implementation-status documents.
+8. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
-- Actual draft-model **loading**. The configurable provider interface exists (see 5.2); no concrete `DraftProvider` loads weights, validates tokenizer compatibility or runs on a device.
+- Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
 - Server-side CAGRA index lifecycle and real-request search.
 - Sparse KV selection, packing, D installation, and attention integration.
@@ -325,8 +337,15 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-19, Linux/WSL venv against the Windows checkout, seventeen PVD CPU test files:
-  **516 passed in 5.8s** (510 plus 6 staging-backpressure tests). Three mutations confirmed
+- 2026-09-19, Linux/WSL venv against the Windows checkout, eighteen PVD CPU test files:
+  **552 passed in 6.2s** (516 plus 36 Hugging Face draft-provider tests). Four mutations
+  confirmed those bite: skipping the vocabulary check failed 4, skipping placement
+  validation failed 2, not truncating to the budget failed 1, and dropping the
+  out-of-vocabulary prefix guard failed 1. The budget mutation initially failed nothing,
+  because the first fake model respected `max_new_tokens`; a fake that ignores it was added
+  so the guard is actually exercised.
+- 2026-09-19, intermediate: seventeen files, **516 passed in 5.8s** (510 plus 6
+  staging-backpressure tests). Three mutations confirmed
   those bite: ignoring staging headroom failed 3, not charging headroom down within a pass
   failed 2, and reporting a deferral as a failure failed 2.
 - 2026-09-19, intermediate: **510 passed in 5.4s** (445 plus 65 draft/probe interface tests). Two mutations confirmed
@@ -516,6 +535,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/runtime.py` | Upload and transfer lifecycle. |
 | `python/sglang/srt/disaggregation/pvd/coordinator.py` | Entry/Delivery coordination. |
 | `python/sglang/srt/disaggregation/pvd/vector_store.py` | V storage and delivery. |
+| `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |
 | `python/sglang/srt/disaggregation/pvd/prediction.py` | Draft/probe interfaces, snapshot and RNG isolation, vector-space enforcement; fakes only, no model loading. |
 | `python/sglang/srt/disaggregation/pvd/selector.py` | Current identity lookup, not a complete vector-search interface. |
 | `python/sglang/srt/disaggregation/pvd/kv_packer.py` | KV layout and packing. |

@@ -121,9 +121,18 @@ V 节点、V worker group、V rank/shard 不是同一概念。
    - 同时拒绝：属于其他请求的预测、基于过期 prefix 的预测、超预算预测、
      probe 返回未请求或重复的层。
    - `FakeDraftProvider` / `FakeTargetProbe` 支持无权重开发。
-6. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+6. `draft_hf.py`：第一个具体 `DraftProvider`，基于 Hugging Face causal LM。
+   - `transformers` 在 loader 内惰性导入，不成为新的硬依赖；加载步骤可注入，因此无需权重即可测试。
+   - `VocabularySignature` 比较词表大小、BOS/EOS 以及固定探针编码的指纹。
+     与目标模型 tokenizer 不一致的 draft 会被拒绝：预测出的 id 对 probe 而言意味着不同的文本，
+     而目前不存在转换步骤。
+   - device 与 dtype 按模型实际加载结果校验，而非假定。
+   - token 预算按模型返回值强制执行，不只按请求值，因此 generate() 超额返回仍会被截断。
+   - 记录 loader 解析出的 revision；本地路径无 revision 时记为 `local/unknown`。
+   - 目前没有任何代码构造它；opt-in，未接入服务。
+7. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
-7. 完整目标和阶段记录文档。
+8. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -323,8 +332,12 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 17 个 PVD CPU 测试文件：
-  516 passed in 5.8s（510 加 6 条 staging 背压测试）。三处变异验证有效：
+- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 18 个 PVD CPU 测试文件：
+  552 passed in 6.2s（516 加 36 条 Hugging Face draft provider 测试）。四处变异验证有效：
+  跳过词表检查失败 4 条；跳过 device/dtype 校验失败 2 条；不按预算截断失败 1 条；
+  去掉越界 prefix 守卫失败 1 条。预算变异最初未导致失败，因为第一个 fake 模型遵守
+  `max_new_tokens`；补充了一个忽略该参数的 fake，该守卫才真正被覆盖。
+- 2026-09-19 中间结果：17 个文件，516 passed in 5.8s（510 加 6 条 staging 背压测试）。三处变异验证有效：
   忽略 staging 余量失败 3 条；一轮内不递减余量失败 2 条；把延后当作失败上报失败 2 条。
 - 2026-09-19 中间结果：510 passed in 5.4s（445 加 65 条 draft/probe 接口测试）。两处变异验证有效：
   去掉向量空间检查失败 1 条；去掉 RNG fork 失败 2 条。
