@@ -307,8 +307,14 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-19, Linux/WSL venv against the Windows checkout, fifteen PVD CPU test files:
-  **430 passed in 5.0s** (377 baseline, +38 bootstrap-gating, +15 waiting-queue wiring).
+- 2026-09-19, Linux/WSL venv against the Windows checkout, sixteen PVD CPU test files:
+  **445 passed in 6.6s** (377 baseline, +38 bootstrap-gating, +15 waiting-queue wiring,
+  +15 decode.py scheduler hooks). The scheduler-hook tests extract
+  `get_new_prebuilt_batch` and `_pvd_enter_waiting_queue` from the shipped source with
+  `ast` and execute them against fakes, so both decode.py edits are now covered. Three
+  injected mutations confirmed they bite: position counting instead of admission counting
+  failed 1, removing the not-runnable guard failed 4, and leaving a failed pull in the
+  waiting queue failed 1.
   `ruff check --select E9,F401,F821,I` and `ruff format --check` pass on every file changed.
   `decode.py` already failed `I001` and `ruff format --check` at HEAD; that is pre-existing
   and was not introduced or fixed here.

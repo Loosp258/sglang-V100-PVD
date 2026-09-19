@@ -309,8 +309,12 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 15 个 PVD CPU 测试文件：
-  430 passed in 5.0s（基线 377，首轮门控 +38，等待队列接线 +15）。
+- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 16 个 PVD CPU 测试文件：
+  445 passed in 6.6s（基线 377，首轮门控 +38，等待队列接线 +15，decode.py 调度钩子 +15）。
+  调度钩子测试用 `ast` 从实际源码中抽出 `get_new_prebuilt_batch` 与 `_pvd_enter_waiting_queue`
+  并对 fake 协作者执行，decode.py 的两处改动现已覆盖。注入三处变异验证有效：
+  按下标计数而非按接纳计数失败 1 条；去掉 not-runnable 守卫失败 4 条；
+  失败的拉取仍留在等待队列失败 1 条。
   所有改动文件通过 `ruff check --select E9,F401,F821,I` 与 `ruff format --check`。
   `decode.py` 在 HEAD 上已经无法通过 `I001` 与 `ruff format --check`，属既有问题，本次未引入也未修复。
 - 2026-09-19 中间结果：14 个文件，415 passed in 5.75s
