@@ -825,6 +825,7 @@ class ServerArgs:
     pvd_rank_rails: Optional[str] = None
     pvd_strict_rdma_preflight: bool = True
     pvd_kv_refresh_interval: int = 16
+    pvd_waiting_queue_bootstrap: bool = False
     # No default is guessed: a staging budget that fits one GPU can be fatal on
     # another, so PVD startup requires both values explicitly.
     pvd_transfer_staging_budget_bytes: Optional[int] = None
@@ -6960,6 +6961,17 @@ class ServerArgs:
                 "--disaggregation-ib-device if both are supplied. Defaults to "
                 "mlx5_0,mlx5_1 only when neither flag is supplied."
             ),
+        )
+        parser.add_argument(
+            "--pvd-waiting-queue-bootstrap",
+            action=argparse.BooleanOptionalAction,
+            default=ServerArgs.pvd_waiting_queue_bootstrap,
+            help="Pull a PVD request's initial Prompt KV when Decode places it "
+            "into the final waiting queue, instead of on its first refresh "
+            "inside the running batch. The request stays in the waiting queue "
+            "and is not runnable until the KV is installed, so it never adds a "
+            "barrier to requests that are already decoding. This first cut is "
+            "synchronous: it does not yet overlap with decoding. Off by default.",
         )
         parser.add_argument(
             "--pvd-strict-rdma-preflight",

@@ -5,6 +5,27 @@ PVD is opt-in. The existing PD path remains the default when
 
 ## PVD 3.0 request flow
 
+### Predictive prefetch development status
+
+The request-independent prefetch goal and latest user decisions are recorded in
+[the prefetch design](../../../../../docs/superpowers/specs/2026-09-20-pvd-prefetch-design.md).
+The model-independent `prefetch.py` clock and standalone
+`scripts/pvd/check_cagra.py` compatibility probe are development foundations,
+**not an enabled serving feature**. Decode still uses the synchronous
+`RefreshClock` and `full_prompt` path described below. There is no draft/probe
+model, CAGRA serving integration, sparse attention, or measured overlap yet.
+Draft model names/paths are to be user-configurable, with an optional revision;
+choosing a specific model is not a prerequisite for generic development.
+The compatibility tool now defaults to `--mode inventory` (no GPU library
+imports); use `--mode smoke` explicitly for real CAGRA build/search. A collected
+inventory is **not** a passed hardware test. No model-loading CLI is wired yet.
+New batch members must not reset existing requests' refresh periods or cancel
+their pending prefetches. See the
+[implementation report](../../../../../docs/superpowers/reports/2026-09-20-pvd-prefetch-foundation.md)
+for tests, hardware limits, and next steps.
+
+### Existing serving path
+
 The accepted design is recorded in
 [the design specification](../../../../../docs/superpowers/specs/2026-09-05-pvd3-design.md).
 The Gateway chooses P, V and D, registers the identity-bearing prompt request
@@ -471,6 +492,32 @@ the final concatenation are live at the same moment). P packing bytes are not
 yet charged; only the transfer slot is. Active, draining and quarantined
 resources are all counted, and no state change refunds a reservation that still
 occupies memory.
+
+### Initial KV: waiting-queue pull (opt-in)
+
+`--pvd-waiting-queue-bootstrap` (off by default) moves a request's first
+Prompt KV fetch out of the running batch. Without it, a newcomer is admitted
+on KV_READY and its round-0 retrieval happens on its first in-batch refresh,
+so the batch stalls on it. With it, the request is admitted into
+`scheduler.waiting_queue` but is **not runnable**: when it reaches that queue,
+Decode publishes an authorization over the KV pages `DecodePreallocQueue`
+already allocated for it and asks V to deliver. D is the initiator; V still
+performs the authorized RDMA WRITE, so write identities, epochs, generations
+and fences are unchanged and there is no RDMA READ. The batch builder skips
+the request and does not charge it against the batch token budget until the
+KV is installed, so a newcomer never becomes a barrier for a running request.
+
+Because the destination is the final pages, there is no staging copy on this
+path and no separate preparation-bytes budget: prealloc admission already
+bounds that memory.
+
+Bootstrap happens exactly once. The refresh clock starts from zero committed
+Decode tokens, so round 0 is never fetched again after admission.
+
+Limitation in this version: **the pull itself is synchronous.** It runs on the
+scheduler thread at waiting-queue entry, so it costs scheduler time; what it
+changes is *where* the wait happens, not that the wait is hidden. Overlapping
+it with decoding is the predictive-prefetch work, not this flag.
 
 ### Lifetime rules
 

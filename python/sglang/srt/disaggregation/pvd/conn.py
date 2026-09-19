@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import torch
 import torch.distributed
 from sglang.srt.disaggregation.base.conn import KVPoll, KVTransferMetric
+from sglang.srt.disaggregation.pvd.bootstrap import BootstrapGate, BootstrapState
 from sglang.srt.disaggregation.pvd.client import PVDCoordinatorClient
 from sglang.srt.disaggregation.pvd.decode_refresh import (
     PVDDecodeRefresher,
@@ -208,6 +209,14 @@ class PVDKVManager:
         # request can never take its unfenced destination away with it.
         self.pending_decode_closes = []
         self.decode_refresher = PVDDecodeRefresher(self)
+        # Opt-in: pull a newcomer's initial Prompt KV when the scheduler puts
+        # it into the final waiting queue, rather than on its first in-batch
+        # refresh. Gates live here, not on the request, so an aborted request
+        # cannot take its pending identity away with it.
+        self.waiting_queue_bootstrap = bool(
+            getattr(scheduler.server_args, "pvd_waiting_queue_bootstrap", False)
+        )
+        self.bootstrap_gates: Dict[Any, BootstrapGate] = {}
         # One bounded driver per worker. It never creates a task per failed
         # request; it advances the owners that already hold the resources.
         self.transfer_progress = TransferProgress(
@@ -222,6 +231,107 @@ class PVDKVManager:
             raise PVDConnectionError(
                 "PVD 3.0 KV refresh requires overlap scheduling disabled"
             )
+
+    # -- waiting-queue bootstrap -------------------------------------------
+
+    def open_bootstrap_gate(self, req) -> Optional[BootstrapGate]:
+        """Create this request's single initial-pull gate, if enabled."""
+        if not self.waiting_queue_bootstrap:
+            return None
+        key = self.key_for(req)
+        if key in self.bootstrap_gates:
+            raise PVDConnectionError("duplicate PVD bootstrap gate for one request")
+        gate = BootstrapGate(
+            delivery_id=f"{key.transfer_id}:bootstrap",
+            receiver_epoch=self.worker_epoch,
+            prompt_tokens=len(req.origin_input_ids),
+        )
+        self.bootstrap_gates[key] = gate
+        return gate
+
+    def bootstrap_gate_for(self, req) -> Optional[BootstrapGate]:
+        if not self.waiting_queue_bootstrap:
+            return None
+        return self.bootstrap_gates.get(self.key_for(req))
+
+    def bootstrap_runnable(self, req) -> bool:
+        """False means: leave this request in the waiting queue, unadmitted.
+
+        A request with no gate is unaffected, so the legacy path and ordinary
+        PD are never gated by this.
+        """
+        gate = self.bootstrap_gate_for(req)
+        return True if gate is None else gate.is_runnable
+
+    def close_bootstrap_gate(self, req) -> None:
+        """Refuse further bootstrap progress. Releases and fences nothing."""
+        if not self.waiting_queue_bootstrap:
+            return
+        gate = self.bootstrap_gates.pop(self.key_for(req), None)
+        if gate is not None:
+            gate.close()
+
+    def enter_waiting_queue(self, reqs) -> List[tuple]:
+        """Trigger the initial pull for requests that just reached the queue.
+
+        Returns (request, error) pairs for requests that must be aborted. A
+        request whose Entry is not stored yet simply stays not-runnable and is
+        retried on a later scheduler pass; that is not an error.
+
+        Every TP rank runs this with the same waiting-queue order, so the
+        collective inside the refresher sees the same request set on all ranks.
+        """
+        if not self.waiting_queue_bootstrap or not reqs:
+            return []
+        pulling = []
+        failures = []
+        for req in reqs:
+            gate = self.bootstrap_gate_for(req)
+            if gate is None:
+                continue
+            if gate.state is BootstrapState.CLOSED:
+                # It can never become runnable, so report it rather than
+                # leaving it parked in the waiting queue forever.
+                failures.append((req, "PVD bootstrap gate is closed"))
+                continue
+            if gate.state is not BootstrapState.QUEUED:
+                # An earlier pass already began or finished this pull.
+                continue
+            try:
+                gate.enter_waiting_queue()
+                if not gate.can_request():
+                    continue
+                gate.begin()
+            except Exception as exc:
+                failures.append((req, f"PVD bootstrap gate refused the pull: {exc}"))
+                continue
+            pulling.append(req)
+        if not pulling:
+            return failures
+        # The existing full_prompt refresher performs the delivery: D asks,
+        # V writes into the pages this request already owns. This first cut is
+        # synchronous, so it costs scheduler time; it does not yet overlap with
+        # decoding. What it does change is that the wait happens before the
+        # request joins the running batch instead of inside it.
+        # Keyed by identity: a scheduler request object is not required to be
+        # hashable, and two distinct requests must never collide here.
+        refresh_failures = {
+            id(req): error for req, error in self.decode_refresher.refresh(pulling)
+        }
+        for req in pulling:
+            gate = self.bootstrap_gate_for(req)
+            error = refresh_failures.get(id(req))
+            if error is not None:
+                failures.append((req, error))
+                continue
+            try:
+                ticket = gate.ticket
+                gate.mark_received(ticket)
+                gate.mark_installed(ticket)
+                gate.handoff()
+            except Exception as exc:
+                failures.append((req, f"PVD bootstrap install was refused: {exc}"))
+        return failures
 
     def retain_pending_close(self, session) -> None:
         """Keep an unfenced Decode receive buffer alive under manager ownership.
@@ -691,6 +801,13 @@ class PVDKVReceiver:
         if self.key in mgr.decode_sessions:
             raise PVDConnectionError("duplicate active PVD Decode transfer identity")
         mgr.decode_sessions[self.key] = self.session
+        # Opened here so an abort between enqueue and the waiting queue still
+        # finds a gate to close. None unless the opt-in flag is set.
+        self.bootstrap_gate = (
+            mgr.open_bootstrap_gate(req)
+            if getattr(mgr, "waiting_queue_bootstrap", False)
+            else None
+        )
 
     def init(self, prefill_dp_rank: int):
         self._entry_future = self.kv_mgr.control.submit(
@@ -788,8 +905,13 @@ class PVDKVReceiver:
                 f"{local_shard.page_count}"
             )
         self._write_first_token_metadata(aux_index)
-        # KV_READY admission only. The selected continuous batch owns the first
-        # retrieval; no RDMA destination is exposed while this request waits.
+        if self.bootstrap_gate is not None:
+            # V holds this Entry. The pull still waits for the final waiting
+            # queue; observing KV_STORED here only removes one precondition.
+            self.bootstrap_gate.mark_source_ready()
+        # KV_READY admission into the waiting queue. With the waiting-queue
+        # bootstrap enabled the request is still not runnable: no RDMA
+        # destination is exposed until it reaches that queue.
         self._admitted = True
 
     def poll(self) -> int:
@@ -817,6 +939,8 @@ class PVDKVReceiver:
     def abort(self):
         self.conclude_state = KVPoll.Failed
         self.session.schedule_close()
+        if self.bootstrap_gate is not None:
+            self.kv_mgr.close_bootstrap_gate(self.req)
 
     def clear(self):
         if self.conclude_state != KVPoll.Success:

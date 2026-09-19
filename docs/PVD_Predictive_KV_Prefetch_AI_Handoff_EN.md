@@ -103,8 +103,16 @@ Route source and destination data by layer, KV head, and token/page ownership, n
    - `handoff()` yields committed-token count 0 exactly once, so round 0 is never re-fetched.
    - `close()` retains the pending identity and refuses late completions; it releases,
      fences and drains nothing.
-4. CPU tests covering clocks, new-request isolation, the existing refresher's selection scope, and diagnostic behavior.
-5. Design and implementation-status documents.
+4. Waiting-queue bootstrap wiring behind `--pvd-waiting-queue-bootstrap` (default off):
+   - `PVDKVManager.open_bootstrap_gate/bootstrap_runnable/enter_waiting_queue/close_bootstrap_gate`.
+   - `PVDKVReceiver` opens the gate at enqueue and reports KV_STORED when the Entry validates.
+   - `decode.py` triggers the pull right after `waiting_queue.extend(transferred_reqs)`, and the
+     batch builder now counts admitted requests instead of queue positions so a not-runnable
+     request is skipped without consuming a batch slot. With the flag off nothing is ever
+     skipped and the count is identical to the previous index comparison.
+   - The pull itself is the existing synchronous `full_prompt` refresher.
+5. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, new-request isolation, the existing refresher's selection scope, and diagnostic behavior.
+6. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
@@ -113,7 +121,8 @@ Route source and destination data by layer, KV head, and token/page ownership, n
 - Server-side CAGRA index lifecycle and real-request search.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
-- Wiring the waiting-queue-triggered initial pull into Decode: registering/pinning the preallocated final pages, publishing the destination authorization, issuing the delivery request, skipping not-runnable requests in the batch builder, and KV-ready admission. `bootstrap.py` supplies the gating logic only; it is not connected to `DecodeTransferQueue`, `scheduler.waiting_queue` or any transport.
+- Asynchronous initial pull. The waiting-queue trigger, gating and admission are wired (see 5.2), but the pull runs synchronously on the scheduler thread, so transfer time is moved rather than hidden. Overlapping it belongs to the prefetch pipeline.
+- Direct registration/pinning of the preallocated final pages as the RDMA destination. The current pull reuses the existing `full_prompt` refresh path, which stages and unpacks; the direct-to-final-page destination is the decided target but is not yet implemented.
 - Real-model, V100S, multi-GPU TP, RDMA, output-quality, and performance acceptance testing.
 
 There is no new launch argument that already enables the complete predictive pipeline. Replacing the current clock with the standalone `PrefetchClock` is not sufficient to implement the pipeline.
@@ -298,8 +307,13 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-19, Linux/WSL venv against the Windows checkout, fourteen PVD CPU test files:
-  **415 passed in 5.75s** (377 before `bootstrap.py`, +38 new bootstrap-gating tests).
+- 2026-09-19, Linux/WSL venv against the Windows checkout, fifteen PVD CPU test files:
+  **430 passed in 5.0s** (377 baseline, +38 bootstrap-gating, +15 waiting-queue wiring).
+  `ruff check --select E9,F401,F821,I` and `ruff format --check` pass on every file changed.
+  `decode.py` already failed `I001` and `ruff format --check` at HEAD; that is pre-existing
+  and was not introduced or fixed here.
+- 2026-09-19, intermediate: fourteen files, **415 passed in 5.75s**
+  (377 before `bootstrap.py`, +38 new bootstrap-gating tests).
   Two mutations were injected to confirm the new tests bite: treating RECEIVED as runnable
   failed 2 tests, and letting a closed gate accept a late completion failed 1.
 - Historical, before this change set: thirteen PVD CPU test files, **377 passed in 3.38s**.
@@ -453,7 +467,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/README.md` | Existing serving flow, support matrix, development status. |
 | `python/sglang/srt/disaggregation/pvd/retrieval.py` | Current full_prompt contract and RefreshClock. |
 | `python/sglang/srt/disaggregation/pvd/prefetch.py` | Standalone request-local prefetch timing, not wired into serving. |
-| `python/sglang/srt/disaggregation/pvd/bootstrap.py` | Standalone waiting-queue-triggered initial-pull gating, not wired into serving. |
+| `python/sglang/srt/disaggregation/pvd/bootstrap.py` | Request-local initial-pull gating; wired into `conn.py` and `decode.py` behind `--pvd-waiting-queue-bootstrap`. |
 | `python/sglang/srt/disaggregation/decode.py` | Decode queue chain: prealloc -> transfer -> `scheduler.waiting_queue` -> running batch. The final waiting queue is the bootstrap trigger point. |
 | `python/sglang/srt/disaggregation/pvd/decode_refresh.py` | Receive buffers, due selection, waiting, unpack, ACK. |
 | `python/sglang/srt/disaggregation/pvd/conn.py` | PVD integration with P/D runtime. |

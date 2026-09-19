@@ -72,12 +72,21 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         or server_args.pvd_kv_refresh_interval <= 0
     ):
         raise ValueError("--pvd-kv-refresh-interval must be a positive integer")
+    waiting_queue_bootstrap = getattr(server_args, "pvd_waiting_queue_bootstrap", False)
+    if not isinstance(waiting_queue_bootstrap, bool):
+        raise ValueError("--pvd-waiting-queue-bootstrap must be a boolean")
     if server_args.disaggregation_mode == "decode":
         server_args.disable_overlap_schedule = True
         logger.info(
             "PVD 3.0 uses a synchronous KV refresh barrier every %s Decode tokens",
             server_args.pvd_kv_refresh_interval,
         )
+        if waiting_queue_bootstrap:
+            logger.info(
+                "PVD initial KV is pulled at final-waiting-queue entry; a "
+                "request is not runnable until it is installed. The pull "
+                "itself is still synchronous in this version."
+            )
 
     # Reserve-before-allocate needs a budget before any staging tensor exists.
     server_args.pvd_transfer_staging_budget_bytes = _require_positive_int(

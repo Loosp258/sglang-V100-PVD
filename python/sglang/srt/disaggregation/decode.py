@@ -1766,10 +1766,26 @@ class SchedulerDisaggregationDecodeMixin:
         can_run_list: List[Req] = []
         waiting_queue: List[Req] = []
 
+        # Counts admitted requests rather than queue positions. Without the PVD
+        # waiting-queue bootstrap nothing is ever skipped, so this is the same
+        # as the previous index comparison.
+        admitted = 0
+        pvd_bootstrap = (
+            self.server_args.disaggregation_topology == "pvd"
+            and self.disagg_decode_prealloc_queue.kv_manager.waiting_queue_bootstrap
+        )
         for i in range(len(self.waiting_queue)):
             req = self.waiting_queue[i]
+            if pvd_bootstrap and not (
+                self.disagg_decode_prealloc_queue.kv_manager.bootstrap_runnable(req)
+            ):
+                # Its initial KV is not installed yet. Leave it queued: it is
+                # not runnable, and it is not a barrier for anything running.
+                waiting_queue.append(req)
+                continue
             # we can only add at least `num_not_used_batch` new batch to the running queue
-            if i < num_not_used_batch:
+            if admitted < num_not_used_batch:
+                admitted += 1
                 can_run_list.append(req)
                 # Decode-radix path: do NOT re-match prefix here.
                 # `pop_preallocated` already took a tree snapshot and used it
@@ -1818,6 +1834,24 @@ class SchedulerDisaggregationDecodeMixin:
 
         return new_batch
 
+    def _pvd_enter_waiting_queue(self: Scheduler, reqs):
+        """Pull initial KV for requests that just reached the final waiting queue."""
+        manager = self.disagg_decode_prealloc_queue.kv_manager
+        if not getattr(manager, "waiting_queue_bootstrap", False):
+            return
+        for req, error in manager.enter_waiting_queue(reqs):
+            logger.error("PVD initial KV pull failed for %s: %s", req.rid, error)
+            prepare_abort(
+                req,
+                f"PVD initial KV pull failed: {error}",
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            manager.close_bootstrap_gate(req)
+            self.output_streamer.stream_output([req], req.return_logprob)
+            release_kv_cache(req, self.tree_cache, is_insert=False)
+            if req in self.waiting_queue:
+                self.waiting_queue.remove(req)
+
     def process_decode_queue(self: Scheduler):
         if self.server_args.disaggregation_topology == "pvd":
             self.disagg_decode_prealloc_queue.kv_manager.decode_refresher.cleanup_finished()
@@ -1849,4 +1883,11 @@ class SchedulerDisaggregationDecodeMixin:
                 for req in transferred_reqs:
                     # Direct-to-host: KV data already in host pool, skip staging
                     self.hisparse_coordinator.admit_request_direct(req)
-            self.waiting_queue.extend(transferred_reqs)
+            if self.server_args.disaggregation_topology == "pvd":
+                # The final waiting queue is the PVD bootstrap trigger. Extend
+                # first so every TP rank sees the same queue order before the
+                # collective inside the pull.
+                self.waiting_queue.extend(transferred_reqs)
+                self._pvd_enter_waiting_queue(transferred_reqs)
+            else:
+                self.waiting_queue.extend(transferred_reqs)

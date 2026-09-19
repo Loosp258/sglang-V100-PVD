@@ -103,8 +103,15 @@ V 节点、V worker group、V rank/shard 不是同一概念。
    - `handoff()` 只能调用一次并返回正式计数 0，round 0 不会被重复获取。
    - `close()` 保留 pending 身份并拒绝迟到完成；不释放、不 fence、不排空。
 3. CAGRA 检测脚本：默认 inventory，显式 smoke 才执行 GPU 操作。
-4. CPU 测试：时钟、首轮门控、新请求隔离、现有 refresher 选择范围、检测脚本行为。
-5. 完整目标和阶段记录文档。
+4. `--pvd-waiting-queue-bootstrap`（默认关闭）下的等待队列首轮接入：
+   - `PVDKVManager` 的 `open_bootstrap_gate/bootstrap_runnable/enter_waiting_queue/close_bootstrap_gate`。
+   - `PVDKVReceiver` 入队时开 gate，Entry 校验通过时上报 KV_STORED。
+   - `decode.py` 在 `waiting_queue.extend(transferred_reqs)` 之后触发拉取；
+     batch 构建改为统计已接纳请求数而非队列下标，跳过 not-runnable 请求且不占用 batch 名额。
+     关闭该开关时不会跳过任何请求，计数与原先的下标比较完全一致。
+   - 拉取本身仍是现有的同步 `full_prompt` refresher。
+5. CPU 测试：时钟、首轮门控、等待队列触发、新请求隔离、现有 refresher 选择范围、检测脚本行为。
+6. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -113,7 +120,8 @@ V 节点、V worker group、V rank/shard 不是同一概念。
 - CAGRA 服务端索引生命周期和真实请求搜索。
 - 稀疏 KV 的服务端选择、打包、D 安装及 attention。
 - 实际 active/next GPU 缓冲、预取 Scheduler 接入。
-- 把等待队列触发的首轮拉取接入 Decode：注册/pin 已预分配的最终页、发布目标授权、发起交付请求、batch 构建跳过 not-runnable 请求、KV 就绪后接纳。`bootstrap.py` 只提供门控逻辑，尚未接入 `DecodeTransferQueue`、`scheduler.waiting_queue` 或任何传输。
+- 异步首轮拉取。等待队列触发、门控与接纳已接入（见 5.2），但拉取本身仍在调度线程上同步执行，只是把等待挪了位置，尚未隐藏。重叠属于预取流水线工作。
+- 直接把已预分配的最终页注册/pin 为 RDMA 目标。当前拉取复用现有 `full_prompt` 刷新路径（staging + unpack）；直写最终页是既定目标但尚未实现。
 - 真实模型、V100S、TP 多 GPU、RDMA、质量与性能验收。
 
 不存在可直接启用完整预测流水线的新启动参数。
@@ -301,8 +309,12 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 14 个 PVD CPU 测试文件：
-  415 passed in 5.75s（新增 `bootstrap.py` 前为 377，新增首轮门控测试 38 条）。
+- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 15 个 PVD CPU 测试文件：
+  430 passed in 5.0s（基线 377，首轮门控 +38，等待队列接线 +15）。
+  所有改动文件通过 `ruff check --select E9,F401,F821,I` 与 `ruff format --check`。
+  `decode.py` 在 HEAD 上已经无法通过 `I001` 与 `ruff format --check`，属既有问题，本次未引入也未修复。
+- 2026-09-19 中间结果：14 个文件，415 passed in 5.75s
+  （新增 `bootstrap.py` 前为 377，新增首轮门控测试 38 条）。
   注入两处变异验证新测试有效：把 RECEIVED 当作 runnable 失败 2 条；
   允许已关闭的 gate 接受迟到完成失败 1 条。
 - 历史记录（本次改动前）：13 个 PVD CPU 测试文件，377 passed in 3.38s。
@@ -461,7 +473,7 @@ draft/probe 开销、网络字节、无用预取、峰值显存。
 | `python/sglang/srt/disaggregation/pvd/README.md` | 现有服务流程、支持范围与开发状态 |
 | `python/sglang/srt/disaggregation/pvd/retrieval.py` | 当前 full_prompt 协议与 RefreshClock |
 | `python/sglang/srt/disaggregation/pvd/prefetch.py` | 未接入服务的请求级预取逻辑 |
-| `python/sglang/srt/disaggregation/pvd/bootstrap.py` | 未接入服务的等待队列触发首轮拉取门控 |
+| `python/sglang/srt/disaggregation/pvd/bootstrap.py` | 请求级首轮拉取门控；已在 `--pvd-waiting-queue-bootstrap` 下接入 `conn.py` 与 `decode.py` |
 | `python/sglang/srt/disaggregation/decode.py` | Decode 队列链：prealloc → transfer → `scheduler.waiting_queue` → 运行 batch；最终等待队列即首轮触发点 |
 | `python/sglang/srt/disaggregation/pvd/decode_refresh.py` | 接收、到期筛选、等待、unpack、ACK |
 | `python/sglang/srt/disaggregation/pvd/conn.py` | PVD 与 P/D runtime 接口 |
