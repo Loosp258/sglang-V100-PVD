@@ -271,6 +271,23 @@ class PVDKVManager:
         if gate is not None:
             gate.close()
 
+    def bootstrap_staging_bytes(self, req) -> int:
+        """Staging bytes this rank's initial pull will reserve for one request."""
+        return self.local_shard_manifest(len(req.origin_input_ids)).expected_bytes
+
+    def _bootstrap_staging_headroom(self) -> Optional[int]:
+        """Unreserved staging bytes, or None when no budget is enforced.
+
+        Advisory only. ``PVDDecodeSession.prepare`` makes the real reservation,
+        and it can still refuse; this check exists so the common case backs off
+        quietly instead of taking the whole pull batch down with it.
+        """
+        budget = getattr(self, "transfer_budget", None)
+        if budget is None:
+            return None
+        limits = budget.snapshot()
+        return limits["staging_bytes"] - limits["used_staging_bytes"]
+
     def enter_waiting_queue(self, reqs) -> List[tuple]:
         """Trigger the initial pull for requests that just reached the queue.
 
@@ -285,6 +302,9 @@ class PVDKVManager:
             return []
         pulling = []
         failures = []
+        # Charged down as this pass admits pulls, so several newcomers in one
+        # pass cannot each be told there is room for all of them.
+        headroom = self._bootstrap_staging_headroom()
         for req in reqs:
             gate = self.bootstrap_gate_for(req)
             if gate is None:
@@ -301,10 +321,21 @@ class PVDKVManager:
                 gate.enter_waiting_queue()
                 if not gate.can_request():
                     continue
+                need = 0 if headroom is None else self.bootstrap_staging_bytes(req)
+                if headroom is not None and need > headroom:
+                    # No room for this request's receive buffer yet. Leave it
+                    # queued and retry on a later pass: being at the worker's
+                    # staging budget is backpressure from running requests, not
+                    # a failure of this one. Aborting here would also take the
+                    # rest of this pull batch down, because the refresher
+                    # reports one error for every session it was given.
+                    continue
                 gate.begin()
             except Exception as exc:
                 failures.append((req, f"PVD bootstrap gate refused the pull: {exc}"))
                 continue
+            if headroom is not None:
+                headroom -= need
             pulling.append(req)
         if not pulling:
             return failures

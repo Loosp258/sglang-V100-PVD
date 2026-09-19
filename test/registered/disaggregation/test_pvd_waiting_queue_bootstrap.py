@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 from sglang.srt.disaggregation.pvd.bootstrap import BootstrapState
 from sglang.srt.disaggregation.pvd.conn import PVDKVManager
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 PROMPT = [1, 2, 3, 4, 5]
 
@@ -36,7 +37,7 @@ def make_req(rid="req-a"):
 EntryKey = namedtuple("EntryKey", "transfer_id")
 
 
-def make_manager(enabled=True, failures=None):
+def make_manager(enabled=True, failures=None, staging_bytes=None, used=0, per_req=64):
     """A real PVDKVManager with only the fields these methods touch.
 
     __new__ without __init__ keeps the shipped method bodies and real attribute
@@ -48,6 +49,13 @@ def make_manager(enabled=True, failures=None):
     mgr.worker_epoch = "d-epoch"
     mgr.decode_refresher = FakeRefresher(failures)
     mgr.key_for = lambda req: EntryKey(f"entry-{req.rid}")
+    if staging_bytes is not None:
+        mgr.transfer_budget = TransferBudget(
+            staging_bytes=staging_bytes, max_inflight=16
+        )
+        if used:
+            mgr.transfer_budget.reserve("someone-else", used, 0)
+    mgr.local_shard_manifest = lambda tokens: SimpleNamespace(expected_bytes=per_req)
     return mgr
 
 
@@ -248,3 +256,76 @@ def test_a_closed_gate_mid_batch_is_reported_rather_than_installed():
     assert [req for req, _ in failures] == [a]
     assert "closed" in failures[0][1]
     assert runnable(mgr, b) is True
+
+
+# --------------------------------------------------------------------------
+# Staging backpressure: a full budget defers, it never aborts
+# --------------------------------------------------------------------------
+
+
+def test_no_budget_means_no_staging_pre_check():
+    mgr = make_manager()
+    req = make_req()
+    open_gate(mgr, req).mark_source_ready()
+    assert enter(mgr, [req]) == []
+    assert runnable(mgr, req) is True
+
+
+def test_a_request_that_fits_the_staging_budget_is_pulled():
+    mgr = make_manager(staging_bytes=128, per_req=64)
+    req = make_req()
+    open_gate(mgr, req).mark_source_ready()
+    assert enter(mgr, [req]) == []
+    assert mgr.decode_refresher.calls == [[req]]
+    assert runnable(mgr, req) is True
+
+
+def test_a_request_that_does_not_fit_is_deferred_not_aborted():
+    mgr = make_manager(staging_bytes=128, used=100, per_req=64)
+    req = make_req()
+    gate = open_gate(mgr, req)
+    gate.mark_source_ready()
+
+    assert enter(mgr, [req]) == []  # no failure reported
+    assert mgr.decode_refresher.calls == []  # nothing was pulled
+    assert gate.state is BootstrapState.QUEUED
+    assert gate.in_waiting_queue
+    assert runnable(mgr, req) is False
+
+
+def test_a_deferred_request_is_pulled_once_the_budget_frees_up():
+    mgr = make_manager(staging_bytes=128, used=100, per_req=64)
+    req = make_req()
+    open_gate(mgr, req).mark_source_ready()
+    enter(mgr, [req])
+
+    mgr.transfer_budget.release("someone-else")
+    assert enter(mgr, [req]) == []
+    assert mgr.decode_refresher.calls == [[req]]
+    assert runnable(mgr, req) is True
+
+
+def test_headroom_is_charged_down_within_one_pass():
+    """Two newcomers must not both be told there is room for one."""
+    mgr = make_manager(staging_bytes=64, per_req=64)
+    first, second = make_req("first"), make_req("second")
+    for req in (first, second):
+        open_gate(mgr, req).mark_source_ready()
+
+    assert enter(mgr, [first, second]) == []
+    assert [r.rid for r in mgr.decode_refresher.calls[0]] == ["first"]
+    assert runnable(mgr, first) is True
+    assert runnable(mgr, second) is False
+
+
+def test_a_deferred_request_does_not_block_a_later_one_that_fits():
+    mgr = make_manager(staging_bytes=64, per_req=64)
+    big, small = make_req("big"), make_req("small")
+    for req in (big, small):
+        open_gate(mgr, req).mark_source_ready()
+    mgr.local_shard_manifest = lambda tokens: SimpleNamespace(expected_bytes=64)
+
+    enter(mgr, [big, small])
+    assert runnable(mgr, big) is True
+    assert runnable(mgr, small) is False
+    assert enter(mgr, [small]) == []  # still deferred, still not an error

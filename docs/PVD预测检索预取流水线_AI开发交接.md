@@ -16,7 +16,7 @@
 新请求加入不触发旧请求额外更新，不重置旧请求时钟，不取消旧请求在途预取。
 
 新请求的首轮采用最终等待队列触发的拉取：D 等到调度器把请求放入最终等待队列
-（`scheduler.waiting_queue`）后，才发起完整 Prompt KV 的交付，目标是该请求已预分配的最终 KV 页。
+（`scheduler.waiting_queue`）后，才发起完整 Prompt KV 的交付，目标是已注册的 staging 缓冲区，D 再把它 unpack 到该请求已预分配的最终 KV 页。
 传输仍由 V 执行获授权的 RDMA WRITE；“拉取”指由 D 发起，不是改变传输方向，也不是 RDMA READ。
 请求在等待队列中标记为 not-runnable，安装校验通过后才进入运行 batch。该方案已确认，尚未实现。
 
@@ -33,7 +33,7 @@
 | query 来源 | 小模型预测 token → 目标模型独立 probe → 目标模型空间的 Q |
 | 近似 | 允许稀疏检索近似，但必须测量质量退化 |
 | 刷新周期 | 每个请求独立按正式 D token 数计算 |
-| 首轮初始化 | D 等请求进入最终等待队列后发起拉取，直接写入已预分配的最终 KV 页；V 执行获授权的 WRITE；请求在等待队列内为 not-runnable，安装完成后才入运行 batch |
+| 首轮初始化 | D 等请求进入最终等待队列后发起拉取，先写入已注册的 staging 缓冲区，再 unpack 到已预分配的最终 KV 页；V 执行获授权的 WRITE；请求在等待队列内为 not-runnable，安装完成后才入运行 batch |
 | 新请求加入 | 就绪后接纳，不重复首轮传输；旧请求的周期与预取保持不变 |
 | 周期等待策略 | 运行 batch 内到期请求仍可同步等待；未就绪的新请求留在 batch 外，不要求旧请求陪等其初始化 |
 | V 硬件目标 | V100S；当前本地没有该实验硬件 |
@@ -133,7 +133,7 @@ V 节点、V worker group、V rank/shard 不是同一概念。
 - 稀疏 KV 的服务端选择、打包、D 安装及 attention。
 - 实际 active/next GPU 缓冲、预取 Scheduler 接入。
 - 异步首轮拉取。等待队列触发、门控与接纳已接入（见 5.2），但拉取本身仍在调度线程上同步执行，只是把等待挪了位置，尚未隐藏。重叠属于预取流水线工作。
-- 直接把已预分配的最终页注册/pin 为 RDMA 目标。当前拉取复用现有 `full_prompt` 刷新路径（staging + unpack）；直写最终页是既定目标但尚未实现。
+-（已放弃，不再是待办。）直写最终页不再是目标，见第 16 节。拉取复用现有 `full_prompt` 的 staging + unpack 路径是决定的结果，不是遗漏。
 - 真实模型、V100S、TP 多 GPU、RDMA、质量与性能验收。
 
 不存在可直接启用完整预测流水线的新启动参数。
@@ -186,9 +186,10 @@ Router 选择 P、V、D
   ├─ P 计算并上传完整 Prompt KV → V：KV_STORED
   └─ D：prealloc 队列 → transfer 队列 → 最终等待队列
                          ↓ 进入 scheduler.waiting_queue 即为触发点
-D 对已预分配的最终 KV 页发布授权，并发起交付请求
+D 注册 staging 缓冲区并对其发布授权，发起交付请求
                          ↓ 此时 V 必须已 KV_STORED，否则 D 在此等待
-V 执行获授权的 RDMA WRITE，写入这些最终页
+V 执行获授权的 RDMA WRITE，写入该 staging 缓冲区
+                         ↓ D 将其 unpack 到已预分配的最终 KV 页
                          ↓
 D：原生完成/身份检查 → GPU 同步及安装 → RUNNABLE → 接纳到运行 batch
 ```
@@ -196,15 +197,16 @@ D：原生完成/身份检查 → GPU 同步及安装 → RUNNABLE → 接纳到
 - 触发点是进入最终等待队列，而不是进入 prealloc 或 transfer 队列；更早的阶段不做任何 KV 传输工作。
 - 由 D 发起，由 V 写入：复用现有的授权目标 WRITE 路径、写身份、epoch/generation 与 fence，不引入 RDMA READ，也不新增传输方向。
 - 仍然是有接收许可的写入，不是 V 未经授权向 D 地址写入。D 不必等请求进入运行 batch 才请求传输。
-- 目标是该请求已预分配的最终 KV 页，发布 descriptor 前先注册并 pin。首轮路径没有 staging 拷贝，因此也不需要单独的预备字节额度：`DecodePreallocQueue` 的准入已经限定了这部分显存。
+- 目标是已注册的 staging 缓冲区，发布 descriptor 前先 pin；随后 D 把它 unpack 到 `DecodePreallocQueue` 已分配的 KV 页。直写这些最终页**不是**当前目标，见第 16 节。
+- staging 字节计入本 worker 的 `--pvd-transfer-staging-budget-bytes`，因此首轮拉取与运行中请求的刷新争用容量。容量不足的请求留在等待队列、后续轮次重试；staging 额度用尽是背压，不是失败，绝不能因此中止排队中的新请求。
 - 首版首轮使用完整 Prompt KV，不需要 bootstrap query，也不需要先完成 CAGRA 搜索。
 - V 索引构建可在 KV 安全可读后并行进行；首轮完整 KV 推送不应额外依赖 INDEX_READY。
 - 后续周期检索仍须索引就绪，并使用 draft → target probe → CAGRA 路径；失败策略另行明确。
-- 限制同时处于拉取中的请求数量；字节上限由 prealloc 准入继承，因为目标是最终页而不是额外的 staging 池。
+- 限制同时处于拉取中的请求数量；字节受两道约束：prealloc 准入限定最终页，staging 预算限定在途接收缓冲区。
 - 无法完成 prealloc 的请求根本到不了等待队列，其 KV 留在 V，不会提前占用 D 显存。
-- 预算包含最终 KV 页和在途传输额度。拉取不能耗尽运行请求必需的显存或造成容量死锁。
+- 预算包含 staging 缓冲区、最终 KV 页和在途传输额度。拉取不能耗尽运行请求必需的显存或造成容量死锁。
 - 数据到达不等于就绪：先记为 RECEIVED；必须完成原生终态、身份检查、GPU 可见性与所需 TP 一致后才是 RUNNABLE。
-- 首轮已确定直接写最终 KV 页；不能默认有地址就能安全安装或立即调度。
+- 首轮已确定使用 staging + unpack；不能默认有地址就能安全安装或立即调度。
 - 首轮只执行一次：入 batch 时不得重复获取 round 0；接纳前完成初始化时钟，再按正式 D token 计数。
 - 取消/超时关闭后续提交并安全排空原生 WRITE；逻辑移出队列不代表 descriptor 可立即回收。
 - 完整首轮需要完整 Prompt 的目标显存预算，不能宣称支持 D 从未容纳得下的 Prompt。
@@ -322,7 +324,9 @@ python scripts/pvd/check_cagra.py --mode smoke
 截至本交接创建前最近一轮：
 
 - 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 17 个 PVD CPU 测试文件：
-  510 passed in 5.4s（445 加 65 条 draft/probe 接口测试）。两处变异验证有效：
+  516 passed in 5.8s（510 加 6 条 staging 背压测试）。三处变异验证有效：
+  忽略 staging 余量失败 3 条；一轮内不递减余量失败 2 条；把延后当作失败上报失败 2 条。
+- 2026-09-19 中间结果：510 passed in 5.4s（445 加 65 条 draft/probe 接口测试）。两处变异验证有效：
   去掉向量空间检查失败 1 条；去掉 RNG fork 失败 2 条。
   第三处变异（让快照别名化 token 序列）未导致失败，因为 `CommittedPrefix` 本身就拒绝非 tuple，
   该拷贝测试与此校验重复。
@@ -367,7 +371,7 @@ $pvdTestFiles = @(rg --files test/registered/disaggregation -g 'test_pvd*.py')
 
 ### 阶段 1：影子预测/检索
 
-- 增加独立首轮拉取子任务：等待队列进入作为触发点、对已预分配最终页的目标授权、V readiness、原生传输确认、D 安装、RUNNABLE 接纳；可先用现有 full_prompt 和 fake transport 验证，不依赖 CAGRA。
+- 增加独立首轮拉取子任务：等待队列进入作为触发点、对已注册 staging 缓冲区的目标授权、V readiness、原生传输确认、D 安装、RUNNABLE 接纳；可先用现有 full_prompt 和 fake transport 验证，不依赖 CAGRA。
 - 正式生成仍用完整 KV 基线。
 - 实现 draft、probe、索引、搜索的可替换接口，逐步接入真实后端。
 - 选择结果暂不改变 attention。
@@ -408,7 +412,7 @@ $pvdTestFiles = @(rg --files test/registered/disaggregation -g 'test_pvd*.py')
 - probe 输入：预测 token、对应正式前缀、目标模型标识与 layer/head/位置选择。
 - query：明确向量空间、位置语义、版本及有效长度。
 - 预取请求：Entry、round、目标安装边界、query/index 身份、返回预算、各 D rank grant。
-- 首轮拉取授权：Entry/请求 incarnation、首轮 Delivery 身份、各 rank 最终页的授权区域、容量和有效性/取消状态；只有请求已进入最终等待队列且页面完成注册与 pin 后才发布授权，且布局与实际容量校验通过才可提交 WRITE。
+- 首轮拉取授权：Entry/请求 incarnation、首轮 Delivery 身份、各 rank staging 区域的授权、容量和有效性/取消状态；只有请求已进入最终等待队列且页面完成注册与 pin 后才发布授权，且布局与实际容量校验通过才可提交 WRITE。
 - selection：原始 token/page IDs、layer/head 范围、布局和实际字节数。
 - delivery：请求身份、状态、写入身份和原生完成证明的关联。
 
@@ -424,7 +428,7 @@ TP ranks 需要对公共请求集合/round/错误一致，但各 rank 的局部 
 - 新请求不影响旧请求时钟和在途预取。
 - 等待队列触发和 KV_STORED 任意顺序到达都可推进；不必等进入运行 batch 才开始传输。
 - 未就绪的新请求不阻塞已有运行 batch，除共享资源争用外不建立额外完成屏障。
-- 未发布授权则无 WRITE；多请求排队时最终页/在途总预算有界。
+- 未发布授权则无 WRITE；多请求排队时 staging/最终页/在途总预算有界。
 - RECEIVED 不等于 RUNNABLE；接纳前完成安装，入 batch 后不重复首轮交付。
 - 等待队列内取消、迟到 WRITE、租约过期/续租和授权重试不会造成提前释放或重复写入。
 - 提前完成不提前安装；迟到不越过边界读取旧/半完成数据。
@@ -475,7 +479,11 @@ draft/probe 开销、网络字节、无用预取、峰值显存。
 
 - 具体架构的 probe 实现，以及预测位置如何构成下一窗口 query。
 - 索引是 token/page 级、哪些层/head 单独或共享选择。
-- 首轮方案已确定为最终等待队列触发的完整 KV 拉取（D 发起、V 写入、直写已预分配最终页），不重复询问是否采用；等待队列内 not-runnable 门控与并发拉取请求之间的公平接纳策略需设计。
+- 首轮方案已确定为最终等待队列触发的完整 KV 拉取（D 发起、V 写入、staging + unpack），不重复询问是否采用；等待队列内 not-runnable 门控与并发拉取请求之间的公平接纳策略需设计。
+- **直写最终页已于 2026-09-19 决定：保留 staging。** `unpack_full_prompt_kv` 把连续的打包缓冲区按页索引散布到各层 K/V 分量，而分配器并不保证这些页连续；
+  一次 RDMA WRITE 只落在一段连续地址。直写最终页要么要求整个 prompt 连续分配（约束分配器，碎片化时会失败），
+  要么每个（分量 × 连续页段）一次 WRITE（成倍增加传输槽位与授权区域，改变预算模型）。两者当前都不值得。
+  首轮沿用现有 staging + unpack 路径，去掉这次拷贝不是当前实现目标；没有证明该拷贝确实影响性能的实测之前不要重开此议题。
 - 周期检索的索引未就绪、预测偏差和失败策略。
 - 初始/最近 token 保留规则与检索容量。
 - 正式质量验收阈值。

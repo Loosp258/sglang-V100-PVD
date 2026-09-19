@@ -507,9 +507,16 @@ and fences are unchanged and there is no RDMA READ. The batch builder skips
 the request and does not charge it against the batch token budget until the
 KV is installed, so a newcomer never becomes a barrier for a running request.
 
-Because the destination is the final pages, there is no staging copy on this
-path and no separate preparation-bytes budget: prealloc admission already
-bounds that memory.
+The destination is a registered staging buffer, which D unpacks into the final
+pages. Writing straight into the final pages is deliberately not a goal: the
+pool scatters per-layer K and V at non-contiguous page indices, so it would
+need either contiguous whole-prompt allocation or one WRITE per contiguous
+page run.
+
+Staging bytes are charged to `--pvd-transfer-staging-budget-bytes`, so an
+initial pull competes with running requests' refreshes. A newcomer that does
+not fit stays in the waiting queue and is retried; being at the staging budget
+is backpressure, never a reason to abort a queued request.
 
 Bootstrap happens exactly once. The refresh clock starts from zero committed
 Decode tokens, so round 0 is never fetched again after admission.

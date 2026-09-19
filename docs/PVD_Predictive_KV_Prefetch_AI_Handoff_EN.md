@@ -17,7 +17,7 @@ Extend the existing SGLang PVD framework with a predictive KV prefetch pipeline:
 
 Predicted tokens are never emitted as committed output. Each request refreshes independently after M committed D-generated tokens. Admitting a new request must not force existing requests to refresh, reset their clocks, or cancel their in-flight prefetches.
 
-Initial KV uses a waiting-queue-triggered pull: D waits until its scheduler places the request into the final waiting queue (`scheduler.waiting_queue`), then initiates delivery of the complete Prompt KV into the KV pages already preallocated for that request. V still performs the authorized RDMA WRITE; "pull" means D is the initiator, not that the transport direction changes. The request stays in the waiting queue marked not-runnable and is admitted to the running batch only after validated installation. This design is confirmed but not yet implemented.
+Initial KV uses a waiting-queue-triggered pull: D waits until its scheduler places the request into the final waiting queue (`scheduler.waiting_queue`), then initiates delivery of the complete Prompt KV into a registered staging buffer, which D unpacks into the KV pages already preallocated for that request. V still performs the authorized RDMA WRITE; "pull" means D is the initiator, not that the transport direction changes. The request stays in the waiting queue marked not-runnable and is admitted to the running batch only after validated installation. This design is confirmed but not yet implemented.
 
 The outcome to evaluate is end-to-end refresh waiting time, TPOT, throughput, memory usage, and output quality—not merely whether one CAGRA search or RDMA WRITE works.
 
@@ -33,7 +33,7 @@ In this document, “committed” means the real target-model generation path, a
 | Query source | Draft-predicted tokens → isolated target-model probe → queries in the target model's Q/K space. |
 | Approximation | Sparse retrieval approximation is allowed, but quality degradation must be measured. |
 | Refresh clock | Independent per request, based on committed D token counts. |
-| Initial bootstrap | D waits until the request reaches the final waiting queue, then pulls the complete Prompt KV into its already-preallocated final KV pages. V performs the authorized WRITE. The request stays in the waiting queue as not-runnable; admission to the running batch follows installation. |
+| Initial bootstrap | D waits until the request reaches the final waiting queue, then pulls the complete Prompt KV into a registered staging buffer and unpacks it into its already-preallocated final KV pages. V performs the authorized WRITE. The request stays in the waiting queue as not-runnable; admission to the running batch follows installation. |
 | New request admission | Admit only when ready, without repeating the initial transfer; preserve existing periods and prefetches. |
 | Periodic waiting policy | Already-running requests may retain a synchronous due-refresh barrier. An uninitialized newcomer stays outside the running batch and does not add an initialization barrier for existing requests. |
 | V hardware target | V100S. That experimental hardware is currently unavailable locally. |
@@ -138,7 +138,7 @@ Route source and destination data by layer, KV head, and token/page ownership, n
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
 - Asynchronous initial pull. The waiting-queue trigger, gating and admission are wired (see 5.2), but the pull runs synchronously on the scheduler thread, so transfer time is moved rather than hidden. Overlapping it belongs to the prefetch pipeline.
-- Direct registration/pinning of the preallocated final pages as the RDMA destination. The current pull reuses the existing `full_prompt` refresh path, which stages and unpacks; the direct-to-final-page destination is the decided target but is not yet implemented.
+- (Dropped, not pending.) Direct-to-final-page delivery is no longer a goal; see section 16. The pull reuses the existing `full_prompt` staging-and-unpack path by decision, not by omission.
 - Real-model, V100S, multi-GPU TP, RDMA, output-quality, and performance acceptance testing.
 
 There is no new launch argument that already enables the complete predictive pipeline. Replacing the current clock with the standalone `PrefetchClock` is not sufficient to implement the pipeline.
@@ -189,9 +189,10 @@ Router selects P, V, D
   ├─ P computes/uploads full Prompt KV → V: KV_STORED
   └─ D: prealloc queue → transfer queue → FINAL WAITING QUEUE
                          ↓ entry into scheduler.waiting_queue is the trigger
-D authorizes its already-preallocated final KV pages and requests delivery
+D registers a staging buffer, authorizes it and requests delivery
                          ↓ V must already be KV_STORED; otherwise D waits here
-V performs the authorized RDMA WRITE into those pages
+V performs the authorized RDMA WRITE into that staging buffer
+                         ↓ D unpacks it into its already-preallocated KV pages
                          ↓
 D: native completion/identity checks → GPU visibility and installation
                          ↓
@@ -201,15 +202,16 @@ RUNNABLE → admission into the running batch
 - The trigger is entry into the final waiting queue, not entry into the prealloc or transfer queue. Earlier stages do no KV transfer work.
 - D is the initiator; V remains the writer. This reuses the existing authorized-destination WRITE path, write identities, epochs/generations and fences. It is not an RDMA READ and introduces no new transport direction.
 - This is still a receiver-authorized write, never an unsolicited write to D memory. D does not wait for admission into the running batch to request delivery.
-- The destination is the request's already-preallocated final KV pages, registered and pinned before their descriptor is published. There is no staging copy on the bootstrap path and therefore no separate preparation-bytes credit: `DecodePreallocQueue` admission already bounds this memory.
+- The destination is a registered staging buffer, pinned before its descriptor is published; D then unpacks it into the KV pages `DecodePreallocQueue` already allocated. Writing straight into those final pages is **not** a current goal (see section 16).
+- Staging bytes are charged to the worker's `--pvd-transfer-staging-budget-bytes`, so an initial pull competes for capacity with running requests' refreshes. A request that does not fit is left in the waiting queue and retried on a later pass; running out of staging headroom is backpressure, not a failure, and must never abort a queued newcomer.
 - The first implementation uses complete Prompt KV for bootstrap: no bootstrap query or initial CAGRA search is required.
 - V may build the index in parallel after KV becomes safely readable. Full initial delivery must not acquire an unnecessary INDEX_READY dependency.
 - Subsequent periodic retrieval still requires a usable index and follows draft → target probe → CAGRA; specify failure policy separately.
-- Bound the number of concurrently pulling requests. Byte-level bounding is inherited from prealloc admission, because the destination is the final pages rather than an extra staging pool.
+- Bound the number of concurrently pulling requests. Bytes are bounded twice: prealloc admission bounds the final pages, and the staging budget bounds the in-flight receive buffers.
 - A request that cannot be preallocated never reaches the waiting queue, so its KV stays on V and no D memory is committed ahead of demand.
-- Account for the final KV pages and any in-flight transfer budget. Pulling must not exhaust resources needed by running requests or create a capacity deadlock.
+- Account for the staging buffer, the final KV pages and the in-flight transfer budget. Pulling must not exhaust resources needed by running requests or create a capacity deadlock.
 - Arrival is not readiness: mark RECEIVED, not RUNNABLE. Native terminal state, identity checks, GPU visibility and required TP agreement are all required before the request becomes runnable.
-- Direct-to-final-page delivery is the decided bootstrap path; a published address does not establish safe installation or runnable status.
+- Staging-and-unpack is the decided bootstrap path; a published address does not establish safe installation or runnable status.
 - Bootstrap is performed exactly once. Complete initial clock initialization before admission; do not fetch round 0 again when the request joins. Thereafter count only committed D tokens.
 - Cancellation/timeouts must close further submissions and safely drain native WRITEs. Removing a queue entry does not authorize immediate descriptor reuse.
 - Full bootstrap requires capacity for complete Prompt KV on D. Do not claim support for prompts that D can never hold in full.
@@ -324,7 +326,10 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 Most recent run before this handoff was created:
 
 - 2026-09-19, Linux/WSL venv against the Windows checkout, seventeen PVD CPU test files:
-  **510 passed in 5.4s** (445 plus 65 draft/probe interface tests). Two mutations confirmed
+  **516 passed in 5.8s** (510 plus 6 staging-backpressure tests). Three mutations confirmed
+  those bite: ignoring staging headroom failed 3, not charging headroom down within a pass
+  failed 2, and reporting a deferral as a failure failed 2.
+- 2026-09-19, intermediate: **510 passed in 5.4s** (445 plus 65 draft/probe interface tests). Two mutations confirmed
   those bite: dropping the vector-space check failed 1, and removing the RNG fork failed 2.
   A third mutation (aliasing the snapshot token sequence) did **not** fail anything, because
   `CommittedPrefix` already rejects a non-tuple; the copy test is redundant with that check.
@@ -411,7 +416,7 @@ These are required semantics, not existing APIs or mandatory final names:
 - **Probe input:** predicted tokens, associated committed prefix, target-model identity, and layer/head/position selection.
 - **Query:** explicitly identified vector space, position semantics, version, and valid length.
 - **Prefetch request:** Entry, round, target installation boundary, query/index identity, output budget, and per-D-rank grants.
-- **Initial pull authorization:** Entry/request incarnation, initial Delivery identity, authorized per-rank final-page regions, capacity, and validity/cancellation state. The authorization is published only once the request has entered the final waiting queue and its pages are registered and pinned; WRITE submission requires validated layout and actual capacity.
+- **Initial pull authorization:** Entry/request incarnation, initial Delivery identity, authorized per-rank staging regions, capacity, and validity/cancellation state. The authorization is published only once the request has entered the final waiting queue and its pages are registered and pinned; WRITE submission requires validated layout and actual capacity.
 - **Selection:** original token/page IDs, layer/head ranges, layout, and actual byte count.
 - **Delivery:** request identity, state, write identity, and linkage to native completion evidence.
 
@@ -466,6 +471,7 @@ Test both stable batches and workloads with continuous new admissions. Also reco
 - Do not substitute KV across requests or automatically introduce cross-V-group search.
 - Do not claim arbitrary TP layouts or model architectures already work.
 - Do not write D-generated KV back to V by default.
+- Do not implement direct-to-final-page bootstrap delivery, or change the allocator to make it possible, without a new decision and a measurement.
 - Do not expand the task into a full Host/NVMe tiering product or replace the whole transport stack.
 - Do not silently replace CAGRA with another algorithm.
 - Do not remove existing MR, metadata-cache, fencing, or native-handle safeguards.
@@ -478,15 +484,16 @@ For these decisions, propose a design and its tradeoffs, ask the user where nece
 - Architecture-specific probe execution and how predicted positions produce queries for the next window.
 - Token-level versus page-level indexing and independent versus shared selection across layers/heads.
 - Bootstrap is already decided: waiting-queue-triggered complete-KV pull, D-initiated, V-written, direct into the preallocated final pages. Do not ask whether to adopt it again; design the not-runnable gating and fair admission among concurrently pulling requests explicitly.
-- **Direct-to-final-page bootstrap delivery needs a decision.** It is recorded as decided in
-  section 6, but the current KV pool makes it non-trivial: `unpack_full_prompt_kv` scatters a
-  contiguous packed buffer into per-layer K and V components at token indices derived from
-  page indices that the allocator does not guarantee to be contiguous. One RDMA WRITE lands in
-  one contiguous range, so writing straight into the final pages requires either contiguous
-  whole-prompt page allocation, or one WRITE per (component x contiguous page run), which
-  multiplies transfer slots and authorized regions and therefore the budget. The bootstrap
-  currently reuses the existing staging-and-unpack path. Choose contiguous allocation,
-  scatter-gather, or keeping staging before this is implemented.
+- **Direct-to-final-page bootstrap delivery is decided: keep staging (2026-09-19).**
+  `unpack_full_prompt_kv` scatters a contiguous packed buffer into per-layer K and V
+  components at token indices derived from page indices the allocator does not guarantee to
+  be contiguous, and one RDMA WRITE lands in one contiguous range. Writing straight into the
+  final pages would require either contiguous whole-prompt page allocation, which constrains
+  the allocator and fails under fragmentation, or one WRITE per (component x contiguous page
+  run), which multiplies transfer slots and authorized regions and so changes the budget
+  model. Neither is worth it now. Bootstrap uses the existing staging-and-unpack path, and
+  removing the staging hop is not a current implementation goal. Do not reopen this without
+  a measurement showing the extra copy matters.
 - Index-not-ready, prediction-deviation, and failure policies for subsequent periodic retrieval.
 - Mandatory initial/recent-token retention and retrieval capacity limits.
 - Formal output-quality acceptance thresholds.
