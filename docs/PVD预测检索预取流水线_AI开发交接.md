@@ -156,9 +156,27 @@ V 节点、V worker group、V rank/shard 不是同一概念。
    - `merge_selections` 必须显式指定策略（`per_layer`、`union`、`intersection`），其余一律拒绝。
      不同层的分数永远不互相排序，因为全局 Top-K 等于一个未声明的建模假设。
    - 并列时按更小的行号确定性排序，测试不依赖 kernel 顺序。
-9. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+9. `prompt_vectors.py`：从真实已存储 EntryShard 中提取 Prompt K。
+   - 输入是 `kv_packer` 打包出的字节缓冲区，加上经校验的存储 `KVLayoutSignature`
+     与 `KVShardManifest`，而不是已经提取好的张量。
+   - 只取 K，跳过 V 分量；按 `last_page_valid_tokens` 排除末页 padding，
+     不会用 prompt 中不存在的 token 构造向量。
+   - 层与 KV head 保持分离，不做任何 head 平均或拼接。输出按（全局层，全局 KV head）
+     分组，全局 head = `manifest.rank * kv_heads_per_rank + 本地下标`；
+     过滤器使用全局 id，请求对端 shard 的 head 会报错而非返回空结果。
+   - dtype、分量偏移、形状与 head 归属全部来自 layout 元数据，并与缓冲区实际大小交叉校验。
+   - **位置编码**：存储的 K 是 post-RoPE（模型在注意力层写入 k 之前完成旋转，
+     见 `models/llama.py`）。提取不做任何变换，因此不会二次旋转；
+     `require_compatible_query` 拒绝声明了不同编码的 Q。该值必须显式传入，绝不从元数据推断。
+   - `QueryHeadMapping` 定义 MHA/GQA/MQA 的 query-head → KV-head 分组，拒绝不整除的布局；
+     query head 数量作为参数传入，因为 `KVLayoutSignature` 并不携带它。
+   - 向量**自有副本**：绝不修改已存储 KV，索引也不借用 Entry 注册区内的内存。
+     可选 budget/owner 可对副本计费；V 目前不传。
+   - `Selection` 新增可选 `kv_head`，head 身份在选择与合并中得以保留；原有按层调用不受影响。
+   - 未接入 V 控制服务。
+10. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
-10. 完整目标和阶段记录文档。
+11. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -358,8 +376,16 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 21 个 PVD CPU 测试文件：
-  691 passed in 18.3s（633 加 58 条索引后端与选择测试）。五处变异验证有效：
+- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 22 个 PVD CPU 测试文件：
+  754 passed in 6.1s（691 加 63 条 Prompt K 提取测试，含一条从真实打包缓冲区经精确索引
+  回到原始 token/page 的往返测试）。六处变异验证有效：包含 padding token 失败 7 条；
+  连 V 分量一起提取失败 6 条；把本地 head 下标当作全局 head 失败 4 条；
+  接受不匹配的位置编码失败 1 条；对不整除的 GQA 布局取整而非拒绝失败 3 条；
+  借用存储而非拷贝失败 1 条。最后一条最初未导致失败，因为默认的 float16→float32
+  转换本身就会拷贝；补充了一条按存储 dtype 提取的测试，那才是会产生别名视图的情形。
+  **这些测试中的 query 是从提取向量里取出的合成行，只能证明映射与身份正确，
+  不能证明真实模型的检索质量。**
+- 2026-09-20 中间结果：21 个 PVD CPU 测试文件，691 passed in 18.3s（633 加 58 条索引后端与选择测试）。五处变异验证有效：
   允许未命名的合并策略失败 5 条；并列排序不稳定失败 9 条；跳过映射覆盖检查失败 1 条；
   跨不同 id 映射合并失败 1 条；别名化调用方向量失败 1 条。最后一条最初未导致失败，
   因为原本的别名测试仍会选出同一个赢家；已改为断言存储下来的分数。

@@ -168,16 +168,40 @@ Route source and destination data by layer, KV head, and token/page ownership, n
      refuses anything else. Scores from different layers are never ranked against each
      other, because a global Top-K would be a silent modelling claim.
    - Ties break deterministically on the lower row, so tests do not depend on kernel order.
-9. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+9. `prompt_vectors.py`: Prompt K extraction from the real stored EntryShard.
+   - Input is `kv_packer`'s packed byte buffer plus the validated storage
+     `KVLayoutSignature` and `KVShardManifest` -- not a pre-extracted tensor.
+   - K only. The V components are skipped, and padding in the final page is excluded
+     using `last_page_valid_tokens`, so no vector comes from a token the prompt lacks.
+   - Layers and KV heads stay separate; nothing averages or concatenates heads. Output is
+     one vector set per (global layer, global KV head), where the global head is
+     `manifest.rank * kv_heads_per_rank + local`. Filters take global ids and reject a
+     peer shard's head rather than returning nothing.
+   - dtype, component offsets, shapes and head ownership are all read from the layout
+     metadata and cross-checked against the buffer's actual size.
+   - **Positional encoding**: stored K is post-RoPE (models rotate before the attention
+     layer writes k; see `models/llama.py`). Extraction applies no transformation, so
+     nothing is rotated twice, and `require_compatible_query` refuses a Q declaring a
+     different encoding. The value is an explicit input, never inferred from metadata.
+   - `QueryHeadMapping` defines the query-head -> KV-head grouping for MHA, GQA and MQA
+     and rejects non-divisible layouts. It takes the query-head count as a parameter,
+     because `KVLayoutSignature` does not carry it.
+   - Vectors **own a copy**: stored KV is never mutated, and the index never borrows
+     memory inside the Entry's registered region. An optional budget/owner charges the
+     copy; V passes none yet.
+   - `Selection` gained an optional `kv_head`, so head identity survives selection and
+     merging. Existing per-layer callers are unchanged.
+   - Not wired into the V control server.
+10. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
-10. Design and implementation-status documents.
+11. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
 - Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
-- A **CAGRA backend and real vector extraction**. The lifecycle state machine, the backend contract, an exact CPU reference, logical selection and the merge policy all exist (see 5.2), so CAGRA is a swap rather than a rewrite. But nothing calls cuVS, nothing builds retrieval vectors out of stored Prompt KV, and the V control server still does not own an `IndexGate` or answer a real retrieval request.
+- A **CAGRA backend and V serving integration**. The lifecycle state machine, the backend contract, an exact CPU reference, logical selection, the merge policy and Prompt K extraction all exist (see 5.2), so CAGRA is a swap rather than a rewrite. But nothing calls cuVS, and the V control server still does not own an `IndexGate`, build an index from a stored Entry, or answer a real retrieval request. Page-level representative vectors are deliberately not implemented.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
 - Hardware validation and performance measurement of the implemented asynchronous initial pull (see 5.2). Network/ACK waits yield to the scheduler, but TP coordination and GPU installation still cost time.
@@ -368,8 +392,18 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-one PVD CPU test files:
-  **691 passed in 18.3s** (633 plus 58 index-backend and selection tests). Five mutations
+- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-two PVD CPU test files:
+  **754 passed in 6.1s** (691 plus 63 Prompt K extraction tests, including a round trip
+  from the real packed buffer through the exact index back to the original token and page).
+  Six mutations confirmed those bite: including padded tokens failed 7, extracting the V
+  components failed 6, using the local head index as the global one failed 4, accepting a
+  mismatched positional encoding failed 1, rounding a non-divisible GQA layout failed 3,
+  and borrowing storage instead of copying failed 1. That last one initially failed
+  nothing, because the default float16 -> float32 conversion already copies; a test that
+  extracts at the stored dtype was added, which is the case where a view would alias.
+  **Queries in these tests are synthetic rows taken from the extracted vectors. They
+  establish mapping and identity correctness, not real-model retrieval quality.**
+- 2026-09-20, intermediate: twenty-one PVD CPU test files, **691 passed in 18.3s** (633 plus 58 index-backend and selection tests). Five mutations
   confirmed those bite: allowing an unnamed merge policy failed 5, unstable tie ordering
   failed 9, skipping the mapping-covers-index check failed 1, merging across different id
   mappings failed 1, and aliasing the caller's vectors failed 1. That last one initially
@@ -578,6 +612,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/runtime.py` | Upload and transfer lifecycle. |
 | `python/sglang/srt/disaggregation/pvd/coordinator.py` | Entry/Delivery coordination. |
 | `python/sglang/srt/disaggregation/pvd/vector_store.py` | V storage and delivery. |
+| `python/sglang/srt/disaggregation/pvd/prompt_vectors.py` | Prompt K extraction from a stored shard: K only, padding excluded, per layer and global KV head, post-RoPE, owns its copy. |
 | `python/sglang/srt/disaggregation/pvd/index_search.py` | Backend seam, exact CPU reference, logical selection, explicit merge policy. No cuVS. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |

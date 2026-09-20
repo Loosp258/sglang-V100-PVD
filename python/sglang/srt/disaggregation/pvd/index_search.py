@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Dict, Mapping, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import torch
 
@@ -89,7 +89,12 @@ class IdMapping:
 
 @dataclass(frozen=True)
 class Selection:
-    """What a search chose, in Prompt terms, for one layer."""
+    """What a search chose, in Prompt terms, for one layer and KV head.
+
+    ``kv_head`` is optional only so callers that index a whole layer keep
+    working; when it is set it stays attached through merging, so head
+    identity is never silently collapsed into a per-layer result.
+    """
 
     layer: int
     token_ids: Tuple[int, ...]
@@ -97,6 +102,12 @@ class Selection:
     scores: Tuple[float, ...]
     metric: str
     id_mapping_version: str
+    kv_head: Optional[int] = None
+
+    @property
+    def key(self):
+        """What identifies this selection: the head too, when there is one."""
+        return self.layer if self.kv_head is None else (self.layer, self.kv_head)
 
 
 @dataclass(frozen=True)
@@ -195,10 +206,15 @@ def select(
     layer: int,
     mapping: IdMapping,
     top_k: int,
+    kv_head: Optional[int] = None,
 ) -> Selection:
     """Search one layer and return the choice in Prompt terms, not addresses."""
     if isinstance(layer, bool) or not isinstance(layer, int) or layer < 0:
         raise IndexSearchError("layer must be a non-negative integer")
+    if kv_head is not None and (
+        isinstance(kv_head, bool) or not isinstance(kv_head, int) or kv_head < 0
+    ):
+        raise IndexSearchError("kv_head must be a non-negative integer")
     if not isinstance(mapping, IdMapping):
         raise IndexSearchError("an id mapping is required to return token ids")
     if len(mapping) != index.count:
@@ -217,6 +233,7 @@ def select(
     token_ids = tuple(token for token, _ in ordered)
     return Selection(
         layer=layer,
+        kv_head=kv_head,
         token_ids=token_ids,
         page_ids=tuple(sorted({token // mapping.page_size for token in token_ids})),
         scores=tuple(score for _, score in ordered),
@@ -230,8 +247,11 @@ def merge_selections(
 ) -> Mapping[int, Tuple[int, ...]]:
     """Combine per-layer selections under an explicitly named policy.
 
-    ``per_layer`` keeps each layer's own choice, which is the only policy that
-    assumes nothing. ``union`` and ``intersection`` combine the token sets but
+    Results are keyed by ``Selection.key``: the layer, or ``(layer, kv_head)``
+    when the selections carry head identity.
+
+    ``per_layer`` keeps each selection's own choice, which is the only policy
+    that assumes nothing. ``union`` and ``intersection`` combine the token sets but
     never the scores: scores from different layers are not comparable, and
     ranking across them would be a silent modelling claim.
     """
@@ -245,12 +265,12 @@ def merge_selections(
     versions = {s.id_mapping_version for s in selections}
     if len(versions) != 1:
         raise IndexSearchError("selections come from different id mappings")
-    layers = [s.layer for s in selections]
-    if len(set(layers)) != len(layers):
-        raise IndexSearchError("duplicate layer in the selections to merge")
+    keys = [s.key for s in selections]
+    if len(set(keys)) != len(keys):
+        raise IndexSearchError("duplicate layer or KV head in the selections to merge")
 
     if policy == "per_layer":
-        return {s.layer: s.token_ids for s in selections}
+        return {s.key: s.token_ids for s in selections}
     sets = [set(s.token_ids) for s in selections]
     combined = set.union(*sets) if policy == "union" else set.intersection(*sets)
-    return {layer: tuple(sorted(combined)) for layer in layers}
+    return {key: tuple(sorted(combined)) for key in keys}
