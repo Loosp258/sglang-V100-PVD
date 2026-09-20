@@ -171,7 +171,10 @@ V 节点、V worker group、V rank/shard 不是同一概念。
    - `QueryHeadMapping` 定义 MHA/GQA/MQA 的 query-head → KV-head 分组，拒绝不整除的布局；
      query head 数量作为参数传入，因为 `KVLayoutSignature` 并不携带它。
    - 向量**自有副本**：绝不修改已存储 KV，索引也不借用 Entry 注册区内的内存。
-     可选 budget/owner 可对副本计费；V 目前不传。
+     传入 budget 时对副本计费，服务路径现在一定会传（见第 11 条）。
+   - 这份副本同时也是**设备迁移**发生的地方。`device=` 指定副本落在哪里，
+     默认跟随已存储分片所在设备；manager 传入其 backend 声明的设备。
+     绝不为了迁就检索后端而移动权威 KV 池。
    - `Selection` 新增可选 `kv_head`，head 身份在选择与合并中得以保留；原有按层调用不受影响。
    - 未接入 V 控制服务。
 10. `prompt_index.py` 与 `VectorKVStore` 接线：第一个真正驱动 `IndexGate` 的实现。
@@ -186,8 +189,25 @@ V 节点、V worker group、V rank/shard 不是同一概念。
       重试在 gate 的上限处停止。
     - `_free_allocation` 在页面归还分配器之前关闭 gate，只丢弃索引自己的副本；
       页面、注册与 MR 仍由原有所有者释放，未作改动。
-    - `PromptIndexManager.search` 经过 `IndexGate.authorize_search` 与
-      `require_compatible_query`，返回带层与 KV head 的逻辑 `Selection`。
+    - `PromptIndexManager.search` 接受 **`SearchRequestIdentity`**：调用方自己声明
+      vector space、位置编码语义、Entry、层与 KV head，并可选地钉住 index 版本与
+      id 映射版本。所有比较都针对这份身份，**缺失的字段绝不从索引自身配置补齐**。
+      返回 `SearchResult`，其 `validated` 元组精确列出实际做过哪些比较，
+      未钉版本的检索会如实显示为未钉，而不是笼统地称为"已校验"。
+      所有身份检查都在调用后端之前完成。
+    - **每一份保留的副本都在其存在之前被计费。** 提取的副本与后端自身的存储分别在
+      两个按尝试隔离的 owner 下预留，检索的有界临时空间在第三个 owner 下按需预留并
+      在结束时退还。`IndexBackend` 新增 `device`、`build_footprint(rows, dim)` 与
+      `search_footprint(rows, dim, num_queries, top_k)`，让所有者在分配之前预留，
+      而不是事后才发现开销。
+    - 按尝试隔离的 owner 意味着：在 Entry 关闭并重建之后才完成的旧构建，
+      只会退还它自己的额度，绝不会退还新尝试的额度。
+    - 只要仍有检索持有这些张量，就不退还额度：`close()` 立即摘除记录，
+      由最后一个离开的检索来真正回收。在 close 处退还，会把仍在被读取的内存报告为空闲。
+    - **容量不足是背压，不是失败。** 构建过程中的 `TransferCapacityError` 会调用新增的
+      `IndexGate.abandon_build`，把 gate 恢复到构建前状态并归还该次尝试，
+      因此短暂的压力不会消耗掉一个 Entry 仅有的几次永久尝试。
+      出于同样的理由，`progress_prompt_indexes()` 把 `deferred` 与 `failed` 分开统计。
     - 关闭时与构建失败时都会退还向量副本的预算；在 Entry 已关闭之后才完成的构建会被丢弃
       而不是安装。注册表加锁，因为 `close()` 可能由 guard 释放回调在另一线程触发。
     - 交付路径完全不查询这些状态，因此没有引入 INDEX_READY 依赖。
@@ -195,20 +215,49 @@ V 节点、V worker group、V rank/shard 不是同一概念。
     此时 V 不构建任何索引，行为与之前完全一致）。
     - `pvd/server.py`：`_build_prompt_index(args)` 返回 manager 或 `None`；
       reaper 循环每个间隔驱动一次 `progress_prompt_indexes()`，单 rank 与 group 启动器都覆盖。
+    - **`--prompt-index-budget-bytes` 与 `--prompt-index-vector-space` 必须同时给出**，
+      不猜任何默认值。它创建的 `TransferBudget` 与 `--transfer-staging-budget-bytes`
+      是**两个独立对象**：索引副本绝不能侵占传输已经据以准入的余量。
+      只给 vector space 而不给预算的启动会被拒绝，而不是悄悄地不计费地服务。
     - shard 路由：`POST /internal/v1/indexes/progress`、`POST /internal/v1/indexes/search`、
       `GET /internal/v1/indexes`；未配置索引时前两者返回 `{"enabled": false}` 或拒绝。
-    - 检索返回逻辑 token/page id，并带层、KV head、度量与 id 映射版本，绝不返回地址。
+    - 检索返回逻辑 token/page id，并带层、KV head、度量、id 映射版本、index 版本
+      以及 `validated` 列表，绝不返回地址。
       请求有界：最多 64 条 query，`top_k` 不超过 512，query 各行长度必须一致。
+    - **请求自带身份。** `vector_space` 与 `positional_encoding` 是必填字段；
+      `expected_index_version` 与 `expected_id_mapping_version` 是可选的版本钉，
+      缺失就保持缺失，绝不由 shard 代填。来自另一个模型、形状恰好一致的 query
+      会被 400 拒绝。query 张量的构造与检索本身都在事件循环之外执行。
+    - **设备策略（2026-09-20 决定）。** `BruteForceIndexBackend` 按声明固定在 CPU：
+      在 V worker 上 GPU 持有权威 KV 池，而每个被索引 prompt 的精确 float32 镜像
+      会与之争抢正是池所需要的那部分显存；同时 query 以 JSON 到达，天然产生在主机侧。
+      后端显式地把两侧都放到它声明的设备上——dtype 转换不移动设备，
+      因此绝不从转换推断设备。设备驻留型后端（CAGRA）声明自己的设备，
+      同一套预留与放置机制随之生效。
     - 交付路由未作改动，也完全不查询索引。
 12. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
 13. 完整目标和阶段记录文档。
+14. 独立单 shard HTTP 检索客户端（`search_client.py`），包含调用者身份、版本钉、
+    单次请求关联、回复大小限制和逻辑选择校验。已用合成 query 测试真实 V shard
+    路由，但正式 D 服务尚未调用。最新修复、**917 passed / 6 skipped** 证据和
+    后续边界见[中英检索复核记录](PVD_Shard_Search_Review_CN_EN.md)；下方旧测试数字
+    保留为历史记录，不代表最新总数。
 
 ### 5.3 尚未实现
 
 - draft provider 的真实权重运行与服务接线：已有可配置 HF provider，但未接入服务或验证真实模型。
 - 目标模型 probe、预测前缀重对齐、Q 捕获。
 - CAGRA 服务端索引生命周期和真实请求搜索。
+- **D 侧真实 query。** 独立单 shard 客户端已在合成 query 测试中调用检索路由，
+  但正式 D 服务尚无真实 probe 执行或客户端接线。调用者必须提供
+  `SearchRequestIdentity` 和可信 `SearchScope`，不能从 V 回复反推身份与边界。
+- **检索路径的任何 GPU 执行。** 设备策略已决定并已强制执行，CPU 测试用一个声明了
+  非 CPU 设备的后端覆盖了放置链路，但从未从 CUDA 池构建过索引，也从未在真实硬件上
+  跨设备做过 query。相关 CUDA 测试在每一次纯 CPU 运行中都会 skip。
+- **索引预算该设多大，没有任何测量依据。** `--prompt-index-budget-bytes` 已强制要求，
+  但尚无针对真实模型的实测数值，运营方目前没有定量依据。预算过小时的行为是背压，
+  正确但未在真实负载上验证。
 - 稀疏 KV 的服务端选择、打包、D 安装及 attention。
 - 实际 active/next GPU 缓冲、预取 Scheduler 接入。
 - 已实现的异步首轮拉取尚待硬件验证和性能测量：网络及 ACK 等待会让出调度循环，TP 协调和 GPU 安装仍有开销。
@@ -403,6 +452,29 @@ python scripts/pvd/check_cagra.py --mode smoke
 截至本交接创建前最近一轮：
 
 - 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 23 个 PVD CPU 测试文件：
+  **837 passed, 3 skipped in 7.4s**（799 加 38 条回归测试，对应下述三个集成缺陷，
+  每一个都先复现再修复）。3 条 skip 是仅限 CUDA 的设备测试，
+  在纯 CPU 机器上**不构成任何证据**。十处变异全部被捕获：
+  - *索引内存计费*。复现：`_build_prompt_index()` 返回的 manager `budget is None`，
+    服务路径上的索引分配完全不计费；即使传入预算，也只对提取的副本计费，
+    而 `BruteForceIndexBackend.build()` 的克隆保留了等量的第二份副本
+    （测试分片上为 `提取=1536 后端=1536 实际保留=3072 已计费=1536 未计费=1536`）。
+    修复过程中又暴露第三个问题：五轮容量吃紧就烧掉了一个 Entry 全部三次永久构建尝试，
+    因为短暂压力而永久失去索引。变异：去掉启动器预算失败 2 条；后端副本不计费失败 6 条；
+    把容量拒绝计为失败失败 8 条；检索仍持有张量时就退还失败 1 条；
+    多次尝试共用同一个预算 owner 失败 1 条。
+  - *调用方 query 身份*。复现：`search()` 把 `self.vector_space` 和记录自身的映射版本
+    传给 `authorize_search`，因此一个用另一模型 K 构造、形状合法的 query 会被应答而非拒绝。
+    变异：改回用 manager 自己的 vector space 授权失败 3 条；
+    版本钉由索引自身补齐失败 3 条；HTTP 路由代填缺失的 `vector_space` 失败 1 条。
+  - *设备一致性*。通过审阅与放置复现，而非通过崩溃：除非 `--allow-cpu-for-tests`，
+    池创建在 `cuda:{local_rank}`；提取与后端都用 `.to(torch.float32)` 拷贝，而它保持设备不变；
+    HTTP 路由始终构造 CPU query——因此在 GPU worker 上索引在 CUDA 而 query 在 CPU。
+    变异：从 dtype 转换推断设备失败 1 条；让提取保持池的设备失败 1 条；
+    两者能被捕获，仅仅因为测试使用了一个声明非 CPU 设备的后端。
+  **CUDA 设备不匹配这一失败本身从未被执行过：没有可用 GPU。**
+  在 CPU 上得到验证的是导致它的放置链路，以及防止它的策略。
+- 2026-09-20，该次工作之前：23 个 PVD CPU 测试文件，
   799 passed in 7.2s（786 加 13 条 V 服务接线测试，走真实 aiohttp shard 路由与启动器）。
   五处变异验证有效：去掉 query 数量上限失败 1 条；去掉 `top_k` 上限失败 1 条；
   未配置索引仍提供检索失败 1 条；启动时无条件构建索引失败 1 条；接受长度不一致的 query 失败 1 条。

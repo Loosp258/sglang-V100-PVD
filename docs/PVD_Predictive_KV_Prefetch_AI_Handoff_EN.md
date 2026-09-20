@@ -187,8 +187,11 @@ Route source and destination data by layer, KV head, and token/page ownership, n
      and rejects non-divisible layouts. It takes the query-head count as a parameter,
      because `KVLayoutSignature` does not carry it.
    - Vectors **own a copy**: stored KV is never mutated, and the index never borrows
-     memory inside the Entry's registered region. An optional budget/owner charges the
-     copy; V passes none yet.
+     memory inside the Entry's registered region. The copy's bytes are charged to a
+     budget when one is supplied, and the serving path now supplies one (see 11).
+   - The copy is also where the **device transition** happens. `device=` names where it
+     lands, defaulting to the stored shard's own device; the manager passes its backend's
+     declared device. The authoritative KV pool is never moved to suit a backend.
    - `Selection` gained an optional `kv_head`, so head identity survives selection and
      merging. Existing per-layer callers are unchanged.
    - Not wired into the V control server.
@@ -206,9 +209,29 @@ Route source and destination data by layer, KV head, and token/page ownership, n
     - `_free_allocation` closes the gate before the pages return to the allocator. That
       drops only the index's own copies; pages, registration and MR are released by their
       existing owners, unchanged.
-    - `PromptIndexManager.search` goes through `IndexGate.authorize_search` and the
-      stored vectors' `require_compatible_query`, then returns a logical `Selection`
-      carrying layer and KV head.
+    - `PromptIndexManager.search` takes a **`SearchRequestIdentity`**: the caller states
+      its own vector space, positional-encoding semantics, Entry, layer and KV head, and
+      optionally pins the index and id-mapping versions. Every comparison is against that
+      identity, and nothing missing from it is defaulted from the index's own
+      configuration. The result is a `SearchResult` whose `validated` tuple names exactly
+      which comparisons were made, so an unpinned search is reported as unpinned rather
+      than as "validated". All identity checks precede any backend call.
+    - **Every retained copy is charged, before it exists.** Extraction's copy and the
+      backend's own storage are reserved under two per-attempt owners, and a search's
+      bounded scratch under a third, for its duration. `IndexBackend` now declares
+      `device`, `build_footprint(rows, dim)` and
+      `search_footprint(rows, dim, num_queries, top_k)` so the owner reserves before
+      allocating rather than discovering the cost afterwards.
+    - Per-attempt owners mean a build finishing after its Entry was closed and rebuilt
+      refunds its own charge and never the newer attempt's.
+    - Refunds are withheld while a search still holds the tensors: `close()` detaches the
+      record at once, and the last search to leave retires it. Refunding at close would
+      report memory as free while it is still being read.
+    - **No capacity is backpressure, not failure.** A `TransferCapacityError` during a
+      build calls the new `IndexGate.abandon_build`, which returns the gate to its
+      pre-build state and gives the attempt back, so transient pressure cannot spend an
+      Entry's few permanent attempts. `progress_prompt_indexes()` reports `deferred`
+      separately from `failed` for the same reason.
     - Vector copies are refunded on close and on a failed build, and a build that lands
       after its Entry was closed is discarded rather than installed. The registry is
       locked, because `close()` can run from a guard-release callback on another thread.
@@ -218,24 +241,52 @@ Route source and destination data by layer, KV head, and token/page ownership, n
     - `pvd/server.py`: `_build_prompt_index(args)` returns a manager or `None`; the reaper
       loop drives `progress_prompt_indexes()` each interval, for both the per-rank and the
       group launcher.
+    - **`--prompt-index-budget-bytes` is required with `--prompt-index-vector-space`** and
+      has no guessed default. It creates a `TransferBudget` that is a **separate object**
+      from `--transfer-staging-budget-bytes`: index copies must never consume headroom a
+      transfer was already admitted against. Launching with a vector space and no budget
+      is refused rather than silently serving uncharged.
     - Shard routes: `POST /internal/v1/indexes/progress`, `POST /internal/v1/indexes/search`,
       `GET /internal/v1/indexes`. The first two report `{"enabled": false}` or refuse when
       no index is configured.
-    - Search returns logical token and page ids with layer, KV head, metric and id-mapping
-      version -- never addresses. Requests are bounded: at most 64 queries, `top_k` at most
-      512, and equal-length query rows.
+    - Search returns logical token and page ids with layer, KV head, metric, id-mapping
+      version, index version and the `validated` list -- never addresses. Requests are
+      bounded: at most 64 queries, `top_k` at most 512, and equal-length query rows.
+    - **The request carries its own identity.** `vector_space` and `positional_encoding`
+      are required fields; `expected_index_version` and `expected_id_mapping_version` are
+      optional pins, and an absent pin stays absent rather than being filled in from the
+      shard. A same-shaped query from another model is refused with 400. Query-tensor
+      construction and the search both run off the event loop.
+    - **Device policy (decided 2026-09-20).** `BruteForceIndexBackend` is CPU by
+      declaration: on a V worker the GPU holds the authoritative KV pool, and an exact
+      float32 mirror of every indexed prompt would compete for exactly that memory, while
+      queries arrive as JSON and are born on the host. The backend places both sides on
+      its declared device explicitly -- a dtype cast moves nothing, so device is never
+      inferred from one. A device-resident backend (CAGRA) declares its own device and
+      the same reservation and placement machinery follows it.
     - Delivery routes are untouched and never consult the index.
 12. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
 13. Design and implementation-status documents.
+14. Standalone single-shard HTTP search client (`search_client.py`), with caller identity,
+    version pins, per-call correlation, bounded replies and logical-selection validation.
+    Tested against the V shard route using synthetic queries; not called by production D.
+    Latest fixes, **917 passed / 6 skipped** evidence and continuation boundaries are in
+    [the bilingual search review](PVD_Shard_Search_Review_CN_EN.md). This supersedes the
+    earlier test totals below, which remain historical evidence.
 
 ### 5.3 Not yet implemented
 
 - Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
 - A **CAGRA backend**. Everything above it now exists and runs (see 5.2): a stored Entry is indexed through the exact CPU backend and searched under the gate's identity checks. Nothing calls cuVS, and no recall comparison against the exact reference has been made.
-- **A real query from D.** V can now build and answer retrieval over HTTP (see 5.2), but nothing on the D side produces a query: there is no probe execution, and no D code path calls the retrieval route. Sparse selection is not consumed by any transfer or attention.
+- **A real query from D.** A standalone single-shard client now calls the retrieval route
+  in synthetic-query tests, but no production D path produces a probe query or invokes
+  it. Sparse selection is not consumed by transfer or attention. The caller must supply
+  `SearchRequestIdentity` and trusted `SearchScope`; they are not inferred from V replies.
+- **Any GPU execution of the retrieval path.** The device policy is decided and enforced (see 5.2 item 11), and the CPU suite covers the placement chain using a declared non-CPU backend, but no index has ever been built from a CUDA pool and no query has ever crossed devices on real hardware. The two CUDA tests in `test_pvd_index_search.py` and the one in `test_pvd_prompt_index.py` skip on every CPU-only run.
+- **Any measurement of what the index budget should be.** `--prompt-index-budget-bytes` is required and enforced, but no figure has been measured for a real model, so the operator has nothing to size it from yet. The manager's behaviour when it is too small is backpressure, which is correct but untested against a real workload.
 - Page-level representative vectors, deliberately.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
@@ -387,6 +438,8 @@ Preserve existing MR/metadata-consistency protections and native-handle lifetime
 
 Budget for models, draft/probe temporary KV, V index build/search scratch, active/next, pack/staging, generated KV, and retained draining resources.
 
+The V index side of that is now implemented and separately budgeted: see 5.2 item 11. Two rules there generalise to the rest of this list. First, a backend declares what a build retains and what a search temporarily needs, and the owner reserves before allocating -- a refusal that arrives after the allocation is not a budget. Second, exhausting capacity is backpressure and must not consume a bounded retry allowance; conflating the two turns a busy minute into a permanent loss of function.
+
 A bounded Prompt working set does not bound generated KV indefinitely. Preserve normal admission and capacity limits.
 
 ## 10. Layered validation: missing hardware must not block generic development
@@ -427,8 +480,38 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-three PVD CPU test files:
-  **799 passed in 7.2s** (786 plus 13 V serving-integration tests over real aiohttp shard
+- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-three PVD CPU test
+  files: **837 passed, 3 skipped in 7.4s** (799 plus 38 regression tests for the three
+  integration defects below, each reproduced before being fixed). The 3 skips are the
+  CUDA-only device tests; they are **not evidence of anything** on a CPU-only box.
+  All ten mutations bite:
+  - *Index memory accounting.* Reproduced: `_build_prompt_index()` returned a manager with
+    `budget is None`, so serving-path index allocations were entirely uncharged; and even
+    with a budget only extraction's copy was charged while
+    `BruteForceIndexBackend.build()`'s clone retained an equal second copy
+    (`extraction=1536 backend=1536 retained=3072 charged=1536 uncharged=1536` on the test
+    shard). A third finding surfaced while fixing it: five squeezed rounds burned all
+    three of an Entry's permanent build attempts, permanently un-indexing it over
+    transient pressure. Mutations: dropping the launcher budget failed 2, leaving the
+    backend copy uncharged failed 6, counting a capacity refusal as a failure failed 8,
+    refunding while a search still holds the tensors failed 1, and sharing one budget
+    owner across attempts failed 1.
+  - *Caller query identity.* Reproduced: `search()` passed `self.vector_space` and the
+    record's own mapping version to `authorize_search`, so a query built from another
+    model's K with a valid shape was answered rather than refused. Mutations:
+    authorizing with the manager's own space failed 3, defaulting the version pins from
+    the index failed 3, and letting the HTTP route fill in a missing `vector_space`
+    failed 1.
+  - *Device consistency.* Reproduced by inspection and placement, not by a crash: the
+    pool is created on `cuda:{local_rank}` unless `--allow-cpu-for-tests`, extraction and
+    the backend both copied with `.to(torch.float32)`, which is device-preserving, and
+    the HTTP route always built a CPU query -- so on a GPU worker the index would be CUDA
+    and the query CPU. Mutations: inferring the device from the cast failed 1 and letting
+    extraction keep the pool's device failed 1; both are only caught because the tests
+    use a backend declaring a non-CPU device.
+  **The CUDA mismatch failure itself was never executed: no GPU was available.** What is
+  verified on CPU is the placement chain that causes it and the policy that prevents it.
+- 2026-09-20, before that work: twenty-three PVD CPU test files, **799 passed in 7.2s** (786 plus 13 V serving-integration tests over real aiohttp shard
   routes and the launcher). Five mutations confirmed those bite: dropping the query-count
   bound failed 1, dropping the `top_k` bound failed 1, serving retrieval with no index
   configured failed 1, building an index unconditionally at startup failed 1, and
@@ -671,6 +754,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/prompt_index.py` | Per-Entry gates, vectors and search on a V rank; driven by `VectorKVStore.progress_prompt_indexes()`. Off unless a manager is supplied. |
 | `python/sglang/srt/disaggregation/pvd/prompt_vectors.py` | Prompt K extraction from a stored shard: K only, padding excluded, per layer and global KV head, post-RoPE, owns its copy. |
 | `python/sglang/srt/disaggregation/pvd/index_search.py` | Backend seam, exact CPU reference, logical selection, explicit merge policy. No cuVS. |
+| `python/sglang/srt/disaggregation/pvd/search_client.py` | Standalone bounded single-shard HTTP search client; synthetic-query tests only, not wired into Decode. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |
 | `python/sglang/srt/disaggregation/pvd/prediction.py` | Draft/probe interfaces, snapshot and RNG isolation, vector-space enforcement; fakes only, no model loading. |

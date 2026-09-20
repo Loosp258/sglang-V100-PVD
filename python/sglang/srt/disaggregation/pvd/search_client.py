@@ -1,0 +1,281 @@
+"""Bounded single-shard search client for future D-side probe integration.
+
+This returns logical selections only. It never fetches KV, updates a refresh
+clock, selects a V group, or mutates committed Decode state. The caller must
+supply the selected shard endpoint and its trusted Prompt layout explicitly.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+import aiohttp
+from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
+
+SEARCH_PROTOCOL = "pvd.search.v1"
+
+
+class ShardSearchError(RuntimeError):
+    """No result may be installed after this error."""
+
+
+class SearchReplyError(ShardSearchError):
+    """Malformed, stale or mismatched remote reply; do not retry blindly."""
+
+
+class SearchRefused(ShardSearchError):
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(f"V search refused ({status}, {code}): {message}")
+        self.status = status
+        self.code = code
+        # No hidden retries: the request's scheduler decides whether to wait.
+        self.retryable = code in ("index_not_ready", "index_capacity")
+
+
+class SearchTransportError(ShardSearchError):
+    pass
+
+
+def _positive(name, value):
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _finite_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+@dataclass(frozen=True)
+class SearchScope:
+    """Trusted request-local bounds, never inferred from a V reply."""
+
+    prompt_tokens: int
+    page_size: int
+    head_dim: int
+    metric: str
+
+    def __post_init__(self):
+        for field in ("prompt_tokens", "page_size", "head_dim"):
+            _positive(field, getattr(self, field))
+        if self.metric not in ("ip", "l2"):
+            raise ValueError("unsupported search metric")
+
+
+@dataclass(frozen=True)
+class ShardSearchResult:
+    identity: SearchRequestIdentity
+    index_version: str
+    id_mapping_version: str
+    token_ids: tuple[int, ...]
+    page_ids: tuple[int, ...]
+    scores: tuple[float, ...]
+    metric: str
+    validated: tuple[str, ...]
+
+
+class PVDShardSearchClient:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        session: aiohttp.ClientSession | None = None,
+        timeout_seconds: float = 30.0,
+        max_response_bytes: int = 2 * 1024 * 1024,
+    ):
+        if not isinstance(base_url, str) or not base_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("an explicit HTTP(S) V shard endpoint is required")
+        if not _finite_number(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be finite and positive")
+        self.base_url = base_url.rstrip("/")
+        self._session = session
+        self._owns_session = session is None
+        self._closed = False
+        self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self._max_response_bytes = _positive("max_response_bytes", max_response_bytes)
+
+    async def close(self):
+        self._closed = True
+        if self._session is not None and self._owns_session:
+            await self._session.close()
+        self._session = None
+
+    async def search(
+        self,
+        identity: SearchRequestIdentity,
+        *,
+        queries: Sequence[Sequence[float]],
+        top_k: int,
+        scope: SearchScope,
+    ) -> ShardSearchResult:
+        if self._closed:
+            raise ShardSearchError("search client is closed")
+        if not isinstance(identity, SearchRequestIdentity) or not isinstance(
+            scope, SearchScope
+        ):
+            raise TypeError("explicit search identity and scope are required")
+        _positive("top_k", top_k)
+        if top_k > min(512, scope.prompt_tokens):
+            raise ValueError("top_k exceeds the request or protocol limit")
+        if not isinstance(queries, (list, tuple)) or not 1 <= len(queries) <= 64:
+            raise ValueError("queries must contain 1..64 host vectors")
+        snapshot = []
+        for row in queries:
+            if not isinstance(row, (list, tuple)) or len(row) != scope.head_dim:
+                raise ValueError("query dimensions disagree with the trusted layout")
+            if any(
+                not _finite_number(v) or abs(v) > 3.4028234663852886e38 for v in row
+            ):
+                raise ValueError("query values must be finite numbers")
+            snapshot.append(list(row))
+        search_id = uuid.uuid4().hex
+        payload = {
+            "search_protocol": SEARCH_PROTOCOL,
+            "search_id": search_id,
+            "transfer_id": identity.entry_transfer_id,
+            "vector_space": identity.vector_space,
+            "positional_encoding": identity.positional_encoding,
+            "layer": identity.layer,
+            "kv_head": identity.kv_head,
+            "queries": snapshot,
+            "top_k": top_k,
+        }
+        for name in ("expected_index_version", "expected_id_mapping_version"):
+            value = getattr(identity, name)
+            if value is not None:
+                payload[name] = value
+        if self._session is None:
+            self._session = aiohttp.ClientSession(timeout=self._timeout)
+        try:
+            async with self._session.post(
+                f"{self.base_url}/internal/v1/indexes/search",
+                json=payload,
+                timeout=self._timeout,
+                allow_redirects=False,
+            ) as response:
+                chunks, size = [], 0
+                async for chunk in response.content.iter_chunked(65536):
+                    size += len(chunk)
+                    if size > self._max_response_bytes:
+                        raise SearchReplyError("V search reply exceeds byte limit")
+                    chunks.append(chunk)
+                try:
+                    body = json.loads(b"".join(chunks))
+                except (ValueError, UnicodeDecodeError) as exc:
+                    raise SearchReplyError("V search returned invalid JSON") from exc
+                if not isinstance(body, dict):
+                    raise SearchReplyError("V search reply must be an object")
+                if response.status != 200:
+                    code = body.get("code", "request_refused")
+                    # Only the defined status/code pairs permit a retry.
+                    if (response.status, code) not in (
+                        (400, "index_not_ready"),
+                        (507, "index_capacity"),
+                    ):
+                        code = "request_refused"
+                    raise SearchRefused(
+                        response.status, code, str(body.get("error", ""))
+                    )
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            raise SearchTransportError(
+                f"V shard search transport failed: {exc}"
+            ) from exc
+        return self._validate_reply(
+            body, identity, scope, search_id, len(snapshot), top_k
+        )
+
+    @staticmethod
+    def _validate_reply(body, identity, scope, search_id, query_count, top_k):
+        expected = {
+            "search_protocol": SEARCH_PROTOCOL,
+            "search_id": search_id,
+            "transfer_id": identity.entry_transfer_id,
+            "vector_space": identity.vector_space,
+            "positional_encoding": identity.positional_encoding,
+            "layer": identity.layer,
+            "kv_head": identity.kv_head,
+            "metric": scope.metric,
+        }
+        for field, value in expected.items():
+            if type(body.get(field)) is not type(value) or body[field] != value:
+                raise SearchReplyError(f"search reply {field} mismatch")
+        for field, pin in (
+            ("index_version", identity.expected_index_version),
+            ("id_mapping_version", identity.expected_id_mapping_version),
+        ):
+            value = body.get(field)
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or (pin is not None and value != pin)
+            ):
+                raise SearchReplyError(f"search reply {field} mismatch")
+        checked = body.get("validated")
+        required = {
+            "vector_space",
+            "entry_transfer_id",
+            "positional_encoding",
+            "layer",
+            "kv_head",
+        }
+        if identity.expected_index_version is not None:
+            required.add("index_version")
+        if identity.expected_id_mapping_version is not None:
+            required.add("id_mapping_version")
+        if (
+            not isinstance(checked, list)
+            or any(not isinstance(v, str) for v in checked)
+            or len(checked) != len(set(checked))
+            or set(checked) != required
+        ):
+            raise SearchReplyError("search reply validation claims mismatch")
+        tokens, pages, scores = (
+            body.get(k) for k in ("token_ids", "page_ids", "scores")
+        )
+        if (
+            not isinstance(tokens, list)
+            or not 1 <= len(tokens) <= min(scope.prompt_tokens, query_count * top_k)
+            or any(
+                type(t) is not int or not 0 <= t < scope.prompt_tokens for t in tokens
+            )
+            or len(tokens) != len(set(tokens))
+        ):
+            raise SearchReplyError(
+                "search reply token selection is out of bounds or duplicated"
+            )
+        if (
+            not isinstance(pages, list)
+            or any(type(p) is not int for p in pages)
+            or pages != sorted({t // scope.page_size for t in tokens})
+        ):
+            raise SearchReplyError("search reply page mapping mismatch")
+        if (
+            not isinstance(scores, list)
+            or len(scores) != len(tokens)
+            or any(not _finite_number(s) for s in scores)
+        ):
+            raise SearchReplyError("search reply scores are invalid")
+        if scope.metric == "l2" and any(s > 0 for s in scores):
+            raise SearchReplyError("L2 similarity must be non-positive")
+        return ShardSearchResult(
+            identity,
+            body["index_version"],
+            body["id_mapping_version"],
+            tuple(tokens),
+            tuple(pages),
+            tuple(scores),
+            scope.metric,
+            tuple(checked),
+        )

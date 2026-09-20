@@ -25,13 +25,20 @@ heads, and head identity is carried through into the selection. The
 query-head -> KV-head grouping lives in ``QueryHeadMapping`` and takes the
 query-head count explicitly, because ``KVLayoutSignature`` does not carry it.
 
-Ownership
----------
+Ownership and placement
+-----------------------
 Extracted vectors **own a copy**. The stored KV is never mutated, and the
 index must not borrow storage inside the Entry's registered region: that would
 tie index lifetime to the MR and put index reads in the path of its release.
-The copy's bytes may be charged through an optional budget; V does not pass
-one yet, which is a recorded gap.
+The copy's bytes are charged through a budget when the caller supplies one.
+
+The copy is also where the *device* transition happens, and it is the only
+one: ``device`` names where the copy lands, defaulting to wherever the stored
+shard already is. The authoritative KV pool is never moved to suit a
+retrieval backend -- a host-resident backend gets a host-resident copy of the
+slice it indexes, and the pool stays exactly where the transport registered
+it. ``.to(dtype)`` converts a dtype and moves nothing, so the device is
+always stated separately rather than inferred from a cast.
 """
 
 from __future__ import annotations
@@ -40,6 +47,7 @@ from dataclasses import dataclass
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 import torch
+
 from sglang.srt.disaggregation.pvd.index_search import IdMapping
 
 #: Stored K already carries rotation by key position.
@@ -195,6 +203,7 @@ def extract_prompt_k(
     id_mapping_version: str,
     positional_encoding: str,
     dtype: torch.dtype = torch.float32,
+    device: Optional[object] = None,
     layers: Optional[Sequence[int]] = None,
     kv_heads: Optional[Sequence[int]] = None,
     budget: Any = None,
@@ -210,6 +219,11 @@ def extract_prompt_k(
     ``layers`` and ``kv_heads`` filter by **global** id and are validated
     against what this shard actually owns, so asking for a peer shard's head
     is an error rather than an empty result.
+
+    ``device`` places the extracted copies. ``None`` keeps them wherever the
+    stored shard is, which is what a caller that only wants to read its own
+    KV wants; an index owner passes its backend's declared device so the
+    vectors are born where they will be used.
     """
     _require_text("entry_transfer_id", entry_transfer_id)
     _require_text("id_mapping_version", id_mapping_version)
@@ -273,6 +287,8 @@ def extract_prompt_k(
     wanted_layers = _resolve(layers, owned_layers, "layer")
     wanted_heads = _resolve(kv_heads, owned_heads, "KV head")
 
+    target_device = None if device is None else torch.device(device)
+
     if budget is not None:
         _require_text("budget_owner", budget_owner)
         element = torch.empty(0, dtype=dtype).element_size()
@@ -310,10 +326,15 @@ def extract_prompt_k(
                 .reshape(total_rows, heads_per_rank, head_dim)
             )
             for head in wanted_heads:
-                # clone(): the index owns its bytes and never aliases stored
-                # KV, so releasing the Entry's MR cannot pull data out from
-                # under a live index.
-                vectors = slab[:valid_tokens, head - head_base, :].to(dtype).clone()
+                # copy=True: the index owns its bytes and never aliases
+                # stored KV, so releasing the Entry's MR cannot pull data out
+                # from under a live index. Device and dtype are both named,
+                # because a cast alone would leave the copy on the pool's
+                # device and tie a host backend to GPU memory.
+                source = slab[:valid_tokens, head - head_base, :]
+                vectors = source.to(
+                    device=target_device or source.device, dtype=dtype, copy=True
+                )
                 results.append(
                     PromptKVectors(
                         entry_transfer_id=entry_transfer_id,

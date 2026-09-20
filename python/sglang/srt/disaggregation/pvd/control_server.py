@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
@@ -20,6 +21,7 @@ from sglang.srt.disaggregation.pvd.coordinator import (
     ShardClient,
     VectorCoordinator,
 )
+from sglang.srt.disaggregation.pvd.index_search import IndexNotReadyError
 from sglang.srt.disaggregation.pvd.protocol import (
     FirstTokenMetadata,
     KVEntryKey,
@@ -29,7 +31,10 @@ from sglang.srt.disaggregation.pvd.protocol import (
     WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.request_state import InvalidStateTransition
-from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    TransferCapacityError,
+    TransportState,
+)
 from sglang.srt.disaggregation.pvd.vector_store import (
     EntryConflictError,
     EntryNotFoundError,
@@ -46,6 +51,14 @@ def _json_error(message: str, status: int) -> web.Response:
 async def pvd_error_middleware(request: web.Request, handler):
     try:
         return await handler(request)
+    except IndexNotReadyError as exc:
+        return web.json_response(
+            {"error": str(exc), "code": "index_not_ready"}, status=400
+        )
+    except TransferCapacityError as exc:
+        return web.json_response(
+            {"error": str(exc), "code": "index_capacity"}, status=507
+        )
     except ProtocolValidationError as exc:
         return _json_error(str(exc), 400)
     except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -236,6 +249,35 @@ class HttpShardClient(ShardClient):
         self._session = None
 
 
+def _optional_text(data: Mapping[str, Any], field: str) -> Optional[str]:
+    """A version pin the caller may or may not have. Absent stays absent.
+
+    Returning ``None`` for a missing field is the whole point: the manager
+    reports which pins it compared, and a pin invented here would be compared
+    against the value it was invented from.
+    """
+    value = data.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string when supplied")
+    return value
+
+
+def _run_search(index, identity, queries, top_k: int):
+    """Build the query tensor and search, both off the HTTP event loop.
+
+    Materialising a 64 x head_dim tensor is small but not free, and the search
+    itself is not: neither belongs on the loop that is also answering
+    delivery polls.
+    """
+    return index.search(
+        identity,
+        queries=torch.tensor(queries, dtype=torch.float32),
+        top_k=top_k,
+    )
+
+
 def create_shard_app(
     store: VectorKVStore, *, preflight: Optional[Mapping[str, Any]] = None
 ) -> web.Application:
@@ -366,9 +408,34 @@ def create_shard_app(
         )
 
     async def search_index(request):
-        """Search one (layer, KV head) and return logical token/page ids."""
+        """Search one (layer, KV head) and return logical token/page ids.
+
+        The request carries its own identity: which model's vector space the
+        Q comes from and under which positional-encoding semantics, which
+        Entry, layer and KV head, and optionally the index and id-mapping
+        versions it was built against. None of that is filled in from this
+        rank's configuration -- a same-shaped query from another model must
+        be refused here, and it cannot be if the shard supplies the answer it
+        is about to check.
+        """
+        from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
+        from sglang.srt.disaggregation.pvd.search_client import SEARCH_PROTOCOL
+
         index = _require_prompt_index()
         data = await _payload(request)
+        search_id = data.get("search_id")
+        if "search_id" in data or "search_protocol" in data:
+            if data.get("search_protocol") != SEARCH_PROTOCOL:
+                raise ValueError("unsupported search protocol")
+            if not isinstance(search_id, str) or not 1 <= len(search_id) <= 128:
+                raise ValueError("search_id must be a non-empty bounded string")
+        for field in ("vector_space", "positional_encoding", "transfer_id"):
+            value = data.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"a search request must state its {field}; this rank will "
+                    "not supply the identity it is meant to verify"
+                )
         queries = data.get("queries")
         if not isinstance(queries, list) or not queries:
             raise ValueError("queries must be a non-empty list of vectors")
@@ -378,30 +445,54 @@ def create_shard_app(
             raise ValueError("queries must be equal-length lists of numbers")
         if len({len(row) for row in queries}) != 1:
             raise ValueError("queries must be equal-length lists of numbers")
+        if any(
+            type(value) not in (int, float)
+            or abs(value) > torch.finfo(torch.float32).max
+            or not math.isfinite(value)
+            for row in queries
+            for value in row
+        ):
+            raise ValueError("queries must contain finite float32 numbers")
         top_k = data.get("top_k", 1)
         if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
             raise ValueError("top_k must be a positive integer")
         if top_k > max_top_k:
             raise ValueError(f"top_k must not exceed {max_top_k}")
-        selection = await asyncio.to_thread(
-            index.search,
-            str(data["transfer_id"]),
-            layer=int(data["layer"]),
-            kv_head=int(data["kv_head"]),
-            queries=torch.tensor(queries, dtype=torch.float32),
-            top_k=top_k,
+        identity = SearchRequestIdentity(
+            vector_space=str(data["vector_space"]),
             positional_encoding=str(data["positional_encoding"]),
+            entry_transfer_id=str(data["transfer_id"]),
+            layer=data["layer"],
+            kv_head=data["kv_head"],
+            expected_index_version=_optional_text(data, "expected_index_version"),
+            expected_id_mapping_version=_optional_text(
+                data, "expected_id_mapping_version"
+            ),
         )
+        # The query is built on the host because that is where JSON numbers
+        # arrive; the backend places it on its own declared device. Both the
+        # tensor build and the search run off the event loop.
+        result = await asyncio.to_thread(_run_search, index, identity, queries, top_k)
+        selection = result.selection
         return web.json_response(
             {
+                "search_protocol": SEARCH_PROTOCOL,
+                "search_id": search_id,
                 "transfer_id": str(data["transfer_id"]),
+                "vector_space": identity.vector_space,
+                "positional_encoding": identity.positional_encoding,
                 "layer": selection.layer,
                 "kv_head": selection.kv_head,
                 "token_ids": list(selection.token_ids),
                 "page_ids": list(selection.page_ids),
                 "scores": [float(score) for score in selection.scores],
                 "metric": selection.metric,
-                "id_mapping_version": selection.id_mapping_version,
+                "id_mapping_version": result.id_mapping_version,
+                "index_version": result.index_version,
+                # Exactly which identity comparisons were made. A caller that
+                # pinned no version will not see one named here, rather than
+                # being told its request was "validated".
+                "validated": list(result.validated),
             }
         )
 

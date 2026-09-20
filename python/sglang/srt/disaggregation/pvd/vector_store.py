@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
@@ -179,15 +180,13 @@ class DeliveryShardRecord:
             "created_at": self.created_at,
             "deadline": self.deadline,
             "error": self.error,
-            "write_identity": self.authorization.identity.to_dict()
-            if self.authorization
-            else None,
+            "write_identity": (
+                self.authorization.identity.to_dict() if self.authorization else None
+            ),
             "transport_state": (
                 self.transfer_handle.transport_state.value
                 if self.transfer_handle
-                else self.local_terminal.value
-                if self.local_terminal
-                else "preparing"
+                else self.local_terminal.value if self.local_terminal else "preparing"
             ),
         }
 
@@ -1083,9 +1082,14 @@ class VectorKVStore:
 
         Never raises for a build failure. An Entry that cannot be indexed is
         still deliverable, and delivery does not consult this at all.
+
+        ``deferred`` is reported separately from ``failed``: a build the index
+        put off because it had no budget for the copies has not failed and
+        has spent none of the Entry's attempts, and reporting it as a failure
+        would make ordinary backpressure look like a broken worker.
         """
         if self.prompt_index is None:
-            return {"built": 0, "failed": 0, "skipped": 0}
+            return {"built": 0, "failed": 0, "deferred": 0, "skipped": 0}
         candidates = []
         skipped = 0
         with self._lock:
@@ -1104,9 +1108,11 @@ class VectorKVStore:
                     continue
                 offset = entry.allocation.start_page * self.page_bytes
                 packed = self.pool[offset : offset + entry.manifest.expected_bytes]
-                candidates.append((entry, owner, packed))
-        built = failed = 0
-        for entry, owner, packed in candidates:
+                gate = self.prompt_index.gate_for(transfer_id)
+                deferrals = 0 if gate is None else gate.deferrals
+                candidates.append((entry, owner, packed, deferrals))
+        built = failed = deferred = 0
+        for entry, owner, packed, deferrals_before in candidates:
             try:
                 ok = self.prompt_index.build(
                     entry.key.transfer_id,
@@ -1121,9 +1127,20 @@ class VectorKVStore:
                 )
             finally:
                 entry.allocation_guard.unpin(owner)
-            built += int(ok)
-            failed += int(not ok)
-        return {"built": built, "failed": failed, "skipped": skipped}
+            if ok:
+                built += 1
+                continue
+            gate = self.prompt_index.gate_for(entry.key.transfer_id)
+            if gate is not None and gate.deferrals > deferrals_before:
+                deferred += 1
+            else:
+                failed += 1
+        return {
+            "built": built,
+            "failed": failed,
+            "deferred": deferred,
+            "skipped": skipped,
+        }
 
     def _free_allocation(self, entry):
         if self.prompt_index is not None:

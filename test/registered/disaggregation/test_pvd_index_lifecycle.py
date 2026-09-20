@@ -163,7 +163,10 @@ def test_readiness_is_not_consumed_by_a_search():
     """One immutable Prompt index serves many Delivery rounds."""
     gate = ready_gate()
     for _ in range(5):
-        assert gate.authorize_search(SPACE, MAPPING).index_version == "idx-1"
+        descriptor, _ = gate.authorize_search(
+            SPACE, expected_id_mapping_version=MAPPING
+        )
+        assert descriptor.index_version == "idx-1"
     assert gate.searchable
 
 
@@ -260,22 +263,22 @@ def test_searching_a_not_ready_index_is_refused_with_its_state():
     gate = IndexGate(ENTRY)
     gate.mark_kv_readable()
     with pytest.raises(ValueError, match="absent"):
-        gate.authorize_search(SPACE, MAPPING)
+        gate.authorize_search(SPACE, expected_id_mapping_version=MAPPING)
     gate.begin_build()
     with pytest.raises(ValueError, match="building"):
-        gate.authorize_search(SPACE, MAPPING)
+        gate.authorize_search(SPACE, expected_id_mapping_version=MAPPING)
 
 
 def test_a_query_from_another_vector_space_is_refused():
     gate = ready_gate()
     with pytest.raises(ValueError, match="draft/model-1b"):
-        gate.authorize_search("draft/model-1b", MAPPING)
+        gate.authorize_search("draft/model-1b", expected_id_mapping_version=MAPPING)
 
 
 def test_a_stale_id_mapping_is_refused():
     gate = ready_gate()
     with pytest.raises(ValueError, match="id mapping has been rebuilt"):
-        gate.authorize_search(SPACE, "map-v2")
+        gate.authorize_search(SPACE, expected_id_mapping_version="map-v2")
 
 
 def test_index_version_and_mapping_version_are_separate_identities():
@@ -283,9 +286,16 @@ def test_index_version_and_mapping_version_are_separate_identities():
     gate.mark_kv_readable()
     gate.begin_build()
     gate.mark_ready(make_descriptor(index_version="idx-9", id_mapping_version="map-v7"))
-    descriptor = gate.authorize_search(SPACE, "map-v7")
+    descriptor, validated = gate.authorize_search(
+        SPACE, expected_id_mapping_version="map-v7"
+    )
     assert descriptor.index_version == "idx-9"
     assert descriptor.id_mapping_version == "map-v7"
+    # The caller pinned the mapping and not the index build, and the gate
+    # says so rather than reporting a blanket "validated".
+    assert validated == ("vector_space", "id_mapping_version")
+    with pytest.raises(ValueError, match="index has been rebuilt"):
+        gate.authorize_search(SPACE, expected_index_version="idx-8")
 
 
 # --------------------------------------------------------------------------
@@ -308,7 +318,7 @@ def test_closing_refuses_further_use_and_stops_delivery():
         lambda g: g.begin_build(),
         lambda g: g.mark_ready(make_descriptor()),
         lambda g: g.mark_failed("late"),
-        lambda g: g.authorize_search(SPACE, MAPPING),
+        lambda g: g.authorize_search(SPACE, expected_id_mapping_version=MAPPING),
     ],
 )
 def test_a_closed_gate_refuses_every_transition(call):

@@ -613,3 +613,23 @@ def test_two_shards_cover_every_global_head_without_overlap():
         assert not (heads & shard_heads)
         heads |= shard_heads
     assert heads == set(range(TOTAL_KV_HEADS))
+
+
+def test_extraction_places_its_copy_where_it_is_told():
+    """'meta' stands in for a device other than the pool's; see index_search."""
+    pool = FakePool()
+    layout = storage_layout(pool)
+    packed, shard, _ = pack_shard(pool, layout, rank=0, prompt_tokens=8)
+    kwargs = dict(
+        layout=layout,
+        manifest=shard,
+        entry_transfer_id="t",
+        id_mapping_version="map-1",
+        positional_encoding=ROPE_APPLIED,
+    )
+    here = extract_prompt_k(packed.tensor, **kwargs)
+    assert {v.vectors.device for v in here} == {packed.tensor.device}
+    there = extract_prompt_k(packed.tensor, device="meta", **kwargs)
+    assert {v.vectors.device for v in there} == {torch.device("meta")}
+    # The source buffer is untouched by either: extraction copies, never moves.
+    assert packed.tensor.device == here[0].vectors.device

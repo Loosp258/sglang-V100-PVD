@@ -17,6 +17,7 @@ import signal
 from typing import List, Sequence
 
 from aiohttp import web
+
 from sglang.srt.disaggregation.pvd.control_server import (
     HttpShardClient,
     create_coordinator_app,
@@ -143,6 +144,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Similarity used by the retrieval index. Only meaningful with "
         "--prompt-index-vector-space.",
     )
+    parser.add_argument(
+        "--prompt-index-budget-bytes",
+        type=_positive_int,
+        default=None,
+        help="Byte budget for this V rank's retrieval-index copies: the "
+        "extracted Prompt K, whatever the backend retains for it, and the "
+        "bounded scratch of a search. Required with "
+        "--prompt-index-vector-space, and no default is guessed. Separate "
+        "from --transfer-staging-budget-bytes on purpose: index pressure "
+        "must never consume the headroom a transfer was admitted against.",
+    )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument("--delivery-timeout-secs", type=float, default=300.0)
     parser.add_argument("--rank1-startup-timeout-secs", type=float, default=300.0)
@@ -217,16 +229,36 @@ def _build_prompt_index(args: argparse.Namespace):
 
     None is the default. Without a vector space there is nothing to compare a
     query against, so a V rank builds no index and serves exactly as before.
+
+    When it *is* configured it is given its own budget, sized by the operator.
+    Every copy the manager retains is charged against it before allocation, so
+    a worker cannot be talked into holding an unbounded mirror of every prompt
+    it has ever stored. The budget is a separate object from the transfer
+    budget: the two are sized for different things, and letting index copies
+    eat the staging headroom would stall uploads that were already admitted.
     """
     if not getattr(args, "prompt_index_vector_space", None):
         return None
     from sglang.srt.disaggregation.pvd.prompt_index import PromptIndexManager
+    from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
+    budget_bytes = getattr(args, "prompt_index_budget_bytes", None)
+    if not budget_bytes:
+        raise ValueError(
+            "--prompt-index-budget-bytes is required with "
+            "--prompt-index-vector-space: the index retains a copy of every "
+            "prompt it indexes, and no size for that is worth guessing"
+        )
+    # Index copies occupy no transfer slots, so the slot limit is the minimum
+    # the budget accepts and every reservation here asks for zero.
+    budget = TransferBudget(staging_bytes=budget_bytes, max_inflight=1)
     # The exact CPU backend by default: a V rank can build and search with no
-    # cuVS present. A CAGRA backend replaces it without other changes.
+    # cuVS present, and its copies stay off the device holding the KV pool.
+    # A CAGRA backend replaces it without other changes.
     return PromptIndexManager(
         vector_space=args.prompt_index_vector_space,
         metric=getattr(args, "prompt_index_metric", "ip"),
+        budget=budget,
     )
 
 

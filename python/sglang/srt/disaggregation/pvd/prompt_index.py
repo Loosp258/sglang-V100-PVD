@@ -16,9 +16,24 @@ Deliberate properties:
 * **No autonomous driver.** ``build_pending`` is one bounded step a caller
   invokes, matching how uploads and decode closes are progressed. A worker
   that stops calling it keeps its gates rather than half-building anything.
-* **It frees nothing.** ``close`` refuses further use and drops this
-  manager's own vectors; the Entry's pages, registration and MR are released
-  only by their existing owners, after their own proofs.
+* **It frees nothing that is not its own.** ``close`` refuses further use and
+  drops this manager's own vectors; the Entry's pages, registration and MR
+  are released only by their existing owners, after their own proofs.
+* **Every copy it retains is charged, before it exists.** Extraction's copy
+  and whatever the backend retains are reserved against a worker-level budget
+  ahead of the allocation, under per-attempt owners so a late build cannot
+  refund a newer one's reservation, and a search's bounded scratch is
+  reserved for its duration. Nothing is refunded while a search still holds
+  it: a closed Entry's charge outlives the close until the last searcher
+  leaves.
+* **Capacity pressure is backpressure, not failure.** An Entry is allowed
+  only a few build attempts, and "there is no room for the copies right now"
+  must not spend them: that attempt is abandoned and retried next round.
+* **A search states its own identity.** ``search`` takes a
+  ``SearchRequestIdentity`` describing the Q the caller holds, and every
+  comparison is against that. Nothing missing from it is filled in from the
+  index's own configuration, because an identity derived from the index
+  would agree with the index by construction.
 
 The default backend is the exact CPU one, so a V rank can build and search
 with no cuVS present. A CAGRA backend replaces it without touching this file.
@@ -29,7 +44,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 from sglang.srt.disaggregation.pvd.index_lifecycle import (
@@ -41,16 +56,19 @@ from sglang.srt.disaggregation.pvd.index_search import (
     BruteForceIndexBackend,
     BuiltIndex,
     IndexBackend,
+    IndexNotReadyError,
     IndexSearchError,
     Selection,
     select,
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import (
+    POSITIONAL_ENCODINGS,
     ROPE_APPLIED,
     PromptKVectors,
     PromptVectorError,
     extract_prompt_k,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferCapacityError
 
 
 @dataclass
@@ -61,11 +79,71 @@ class EntryIndex:
     id_mapping_version: str
     vectors: Dict[Tuple[int, int], PromptKVectors] = field(default_factory=dict)
     indexes: Dict[Tuple[int, int], BuiltIndex] = field(default_factory=dict)
-    #: Set while this entry holds a budget reservation for its vector copies.
-    budget_owner: Optional[str] = None
+    #: Budget owners for the copies this entry currently retains: one for the
+    #: extracted vectors, one for whatever the backend holds. Per attempt, so
+    #: a build that finishes after a retry cannot refund the retry's charge.
+    budget_owners: Tuple[str, ...] = ()
+    #: Live searches reading this record's tensors. The charge is not refunded
+    #: while this is non-zero, even after close(): the memory is still held.
+    users: int = 0
 
     def heads(self) -> List[Tuple[int, int]]:
         return sorted(self.indexes)
+
+
+@dataclass(frozen=True)
+class SearchRequestIdentity:
+    """What the caller claims about the Q it is about to search with.
+
+    Every field is the caller's own assertion. None of it is defaulted from
+    the index being searched: an identity the manager filled in would match
+    the index by construction and prove nothing about the query. The two
+    ``expected_*`` pins are optional because a caller that has never seen a
+    version cannot supply one -- and a search that omits them is reported as
+    not having checked them, rather than as having passed.
+    """
+
+    vector_space: str
+    positional_encoding: str
+    entry_transfer_id: str
+    layer: int
+    kv_head: int
+    expected_index_version: Optional[str] = None
+    expected_id_mapping_version: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        for name in ("vector_space", "positional_encoding", "entry_transfer_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise IndexSearchError(
+                    f"a search request must state its {name}; it is the "
+                    "caller's own identity and has no default"
+                )
+        if self.positional_encoding not in POSITIONAL_ENCODINGS:
+            raise IndexSearchError(
+                f"positional_encoding must be one of {POSITIONAL_ENCODINGS}, "
+                f"got {self.positional_encoding!r}"
+            )
+        for name in ("layer", "kv_head"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise IndexSearchError(f"{name} must be a non-negative integer")
+        for name in ("expected_index_version", "expected_id_mapping_version"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise IndexSearchError(f"{name} must be a non-empty string when given")
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """A selection plus what was actually verified to produce it."""
+
+    selection: Selection
+    index_version: str
+    id_mapping_version: str
+    #: The identity comparisons that were made. A caller that did not pin a
+    #: version will not find it named here.
+    validated: Tuple[str, ...]
 
 
 class PromptIndexManager:
@@ -89,6 +167,10 @@ class PromptIndexManager:
         self.positional_encoding = positional_encoding
         self.max_build_attempts = max_build_attempts
         self.budget = budget
+        # Where this manager's copies live: the backend's declared device, so
+        # vectors are born where they will be searched. The KV pool is never
+        # moved to match; extraction copies across instead.
+        self.backend_device = getattr(self.backend, "device", None)
         self._entries: Dict[str, EntryIndex] = {}
         # close() can run from a guard-release callback on a different thread
         # than build()/search(), so the registry is locked like every other
@@ -114,11 +196,45 @@ class PromptIndexManager:
             self._entries[transfer_id] = record
             return record.gate
 
+    # -- budget -------------------------------------------------------------
+
+    def _reserve(self, owner: str, byte_count: int) -> None:
+        """Charge bytes before the allocation they pay for exists.
+
+        Index copies never occupy transfer slots, so only bytes are reserved.
+        A refusal raises ``TransferCapacityError``, which the build path
+        treats as backpressure rather than as a failed build.
+        """
+        if self.budget is not None:
+            self.budget.reserve(owner, byte_count, 0)
+
+    def _release_owners(self, owners: Sequence[str]) -> None:
+        """Refund specific owners. Idempotent: releasing twice is a no-op."""
+        if self.budget is None:
+            return
+        for owner in owners:
+            self.budget.release(owner)
+
     def _release_budget_locked(self, record: EntryIndex) -> None:
-        """Refund this entry's vector copies. Idempotent; safe when unset."""
-        if self.budget is not None and record.budget_owner is not None:
-            self.budget.release(record.budget_owner)
-        record.budget_owner = None
+        """Refund what this entry retains. Idempotent; safe when unset."""
+        self._release_owners(record.budget_owners)
+        record.budget_owners = ()
+
+    def _retire_locked(self, record: EntryIndex) -> None:
+        """Drop a detached record's copies once nothing is reading them.
+
+        Called with the lock held, from close() and from the last search to
+        leave. Refunding earlier would report memory as free while a search
+        still holds a reference to it.
+        """
+        if (
+            record.users > 0
+            or self._entries.get(record.gate.entry_transfer_id) is record
+        ):
+            return
+        self._release_budget_locked(record)
+        record.vectors.clear()
+        record.indexes.clear()
 
     def note_kv_readable(self, transfer_id: str) -> None:
         """The complete Prompt KV is stored and safely visible on this rank."""
@@ -145,17 +261,34 @@ class PromptIndexManager:
         """Extract and index one stored shard. Returns whether it is searchable.
 
         A failure is recorded on the gate and reported, never raised: an Entry
-        that cannot be indexed is still perfectly deliverable.
+        that cannot be indexed is still perfectly deliverable. A *refusal for
+        lack of budget* is not even recorded as a failure: the attempt is
+        abandoned and the Entry stays a candidate for the next round.
         """
         with self._lock:
             record = self._entries.get(transfer_id)
             if record is None:
                 raise IndexSearchError(f"no index gate for {transfer_id}")
             record.gate.begin_build()
+            # Whatever the previous attempt retained is gone as of now.
             self._release_budget_locked(record)
-            owner = f"prompt-index:{transfer_id}" if self.budget is not None else None
+            # Per-attempt owners. A build that completes after this Entry has
+            # been closed and rebuilt refunds its own charge, never the new
+            # attempt's, and two owners let the vectors and the backend's own
+            # storage be charged and refunded independently.
+            # One token per attempt, and it is what names the resulting
+            # index. Deriving the version from the gate's attempt counter
+            # repeated it across incarnations: close and reopen resets
+            # attempts to 1, so a rebuilt index could be handed the version
+            # a caller had pinned against the *previous* one and pass.
+            attempt_token = uuid.uuid4().hex[:12]
+            epoch = f"prompt-index:{transfer_id}:{attempt_token}"
+            vectors_owner = f"{epoch}:vectors"
+            index_owner = f"{epoch}:index"
+            scratch_owner = f"{epoch}:build-scratch"
             mapping_version = record.id_mapping_version
 
+        owners = (vectors_owner, index_owner, scratch_owner)
         # Extraction and the backend build run outside the lock: they copy and
         # index the whole shard, and close() must not block behind them.
         try:
@@ -166,41 +299,77 @@ class PromptIndexManager:
                 entry_transfer_id=transfer_id,
                 id_mapping_version=mapping_version,
                 positional_encoding=self.positional_encoding,
+                device=self.backend_device,
                 budget=self.budget,
-                budget_owner=owner,
+                budget_owner=vectors_owner,
             )
             if not vectors:
                 raise PromptVectorError("the shard produced no Prompt K vectors")
+            # The backend's own storage is charged before it is allocated,
+            # not discovered afterwards, and retained bytes are charged
+            # separately from the transient peak a build passes through:
+            # they have different lifetimes, so one reservation cannot
+            # describe both without lying about one of them.
+            if self.budget is not None:
+                shapes = [
+                    (int(item.vectors.shape[0]), int(item.vectors.shape[1]))
+                    for item in vectors
+                ]
+                self._reserve(
+                    index_owner,
+                    sum(
+                        self.backend.build_footprint(rows, dim, metric=self.metric)
+                        for rows, dim in shapes
+                    ),
+                )
+                # Builds run one after another, so only the largest single
+                # build's scratch is ever live. It is released below.
+                self._reserve(
+                    scratch_owner,
+                    max(
+                        self.backend.build_scratch_footprint(
+                            rows, dim, metric=self.metric
+                        )
+                        for rows, dim in shapes
+                    ),
+                )
             built = {}
             for item in vectors:
                 built[(item.layer, item.kv_head)] = self.backend.build(
                     item.vectors, vector_space=self.vector_space, metric=self.metric
                 )
+            # The transient peak is over; give it back before the index is
+            # installed, so an idle index is charged only for what it holds.
+            self._release_owners((scratch_owner,))
+        except TransferCapacityError as exc:
+            # Backpressure, not a failed build. Nothing was retained, so the
+            # attempt is given back and this Entry is tried again next round.
+            with self._lock:
+                self._release_owners(owners)
+                if self._entries.get(transfer_id) is record:
+                    record.gate.abandon_build(str(exc))
+            return False
         except Exception as exc:
             with self._lock:
+                # Refund whatever this attempt reserved before the failure: a
+                # permanently failing Entry must not hold the worker's budget
+                # until restart. Unknown owners release as no-ops.
+                self._release_owners(owners)
                 if self._entries.get(transfer_id) is record:
-                    # Refund what extraction reserved before the failure: a
-                    # permanently failing Entry must not hold the worker's
-                    # budget until restart.
-                    record.budget_owner = owner
-                    self._release_budget_locked(record)
                     record.gate.mark_failed(str(exc))
-                elif self.budget is not None and owner is not None:
-                    self.budget.release(owner)
             return False
 
         with self._lock:
             if self._entries.get(transfer_id) is not record:
                 # Closed while we were building. Drop what we made and refund.
-                if self.budget is not None and owner is not None:
-                    self.budget.release(owner)
+                self._release_owners(owners)
                 return False
-            record.budget_owner = owner
+            record.budget_owners = (vectors_owner, index_owner)
             record.vectors = {(v.layer, v.kv_head): v for v in vectors}
             record.indexes = built
             record.gate.mark_ready(
                 IndexDescriptor(
-                    index_version=f"idx:{transfer_id}:{record.gate.attempts}",
+                    index_version=f"idx:{transfer_id}:{attempt_token}",
                     entry_transfer_id=transfer_id,
                     vector_space=self.vector_space,
                     id_mapping_version=mapping_version,
@@ -214,45 +383,97 @@ class PromptIndexManager:
 
     def search(
         self,
-        transfer_id: str,
+        identity: SearchRequestIdentity,
         *,
-        layer: int,
-        kv_head: int,
         queries: torch.Tensor,
         top_k: int,
-        positional_encoding: str,
-    ) -> Selection:
-        """Search one (layer, KV head) and return a logical Selection."""
+    ) -> SearchResult:
+        """Search one (layer, KV head) under the caller's stated identity.
+
+        Everything the caller claims is checked against what was actually
+        built -- vector space, Entry, layer and KV head, positional-encoding
+        semantics, head dimension, and whichever versions the caller pinned --
+        and all of it before the backend is invoked. A query that does not
+        belong to this index is refused, not answered.
+        """
+        if not isinstance(identity, SearchRequestIdentity):
+            raise IndexSearchError(
+                "a search must carry a SearchRequestIdentity describing the "
+                "query; identity is not inferable from the index"
+            )
         if not isinstance(queries, torch.Tensor) or queries.ndim != 2:
             raise IndexSearchError(
                 "queries must be a 2-D [num_queries, head_dim] tensor"
             )
+        transfer_id = identity.entry_transfer_id
+        key = (identity.layer, identity.kv_head)
         with self._lock:
             record = self._entries.get(transfer_id)
             if record is None:
                 raise IndexSearchError(f"no index gate for {transfer_id}")
-            # Refuses unless READY, and re-checks the query's vector space and
-            # the id-mapping version against what was actually built.
-            record.gate.authorize_search(self.vector_space, record.id_mapping_version)
-            key = (layer, kv_head)
+            # The caller's vector space, not this manager's. Refuses unless
+            # READY, and compares only the versions the caller actually pinned.
+            if not record.gate.searchable:
+                message = (
+                    f"index for {transfer_id} is {record.gate.state.value}, not ready"
+                )
+                if record.gate.exhausted or record.gate.state is IndexState.CLOSED:
+                    raise IndexSearchError(message)
+                raise IndexNotReadyError(message)
+            descriptor, validated = record.gate.authorize_search(
+                identity.vector_space,
+                expected_id_mapping_version=identity.expected_id_mapping_version,
+                expected_index_version=identity.expected_index_version,
+                entry_transfer_id=transfer_id,
+            )
             item = record.vectors.get(key)
             index = record.indexes.get(key)
-        if item is None or index is None:
-            raise IndexSearchError(
-                f"entry {transfer_id} has no index for layer {layer} KV head {kv_head}"
+            if item is None or index is None:
+                raise IndexSearchError(
+                    f"entry {transfer_id} has no index for layer "
+                    f"{identity.layer} KV head {identity.kv_head}"
+                )
+            # Registered as a reader before the lock is dropped, so a close()
+            # racing this search leaves the copies -- and their charge -- in
+            # place until this search returns them.
+            record.users += 1
+        scratch_owner = f"prompt-index-search:{transfer_id}:{uuid.uuid4().hex[:8]}"
+        try:
+            # Encoding semantics and head dimension are the last two identity
+            # checks, and like the rest they precede any backend call.
+            item.require_compatible_query(
+                positional_encoding=identity.positional_encoding,
+                head_dim=int(queries.shape[-1]),
             )
-        item.require_compatible_query(
-            positional_encoding=positional_encoding,
-            head_dim=int(queries.shape[-1]),
-        )
-        return select(
-            self.backend,
-            index,
-            queries,
-            layer=layer,
-            kv_head=kv_head,
-            mapping=item.mapping,
-            top_k=top_k,
+            validated = validated + ("positional_encoding", "layer", "kv_head")
+            # A search's scratch is bounded and charged for its duration, so
+            # concurrent searches cannot together exceed the worker's budget.
+            if self.budget is not None:
+                self._reserve(
+                    scratch_owner,
+                    self.backend.search_footprint(
+                        index.count, index.dim, int(queries.shape[0]), int(top_k)
+                    ),
+                )
+            selection = select(
+                self.backend,
+                index,
+                queries,
+                layer=identity.layer,
+                kv_head=identity.kv_head,
+                mapping=item.mapping,
+                top_k=top_k,
+            )
+        finally:
+            self._release_owners((scratch_owner,))
+            with self._lock:
+                record.users -= 1
+                self._retire_locked(record)
+        return SearchResult(
+            selection=selection,
+            index_version=descriptor.index_version,
+            id_mapping_version=descriptor.id_mapping_version,
+            validated=validated,
         )
 
     # -- teardown -----------------------------------------------------------
@@ -267,12 +488,13 @@ class PromptIndexManager:
             record = self._entries.pop(transfer_id, None)
             if record is None:
                 return
-            # Refund the vector copies this manager made. The Entry's pages,
-            # registration and MR are not ours and are untouched.
-            self._release_budget_locked(record)
             record.gate.close()
-            record.vectors.clear()
-            record.indexes.clear()
+            # Refund the vector copies this manager made -- but only once no
+            # search still holds them. A search in flight keeps its reference
+            # alive, so reporting the bytes as free here would let the worker
+            # over-commit by exactly the amount still in use. The last search
+            # to leave retires the record instead.
+            self._retire_locked(record)
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -280,12 +502,15 @@ class PromptIndexManager:
         return {
             "vector_space": self.vector_space,
             "backend": getattr(self.backend, "name", "unknown"),
+            "device": str(self.backend_device) if self.backend_device else None,
             "metric": self.metric,
             "positional_encoding": self.positional_encoding,
+            "budget": (None if self.budget is None else self.budget.snapshot()),
             "entries": {
                 transfer_id: {
                     **record.gate.snapshot(),
                     "indexed_heads": len(record.indexes),
+                    "active_searches": record.users,
                 }
                 for transfer_id, record in records
             },
