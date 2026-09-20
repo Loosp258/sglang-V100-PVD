@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field, replace
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
@@ -270,6 +270,7 @@ class VectorKVStore:
         delivery_timeout_secs: float = 300.0,
         allow_cpu_for_tests: bool = False,
         metrics: Optional[PVDMetrics] = None,
+        prompt_index: Optional[Any] = None,
     ) -> None:
         if rank < 0 or rank >= world_size:
             raise ValueError(f"rank {rank} is outside world size {world_size}")
@@ -305,6 +306,10 @@ class VectorKVStore:
             rail=rail,
             metadata={"role": "vector", "page_bytes": page_bytes},
         )
+        # Optional retrieval index over stored prompts. None by default, so a
+        # store built without one behaves exactly as before. Delivery never
+        # consults it: an Entry is deliverable whatever its index state.
+        self.prompt_index = prompt_index
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         self.worker_epoch = uuid.uuid4().hex
         self._closed = False
@@ -514,6 +519,11 @@ class VectorKVStore:
         for delivery in entry.deliveries.values():
             if delivery.state == DeliveryState.WAITING_SOURCE:
                 delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
+        if self.prompt_index is not None:
+            # Complete and visible: this is the only point an index may be
+            # built from. Recording readiness is all that happens under the
+            # lock; the build itself is a separate, caller-driven step.
+            self.prompt_index.note_kv_readable(entry.key.transfer_id)
         self.metrics.increment("vector_p_to_v_bytes", received_bytes)
         self.metrics.increment("vector_entries_stored")
 
@@ -1063,7 +1073,64 @@ class VectorKVStore:
         if entry.upload_authorization is not None and entry.upload_terminal is None:
             entry.upload_close_requested = True
 
+    def progress_prompt_indexes(self) -> Dict[str, int]:
+        """Build one round of pending Prompt indexes. Bounded, caller-driven.
+
+        Each candidate's allocation is pinned for the copy, so an Entry whose
+        release has begun is skipped rather than read from: ResourceGuard.pin
+        refuses once release is requested. Extraction happens outside the
+        store lock, and the pin is dropped whether or not the build succeeds.
+
+        Never raises for a build failure. An Entry that cannot be indexed is
+        still deliverable, and delivery does not consult this at all.
+        """
+        if self.prompt_index is None:
+            return {"built": 0, "failed": 0, "skipped": 0}
+        candidates = []
+        skipped = 0
+        with self._lock:
+            for entry in self.entries.values():
+                transfer_id = entry.key.transfer_id
+                if entry.state != EntryShardState.STORED or entry.release_requested:
+                    continue
+                if not self.prompt_index.wants_build(transfer_id):
+                    continue
+                owner = f"prompt-index:{transfer_id}:{uuid.uuid4().hex[:8]}"
+                try:
+                    entry.allocation_guard.pin(owner)
+                except Exception:
+                    # Release has already begun; its pages are not ours to read.
+                    skipped += 1
+                    continue
+                offset = entry.allocation.start_page * self.page_bytes
+                packed = self.pool[offset : offset + entry.manifest.expected_bytes]
+                candidates.append((entry, owner, packed))
+        built = failed = 0
+        for entry, owner, packed in candidates:
+            try:
+                ok = self.prompt_index.build(
+                    entry.key.transfer_id,
+                    packed,
+                    layout=entry.layout,
+                    manifest=entry.manifest,
+                )
+            except Exception as exc:
+                ok = False
+                logger.warning(
+                    "V prompt index build refused for %s: %s", entry.key, exc
+                )
+            finally:
+                entry.allocation_guard.unpin(owner)
+            built += int(ok)
+            failed += int(not ok)
+        return {"built": built, "failed": failed, "skipped": skipped}
+
     def _free_allocation(self, entry):
+        if self.prompt_index is not None:
+            # Stop serving this Entry's index before its pages go back to the
+            # allocator. This drops the index's own copies only; the pages,
+            # registration and MR are released by their existing owners.
+            self.prompt_index.close(entry.key.transfer_id)
         with self._lock:
             if not entry.resources_released:
                 self.allocator.free(entry.allocation)

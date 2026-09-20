@@ -192,16 +192,36 @@ Route source and destination data by layer, KV head, and token/page ownership, n
    - `Selection` gained an optional `kv_head`, so head identity survives selection and
      merging. Existing per-layer callers are unchanged.
    - Not wired into the V control server.
-10. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+10. `prompt_index.py` + `VectorKVStore` wiring: the first thing that drives `IndexGate`.
+    - The store takes an optional `prompt_index`. **None by default**, so a store built
+      without one behaves exactly as before and the feature is entirely off.
+    - `_publish_stored_locked` marks the gate KV-readable -- the only point an index may
+      be built from. Nothing else happens under the store lock.
+    - `progress_prompt_indexes()` is one bounded, caller-driven step, matching how uploads
+      and decode closes are progressed. It pins each candidate's `allocation_guard` for the
+      copy, so an Entry whose release has begun is skipped rather than read (`pin` refuses
+      once release is requested), extracts outside the store lock, and unpins either way.
+    - A build failure is recorded on the gate and reported, never raised: an Entry that
+      cannot be indexed stays STORED and deliverable. Retries stop at the gate's bound.
+    - `_free_allocation` closes the gate before the pages return to the allocator. That
+      drops only the index's own copies; pages, registration and MR are released by their
+      existing owners, unchanged.
+    - `PromptIndexManager.search` goes through `IndexGate.authorize_search` and the
+      stored vectors' `require_compatible_query`, then returns a logical `Selection`
+      carrying layer and KV head.
+    - Delivery never consults any of this, so no INDEX_READY dependency is introduced.
+11. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
-11. Design and implementation-status documents.
+12. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
 - Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
-- A **CAGRA backend and V serving integration**. The lifecycle state machine, the backend contract, an exact CPU reference, logical selection, the merge policy and Prompt K extraction all exist (see 5.2), so CAGRA is a swap rather than a rewrite. But nothing calls cuVS, and the V control server still does not own an `IndexGate`, build an index from a stored Entry, or answer a real retrieval request. Page-level representative vectors are deliberately not implemented.
+- A **CAGRA backend**. Everything above it now exists and runs (see 5.2): a stored Entry is indexed through the exact CPU backend and searched under the gate's identity checks. Nothing calls cuVS, and no recall comparison against the exact reference has been made.
+- **Serving integration of retrieval.** The store can build and search, but no control-server route exposes it, no scheduler calls `progress_prompt_indexes()`, and no D request produces a real query. The V launcher constructs no `PromptIndexManager`, so on a running server the feature is off.
+- Page-level representative vectors, deliberately.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
 - Hardware validation and performance measurement of the implemented asynchronous initial pull (see 5.2). Network/ACK waits yield to the scheduler, but TP coordination and GPU installation still cost time.
@@ -392,8 +412,15 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-two PVD CPU test files:
-  **754 passed in 6.1s** (691 plus 63 Prompt K extraction tests, including a round trip
+- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-three PVD CPU test files:
+  **776 passed in 9.0s** (754 plus 22 store/index integration tests, which drive a real
+  `VectorKVStore` through create, fill, commit, build, search and release). Five mutations
+  confirmed those bite: reading an entry whose release has begun failed 1, building an
+  entry that left STORED failed 1, letting a build failure escape failed 2, serving an
+  index after release failed 1, and skipping the search authorization failed 1. The
+  entry-state mutation initially failed nothing, because a gate only exists after STORED;
+  a test that changes state with the gate already open was added.
+- 2026-09-20, intermediate: twenty-two PVD CPU test files, **754 passed in 6.1s** (691 plus 63 Prompt K extraction tests, including a round trip
   from the real packed buffer through the exact index back to the original token and page).
   Six mutations confirmed those bite: including padded tokens failed 7, extracting the V
   components failed 6, using the local head index as the global one failed 4, accepting a
@@ -612,6 +639,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/runtime.py` | Upload and transfer lifecycle. |
 | `python/sglang/srt/disaggregation/pvd/coordinator.py` | Entry/Delivery coordination. |
 | `python/sglang/srt/disaggregation/pvd/vector_store.py` | V storage and delivery. |
+| `python/sglang/srt/disaggregation/pvd/prompt_index.py` | Per-Entry gates, vectors and search on a V rank; driven by `VectorKVStore.progress_prompt_indexes()`. Off unless a manager is supplied. |
 | `python/sglang/srt/disaggregation/pvd/prompt_vectors.py` | Prompt K extraction from a stored shard: K only, padding excluded, per layer and global KV head, post-RoPE, owns its copy. |
 | `python/sglang/srt/disaggregation/pvd/index_search.py` | Backend seam, exact CPU reference, logical selection, explicit merge policy. No cuVS. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |

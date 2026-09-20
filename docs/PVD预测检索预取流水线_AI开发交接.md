@@ -174,9 +174,24 @@ V 节点、V worker group、V rank/shard 不是同一概念。
      可选 budget/owner 可对副本计费；V 目前不传。
    - `Selection` 新增可选 `kv_head`，head 身份在选择与合并中得以保留；原有按层调用不受影响。
    - 未接入 V 控制服务。
-10. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+10. `prompt_index.py` 与 `VectorKVStore` 接线：第一个真正驱动 `IndexGate` 的实现。
+    - store 新增可选 `prompt_index`，**默认 None**，不传时行为与之前完全一致，功能整体关闭。
+    - `_publish_stored_locked` 标记 gate 为 KV 可读——这是唯一允许开始构建索引的时点；
+      锁内不做其他事情。
+    - `progress_prompt_indexes()` 是一次有界、由调用方驱动的步骤，与 upload/decode close
+      的推进方式一致。它为每个候选 pin `allocation_guard` 再拷贝，因此已开始释放的 Entry
+      会被跳过而不是被读取（release 一旦请求，`pin` 即拒绝）；提取在 store 锁之外进行，
+      无论成败都会 unpin。
+    - 构建失败记录在 gate 上并如实返回，绝不抛出：无法建索引的 Entry 仍是 STORED 且可交付；
+      重试在 gate 的上限处停止。
+    - `_free_allocation` 在页面归还分配器之前关闭 gate，只丢弃索引自己的副本；
+      页面、注册与 MR 仍由原有所有者释放，未作改动。
+    - `PromptIndexManager.search` 经过 `IndexGate.authorize_search` 与
+      `require_compatible_query`，返回带层与 KV head 的逻辑 `Selection`。
+    - 交付路径完全不查询这些状态，因此没有引入 INDEX_READY 依赖。
+11. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
-11. 完整目标和阶段记录文档。
+12. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -376,8 +391,14 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 22 个 PVD CPU 测试文件：
-  754 passed in 6.1s（691 加 63 条 Prompt K 提取测试，含一条从真实打包缓冲区经精确索引
+- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 23 个 PVD CPU 测试文件：
+  776 passed in 9.0s（754 加 22 条 store/索引集成测试，驱动真实 `VectorKVStore`
+  走完创建、写入、提交、构建、检索、释放）。五处变异验证有效：
+  读取已开始释放的 entry 失败 1 条；对已离开 STORED 的 entry 构建失败 1 条；
+  让构建失败抛出而非记录失败 2 条；释放后仍提供索引失败 1 条；跳过检索授权失败 1 条。
+  entry 状态那条最初未导致失败，因为 gate 只在 STORED 之后才存在；
+  补充了一条在 gate 已打开后再改变状态的测试。
+- 2026-09-20 中间结果：22 个 PVD CPU 测试文件，754 passed in 6.1s（691 加 63 条 Prompt K 提取测试，含一条从真实打包缓冲区经精确索引
   回到原始 token/page 的往返测试）。六处变异验证有效：包含 padding token 失败 7 条；
   连 V 分量一起提取失败 6 条；把本地 head 下标当作全局 head 失败 4 条；
   接受不匹配的位置编码失败 1 条；对不整除的 GQA 布局取整而非拒绝失败 3 条；
