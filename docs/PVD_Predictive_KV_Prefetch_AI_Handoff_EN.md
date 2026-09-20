@@ -156,16 +156,28 @@ Route source and destination data by layer, KV head, and token/page ownership, n
    - Failed builds are retried up to a bound and then refused; `close()` retains the
      descriptor and frees no vectors, graph storage or mappings.
    - Not wired into the V control server; nothing builds or searches an index yet.
-8. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+8. `index_search.py`: the retrieval backend contract, an exact reference implementation,
+   logical selection and the merge policy. CAGRA becomes a swap, not a rewrite.
+   - `IndexBackend` is the seam: `build` and `search`. `BruteForceIndexBackend` is exact,
+     CPU-only and needs no cuVS, so it is also the ground truth a CAGRA backend's recall
+     will be measured against rather than a throwaway stub.
+   - `select` returns **logical** token and page ids through a versioned `IdMapping`, never
+     raw addresses; whoever gathers KV resolves addresses under its own bounds checks.
+   - A token chosen by several queries is selected once, keeping its best score.
+   - `merge_selections` requires a named policy (`per_layer`, `union`, `intersection`) and
+     refuses anything else. Scores from different layers are never ranked against each
+     other, because a global Top-K would be a silent modelling claim.
+   - Ties break deterministically on the lower row, so tests do not depend on kernel order.
+9. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
-9. Design and implementation-status documents.
+10. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
 - Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
-- Server-side CAGRA index **building and search**. The lifecycle state machine exists (see 5.2) but nothing constructs vectors, calls cuVS, or answers a real retrieval request; the V control server does not own an `IndexGate` yet.
+- A **CAGRA backend and real vector extraction**. The lifecycle state machine, the backend contract, an exact CPU reference, logical selection and the merge policy all exist (see 5.2), so CAGRA is a swap rather than a rewrite. But nothing calls cuVS, nothing builds retrieval vectors out of stored Prompt KV, and the V control server still does not own an `IndexGate` or answer a real retrieval request.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
 - Hardware validation and performance measurement of the implemented asynchronous initial pull (see 5.2). Network/ACK waits yield to the scheduler, but TP coordination and GPU installation still cost time.
@@ -356,8 +368,14 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty PVD CPU test files:
-  **633 passed in 16.4s** (584 after the asynchronous initial-pull work, plus 49 V-side
+- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-one PVD CPU test files:
+  **691 passed in 18.3s** (633 plus 58 index-backend and selection tests). Five mutations
+  confirmed those bite: allowing an unnamed merge policy failed 5, unstable tie ordering
+  failed 9, skipping the mapping-covers-index check failed 1, merging across different id
+  mappings failed 1, and aliasing the caller's vectors failed 1. That last one initially
+  failed nothing, because the first aliasing test still produced the same winner; it was
+  rewritten to assert the stored score instead.
+- 2026-09-20, intermediate: twenty PVD CPU test files, **633 passed in 16.4s** (584 after the asynchronous initial-pull work, plus 49 V-side
   index-lifecycle tests). Five mutations confirmed the new tests bite: making delivery wait
   for INDEX_READY failed 5, building before the KV is readable failed 1, dropping the
   vector-space check failed 1, unbounded rebuild attempts failed 1, and treating a failed
@@ -560,6 +578,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/runtime.py` | Upload and transfer lifecycle. |
 | `python/sglang/srt/disaggregation/pvd/coordinator.py` | Entry/Delivery coordination. |
 | `python/sglang/srt/disaggregation/pvd/vector_store.py` | V storage and delivery. |
+| `python/sglang/srt/disaggregation/pvd/index_search.py` | Backend seam, exact CPU reference, logical selection, explicit merge policy. No cuVS. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |
 | `python/sglang/srt/disaggregation/pvd/prediction.py` | Draft/probe interfaces, snapshot and RNG isolation, vector-space enforcement; fakes only, no model loading. |

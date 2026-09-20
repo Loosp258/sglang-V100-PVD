@@ -147,9 +147,18 @@ V 节点、V worker group、V rank/shard 不是同一概念。
    - 失败的构建可在上限内重试，超出后拒绝；`close()` 保留 descriptor，
      不释放任何向量、图存储或映射。
    - 未接入 V 控制服务；目前没有任何代码构建或检索索引。
-8. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+8. `index_search.py`：检索后端契约、精确参考实现、逻辑选择与合并策略。CAGRA 成为可替换项而非重写。
+   - `IndexBackend` 是接缝：`build` 与 `search`。`BruteForceIndexBackend` 精确、纯 CPU、
+     不需要 cuVS，因此它同时是将来衡量 CAGRA recall 的基准，而不是一次性桩。
+   - `select` 通过带版本的 `IdMapping` 返回**逻辑** token/page id，绝不返回原始地址；
+     由负责 gather KV 的一方在自己的边界检查下解析地址。
+   - 被多个 query 选中的同一 token 只选取一次，保留其最佳分数。
+   - `merge_selections` 必须显式指定策略（`per_layer`、`union`、`intersection`），其余一律拒绝。
+     不同层的分数永远不互相排序，因为全局 Top-K 等于一个未声明的建模假设。
+   - 并列时按更小的行号确定性排序，测试不依赖 kernel 顺序。
+9. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
-9. 完整目标和阶段记录文档。
+10. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -349,8 +358,12 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 20 个 PVD CPU 测试文件：
-  633 passed in 16.4s（异步首轮拉取后的 584，加 49 条 V 侧索引生命周期测试）。
+- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 21 个 PVD CPU 测试文件：
+  691 passed in 18.3s（633 加 58 条索引后端与选择测试）。五处变异验证有效：
+  允许未命名的合并策略失败 5 条；并列排序不稳定失败 9 条；跳过映射覆盖检查失败 1 条；
+  跨不同 id 映射合并失败 1 条；别名化调用方向量失败 1 条。最后一条最初未导致失败，
+  因为原本的别名测试仍会选出同一个赢家；已改为断言存储下来的分数。
+- 2026-09-20 中间结果：20 个 PVD CPU 测试文件，633 passed in 16.4s（异步首轮拉取后的 584，加 49 条 V 侧索引生命周期测试）。
   五处变异验证新测试有效：让交付等待 INDEX_READY 失败 5 条；KV 可读前就构建失败 1 条；
   去掉向量空间检查失败 1 条；重试次数无上限失败 1 条；把失败的构建当作 absent 失败 1 条。
 - 2026-09-19 中间结果：18 个 PVD CPU 测试文件，
