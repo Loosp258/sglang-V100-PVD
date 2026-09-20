@@ -289,79 +289,88 @@ class PVDKVManager:
         return limits["staging_bytes"] - limits["used_staging_bytes"]
 
     def enter_waiting_queue(self, reqs) -> List[tuple]:
-        """Trigger the initial pull for requests that just reached the queue.
+        """Progress initial pulls and retry the entire final waiting queue.
 
-        Returns (request, error) pairs for requests that must be aborted. A
-        request whose Entry is not stored yet simply stays not-runnable and is
-        retried on a later scheduler pass; that is not an error.
-
-        Every TP rank runs this with the same waiting-queue order, so the
-        collective inside the refresher sees the same request set on all ranks.
+        HTTP delivery/poll/ACK run asynchronously. Preparation, TP agreement
+        and installation run on the scheduler thread. One bounded-by-budget
+        wave is active at a time; it never joins the running-batch barrier.
         """
-        if not self.waiting_queue_bootstrap or not reqs:
+        if not self.waiting_queue_bootstrap:
             return []
-        pulling = []
         failures = []
-        # Charged down as this pass admits pulls, so several newcomers in one
-        # pass cannot each be told there is room for all of them.
+
+        def finish(completed, errors):
+            failed = {id(req): error for req, error in errors}
+            for req in completed:
+                # An abort may already have removed the request and released
+                # its final pages. Never resurrect it or release them twice.
+                gate = self.bootstrap_gate_for(req)
+                if gate is None or not any(req is queued for queued in reqs):
+                    continue
+                if id(req) in failed:
+                    failures.append((req, failed[id(req)]))
+                    continue
+                try:
+                    gate.mark_received(gate.ticket)
+                    gate.mark_installed(gate.ticket)
+                    gate.handoff()
+                except Exception as exc:
+                    failures.append((req, f"PVD bootstrap install was refused: {exc}"))
+
+        finish(*self.decode_refresher.poll_bootstrap())
+        if self.decode_refresher.bootstrap_pending:
+            return failures
+
         headroom = self._bootstrap_staging_headroom()
+        candidates, local_errors = {}, {}
+        by_key = {}
         for req in reqs:
             gate = self.bootstrap_gate_for(req)
             if gate is None:
                 continue
+            key = self.key_for(req).transfer_id
+            by_key[key] = req
             if gate.state is BootstrapState.CLOSED:
-                # It can never become runnable, so report it rather than
-                # leaving it parked in the waiting queue forever.
-                failures.append((req, "PVD bootstrap gate is closed"))
+                local_errors[key] = "PVD bootstrap gate is closed"
                 continue
             if gate.state is not BootstrapState.QUEUED:
-                # An earlier pass already began or finished this pull.
                 continue
             try:
                 gate.enter_waiting_queue()
-                if not gate.can_request():
-                    continue
-                need = 0 if headroom is None else self.bootstrap_staging_bytes(req)
-                if headroom is not None and need > headroom:
-                    # No room for this request's receive buffer yet. Leave it
-                    # queued and retry on a later pass: being at the worker's
-                    # staging budget is backpressure from running requests, not
-                    # a failure of this one. Aborting here would also take the
-                    # rest of this pull batch down, because the refresher
-                    # reports one error for every session it was given.
-                    continue
-                gate.begin()
+                if gate.can_request():
+                    candidates[key] = self.bootstrap_staging_bytes(req)
             except Exception as exc:
-                failures.append((req, f"PVD bootstrap gate refused the pull: {exc}"))
+                local_errors[key] = str(exc)
+
+        # Budget and source readiness can differ between TP ranks. Agree on
+        # one ordered set BEFORE entering any per-wave collective; a local
+        # early return here would deadlock another rank preparing a pull.
+        ranks = self.gather_rank_objects(
+            {"candidates": candidates, "headroom": headroom, "errors": local_errors}
+        )
+        errors = {key: error for rank in ranks for key, error in rank["errors"].items()}
+        failures.extend(
+            (by_key[key], error) for key, error in errors.items() if key in by_key
+        )
+        remaining = [rank["headroom"] for rank in ranks]
+        pulling = []
+        for key in ranks[0]["candidates"]:
+            if key in errors or any(key not in rank["candidates"] for rank in ranks):
                 continue
-            if headroom is not None:
-                headroom -= need
+            needs = [rank["candidates"][key] for rank in ranks]
+            if any(
+                free is not None and need > free
+                for need, free in zip(needs, remaining)
+            ):
+                continue
+            for i, need in enumerate(needs):
+                if remaining[i] is not None:
+                    remaining[i] -= need
+            req = by_key[key]
+            self.bootstrap_gate_for(req).begin()
             pulling.append(req)
-        if not pulling:
-            return failures
-        # The existing full_prompt refresher performs the delivery: D asks,
-        # V writes into the pages this request already owns. This first cut is
-        # synchronous, so it costs scheduler time; it does not yet overlap with
-        # decoding. What it does change is that the wait happens before the
-        # request joins the running batch instead of inside it.
-        # Keyed by identity: a scheduler request object is not required to be
-        # hashable, and two distinct requests must never collide here.
-        refresh_failures = {
-            id(req): error for req, error in self.decode_refresher.refresh(pulling)
-        }
-        for req in pulling:
-            gate = self.bootstrap_gate_for(req)
-            error = refresh_failures.get(id(req))
-            if error is not None:
-                failures.append((req, error))
-                continue
-            try:
-                ticket = gate.ticket
-                gate.mark_received(ticket)
-                gate.mark_installed(ticket)
-                gate.handoff()
-            except Exception as exc:
-                failures.append((req, f"PVD bootstrap install was refused: {exc}"))
+        if pulling:
+            finish(*self.decode_refresher.start_bootstrap(pulling))
         return failures
 
     def retain_pending_close(self, session) -> None:

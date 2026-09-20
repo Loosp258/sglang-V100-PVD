@@ -1835,7 +1835,7 @@ class SchedulerDisaggregationDecodeMixin:
         return new_batch
 
     def _pvd_enter_waiting_queue(self: Scheduler, reqs):
-        """Pull initial KV for requests that just reached the final waiting queue."""
+        """Progress initial KV and retry deferred requests in the final queue."""
         manager = self.disagg_decode_prealloc_queue.kv_manager
         if not getattr(manager, "waiting_queue_bootstrap", False):
             return
@@ -1847,6 +1847,7 @@ class SchedulerDisaggregationDecodeMixin:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             manager.close_bootstrap_gate(req)
+            manager.decode_refresher.release_request(req)
             self.output_streamer.stream_output([req], req.return_logprob)
             release_kv_cache(req, self.tree_cache, is_insert=False)
             if req in self.waiting_queue:
@@ -1863,6 +1864,8 @@ class SchedulerDisaggregationDecodeMixin:
         self.waiting_queue.extend(resumed_reqs)
         if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
             # if there are still retracted requests, we do not allocate new requests
+            if self.server_args.disaggregation_topology == "pvd":
+                self._pvd_enter_waiting_queue(self.waiting_queue)
             return
 
         if not hasattr(self, "polling_count"):
@@ -1883,11 +1886,9 @@ class SchedulerDisaggregationDecodeMixin:
                 for req in transferred_reqs:
                     # Direct-to-host: KV data already in host pool, skip staging
                     self.hisparse_coordinator.admit_request_direct(req)
-            if self.server_args.disaggregation_topology == "pvd":
-                # The final waiting queue is the PVD bootstrap trigger. Extend
-                # first so every TP rank sees the same queue order before the
-                # collective inside the pull.
-                self.waiting_queue.extend(transferred_reqs)
-                self._pvd_enter_waiting_queue(transferred_reqs)
-            else:
-                self.waiting_queue.extend(transferred_reqs)
+            self.waiting_queue.extend(transferred_reqs)
+
+        # Run even without arrivals or on a non-polling iteration: pending
+        # transfers and budget-deferred newcomers must keep making progress.
+        if self.server_args.disaggregation_topology == "pvd":
+            self._pvd_enter_waiting_queue(self.waiting_queue)

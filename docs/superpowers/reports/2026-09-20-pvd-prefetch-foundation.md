@@ -1,5 +1,15 @@
 # PVD 请求独立预取：基础设施实施记录
 
+## 2026-09-20 后续：最终等待队列异步首轮交付
+
+在 `3cc34440529d65eb9ae25e9fc49bb3a29a8db5f5` 基线上，首轮交付和 ACK
+改为异步 future 轮询；每个 scheduler pass 重试完整等待队列，TP 共同确认
+源就绪和 staging 余量。GPU 安装和 collective 保留在调度线程，周期刷新仍同步。
+通过 D 的 `--pvd-waiting-queue-bootstrap` 开启，默认关闭以兼容旧路径。
+目标、实现边界、测试与剩余硬件验收见
+[中英双语首轮目标](../../PVD_Waiting_Queue_Bootstrap_CN_EN.md)。
+以下早期基础设施记录不代表完整预测流水线已实现。
+
 ## 基线和用户决定
 
 - 分支：`pvd-disaggregation`。

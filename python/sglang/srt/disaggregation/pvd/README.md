@@ -13,7 +13,9 @@ The model-independent `prefetch.py` clock and standalone
 `scripts/pvd/check_cagra.py` compatibility probe are development foundations,
 **not an enabled serving feature**. Decode still uses the synchronous
 `RefreshClock` and `full_prompt` path described below. There is no draft/probe
-model, CAGRA serving integration, sparse attention, or measured overlap yet.
+serving integration, CAGRA serving integration, sparse attention, or measured overlap yet.
+Initial delivery can now yield network/ACK waits to the scheduler with
+`--pvd-waiting-queue-bootstrap`; periodic refresh remains synchronous.
 Draft model names/paths are to be user-configurable, with an optional revision;
 choosing a specific model is not a prerequisite for generic development.
 The compatibility tool now defaults to `--mode inventory` (no GPU library
@@ -500,8 +502,9 @@ Prompt KV fetch out of the running batch. Without it, a newcomer is admitted
 on KV_READY and its round-0 retrieval happens on its first in-batch refresh,
 so the batch stalls on it. With it, the request is admitted into
 `scheduler.waiting_queue` but is **not runnable**: when it reaches that queue,
-Decode publishes an authorization over the KV pages `DecodePreallocQueue`
-already allocated for it and asks V to deliver. D is the initiator; V still
+Decode publishes an authorization over request-owned registered staging
+and asks V to deliver. Final KV pages have already been allocated by
+`DecodePreallocQueue`. D is the initiator; V still
 performs the authorized RDMA WRITE, so write identities, epochs, generations
 and fences are unchanged and there is no RDMA READ. The batch builder skips
 the request and does not charge it against the batch token budget until the
@@ -521,10 +524,16 @@ is backpressure, never a reason to abort a queued request.
 Bootstrap happens exactly once. The refresh clock starts from zero committed
 Decode tokens, so round 0 is never fetched again after admission.
 
-Limitation in this version: **the pull itself is synchronous.** It runs on the
-scheduler thread at waiting-queue entry, so it costs scheduler time; what it
-changes is *where* the wait happens, not that the wait is hidden. Overlapping
-it with decoding is the predictive-prefetch work, not this flag.
+Delivery and ACK are now polled asynchronously: unresolved control futures
+return to the scheduler, while TP agreement and GPU installation remain on
+the scheduler thread. The whole waiting queue progresses every pass, including
+without arrivals and during retraction. Ranks jointly select a wave using
+source readiness and local staging headroom, avoiding rank-divergent collectives.
+One bootstrap wave is active per D worker group. A cancellation/protocol error
+can fail its wave, but the wave contains no already-running requests.
+This does not remove the periodic-refresh barrier or guarantee zero TPOT impact.
+Real V100S/RDMA overlap measurements are still pending; see the
+[bilingual objective](../../../../../docs/PVD_Waiting_Queue_Bootstrap_CN_EN.md).
 
 ### Lifetime rules
 

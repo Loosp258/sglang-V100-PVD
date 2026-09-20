@@ -1,7 +1,8 @@
-"""Request-owned receive buffers and a synchronous continuous-batch KV barrier.
+"""Request-owned buffers, async bootstrap, and a synchronous periodic barrier.
 
 Control traffic is issued by D rank 0. All TP ranks agree on preparation,
-delivery, local unpack and ACK before any rank launches the next forward.
+delivery, local unpack and ACK before admitting a newcomer, or before the next
+forward when an already-running request has reached its periodic boundary.
 """
 
 from __future__ import annotations
@@ -261,9 +262,9 @@ class PVDDecodeSession:
     def release_refresh(self) -> None:
         """Drop this refresh's destination pin after a proven transport terminal.
 
-        Only called on the success path, where V reported every shard DELIVERED
-        -- which it does solely after observing TERMINAL_SUCCESS natively. The
-        MR itself stays registered for the next refresh.
+        Requires V's terminal proof, a matching fence, or the caller's proof
+        that the prepared descriptor has never been published. A timeout is
+        never sufficient. The MR stays registered until session close.
         """
         owner, self._refresh_owner = self._refresh_owner, None
         if owner is not None:
@@ -377,6 +378,50 @@ class PVDDecodeRefresher:
 
     def __init__(self, manager):
         self.manager = manager
+        self._bootstrap = None
+
+    @property
+    def bootstrap_pending(self):
+        return self._bootstrap is not None
+
+    @staticmethod
+    def _future_result(future):
+        if future is None:
+            return None, None
+        try:
+            return future.result(), None
+        except Exception as exc:
+            return None, str(exc)
+
+    def start_bootstrap(self, reqs):
+        """Prepare on the scheduler thread; yield before waiting for V or ACK."""
+        if self.bootstrap_pending:
+            raise RuntimeError("a bootstrap wave is already pending")
+        steps = self._refresh_steps(reqs)
+        try:
+            future = next(steps)
+        except StopIteration as done:
+            return list(reqs), done.value
+        self._bootstrap = (list(reqs), steps, future)
+        return [], []
+
+    def poll_bootstrap(self):
+        """Never wait on a network future. TP/GPU work stays on this thread."""
+        if self._bootstrap is None:
+            return [], []
+        reqs, steps, future = self._bootstrap
+        ready = future is None or future.done()
+        # Only rank 0 owns the HTTP future. Agree before advancing generators,
+        # otherwise ranks could enter different preparation/install collectives.
+        if not all(item["ready"] for item in self._exchange(ready=ready)):
+            return [], []
+        try:
+            future = steps.send(self._future_result(future))
+        except StopIteration as done:
+            self._bootstrap = None
+            return reqs, done.value
+        self._bootstrap = (reqs, steps, future)
+        return [], []
 
     async def _drive_delivery(self, client, result):
         """Advance one retrieval result until V reports a terminal state."""
@@ -444,12 +489,29 @@ class PVDDecodeRefresher:
 
     def release_request(self, req):
         """Also used when a queued request is removed without finished_reason."""
+        close_gate = getattr(self.manager, "close_bootstrap_gate", None)
+        if close_gate is not None:
+            close_gate(req)
         session = self.manager.decode_sessions.pop(self.manager.key_for(req), None)
         if session is not None:
             session.schedule_close()
 
     def refresh(self, reqs):
         """Return (request, error) pairs to abort before prepare_for_decode."""
+        steps = self._refresh_steps(reqs)
+        try:
+            future = next(steps)
+            while True:
+                future = steps.send(self._future_result(future))
+        except StopIteration as done:
+            return done.value
+
+    def _refresh_steps(self, reqs):
+        """Shared safe delivery protocol; drivers choose blocking or polling.
+
+        Yield only for control-plane futures. Never run this generator (which
+        performs TP collectives and GPU copies) on the control-loop thread.
+        """
         sessions, due, error = [], [], None
         try:
             sessions = [
@@ -483,6 +545,11 @@ class PVDDecodeRefresher:
             error = str(exc)
         error = self._agree_error(error)
         if error:
+            # No descriptor has left D yet. Prepared pins can be dropped
+            # without asking V to fence a delivery that was never published.
+            for session, _ in zip(due, local):
+                if session._refresh_owner is not None:
+                    session.release_refresh()
             return [(s.req, error) for s in due]
         ranks = self._exchange(sequences=local)
         identities = [
@@ -496,6 +563,8 @@ class PVDDecodeRefresher:
             != identities
             for rank in ranks
         ):
+            for session in due:
+                session.release_refresh()
             return [
                 (s.req, "PVD TP ranks disagree on retrieval identities") for s in due
             ]
@@ -534,14 +603,22 @@ class PVDDecodeRefresher:
                 results.extend(batch)
             return results
 
-        results = None
+        future = None
         if self.manager.tp_rank == 0:
             try:
-                results = self.manager.control.submit(retrieve_groups()).result()
+                future = self.manager.control.submit(retrieve_groups())
             except Exception as exc:
                 error = str(exc)
+        results, future_error = yield future
+        error = error or future_error
         status = self._exchange(results=results, error=error)[0]
         error = status["error"]
+        # Cancellation may have freed the request's final KV pages while the
+        # WRITE still targeted its pinned staging buffer. Never unpack into
+        # recycled pages; close/fence owns disposal of that staging buffer.
+        if any(s._closed or s.req.finished() for s in due):
+            error = error or "PVD request closed during retrieval"
+        error = self._agree_error(error)
         if not error:
             try:
                 results = status["results"]
@@ -575,11 +652,16 @@ class PVDDecodeRefresher:
                 ):
                     raise ValueError("invalid retrieval ACK response")
 
+        future = None
         if self.manager.tp_rank == 0:
             try:
-                self.manager.control.submit(ack_all()).result()
+                future = self.manager.control.submit(ack_all())
             except Exception as exc:
                 error = str(exc)
+        _, future_error = yield future
+        error = error or future_error
+        if any(s._closed or s.req.finished() for s in due):
+            error = error or "PVD request closed during ACK"
         error = self._agree_error(error)
         if error:
             return [(s.req, error) for s in due]

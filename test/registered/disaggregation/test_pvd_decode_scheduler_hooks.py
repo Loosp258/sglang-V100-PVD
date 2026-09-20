@@ -195,6 +195,7 @@ def make_trigger_scheduler(reqs, failures=(), enabled=True):
             calls["entered"].append(list(rs)) or list(failures)
         ),
         close_bootstrap_gate=lambda req: calls["closed"].append(req.rid),
+        decode_refresher=SimpleNamespace(release_request=lambda req: None),
     )
     scheduler = SimpleNamespace(
         waiting_queue=list(reqs),
@@ -256,3 +257,42 @@ def test_a_failure_for_a_request_already_gone_from_the_queue_is_safe(monkeypatch
     run_trigger(scheduler, [gone], monkeypatch)
     assert [r.rid for r in scheduler.waiting_queue] == ["still-here"]
     assert calls["closed"] == ["gone"]
+
+
+@pytest.mark.parametrize("queue_mode", ["normal", "non-polling", "retracted"])
+def test_scheduler_retries_deferred_waiters_without_new_arrivals(queue_mode):
+    from test_pvd_waiting_queue_bootstrap import make_manager, make_req, open_gate
+
+    mgr = make_manager(staging_bytes=128, used=100, per_req=64)
+    mgr.decode_refresher.cleanup_finished = lambda: None
+    req = make_req()
+    open_gate(mgr, req).mark_source_ready()
+    scheduler = SimpleNamespace(
+        waiting_queue=[req],
+        server_args=SimpleNamespace(
+            disaggregation_topology="pvd",
+            disaggregation_decode_enable_offload_kvcache=False,
+            disaggregation_decode_polling_interval=1,
+        ),
+        disagg_decode_prealloc_queue=SimpleNamespace(
+            kv_manager=mgr,
+            resume_retracted_reqs=lambda: [],
+            retracted_queue=[object()] if queue_mode == "retracted" else [],
+            pop_preallocated=lambda: ([], []),
+        ),
+        disagg_decode_transfer_queue=SimpleNamespace(
+            extend=lambda reqs: None, pop_transferred=lambda: [],
+        ),
+        enable_hisparse=False,
+        polling_count=0,
+        polling_interval=100 if queue_mode == "non-polling" else 1,
+        _pvd_enter_waiting_queue=lambda reqs: mgr.enter_waiting_queue(reqs),
+    )
+    process, _ = load_method("process_decode_queue")
+    process(scheduler)
+    assert not mgr.bootstrap_runnable(req)
+    assert not mgr.decode_refresher.calls
+    mgr.transfer_budget.release("someone-else")
+    process(scheduler)
+    assert mgr.bootstrap_runnable(req)
+    assert mgr.decode_refresher.calls == [[req]]

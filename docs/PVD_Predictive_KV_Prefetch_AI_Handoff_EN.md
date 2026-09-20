@@ -6,6 +6,9 @@ This document is intended for an AI taking over without access to the previous c
 
 Explicit subsequent user instructions take precedence. Update this document when the user changes a decision.
 
+The implemented asynchronous initial-delivery contract and its limits are recorded in
+[the bilingual waiting-queue bootstrap goal](PVD_Waiting_Queue_Bootstrap_CN_EN.md).
+
 ## 1. Objective
 
 Extend the existing SGLang PVD framework with a predictive KV prefetch pipeline:
@@ -17,7 +20,7 @@ Extend the existing SGLang PVD framework with a predictive KV prefetch pipeline:
 
 Predicted tokens are never emitted as committed output. Each request refreshes independently after M committed D-generated tokens. Admitting a new request must not force existing requests to refresh, reset their clocks, or cancel their in-flight prefetches.
 
-Initial KV uses a waiting-queue-triggered pull: D waits until its scheduler places the request into the final waiting queue (`scheduler.waiting_queue`), then initiates delivery of the complete Prompt KV into a registered staging buffer, which D unpacks into the KV pages already preallocated for that request. V still performs the authorized RDMA WRITE; "pull" means D is the initiator, not that the transport direction changes. The request stays in the waiting queue marked not-runnable and is admitted to the running batch only after validated installation. This design is confirmed but not yet implemented.
+Initial KV uses a waiting-queue-triggered pull: D waits until its scheduler places the request into the final waiting queue (`scheduler.waiting_queue`), then initiates delivery of the complete Prompt KV into a registered staging buffer, which D unpacks into the KV pages already preallocated for that request. V still performs the authorized RDMA WRITE; "pull" means D is the initiator, not that the transport direction changes. The request stays in the waiting queue marked not-runnable and is admitted to the running batch only after validated installation and ACK. This path is implemented behind `--pvd-waiting-queue-bootstrap`; real hardware acceptance remains pending.
 
 The outcome to evaluate is end-to-end refresh waiting time, TPOT, throughput, memory usage, and output quality—not merely whether one CAGRA search or RDMA WRITE works.
 
@@ -106,11 +109,15 @@ Route source and destination data by layer, KV head, and token/page ownership, n
 4. Waiting-queue bootstrap wiring behind `--pvd-waiting-queue-bootstrap` (default off):
    - `PVDKVManager.open_bootstrap_gate/bootstrap_runnable/enter_waiting_queue/close_bootstrap_gate`.
    - `PVDKVReceiver` opens the gate at enqueue and reports KV_STORED when the Entry validates.
-   - `decode.py` triggers the pull right after `waiting_queue.extend(transferred_reqs)`, and the
+   - `decode.py` progresses the whole final waiting queue on every scheduler pass, and the
      batch builder now counts admitted requests instead of queue positions so a not-runnable
      request is skipped without consuming a batch slot. With the flag off nothing is ever
      skipped and the count is identical to the previous index comparison.
-   - The pull itself is the existing synchronous `full_prompt` refresher.
+   - Initial delivery and ACK use asynchronously polled control futures. TP agreement and
+     unpack remain on the scheduler thread. Periodic refresh still uses the blocking driver
+     of the same `full_prompt` protocol. Deferred waiters retry without requiring arrivals.
+   - Ranks agree on source readiness and staging headroom before selecting a wave. A wave
+     failure can fail its other newcomers; it does not include already-running requests.
 5. `prediction.py`: the draft/probe interfaces, with fakes and no model loading.
    - `DraftConfig` takes a model name or local path, optional revision, device, dtype and
      token budget. No model is defaulted; a missing revision records `local/unknown`
@@ -137,19 +144,31 @@ Route source and destination data by layer, KV head, and token/page ownership, n
    - The revision the loader resolved is recorded; a local path with none reports
      `local/unknown`.
    - Nothing constructs it yet; it is opt-in and not wired into serving.
-7. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+7. `index_lifecycle.py`: the V-side retrieval-index state machine, with no vectors.
+   - ABSENT, BUILDING, READY and FAILED are distinguishable: "not ready" is not "failed".
+   - An index may only be built after the complete Prompt KV is stored and visible.
+   - `deliverable` is deliberately independent of index state, so full initial delivery
+     never acquires an INDEX_READY dependency.
+   - A built Prompt index is immutable and its readiness is not consumed by a search, so
+     one index serves many Delivery rounds.
+   - `authorize_search` compares the query's vector space and the caller's id-mapping
+     version; index version, mapping version and vector space stay separate identities.
+   - Failed builds are retried up to a bound and then refused; `close()` retains the
+     descriptor and frees no vectors, graph storage or mappings.
+   - Not wired into the V control server; nothing builds or searches an index yet.
+8. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
-8. Design and implementation-status documents.
+9. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
 - Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
-- Server-side CAGRA index lifecycle and real-request search.
+- Server-side CAGRA index **building and search**. The lifecycle state machine exists (see 5.2) but nothing constructs vectors, calls cuVS, or answers a real retrieval request; the V control server does not own an `IndexGate` yet.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
-- Asynchronous initial pull. The waiting-queue trigger, gating and admission are wired (see 5.2), but the pull runs synchronously on the scheduler thread, so transfer time is moved rather than hidden. Overlapping it belongs to the prefetch pipeline.
+- Hardware validation and performance measurement of the implemented asynchronous initial pull (see 5.2). Network/ACK waits yield to the scheduler, but TP coordination and GPU installation still cost time.
 - (Dropped, not pending.) Direct-to-final-page delivery is no longer a goal; see section 16. The pull reuses the existing `full_prompt` staging-and-unpack path by decision, not by omission.
 - Real-model, V100S, multi-GPU TP, RDMA, output-quality, and performance acceptance testing.
 
@@ -194,7 +213,7 @@ Only B's periodic refresh and new request D's initial preparation require KV wor
 
 Asynchronous release of already-running requests at periodic refresh boundaries remains a separate future optimization. The newly confirmed change is asynchronous initial preparation of queued newcomers.
 
-### Initial waiting-queue pull (confirmed, not implemented)
+### Initial waiting-queue pull (implemented, opt-in; hardware acceptance pending)
 
 ```text
 Router selects P, V, D
@@ -337,7 +356,13 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 
 Most recent run before this handoff was created:
 
-- 2026-09-19, Linux/WSL venv against the Windows checkout, eighteen PVD CPU test files:
+- 2026-09-20, Linux/WSL venv against the Windows checkout, twenty PVD CPU test files:
+  **633 passed in 16.4s** (584 after the asynchronous initial-pull work, plus 49 V-side
+  index-lifecycle tests). Five mutations confirmed the new tests bite: making delivery wait
+  for INDEX_READY failed 5, building before the KV is readable failed 1, dropping the
+  vector-space check failed 1, unbounded rebuild attempts failed 1, and treating a failed
+  build as absent failed 1.
+- 2026-09-19, intermediate: eighteen PVD CPU test files,
   **552 passed in 6.2s** (516 plus 36 Hugging Face draft-provider tests). Four mutations
   confirmed those bite: skipping the vocabulary check failed 4, skipping placement
   validation failed 2, not truncating to the budget failed 1, and dropping the
@@ -396,7 +421,7 @@ Do not wait for a fixed model choice or local V100S availability to start generi
 
 ### Phase 1: shadow prediction and retrieval
 
-- Add an independent bootstrap subtask: waiting-queue entry as trigger, destination authorization over the preallocated final pages, V readiness, native completion, D installation, and RUNNABLE admission. Validate first with existing full_prompt and fake transport; this does not depend on CAGRA.
+- Preserve the implemented independent bootstrap: waiting-queue trigger, authorization over registered staging, V readiness, native completion, installation into preallocated final pages, ACK, and RUNNABLE admission. Extend hardware validation; this does not depend on CAGRA.
 - Keep committed generation on the full-KV baseline.
 - Implement replaceable draft, probe, index, and search interfaces, progressively connecting real backends.
 - Do not yet let selection results change attention.
@@ -502,7 +527,7 @@ For these decisions, propose a design and its tradeoffs, ask the user where nece
 
 - Architecture-specific probe execution and how predicted positions produce queries for the next window.
 - Token-level versus page-level indexing and independent versus shared selection across layers/heads.
-- Bootstrap is already decided: waiting-queue-triggered complete-KV pull, D-initiated, V-written, direct into the preallocated final pages. Do not ask whether to adopt it again; design the not-runnable gating and fair admission among concurrently pulling requests explicitly.
+- Bootstrap is already decided: waiting-queue-triggered complete-KV pull, D-initiated and V-written into registered staging, then unpacked into preallocated final pages. Preserve not-runnable gating and asynchronous network progress; do not silently switch to direct final-page writes.
 - **Direct-to-final-page bootstrap delivery is decided: keep staging (2026-09-19).**
   `unpack_full_prompt_kv` scatters a contiguous packed buffer into per-layer K and V
   components at token indices derived from page indices the allocator does not guarantee to
@@ -535,6 +560,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/runtime.py` | Upload and transfer lifecycle. |
 | `python/sglang/srt/disaggregation/pvd/coordinator.py` | Entry/Delivery coordination. |
 | `python/sglang/srt/disaggregation/pvd/vector_store.py` | V storage and delivery. |
+| `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |
 | `python/sglang/srt/disaggregation/pvd/prediction.py` | Draft/probe interfaces, snapshot and RNG isolation, vector-space enforcement; fakes only, no model loading. |
 | `python/sglang/srt/disaggregation/pvd/selector.py` | Current identity lookup, not a complete vector-search interface. |

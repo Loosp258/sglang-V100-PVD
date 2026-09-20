@@ -29,6 +29,16 @@ class FakeRefresher:
         self.calls.append(list(reqs))
         return [(r, self.failures[r.rid]) for r in reqs if r.rid in self.failures]
 
+    bootstrap_pending = False
+
+    def poll_bootstrap(self):
+        return [], []
+
+    def start_bootstrap(self, reqs):
+        # Immediate fake completion for gate/admission unit tests. Real
+        # asynchronous delivery and ACK are covered by the refresher tests.
+        return list(reqs), self.refresh(reqs)
+
 
 def make_req(rid="req-a"):
     return SimpleNamespace(rid=rid, origin_input_ids=list(PROMPT))
@@ -49,6 +59,7 @@ def make_manager(enabled=True, failures=None, staging_bytes=None, used=0, per_re
     mgr.worker_epoch = "d-epoch"
     mgr.decode_refresher = FakeRefresher(failures)
     mgr.key_for = lambda req: EntryKey(f"entry-{req.rid}")
+    mgr.gather_rank_objects = lambda value: [value]
     if staging_bytes is not None:
         mgr.transfer_budget = TransferBudget(
             staging_bytes=staging_bytes, max_inflight=16
@@ -329,3 +340,60 @@ def test_a_deferred_request_does_not_block_a_later_one_that_fits():
     assert runnable(mgr, big) is True
     assert runnable(mgr, small) is False
     assert enter(mgr, [small]) == []  # still deferred, still not an error
+
+
+@pytest.mark.parametrize("blocked_by", ["budget", "source"])
+def test_tp_ranks_agree_before_starting_a_wave_and_retry(blocked_by):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    managers = [make_manager(staging_bytes=128), make_manager(staging_bytes=128)]
+    reqs = [make_req(), make_req()]
+    barrier = threading.Barrier(2, timeout=5)
+    slots = [None, None]
+    for rank, (mgr, req) in enumerate(zip(managers, reqs)):
+        def gather(value, rank=rank):
+            slots[rank] = value
+            barrier.wait()
+            result = list(slots)
+            barrier.wait()
+            return result
+        mgr.gather_rank_objects = gather
+        gate = open_gate(mgr, req)
+        if blocked_by != "source" or rank == 0:
+            gate.mark_source_ready()
+    if blocked_by == "budget":
+        managers[1].transfer_budget.reserve("occupied", 128, 0)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        def step():
+            futures = [pool.submit(enter, m, [r]) for m, r in zip(managers, reqs)]
+            return [f.result(timeout=10) for f in futures]
+        assert step() == [[], []]
+        assert all(not m.decode_refresher.calls for m in managers)
+        assert all(not runnable(m, r) for m, r in zip(managers, reqs))
+        if blocked_by == "budget":
+            managers[1].transfer_budget.release("occupied")
+        else:
+            managers[1].bootstrap_gate_for(reqs[1]).mark_source_ready()
+        assert step() == [[], []]
+        assert all(len(m.decode_refresher.calls) == 1 for m in managers)
+        assert all(runnable(m, r) for m, r in zip(managers, reqs))
+
+
+def test_pending_completion_installs_once_and_never_resurrects_cancelled_request():
+    mgr = make_manager()
+    live, cancelled = make_req("live"), make_req("cancelled")
+    for req in (live, cancelled):
+        gate = open_gate(mgr, req)
+        gate.mark_source_ready()
+        gate.enter_waiting_queue()
+        gate.begin()
+    mgr.close_bootstrap_gate(cancelled)
+    results = [([live, cancelled], []), ([], [])]
+    mgr.decode_refresher.poll_bootstrap = lambda: results.pop(0)
+    assert enter(mgr, [live]) == []
+    assert runnable(mgr, live)
+    assert mgr.bootstrap_gate_for(cancelled) is None
+    assert enter(mgr, [live]) == []
+    assert not mgr.decode_refresher.calls

@@ -1,6 +1,7 @@
 """Request-local gating for the waiting-queue-triggered initial KV pull.
 
-This module is NOT wired into Decode yet. It owns no tensors, registrations,
+This module is wired into Decode behind --pvd-waiting-queue-bootstrap.
+It owns no tensors, registrations,
 native handles or transport permissions, and it never releases anything.
 Every transition is an assertion by the caller after it has validated the
 corresponding real-world fact; this object only refuses illegal orderings.
@@ -8,8 +9,8 @@ corresponding real-world fact; this object only refuses illegal orderings.
 The confirmed bootstrap shape it encodes:
 
   prealloc queue -> transfer queue -> FINAL WAITING QUEUE  (the trigger)
-      -> D publishes an authorization over the request's already-preallocated
-         final KV pages and requests delivery
+      -> D publishes an authorization over registered request-owned staging
+         memory and requests delivery (final KV pages are already allocated)
       -> V performs the authorized RDMA WRITE (D is the initiator, V is still
          the writer; there is no RDMA READ and no new transport direction)
       -> native terminal + identity checks            -> RECEIVED

@@ -771,13 +771,16 @@ def test_cancel_waiting_session_releases_lease_without_finished_flag():
 
 
 @pytest.mark.parametrize("tp_size", [2, 4])
-@pytest.mark.parametrize("identity_fault", [False, True, "regression"])
+@pytest.mark.parametrize("identity_fault", [False, True, "regression", "prepare"])
+@pytest.mark.parametrize(
+    "bootstrap_case", ["off", "success", "cancel-retrieve", "cancel-ack"]
+)
 def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
-    tp_size, identity_fault
+    tp_size, identity_fault, bootstrap_case
 ):
     """Real coordinator and tensors, with a thread barrier for TP collectives."""
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import Future, ThreadPoolExecutor
     from dataclasses import replace
 
     from sglang.srt.disaggregation.pvd.conn import _AsyncControlLoop
@@ -793,16 +796,25 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
     )
     barrier = threading.Barrier(tp_size, timeout=10)
     slots = [None] * tp_size
+    retrieve_permission, ack_permission = Future(), Future()
+    if bootstrap_case == "off":
+        retrieve_permission.set_result(None)
+        ack_permission.set_result(None)
 
     class LocalClient:
         async def retrieve(self, sequences):
+            await asyncio.wrap_future(retrieve_permission)
             return {"results": await coordinator.retrieve(sequences)}
 
         async def ack_delivery(self, delivery_id):
+            await asyncio.wrap_future(ack_permission)
             return (await coordinator.ack_delivery(delivery_id)).to_dict()
 
-        async def fence_retrieval(self, delivery_id):
-            return await coordinator.fence_retrieval(delivery_id)
+        async def poll_delivery(self, delivery_id):
+            return (await coordinator.poll_delivery(delivery_id)).to_dict()
+
+        async def fence_retrieval(self, delivery_id, identities):
+            return await coordinator.fence_retrieval(delivery_id, identities)
 
         async def release_consumer(self, key, consumer_id):
             return await coordinator.release_consumer(key, consumer_id)
@@ -878,17 +890,75 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
                 ]
                 return [future.result(timeout=15) for future in futures]
 
+            def bootstrap_step(method):
+                futures = [
+                    executor.submit(
+                        getattr(r, method),
+                        *(([s.req],) if method == "start_bootstrap" else ()),
+                    )
+                    for r, s in zip(refreshers, sessions)
+                ]
+                return [future.result(timeout=15) for future in futures]
+
             if identity_fault:
                 if identity_fault == "regression":
                     sessions[-1].clock.last_tokens = 4
+                elif identity_fault == "prepare":
+                    def refuse_prepare(pages):
+                        raise RuntimeError("rank-local preparation failure")
+                    sessions[-1].prepare = refuse_prepare
                 else:
                     sessions[-1].clock.round = 3
-                errors = step()
+                errors = (
+                    step() if bootstrap_case == "off"
+                    else [errors for _, errors in bootstrap_step("start_bootstrap")]
+                )
                 assert all(len(items) == 1 for items in errors)
                 assert not coordinator.deliveries
+                # A descriptor that never left D must not pin memory forever.
+                assert all(s._refresh_owner is None for s in sessions)
                 return
 
-            assert step() == [[] for _ in range(tp_size)]
+            if bootstrap_case == "off":
+                assert step() == [[] for _ in range(tp_size)]
+            else:
+                assert bootstrap_step("start_bootstrap") == [([], [])] * tp_size
+                # An unresolved network future must return control, not stall
+                # this scheduler pass. No initial clock is completed yet.
+                assert bootstrap_step("poll_bootstrap") == [([], [])] * tp_size
+                assert not coordinator.deliveries
+                assert all(s.clock.round == 0 for s in sessions)
+                if bootstrap_case == "cancel-retrieve":
+                    sessions[-1]._closed = True  # rank-local cancellation
+                retrieve_permission.set_result(None)
+                refreshers[0]._bootstrap[2].result(timeout=10)
+                result = bootstrap_step("poll_bootstrap")
+                if bootstrap_case == "cancel-retrieve":
+                    assert all(len(errors) == 1 for _, errors in result)
+                    assert all(torch.all(m.kv_pool.k_buffer[0] == -9) for m in managers)
+                    assert all(s.clock.round == 0 for s in sessions)
+                    return
+                assert result == [([], [])] * tp_size
+                # Even after installation, an unfinished ACK is not runnable.
+                assert bootstrap_step("poll_bootstrap") == [([], [])] * tp_size
+                assert all(s.clock.round == 0 for s in sessions)
+                if bootstrap_case == "cancel-ack":
+                    sessions[-1]._closed = True
+                ack_permission.set_result(None)
+                refreshers[0]._bootstrap[2].result(timeout=10)
+                result = bootstrap_step("poll_bootstrap")
+                if bootstrap_case == "cancel-ack":
+                    assert all(len(errors) == 1 for _, errors in result)
+                    assert all(s.clock.round == 0 for s in sessions)
+                    return
+                assert all(
+                    completed == [s.req] and not errors
+                    for (completed, errors), s in zip(result, sessions)
+                )
+                assert all(not r.bootstrap_pending for r in refreshers)
+                assert all(
+                    s.clock.round == 1 and s.clock.last_tokens == 0 for s in sessions
+                )
             assert len(coordinator.deliveries) == 1
             pointers = [s.staging.data_ptr() for s in sessions]
             for manager in managers:
@@ -919,13 +989,12 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
     finally:
         barrier.abort()
         for session in sessions:
-            # Task 6 closes through the identity fence. A session whose refresh
-            # never reached V cannot be drained, and must keep its buffer
-            # rather than release an unfenced destination.
+            # Published cancellations drain through a matching identity fence;
+            # pre-publication failures have already dropped their local pins.
             drained = control.submit(session.close()).result(timeout=10)
-            if not drained:
-                assert session in session.manager.pending_decode_closes
-                assert session.registration is not None
+            assert drained
+            assert session.registration is None
+            assert session.staging is None
         control.loop.call_soon_threadsafe(control.loop.stop)
         control.thread.join(timeout=10)
         control.loop.close()

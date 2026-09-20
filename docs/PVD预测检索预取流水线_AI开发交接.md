@@ -6,6 +6,9 @@
 本文整合用户当前要求，不需要通过历史对话猜测设计。
 如用户后续给出新要求，以用户最新明确要求为准，并同步维护本文。
 
+本次已实现的异步首轮交付约束及限制见
+[最终等待队列首轮 KV 中英双语目标](PVD_Waiting_Queue_Bootstrap_CN_EN.md)。
+
 ## 1. 一句话目标
 
 在现有 SGLang PVD 框架中，使用用户可配置的独立小模型预测未来 token，
@@ -18,7 +21,8 @@
 新请求的首轮采用最终等待队列触发的拉取：D 等到调度器把请求放入最终等待队列
 （`scheduler.waiting_queue`）后，才发起完整 Prompt KV 的交付，目标是已注册的 staging 缓冲区，D 再把它 unpack 到该请求已预分配的最终 KV 页。
 传输仍由 V 执行获授权的 RDMA WRITE；“拉取”指由 D 发起，不是改变传输方向，也不是 RDMA READ。
-请求在等待队列中标记为 not-runnable，安装校验通过后才进入运行 batch。该方案已确认，尚未实现。
+请求在等待队列中标记为 not-runnable，安装校验与 ACK 通过后才进入运行 batch。
+该路径已在 `--pvd-waiting-queue-bootstrap` 下实现，真实硬件验收待完成。
 
 最终要验证的是端到端刷新等待、TPOT、吞吐、显存与质量的权衡，
 不是只证明一个 CAGRA search 或 RDMA WRITE 能运行。
@@ -106,10 +110,13 @@ V 节点、V worker group、V rank/shard 不是同一概念。
 4. `--pvd-waiting-queue-bootstrap`（默认关闭）下的等待队列首轮接入：
    - `PVDKVManager` 的 `open_bootstrap_gate/bootstrap_runnable/enter_waiting_queue/close_bootstrap_gate`。
    - `PVDKVReceiver` 入队时开 gate，Entry 校验通过时上报 KV_STORED。
-   - `decode.py` 在 `waiting_queue.extend(transferred_reqs)` 之后触发拉取；
+   - `decode.py` 每轮推进完整的最终等待队列，包括没有新请求到达的轮次；
      batch 构建改为统计已接纳请求数而非队列下标，跳过 not-runnable 请求且不占用 batch 名额。
      关闭该开关时不会跳过任何请求，计数与原先的下标比较完全一致。
-   - 拉取本身仍是现有的同步 `full_prompt` refresher。
+   - 首轮交付与 ACK 使用异步轮询的控制 future，TP 协调和 unpack 仍在调度线程。
+     周期刷新保留同一个 `full_prompt` 协议的同步驱动；延期请求无需等新到达就会重试。
+   - 各 rank 共同确认源就绪和 staging 余量后选择 wave。wave 失败可能影响同组新请求，
+     但不包含已在运行 batch 的旧请求。
 5. `prediction.py`：draft/probe 接口，含 fake，不加载任何模型。
    - `DraftConfig` 接受模型名或本地路径、可选 revision、device、dtype 与 token 预算；
      不设默认模型；缺少 revision 时记为 `local/unknown`，不伪造。
@@ -130,18 +137,28 @@ V 节点、V worker group、V rank/shard 不是同一概念。
    - token 预算按模型返回值强制执行，不只按请求值，因此 generate() 超额返回仍会被截断。
    - 记录 loader 解析出的 revision；本地路径无 revision 时记为 `local/unknown`。
    - 目前没有任何代码构造它；opt-in，未接入服务。
-7. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+7. `index_lifecycle.py`：V 侧检索索引状态机，不含任何向量。
+   - ABSENT、BUILDING、READY、FAILED 可区分：「未就绪」不等于「失败」。
+   - 只有在完整 Prompt KV 已存储且可见之后才允许构建索引。
+   - `deliverable` 刻意与索引状态无关，首轮完整交付不会产生 INDEX_READY 依赖。
+   - 已建成的 Prompt 索引不可变，且就绪状态不会被一次检索消耗，可服务多轮 Delivery。
+   - `authorize_search` 校验 query 向量空间与调用方的 id 映射版本；
+     索引版本、映射版本与向量空间保持为彼此独立的身份。
+   - 失败的构建可在上限内重试，超出后拒绝；`close()` 保留 descriptor，
+     不释放任何向量、图存储或映射。
+   - 未接入 V 控制服务；目前没有任何代码构建或检索索引。
+8. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
-8. 完整目标和阶段记录文档。
+9. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
-- 自定义 draft 模型的真实加载配置与 provider。
+- draft provider 的真实权重运行与服务接线：已有可配置 HF provider，但未接入服务或验证真实模型。
 - 目标模型 probe、预测前缀重对齐、Q 捕获。
 - CAGRA 服务端索引生命周期和真实请求搜索。
 - 稀疏 KV 的服务端选择、打包、D 安装及 attention。
 - 实际 active/next GPU 缓冲、预取 Scheduler 接入。
-- 异步首轮拉取。等待队列触发、门控与接纳已接入（见 5.2），但拉取本身仍在调度线程上同步执行，只是把等待挪了位置，尚未隐藏。重叠属于预取流水线工作。
+- 已实现的异步首轮拉取尚待硬件验证和性能测量：网络及 ACK 等待会让出调度循环，TP 协调和 GPU 安装仍有开销。
 -（已放弃，不再是待办。）直写最终页不再是目标，见第 16 节。拉取复用现有 `full_prompt` 的 staging + unpack 路径是决定的结果，不是遗漏。
 - 真实模型、V100S、TP 多 GPU、RDMA、质量与性能验收。
 
@@ -188,7 +205,7 @@ A、C 的计数、round、在途预取不变。现有运行 batch 可以因 B �
 但不能仅因新请求 D 还未初始化而等待。D 安装完成后才可接纳。
 已在运行 batch 内的到期请求异步放行仍是另一项未来优化；本次只明确增加新请求的异步首轮准备。
 
-### 首轮等待队列拉取（已确认，待实现）
+### 首轮等待队列拉取（已实现，需开关启用；待硬件验收）
 
 ```text
 Router 选择 P、V、D
@@ -332,7 +349,11 @@ python scripts/pvd/check_cagra.py --mode smoke
 
 截至本交接创建前最近一轮：
 
-- 2026-09-19，在 Windows 检出上用 Linux/WSL venv 运行 18 个 PVD CPU 测试文件：
+- 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 20 个 PVD CPU 测试文件：
+  633 passed in 16.4s（异步首轮拉取后的 584，加 49 条 V 侧索引生命周期测试）。
+  五处变异验证新测试有效：让交付等待 INDEX_READY 失败 5 条；KV 可读前就构建失败 1 条；
+  去掉向量空间检查失败 1 条；重试次数无上限失败 1 条；把失败的构建当作 absent 失败 1 条。
+- 2026-09-19 中间结果：18 个 PVD CPU 测试文件，
   552 passed in 6.2s（516 加 36 条 Hugging Face draft provider 测试）。四处变异验证有效：
   跳过词表检查失败 4 条；跳过 device/dtype 校验失败 2 条；不按预算截断失败 1 条；
   去掉越界 prefix 守卫失败 1 条。预算变异最初未导致失败，因为第一个 fake 模型遵守

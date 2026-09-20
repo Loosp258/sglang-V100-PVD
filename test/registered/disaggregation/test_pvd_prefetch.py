@@ -255,6 +255,7 @@ def test_existing_refresher_only_fetches_due_and_new_requests():
             origin_input_ids=list(range(5)),
             req_pool_idx=index,
             group="v1" if name == "new" else "v0",
+            finished=lambda: False,
         )
         session = SimpleNamespace(
             req=req,
@@ -262,6 +263,7 @@ def test_existing_refresher_only_fetches_due_and_new_requests():
             clock=clock,
             decode_tokens=count,
             lease_error=None,
+            _closed=False,
             client=clients[req.group],
             adopt_identities=lambda reply: None,
             unpack=lambda reply: installed.append(reply["sequence_id"]),
