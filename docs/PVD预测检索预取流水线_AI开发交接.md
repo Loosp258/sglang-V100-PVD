@@ -191,9 +191,18 @@ V 节点、V worker group、V rank/shard 不是同一概念。
     - 关闭时与构建失败时都会退还向量副本的预算；在 Entry 已关闭之后才完成的构建会被丢弃
       而不是安装。注册表加锁，因为 `close()` 可能由 guard 释放回调在另一线程触发。
     - 交付路径完全不查询这些状态，因此没有引入 INDEX_READY 依赖。
-11. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
+11. V 侧检索服务接线，位于 `--prompt-index-vector-space` 之后（默认不设置，
+    此时 V 不构建任何索引，行为与之前完全一致）。
+    - `pvd/server.py`：`_build_prompt_index(args)` 返回 manager 或 `None`；
+      reaper 循环每个间隔驱动一次 `progress_prompt_indexes()`，单 rank 与 group 启动器都覆盖。
+    - shard 路由：`POST /internal/v1/indexes/progress`、`POST /internal/v1/indexes/search`、
+      `GET /internal/v1/indexes`；未配置索引时前两者返回 `{"enabled": false}` 或拒绝。
+    - 检索返回逻辑 token/page id，并带层、KV head、度量与 id 映射版本，绝不返回地址。
+      请求有界：最多 64 条 query，`top_k` 不超过 512，query 各行长度必须一致。
+    - 交付路由未作改动，也完全不查询索引。
+12. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
-12. 完整目标和阶段记录文档。
+13. 完整目标和阶段记录文档。
 
 ### 5.3 尚未实现
 
@@ -394,7 +403,13 @@ python scripts/pvd/check_cagra.py --mode smoke
 截至本交接创建前最近一轮：
 
 - 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 23 个 PVD CPU 测试文件：
-  786 passed in 7.4s（776 加 10 条回归测试，对应复查中发现并先复现再修复的三个缺陷：
+  799 passed in 7.2s（786 加 13 条 V 服务接线测试，走真实 aiohttp shard 路由与启动器）。
+  五处变异验证有效：去掉 query 数量上限失败 1 条；去掉 `top_k` 上限失败 1 条；
+  未配置索引仍提供检索失败 1 条；启动时无条件构建索引失败 1 条；接受长度不一致的 query 失败 1 条。
+  其中三条最初未导致失败，因为测试只断言 400，而下游错误本来也会产生 400，
+  且从未真正执行 `_build_prompt_index`；现在改为断言具体拒绝文本，
+  并把启动器的索引构造提取成可测试的 helper。
+- 2026-09-20 中间结果：23 个 PVD CPU 测试文件，786 passed in 7.4s（776 加 10 条回归测试，对应复查中发现并先复现再修复的三个缺陷：
   关闭时预算泄漏、构建失败时预算泄漏、非二维 query 报出无意义的 `head_dim -1`）。
   四处变异再次确认修复有效：关闭时不退还失败 3 条；构建失败时不退还失败 2 条；
   安装关闭后才完成的构建失败 1 条；重新接受非二维 query 失败 1 条。

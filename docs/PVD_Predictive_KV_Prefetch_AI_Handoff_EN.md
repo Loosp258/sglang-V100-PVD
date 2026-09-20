@@ -213,17 +213,29 @@ Route source and destination data by layer, KV head, and token/page ownership, n
       after its Entry was closed is discarded rather than installed. The registry is
       locked, because `close()` can run from a guard-release callback on another thread.
     - Delivery never consults any of this, so no INDEX_READY dependency is introduced.
-11. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
+11. V serving integration for retrieval, behind `--prompt-index-vector-space` (default
+    unset, so a V rank builds no index and serves exactly as before).
+    - `pvd/server.py`: `_build_prompt_index(args)` returns a manager or `None`; the reaper
+      loop drives `progress_prompt_indexes()` each interval, for both the per-rank and the
+      group launcher.
+    - Shard routes: `POST /internal/v1/indexes/progress`, `POST /internal/v1/indexes/search`,
+      `GET /internal/v1/indexes`. The first two report `{"enabled": false}` or refuse when
+      no index is configured.
+    - Search returns logical token and page ids with layer, KV head, metric and id-mapping
+      version -- never addresses. Requests are bounded: at most 64 queries, `top_k` at most
+      512, and equal-length query rows.
+    - Delivery routes are untouched and never consult the index.
+12. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
    refresher's selection scope, and diagnostic behavior.
-12. Design and implementation-status documents.
+13. Design and implementation-status documents.
 
 ### 5.3 Not yet implemented
 
 - Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
 - A **CAGRA backend**. Everything above it now exists and runs (see 5.2): a stored Entry is indexed through the exact CPU backend and searched under the gate's identity checks. Nothing calls cuVS, and no recall comparison against the exact reference has been made.
-- **Serving integration of retrieval.** The store can build and search, but no control-server route exposes it, no scheduler calls `progress_prompt_indexes()`, and no D request produces a real query. The V launcher constructs no `PromptIndexManager`, so on a running server the feature is off.
+- **A real query from D.** V can now build and answer retrieval over HTTP (see 5.2), but nothing on the D side produces a query: there is no probe execution, and no D code path calls the retrieval route. Sparse selection is not consumed by any transfer or attention.
 - Page-level representative vectors, deliberately.
 - Sparse KV selection, packing, D installation, and attention integration.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
@@ -416,7 +428,15 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 Most recent run before this handoff was created:
 
 - 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-three PVD CPU test files:
-  **786 passed in 7.4s** (776 plus 10 regression tests for three defects found by review
+  **799 passed in 7.2s** (786 plus 13 V serving-integration tests over real aiohttp shard
+  routes and the launcher). Five mutations confirmed those bite: dropping the query-count
+  bound failed 1, dropping the `top_k` bound failed 1, serving retrieval with no index
+  configured failed 1, building an index unconditionally at startup failed 1, and
+  accepting ragged queries failed 1. Three of those initially failed nothing, because the
+  tests only asserted a 400 that a downstream error produced anyway and never exercised
+  `_build_prompt_index`; they now assert the specific refusal text, and the launcher's
+  index construction was extracted into a testable helper.
+- 2026-09-20, intermediate: twenty-three PVD CPU test files, **786 passed in 7.4s** (776 plus 10 regression tests for three defects found by review
   and reproduced before fixing: a budget leak on close, a budget leak on a failed build,
   and a non-2-D query producing a nonsense `head_dim -1` message). Four mutations
   re-confirmed the fixes: not refunding on close failed 3, not refunding on a failed

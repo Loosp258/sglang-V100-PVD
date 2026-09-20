@@ -485,3 +485,217 @@ def test_a_query_that_is_not_two_dimensional_is_refused_clearly(bad):
             top_k=1,
             positional_encoding=ROPE_APPLIED,
         )
+
+
+# --------------------------------------------------------------------------
+# V serving integration: shard HTTP routes and the launcher
+# --------------------------------------------------------------------------
+
+
+def shard_client(store):
+    from aiohttp.test_utils import TestClient, TestServer
+    from sglang.srt.disaggregation.pvd.control_server import create_shard_app
+
+    return TestClient(TestServer(create_shard_app(store)))
+
+
+def test_the_index_routes_report_disabled_when_no_index_is_configured():
+    import asyncio
+
+    async def scenario():
+        store, _, _, _ = stored_entry()
+        async with shard_client(store) as http:
+            assert await (await http.post("/internal/v1/indexes/progress")).json() == {
+                "enabled": False
+            }
+            assert await (await http.get("/internal/v1/indexes")).json() == {
+                "enabled": False
+            }
+            refused = await http.post(
+                "/internal/v1/indexes/search",
+                json={
+                    "transfer_id": "x",
+                    "layer": 0,
+                    "kv_head": 0,
+                    "queries": [[0.0]],
+                    "positional_encoding": ROPE_APPLIED,
+                },
+            )
+            assert refused.status == 400
+
+    asyncio.run(scenario())
+
+
+def test_progress_and_search_over_http_return_original_tokens():
+    import asyncio
+
+    async def scenario():
+        index = manager()
+        store, manifest, _, layout = stored_entry(index)
+        transfer_id = manifest.key.transfer_id
+        async with shard_client(store) as http:
+            progressed = await (await http.post("/internal/v1/indexes/progress")).json()
+            assert progressed == {
+                "enabled": True,
+                "built": 1,
+                "failed": 0,
+                "skipped": 0,
+            }
+            snapshot = await (await http.get("/internal/v1/indexes")).json()
+            assert snapshot["entries"][transfer_id]["state"] == "ready"
+
+            (layer, head), item = sorted(index._entries[transfer_id].vectors.items())[0]
+            row = 5
+            reply = await http.post(
+                "/internal/v1/indexes/search",
+                json={
+                    "transfer_id": transfer_id,
+                    "layer": layer,
+                    "kv_head": head,
+                    "queries": item.vectors[row : row + 1].tolist(),
+                    "top_k": 1,
+                    "positional_encoding": ROPE_APPLIED,
+                },
+            )
+            assert reply.status == 200
+            body = await reply.json()
+            assert body["token_ids"] == [row]
+            assert body["page_ids"] == [row // layout.page_size]
+            assert (body["layer"], body["kv_head"]) == (layer, head)
+            assert body["id_mapping_version"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({"queries": []}, "non-empty list"),
+        ({"queries": "not-a-list"}, "non-empty list"),
+        ({"queries": [[0.0], [0.0, 0.0]]}, "equal-length"),
+        ({"queries": [[0.0] * 8] * 65}, "at most 64 queries"),
+        ({"top_k": 0}, "positive integer"),
+        ({"top_k": True}, "positive integer"),
+        ({"top_k": 513}, "must not exceed 512"),
+    ],
+)
+def test_a_malformed_or_unbounded_search_is_refused(payload, expected):
+    import asyncio
+
+    async def scenario():
+        index = manager()
+        store, manifest, _, _ = stored_entry(index)
+        store.progress_prompt_indexes()
+        body = {
+            "transfer_id": manifest.key.transfer_id,
+            "layer": 0,
+            "kv_head": 0,
+            "queries": [[0.0] * 8],
+            "top_k": 1,
+            "positional_encoding": ROPE_APPLIED,
+        }
+        body.update(payload)
+        async with shard_client(store) as http:
+            reply = await http.post("/internal/v1/indexes/search", json=body)
+            assert reply.status == 400
+            # The specific refusal matters: a generic downstream error would
+            # mean the bound or shape check never ran.
+            assert expected in (await reply.text())
+
+    asyncio.run(scenario())
+
+
+def test_searching_a_not_ready_index_over_http_is_refused():
+    import asyncio
+
+    async def scenario():
+        index = manager()
+        store, manifest, _, _ = stored_entry(index)
+        async with shard_client(store) as http:
+            reply = await http.post(
+                "/internal/v1/indexes/search",
+                json={
+                    "transfer_id": manifest.key.transfer_id,
+                    "layer": 0,
+                    "kv_head": 0,
+                    "queries": [[0.0] * 8],
+                    "top_k": 1,
+                    "positional_encoding": ROPE_APPLIED,
+                },
+            )
+            assert reply.status == 400
+
+    asyncio.run(scenario())
+
+
+def test_the_launcher_builds_no_index_unless_a_vector_space_is_given():
+    from sglang.srt.disaggregation.pvd.server import _build_prompt_index, build_parser
+
+    args = build_parser().parse_args(
+        [
+            "--advertise-host",
+            "v",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
+            "--total-pages",
+            "8",
+            "--page-bytes",
+            "32",
+        ]
+    )
+    assert args.prompt_index_vector_space is None
+    assert args.prompt_index_metric == "ip"
+    assert _build_prompt_index(args) is None
+
+
+def test_the_launcher_accepts_a_vector_space_and_metric():
+    from sglang.srt.disaggregation.pvd.server import _build_prompt_index, build_parser
+
+    args = build_parser().parse_args(
+        [
+            "--advertise-host",
+            "v",
+            "--transfer-staging-budget-bytes",
+            "1073741824",
+            "--transfer-max-inflight",
+            "64",
+            "--total-pages",
+            "8",
+            "--page-bytes",
+            "32",
+            "--prompt-index-vector-space",
+            "target/model-8b",
+            "--prompt-index-metric",
+            "l2",
+        ]
+    )
+    assert args.prompt_index_vector_space == "target/model-8b"
+    assert args.prompt_index_metric == "l2"
+    built = _build_prompt_index(args)
+    assert built is not None
+    assert built.vector_space == "target/model-8b"
+    assert built.metric == "l2"
+
+
+def test_an_unknown_metric_is_rejected_at_startup():
+    from sglang.srt.disaggregation.pvd.server import build_parser
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            [
+                "--advertise-host",
+                "v",
+                "--transfer-staging-budget-bytes",
+                "1",
+                "--transfer-max-inflight",
+                "1",
+                "--total-pages",
+                "8",
+                "--page-bytes",
+                "32",
+                "--prompt-index-metric",
+                "cosine",
+            ]
+        )

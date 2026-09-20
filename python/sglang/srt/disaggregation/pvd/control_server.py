@@ -12,6 +12,7 @@ import json
 from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
+import torch
 from aiohttp import web
 from sglang.srt.disaggregation.pvd.coordinator import (
     CoordinatorError,
@@ -337,6 +338,73 @@ def create_shard_app(
         await asyncio.to_thread(store.release_entry, _key(data))
         return web.json_response({"ok": True})
 
+    # Bounds on one retrieval request, so a caller cannot ask for an
+    # unbounded response. Section 8 requires response-byte limits.
+    max_queries = 64
+    max_top_k = 512
+
+    def _require_prompt_index():
+        if store.prompt_index is None:
+            raise ValueError(
+                "this V rank has no prompt index; start it with "
+                "--prompt-index-vector-space to enable retrieval"
+            )
+        return store.prompt_index
+
+    async def progress_indexes(_request):
+        """Drive one bounded round of index builds. Never fails an Entry."""
+        if store.prompt_index is None:
+            return web.json_response({"enabled": False})
+        result = await asyncio.to_thread(store.progress_prompt_indexes)
+        return web.json_response({"enabled": True, **result})
+
+    async def index_snapshot(_request):
+        if store.prompt_index is None:
+            return web.json_response({"enabled": False})
+        return web.json_response(
+            {"enabled": True, **(await asyncio.to_thread(store.prompt_index.snapshot))}
+        )
+
+    async def search_index(request):
+        """Search one (layer, KV head) and return logical token/page ids."""
+        index = _require_prompt_index()
+        data = await _payload(request)
+        queries = data.get("queries")
+        if not isinstance(queries, list) or not queries:
+            raise ValueError("queries must be a non-empty list of vectors")
+        if len(queries) > max_queries:
+            raise ValueError(f"at most {max_queries} queries per request")
+        if not all(isinstance(row, list) and row for row in queries):
+            raise ValueError("queries must be equal-length lists of numbers")
+        if len({len(row) for row in queries}) != 1:
+            raise ValueError("queries must be equal-length lists of numbers")
+        top_k = data.get("top_k", 1)
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
+            raise ValueError("top_k must be a positive integer")
+        if top_k > max_top_k:
+            raise ValueError(f"top_k must not exceed {max_top_k}")
+        selection = await asyncio.to_thread(
+            index.search,
+            str(data["transfer_id"]),
+            layer=int(data["layer"]),
+            kv_head=int(data["kv_head"]),
+            queries=torch.tensor(queries, dtype=torch.float32),
+            top_k=top_k,
+            positional_encoding=str(data["positional_encoding"]),
+        )
+        return web.json_response(
+            {
+                "transfer_id": str(data["transfer_id"]),
+                "layer": selection.layer,
+                "kv_head": selection.kv_head,
+                "token_ids": list(selection.token_ids),
+                "page_ids": list(selection.page_ids),
+                "scores": [float(score) for score in selection.scores],
+                "metric": selection.metric,
+                "id_mapping_version": selection.id_mapping_version,
+            }
+        )
+
     async def health(_request):
         snapshot = await asyncio.to_thread(store.snapshot)
         snapshot["preflight"] = dict(preflight or {})
@@ -356,6 +424,9 @@ def create_shard_app(
             web.post("/internal/v1/deliveries/fence", fence_delivery),
             web.post("/internal/v1/entries/cancel", cancel_entry),
             web.post("/internal/v1/entries/release", release_entry),
+            web.post("/internal/v1/indexes/progress", progress_indexes),
+            web.post("/internal/v1/indexes/search", search_index),
+            web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/health", health),
         ]
     )

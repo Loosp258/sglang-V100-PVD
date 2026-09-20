@@ -126,6 +126,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--total-pages", type=_positive_int, required=True)
     parser.add_argument("--page-bytes", type=_positive_int, required=True)
+    parser.add_argument(
+        "--prompt-index-vector-space",
+        type=str,
+        default=None,
+        help="Enable the retrieval index over stored prompts, naming the model "
+        "whose K these vectors come from. A query in another space is refused. "
+        "Omitted (the default) means no index is built and V serves exactly as "
+        "before; delivery never depends on the index either way.",
+    )
+    parser.add_argument(
+        "--prompt-index-metric",
+        type=str,
+        default="ip",
+        choices=("ip", "l2"),
+        help="Similarity used by the retrieval index. Only meaningful with "
+        "--prompt-index-vector-space.",
+    )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument("--delivery-timeout-secs", type=float, default=300.0)
     parser.add_argument("--rank1-startup-timeout-secs", type=float, default=300.0)
@@ -195,6 +212,24 @@ def _parse_device_ids(value: str, world_size: int) -> List[int]:
     return devices
 
 
+def _build_prompt_index(args: argparse.Namespace):
+    """Return a PromptIndexManager, or None when retrieval is not configured.
+
+    None is the default. Without a vector space there is nothing to compare a
+    query against, so a V rank builds no index and serves exactly as before.
+    """
+    if not getattr(args, "prompt_index_vector_space", None):
+        return None
+    from sglang.srt.disaggregation.pvd.prompt_index import PromptIndexManager
+
+    # The exact CPU backend by default: a V rank can build and search with no
+    # cuVS present. A CAGRA backend replaces it without other changes.
+    return PromptIndexManager(
+        vector_space=args.prompt_index_vector_space,
+        metric=getattr(args, "prompt_index_metric", "ip"),
+    )
+
+
 async def _reaper(
     store: VectorKVStore,
     interval: float,
@@ -206,6 +241,10 @@ async def _reaper(
         # never outlive the two shard allocations. Shards still reap timed-out
         # Delivery resources locally.
         store.reap_expired(reap_entries=False)
+        # Drive one bounded round of index builds. A no-op unless a prompt
+        # index is configured, and it never blocks or fails delivery: a build
+        # error is recorded on the Entry's gate, which stays deliverable.
+        await asyncio.to_thread(store.progress_prompt_indexes)
         if coordinator is not None:
             await coordinator.reap_expired()
 
@@ -220,6 +259,7 @@ async def _group_reaper(
         await asyncio.sleep(interval)
         for store in stores:
             store.reap_expired(reap_entries=False)
+            await asyncio.to_thread(store.progress_prompt_indexes)
         await coordinator.reap_expired()
 
 
@@ -300,6 +340,7 @@ def _create_store(
             "skipped": True,
             "reason": "fake transport",
         }
+    prompt_index = _build_prompt_index(args)
     store = VectorKVStore(
         rank=rank,
         world_size=args.world_size,
@@ -312,6 +353,7 @@ def _create_store(
         entry_ttl_secs=args.entry_ttl_secs,
         delivery_timeout_secs=args.delivery_timeout_secs,
         allow_cpu_for_tests=args.allow_cpu_for_tests,
+        prompt_index=prompt_index,
     )
     return store, preflight
 
