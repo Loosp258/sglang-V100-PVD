@@ -209,6 +209,9 @@ Route source and destination data by layer, KV head, and token/page ownership, n
     - `PromptIndexManager.search` goes through `IndexGate.authorize_search` and the
       stored vectors' `require_compatible_query`, then returns a logical `Selection`
       carrying layer and KV head.
+    - Vector copies are refunded on close and on a failed build, and a build that lands
+      after its Entry was closed is discarded rather than installed. The registry is
+      locked, because `close()` can run from a guard-release callback on another thread.
     - Delivery never consults any of this, so no INDEX_READY dependency is introduced.
 11. CPU tests covering clocks, the bootstrap gate, the waiting-queue trigger, the decode.py
    scheduler hooks, the draft/probe interfaces, new-request isolation, the existing
@@ -413,7 +416,13 @@ The default synthetic recall threshold of 0.90 is a small smoke-test criterion, 
 Most recent run before this handoff was created:
 
 - 2026-09-20, Linux/WSL venv against the Windows checkout, twenty-three PVD CPU test files:
-  **776 passed in 9.0s** (754 plus 22 store/index integration tests, which drive a real
+  **786 passed in 7.4s** (776 plus 10 regression tests for three defects found by review
+  and reproduced before fixing: a budget leak on close, a budget leak on a failed build,
+  and a non-2-D query producing a nonsense `head_dim -1` message). Four mutations
+  re-confirmed the fixes: not refunding on close failed 3, not refunding on a failed
+  build failed 2, installing a build that finished after close failed 1, and accepting a
+  non-2-D query failed 1.
+- 2026-09-20, intermediate: twenty-three PVD CPU test files, **776 passed in 9.0s** (754 plus 22 store/index integration tests, which drive a real
   `VectorKVStore` through create, fill, commit, build, search and release). Five mutations
   confirmed those bite: reading an entry whose release has begun failed 1, building an
   entry that left STORED failed 1, letting a build failure escape failed 2, serving an

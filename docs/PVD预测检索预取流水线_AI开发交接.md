@@ -188,6 +188,8 @@ V 节点、V worker group、V rank/shard 不是同一概念。
       页面、注册与 MR 仍由原有所有者释放，未作改动。
     - `PromptIndexManager.search` 经过 `IndexGate.authorize_search` 与
       `require_compatible_query`，返回带层与 KV head 的逻辑 `Selection`。
+    - 关闭时与构建失败时都会退还向量副本的预算；在 Entry 已关闭之后才完成的构建会被丢弃
+      而不是安装。注册表加锁，因为 `close()` 可能由 guard 释放回调在另一线程触发。
     - 交付路径完全不查询这些状态，因此没有引入 INDEX_READY 依赖。
 11. CPU 测试：时钟、首轮门控、等待队列触发、decode.py 调度钩子、draft/probe 接口、
    新请求隔离、现有 refresher 选择范围、检测脚本行为。
@@ -392,7 +394,11 @@ python scripts/pvd/check_cagra.py --mode smoke
 截至本交接创建前最近一轮：
 
 - 2026-09-20，在 Windows 检出上用 Linux/WSL venv 运行 23 个 PVD CPU 测试文件：
-  776 passed in 9.0s（754 加 22 条 store/索引集成测试，驱动真实 `VectorKVStore`
+  786 passed in 7.4s（776 加 10 条回归测试，对应复查中发现并先复现再修复的三个缺陷：
+  关闭时预算泄漏、构建失败时预算泄漏、非二维 query 报出无意义的 `head_dim -1`）。
+  四处变异再次确认修复有效：关闭时不退还失败 3 条；构建失败时不退还失败 2 条；
+  安装关闭后才完成的构建失败 1 条；重新接受非二维 query 失败 1 条。
+- 2026-09-20 中间结果：23 个 PVD CPU 测试文件，776 passed in 9.0s（754 加 22 条 store/索引集成测试，驱动真实 `VectorKVStore`
   走完创建、写入、提交、构建、检索、释放）。五处变异验证有效：
   读取已开始释放的 entry 失败 1 条；对已离开 STORED 的 entry 构建失败 1 条；
   让构建失败抛出而非记录失败 2 条；释放后仍提供索引失败 1 条；跳过检索授权失败 1 条。

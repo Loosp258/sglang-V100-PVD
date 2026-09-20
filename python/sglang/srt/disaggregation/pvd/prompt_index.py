@@ -26,6 +26,7 @@ with no cuVS present. A CAGRA backend replaces it without touching this file.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -60,6 +61,8 @@ class EntryIndex:
     id_mapping_version: str
     vectors: Dict[Tuple[int, int], PromptKVectors] = field(default_factory=dict)
     indexes: Dict[Tuple[int, int], BuiltIndex] = field(default_factory=dict)
+    #: Set while this entry holds a budget reservation for its vector copies.
+    budget_owner: Optional[str] = None
 
     def heads(self) -> List[Tuple[int, int]]:
         return sorted(self.indexes)
@@ -87,23 +90,35 @@ class PromptIndexManager:
         self.max_build_attempts = max_build_attempts
         self.budget = budget
         self._entries: Dict[str, EntryIndex] = {}
+        # close() can run from a guard-release callback on a different thread
+        # than build()/search(), so the registry is locked like every other
+        # per-worker registry here. Heavy work happens outside the lock.
+        self._lock = threading.RLock()
 
     # -- gates --------------------------------------------------------------
 
     def gate_for(self, transfer_id: str) -> Optional[IndexGate]:
-        entry = self._entries.get(transfer_id)
-        return entry.gate if entry is not None else None
+        with self._lock:
+            entry = self._entries.get(transfer_id)
+            return entry.gate if entry is not None else None
 
     def open(self, transfer_id: str) -> IndexGate:
-        existing = self._entries.get(transfer_id)
-        if existing is not None:
-            return existing.gate
-        record = EntryIndex(
-            gate=IndexGate(transfer_id, max_build_attempts=self.max_build_attempts),
-            id_mapping_version=f"map:{transfer_id}:{uuid.uuid4().hex[:8]}",
-        )
-        self._entries[transfer_id] = record
-        return record.gate
+        with self._lock:
+            existing = self._entries.get(transfer_id)
+            if existing is not None:
+                return existing.gate
+            record = EntryIndex(
+                gate=IndexGate(transfer_id, max_build_attempts=self.max_build_attempts),
+                id_mapping_version=f"map:{transfer_id}:{uuid.uuid4().hex[:8]}",
+            )
+            self._entries[transfer_id] = record
+            return record.gate
+
+    def _release_budget_locked(self, record: EntryIndex) -> None:
+        """Refund this entry's vector copies. Idempotent; safe when unset."""
+        if self.budget is not None and record.budget_owner is not None:
+            self.budget.release(record.budget_owner)
+        record.budget_owner = None
 
     def note_kv_readable(self, transfer_id: str) -> None:
         """The complete Prompt KV is stored and safely visible on this rank."""
@@ -132,22 +147,27 @@ class PromptIndexManager:
         A failure is recorded on the gate and reported, never raised: an Entry
         that cannot be indexed is still perfectly deliverable.
         """
-        record = self._entries.get(transfer_id)
-        if record is None:
-            raise IndexSearchError(f"no index gate for {transfer_id}")
-        record.gate.begin_build()
+        with self._lock:
+            record = self._entries.get(transfer_id)
+            if record is None:
+                raise IndexSearchError(f"no index gate for {transfer_id}")
+            record.gate.begin_build()
+            self._release_budget_locked(record)
+            owner = f"prompt-index:{transfer_id}" if self.budget is not None else None
+            mapping_version = record.id_mapping_version
+
+        # Extraction and the backend build run outside the lock: they copy and
+        # index the whole shard, and close() must not block behind them.
         try:
             vectors = extract_prompt_k(
                 packed,
                 layout=layout,
                 manifest=manifest,
                 entry_transfer_id=transfer_id,
-                id_mapping_version=record.id_mapping_version,
+                id_mapping_version=mapping_version,
                 positional_encoding=self.positional_encoding,
                 budget=self.budget,
-                budget_owner=(
-                    f"prompt-index:{transfer_id}" if self.budget is not None else None
-                ),
+                budget_owner=owner,
             )
             if not vectors:
                 raise PromptVectorError("the shard produced no Prompt K vectors")
@@ -157,21 +177,37 @@ class PromptIndexManager:
                     item.vectors, vector_space=self.vector_space, metric=self.metric
                 )
         except Exception as exc:
-            record.gate.mark_failed(str(exc))
+            with self._lock:
+                if self._entries.get(transfer_id) is record:
+                    # Refund what extraction reserved before the failure: a
+                    # permanently failing Entry must not hold the worker's
+                    # budget until restart.
+                    record.budget_owner = owner
+                    self._release_budget_locked(record)
+                    record.gate.mark_failed(str(exc))
+                elif self.budget is not None and owner is not None:
+                    self.budget.release(owner)
             return False
-        record.vectors = {(v.layer, v.kv_head): v for v in vectors}
-        record.indexes = built
-        total = sum(index.count for index in built.values())
-        record.gate.mark_ready(
-            IndexDescriptor(
-                index_version=f"idx:{transfer_id}:{record.gate.attempts}",
-                entry_transfer_id=transfer_id,
-                vector_space=self.vector_space,
-                id_mapping_version=record.id_mapping_version,
-                vector_count=total,
-                metric=self.metric,
+
+        with self._lock:
+            if self._entries.get(transfer_id) is not record:
+                # Closed while we were building. Drop what we made and refund.
+                if self.budget is not None and owner is not None:
+                    self.budget.release(owner)
+                return False
+            record.budget_owner = owner
+            record.vectors = {(v.layer, v.kv_head): v for v in vectors}
+            record.indexes = built
+            record.gate.mark_ready(
+                IndexDescriptor(
+                    index_version=f"idx:{transfer_id}:{record.gate.attempts}",
+                    entry_transfer_id=transfer_id,
+                    vector_space=self.vector_space,
+                    id_mapping_version=mapping_version,
+                    vector_count=sum(index.count for index in built.values()),
+                    metric=self.metric,
+                )
             )
-        )
         return True
 
     # -- searching ----------------------------------------------------------
@@ -187,22 +223,27 @@ class PromptIndexManager:
         positional_encoding: str,
     ) -> Selection:
         """Search one (layer, KV head) and return a logical Selection."""
-        record = self._entries.get(transfer_id)
-        if record is None:
-            raise IndexSearchError(f"no index gate for {transfer_id}")
-        # Refuses unless READY, and re-checks the query's vector space and the
-        # id-mapping version against what was actually built.
-        record.gate.authorize_search(self.vector_space, record.id_mapping_version)
-        key = (layer, kv_head)
-        item = record.vectors.get(key)
-        index = record.indexes.get(key)
+        if not isinstance(queries, torch.Tensor) or queries.ndim != 2:
+            raise IndexSearchError(
+                "queries must be a 2-D [num_queries, head_dim] tensor"
+            )
+        with self._lock:
+            record = self._entries.get(transfer_id)
+            if record is None:
+                raise IndexSearchError(f"no index gate for {transfer_id}")
+            # Refuses unless READY, and re-checks the query's vector space and
+            # the id-mapping version against what was actually built.
+            record.gate.authorize_search(self.vector_space, record.id_mapping_version)
+            key = (layer, kv_head)
+            item = record.vectors.get(key)
+            index = record.indexes.get(key)
         if item is None or index is None:
             raise IndexSearchError(
                 f"entry {transfer_id} has no index for layer {layer} KV head {kv_head}"
             )
         item.require_compatible_query(
             positional_encoding=positional_encoding,
-            head_dim=int(queries.shape[-1]) if queries.ndim == 2 else -1,
+            head_dim=int(queries.shape[-1]),
         )
         return select(
             self.backend,
@@ -222,14 +263,20 @@ class PromptIndexManager:
         The Entry's pages, registration and MR are untouched: they are freed
         by their existing owners, after their own safety checks.
         """
-        record = self._entries.pop(transfer_id, None)
-        if record is None:
-            return
-        record.gate.close()
-        record.vectors.clear()
-        record.indexes.clear()
+        with self._lock:
+            record = self._entries.pop(transfer_id, None)
+            if record is None:
+                return
+            # Refund the vector copies this manager made. The Entry's pages,
+            # registration and MR are not ours and are untouched.
+            self._release_budget_locked(record)
+            record.gate.close()
+            record.vectors.clear()
+            record.indexes.clear()
 
     def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            records = list(self._entries.items())
         return {
             "vector_space": self.vector_space,
             "backend": getattr(self.backend, "name", "unknown"),
@@ -240,6 +287,6 @@ class PromptIndexManager:
                     **record.gate.snapshot(),
                     "indexed_heads": len(record.indexes),
                 }
-                for transfer_id, record in self._entries.items()
+                for transfer_id, record in records
             },
         }

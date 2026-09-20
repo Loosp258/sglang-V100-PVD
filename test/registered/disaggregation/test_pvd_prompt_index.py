@@ -365,3 +365,123 @@ def test_the_snapshot_reports_backend_and_per_entry_state():
     entry = snapshot["entries"][manifest.key.transfer_id]
     assert entry["state"] == "ready"
     assert entry["indexed_heads"] == 3 * 2
+
+
+# --------------------------------------------------------------------------
+# Budget accounting: a copy is refunded on failure and on close
+# --------------------------------------------------------------------------
+
+
+def budgeted(backend=None, limit=1 << 20):
+    from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+
+    budget = TransferBudget(staging_bytes=limit, max_inflight=4)
+    kwargs = {"budget": budget}
+    if backend is not None:
+        kwargs["backend"] = backend
+    return manager(**kwargs), budget
+
+
+class BrokenBackend:
+    name = "broken"
+
+    def build(self, *a, **k):
+        raise RuntimeError("backend down")
+
+    def search(self, *a, **k):  # pragma: no cover
+        raise AssertionError
+
+
+def test_a_successful_build_charges_the_vector_copies():
+    index, budget = budgeted()
+    store, _, _, _ = stored_entry(index)
+    store.progress_prompt_indexes()
+    assert budget.snapshot()["used_staging_bytes"] > 0
+
+
+def test_a_failed_build_refunds_what_extraction_reserved():
+    """Otherwise a permanently failing Entry holds budget until restart."""
+    index, budget = budgeted(BrokenBackend())
+    store, _, _, _ = stored_entry(index)
+    assert store.progress_prompt_indexes()["failed"] == 1
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_repeated_failures_do_not_accumulate_budget():
+    index, budget = budgeted(BrokenBackend())
+    store, _, _, _ = stored_entry(index)
+    for _ in range(3):
+        store.progress_prompt_indexes()
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_closing_refunds_the_vector_copies():
+    """The success path: every served Entry must give its bytes back."""
+    index, budget = budgeted()
+    store, manifest, _, _ = stored_entry(index)
+    store.progress_prompt_indexes()
+    assert budget.snapshot()["used_staging_bytes"] > 0
+    index.close(manifest.key.transfer_id)
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_releasing_the_entry_refunds_through_the_store():
+    index, budget = budgeted()
+    store, manifest, _, _ = stored_entry(index)
+    store.progress_prompt_indexes()
+    store.release_entry(manifest.key)
+    store._progress_releases()
+    store._free_allocation(store.entries[manifest.key])
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_many_entries_do_not_exhaust_the_budget_when_each_is_released():
+    index, budget = budgeted(limit=4096)
+    for _ in range(6):
+        store, manifest, _, _ = stored_entry(index)
+        assert store.progress_prompt_indexes()["built"] == 1
+        store.release_entry(manifest.key)
+        store._progress_releases()
+        store._free_allocation(store.entries[manifest.key])
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_a_build_finishing_after_close_refunds_and_does_not_resurrect():
+    """close() can land mid-build; the result is discarded, not installed."""
+    index, budget = budgeted()
+    pool, layout, manifest, packed, shard = build_entry()
+    transfer_id = manifest.key.transfer_id
+    index.open(transfer_id)
+    index.note_kv_readable(transfer_id)
+
+    real_build = index.backend.build
+
+    def close_then_build(*a, **k):
+        index.close(transfer_id)
+        return real_build(*a, **k)
+
+    index.backend.build = close_then_build
+    assert (
+        index.build(transfer_id, packed.tensor, layout=layout, manifest=shard) is False
+    )
+    assert index.gate_for(transfer_id) is None
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+# --------------------------------------------------------------------------
+# Query shape
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [torch.zeros(8), torch.zeros(1, 1, 8), [0.0] * 8])
+def test_a_query_that_is_not_two_dimensional_is_refused_clearly(bad):
+    index, _, manifest, _, _ = searchable()
+    with pytest.raises(IndexSearchError, match="2-D"):
+        index.search(
+            manifest.key.transfer_id,
+            layer=0,
+            kv_head=0,
+            queries=bad,
+            top_k=1,
+            positional_encoding=ROPE_APPLIED,
+        )
