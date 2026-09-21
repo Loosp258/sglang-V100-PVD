@@ -11,7 +11,12 @@ import torch
 
 
 def validate_batch_decode(
-    runner, *, scheduled_results=False, draft_provider=None, automatic_refresh=False
+    runner,
+    *,
+    scheduled_results=False,
+    draft_provider=None,
+    automatic_refresh=False,
+    wire_delivery=False,
 ):
     from pvd_controlled_prefetch import ControlledFixture
     from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import (
@@ -303,17 +308,17 @@ def validate_batch_decode(
         try:
             old = create("old", (1, 4, 13, 7, 22))
             new = create("new", (1, 6, 17))  # different absolute positions in batch
-            old.life.admit(old.fixture.request)
             hooks.extend(
                 layer.self_attn.attn.register_forward_hook(oracle)
                 for layer in runner.model.model.layers
             )
-            for _ in range(3):
-                step(("old",))
             async with (
-                old.fixture.clients() as clients,
-                new.fixture.clients() as newclients,
+                old.fixture.clients(wire_delivery=wire_delivery) as clients,
+                new.fixture.clients(wire_delivery=wire_delivery) as newclients,
             ):
+                old.life.admit(old.fixture.request)
+                for _ in range(3):
+                    step(("old",))
                 entered, release = asyncio.Event(), asyncio.Event()
 
                 class Delayed:
@@ -327,7 +332,7 @@ def validate_batch_decode(
                     driver.register(
                         old.life,
                         clients={0: clients[0], 1: Delayed()},
-                        pack_source=old.fixture.pack_source,
+                        pack_source=None if wire_delivery else old.fixture.pack_source,
                         timeout_seconds=30,
                     )
                     launch = driver.progress().launched[0]
@@ -337,7 +342,7 @@ def validate_batch_decode(
                     task = old.life.launch_refresh(
                         query_positions=(len(prefix.tokens),),
                         clients={0: clients[0], 1: Delayed()},
-                        pack_source=old.fixture.pack_source,
+                        pack_source=None if wire_delivery else old.fixture.pack_source,
                         timeout_seconds=30,
                     )
                 tasks.append(task)
@@ -348,7 +353,7 @@ def validate_batch_decode(
                     driver.register(
                         new.life,
                         clients=newclients,
-                        pack_source=new.fixture.pack_source,
+                        pack_source=None if wire_delivery else new.fixture.pack_source,
                         timeout_seconds=30,
                     )
                 assert old.fixture.group.coordinator.snapshot() == state
@@ -385,7 +390,7 @@ def validate_batch_decode(
                     task = old.life.launch_refresh(
                         query_positions=(len(prefix.tokens) - 1,),
                         clients=clients,
-                        pack_source=old.fixture.pack_source,
+                        pack_source=None if wire_delivery else old.fixture.pack_source,
                         timeout_seconds=30,
                     )
                 tasks.append(task)
@@ -395,6 +400,30 @@ def validate_batch_decode(
                 else:
                     assert driver.progress().installed == ("old",)
                 step(("old",))
+            delivery_evidence = None
+            if wire_delivery:
+                deliveries = [
+                    d
+                    for store in old.fixture.stores.values()
+                    for d in store.entries[old.fixture.manifest.key].deliveries.values()
+                ]
+                assert len(deliveries) == 4  # two boundaries, two V shards
+                assert all(d.state.value == "released" for d in deliveries)
+                assert old.fixture.packed_specs == new.fixture.packed_specs == []
+                assert old.fixture.request.delivery.registry.snapshot() == {}
+                transferred = sum(
+                    store.transfer_engine.total_put_bytes
+                    for store in old.fixture.stores.values()
+                )
+                assert transferred == sum(d.sparse_manifest.nbytes for d in deliveries)
+                delivery_evidence = {
+                    "http_shard_deliveries": len(deliveries),
+                    "selected_kv_bytes": transferred,
+                    "no_local_pack_callback": True,
+                    "acknowledged_after_all_rank_install": True,
+                    "receive_budget_restored": True,
+                    "transport": "fake in-process byte copy; real localhost HTTP control",
+                }
             third = create("third", (1, 12, 25, 8))
             third.life.admit(third.fixture.request)
             outputs_before = old.life.outputs, third.life.outputs
@@ -436,6 +465,7 @@ def validate_batch_decode(
                 "real_req_retraction_and_length_limit": scheduled_results,
                 "independent_real_draft": draft_provider is not None,
                 "request_local_refresh_driver": driver is not None,
+                "sparse_delivery_evidence": delivery_evidence,
                 "production_scheduler_gpu_rdma_validated": False,
             }
         finally:

@@ -46,12 +46,7 @@ destination, capacity failure, short successful writes, unregister retry and
 unknown-registration quarantine. Full Windows suite: 1408 passed / 11 skipped.
 No native RDMA/GPU evidence is claimed.
 
-## 接下来 / Next
-
-V 已接原 reserve/start/poll/fence/ACK 并保留整个异步传输期间的 staging；
-下一步接 D 的独立 destination 生命周期、安装与 ACK，以及真实本地 HTTP 交付测试。
-完整 Prompt bootstrap 不依赖检索索引；新增稀疏路径必须显式启用，不能改变默认行为。
-# Step 4 / 第四步：Request-local HTTP sparse delivery integration
+## Step 4 / 第四步：Request-local HTTP sparse delivery integration
 
 The controlled `CPUPrefetchRequest` can now select an explicit `CPUSparseDelivery`
 sink instead of a local packing callback; configuring both is refused. After one
@@ -77,7 +72,7 @@ verify two rounds, delayed delivery at a boundary, new admission independence,
 stale source indexes, ACK loss/retry, scoped cleanup and the automatic refresh
 driver. This does not claim a production Scheduler, CUDA or native RDMA path.
 
-# Step 3 / 第三步：D-owned sparse receive lifecycle
+## Step 3 / 第三步：D-owned sparse receive lifecycle
 
 `SparseReceiveRegistry` now owns CPU receive allocations before registration or
 descriptor publication. It charges bytes and one in-flight slot, reconstructs
@@ -102,10 +97,55 @@ Validation uses real localhost HTTP routes and the real V store/index/packer,
 with a controlled delayed byte-copy engine. It tests late writes after cancel,
 foreign completion identities, short/invalid success, lost replies, ACK retry,
 and cleanup failure. This is **not Mooncake, RDMA, GPU or production Scheduler
-acceptance**. The controlled request loop is not yet wired to this receiver;
+acceptance**. Step 4 above connects the controlled request loop to this receiver;
 CPU installation deliberately refuses FP16/BF16 rather than allocating an
 unaccounted conversion. An unknown reservation not found on V remains pinned:
 absence is not a fence against a late request; recovery/tombstones are future work.
 
 真实本地 HTTP 已覆盖正常交付与故障路径，但未证明 GPU/RDMA 正确性或性能。
-下一步是把该接收器接入现有 CPU 请求级预取流水线，再单独推进生产运行时集成。
+CPU 请求级预取流水线接入见 Step 4；生产运行时集成仍需单独推进。
+
+## Step 5 / 第五步：Real models consume delivered bytes
+
+```bash
+PYTHONPATH=python python test/registered/disaggregation/run_pvd_draft_cpu_smoke.py \
+  --probe --search --sparse-decode --controlled-decode \
+  --batch-decode --scheduled-decode --wire-sparse-loop
+```
+
+Strict WSL CPU execution passed. The independent smaller SGLang draft runs two
+forwards and predicts `(13, 13)`; the target model generates its own committed
+tokens. Real post-RoPE Q drives exact V search, four HTTP-controlled sparse
+Deliveries (two boundaries × two shards), and **1600 selected K/V bytes**. The
+Decode attention consumes the installed received bytes, with no local packing
+callback. Twenty-one independent attention comparisons have maximum absolute
+error `3.5762786865234375e-7`. Receive charges and private pool capacity recover.
+
+Actual Req/ScheduleBatch result processing, independent request clocks, new
+admission/reordering/retraction, wait-all, actual-forward failure and length
+limits remain covered. A first query at the boundary uses committed-prefix Q
+without calling the draft. Counts are old=9, new=2, third=0, length-limit=1.
+
+两个真实随机小模型的 CPU 闭环已通过：独立 draft → 目标 Q → V 检索 → 4 次
+HTTP 控制的稀疏交付 → 安装 → Decode 实际读取 → 原 Req 提交。共交付 1600 bytes，
+21 次 attention 对照最大误差约 3.58e-7，接收预算归零。这里不是“只返回了 token
+编号”：配对 K/V 的实际字节走过 V Delivery 与 D receiver，再被模型使用。
+
+**Evidence boundary:** HTTP control is real localhost networking, but payload
+transfer is still a fake in-process byte copy, not network data transfer or
+Mooncake/RDMA. Models are randomly initialized tiny Llamas with a toy tokenizer.
+No output-quality, throughput, GPU memory saving or network-hiding claim follows.
+Full suite at the Step 4 gate: Windows 1436 passed / 11 skipped; WSL 1441 passed /
+6 skipped. Step 5 additionally executes the strict real-model command above.
+
+## Remaining production gates / 尚未完成
+
+- GPU sparse packing, destination visibility/current-next banks, and sparse
+  attention kernels (CPU FP32 is explicitly enforced today).
+- Native Mooncake submit/poll, CUDA stream ownership, actual TP rank activation,
+  and production Scheduler admission/cleanup integration.
+- V100S-compatible CAGRA backend execution, real-Q recall/quality and budgets.
+- Model-loading ownership, draft-prefix reuse and measured latency hiding.
+
+完整 Prompt 默认服务不变。初始完整 Prompt 不依赖检索索引；不得把 CPU 工作集或
+fake transport 注册为生产 GPU 后端，也不得把以上验证称为最终目标完成。

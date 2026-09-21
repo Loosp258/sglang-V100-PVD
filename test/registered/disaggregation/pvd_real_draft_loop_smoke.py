@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import torch
 
 
-def validate_real_draft_loop(target, port):
+def validate_real_draft_loop(target, port, *, wire_delivery=False):
     from pvd_batch_decode_smoke import validate_batch_decode
     from sglang.srt.configs.model_config import ModelConfig
     from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
@@ -197,6 +197,7 @@ def validate_real_draft_loop(target, port):
             scheduled_results=True,
             draft_provider=provider,
             automatic_refresh=True,
+            wire_delivery=wire_delivery,
         )
         assert len(predictions) == 1 and predictions[0][0] == "old"
         assert (

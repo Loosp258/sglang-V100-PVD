@@ -300,10 +300,12 @@ def main() -> None:
             scheduled_decode_evidence = validate_batch_decode(
                 runner, scheduled_results=True
             )
-        if "--real-draft-loop" in sys.argv[1:]:
+        if "--real-draft-loop" in sys.argv[1:] or "--wire-sparse-loop" in sys.argv[1:]:
             from pvd_real_draft_loop_smoke import validate_real_draft_loop
 
-            real_draft_loop_evidence = validate_real_draft_loop(runner, port)
+            real_draft_loop_evidence = validate_real_draft_loop(
+                runner, port, wire_delivery="--wire-sparse-loop" in sys.argv[1:]
+            )
         print(
             json.dumps(
                 {

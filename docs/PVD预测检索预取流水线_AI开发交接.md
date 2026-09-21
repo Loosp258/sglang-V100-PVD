@@ -2,6 +2,16 @@
 
 更新日期：2026-09-21。
 
+当前权威更新（覆盖下面历史“未推送”等状态）：见[稀疏 Delivery 推进](PVD_Sparse_Delivery_CN_EN.md)。
+历史本地 commit 与交付步骤至 `309e464be` 均已推送 GitHub `pvd-disaggregation`；
+用户现在要求每一步 commit 后 push。V 在 Entry/index lease 下打包所选 K/V；D
+持有目标缓冲并验证 fence，全部 rank 安装后 ACK；请求级驱动已接该 HTTP 路径。
+`--wire-sparse-loop` 真实双 CPU 小模型通过：4 次交付、1600 bytes、21 次 attention
+对照，最大误差约 3.58e-7，没有本地打包回调。Windows suite 1436/11 skipped，
+WSL 1441/6 skipped。HTTP 控制为真实本地网络，数据拷贝仍为 fake transport。
+生产 GPU 打包/attention、原生 RDMA、实际 TP/Scheduler 激活与 CAGRA 仍有缺口，
+不能开启生产 sparse 模式或宣称最终目标已完成。
+
 最新：[请求级 CPU 刷新驱动](PVD_CPU_Refresh_Driver_CN_EN.md)：根据各请求正式 token
 时钟选择边界末 token 的目标 Q，每次 poll 最多启动一次 capture，保留迟到任务，
 仅边界安装。真实独立 draft 闭环已使用；9 个 HTTP/CPU 新测试通过。

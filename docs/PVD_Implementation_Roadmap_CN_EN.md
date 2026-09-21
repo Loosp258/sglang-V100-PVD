@@ -2,7 +2,26 @@
 
 更新 / Updated: 2026-09-21. 按以下顺序推进；每一步记录实现和证据，
 不把接口、CPU 通过或硬件预检当成生产端到端验收。当前用户要求每阶段验证后 commit，
-继续推进；未要求时不自动 push。
+继续推进。当前用户已明确要求每步 commit 后推送 GitHub `pvd-disaggregation`。
+
+### 当前权威状态 / Current authoritative status
+
+本节覆盖下面的历史未推送/未接交付记录。此前本地 commit 已推送；本轮已逐步推送
+`45c47a788`（清单与 index lease）、`46856081b`（V 稀疏 Delivery）、`de935b931`
+（D-owned receive/fence/install/ACK）、`309e464be`（请求级 HTTP Delivery 闭环）。
+详见[稀疏交付推进与证据](PVD_Sparse_Delivery_CN_EN.md)。
+
+真实 CPU 双模型严格验收也已通过新的交付路径：4 次交付、1600 bytes、21 次
+attention 对照，最大误差约 3.58e-7；不再使用本地 pack_source 回调。Windows 完整
+suite 1436 passed / 11 skipped；WSL 1441 passed / 6 skipped。
+
+These are CPU/local-HTTP gates. Payload transfer remains a fake in-process byte
+copy. Production GPU packing/attention, native Mooncake, real TP activation,
+Scheduler loop/cleanup and V100S CAGRA are still implementation/validation gaps.
+The final goal is **not complete**. The local lack of hardware does not block
+further protocol, lifecycle, reference, fault-injection or tooling development.
+Do not mistake the delivery substeps numbered in that note for completion of
+the larger production gates 1–7 below.
 
 ## 固定目标 / Invariants
 
@@ -51,7 +70,8 @@ The initial complete Prompt is not truncated by the later refresh union bound.
   两个 V shard、8 组 layer/Q-head 结果、14 个拒绝检查。修复 probe 的
   `post_rope` 标签与 V 的 `rope_applied` 协议不一致的问题。
 - Step 2：离线稀疏 K/V 载荷契约已通过；8 份载荷与原始 K/V 精确一致。
-  尚未接入异步交付、源 Entry lease、GPU 目标授权和 MR fence。
+  后续已接源 Entry/index lease、异步授权 Delivery、D fence 与安装/ACK；
+  目前为 CPU/local-HTTP/fake transport，GPU 目标与原生 RDMA 尚未验收。
 - Step 3：CPU reference 已实现并验证：GQA 并集、初始完整 Prompt、current/next
   预算、边界切换、reader 释放前禁止切换、生成 KV 不变和绝对位置 attention。
   本地 HTTP 验收接入 4 组并集的 CPU 分片工作集安装。
@@ -101,12 +121,12 @@ The CPU driver is still a standalone smoke, not Scheduler or GPU/TP evidence.
 CPU banks are not GPU fences or production allocators. No new request may reset
 an old request's clock. See the linked note for current limits.
 
-真实 CPU Decode 消费已提交为 `8f482e631`，此前协议为 `3c4b0c479`，未推送。
-CPU 生命周期接点已提交 `81bfb64b4`，batch 执行器已提交 `1553d036c`，未推送。
+真实 CPU Decode 消费 `8f482e631`、此前协议 `3c4b0c479`、CPU 生命周期接点
+`81bfb64b4`、batch 执行器 `1553d036c` 已随历史本地 commit 一并推送。
 
 ## 当前接续点 / Current handoff gate (2026-09-21)
 
-本轮验证后逐阶段提交（均未自动 push）：
+以下为先前阶段的历史记录（现已推送；最新状态见文首）：
 
 | Commit | 完成的阶段 / Completed stage |
 |---|---|
@@ -115,7 +135,7 @@ CPU 生命周期接点已提交 `81bfb64b4`，batch 执行器已提交 `1553d036
 | `92ae30c23` | Real independent draft closed loop; backing-KV storage isolation fix |
 | `1e3c8ab83` | Request-local CPU refresh driver, boundary installation / actual-Q fallback |
 
-最新完整 suite：Windows 1373 passed / 11 skipped；WSL 1378 passed / 6 skipped。
+该历史阶段完整 suite：Windows 1373 passed / 11 skipped；WSL 1378 passed / 6 skipped。
 全部严格 CPU 组合验收通过，包括真实双模型、V 本地 HTTP、稀疏 attention 和正式 Req
 结果处理。**最终生产目标尚未完成。** 对真实 TP/GPU/RDMA/CAGRA 的未验证项目，仍有
 实际实现缺口，不能只运行一个 benchmark 就宣布完成。

@@ -2,6 +2,19 @@
 
 Updated: 2026-09-21.
 
+Current authoritative update (supersedes historical status/"not pushed" notes
+below): [sparse Delivery integration](PVD_Sparse_Delivery_CN_EN.md). Existing
+local commits and the four delivery steps through `309e464be` are on GitHub
+`pvd-disaggregation`; the user now requires commit AND push after each step.
+V packs selected K/V under Entry/index leases; D owns fenced destinations and
+ACKs only after all-rank CPU installation. The request-local driver uses this
+HTTP path. `--wire-sparse-loop` passes with two real independent tiny CPU models,
+four shard Deliveries / 1600 bytes / 21 attention checks, maximum error ~3.58e-7,
+no local packing callback. Windows suite 1436/11 skipped; WSL 1441/6 skipped.
+Control HTTP is real; byte transport is still fake and local. Production GPU
+packing/attention, native RDMA, actual TP/Scheduler activation and CAGRA remain
+gaps. Do not enable production sparse mode or declare the final goal achieved.
+
 Newest: [request-local CPU refresh driver](PVD_CPU_Refresh_Driver_CN_EN.md).
 Independent clocks now choose the last boundary-token target Q, launch one
 capture per poll, retain late queries and install only at the exact boundary.
