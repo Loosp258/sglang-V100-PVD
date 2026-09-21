@@ -36,6 +36,11 @@ from sglang.srt.disaggregation.pvd.sharding import (
     layout_from_destination,
     source_rank_and_head_offset,
 )
+from sglang.srt.disaggregation.pvd.sparse_delivery import (
+    SPARSE_DELIVERY_KEY,
+    SparseDeliveryManifest,
+)
+from sglang.srt.disaggregation.pvd.sparse_payload import pack_sparse_kv
 from sglang.srt.disaggregation.pvd.transfer_authorization import WriteAuthorization
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
@@ -170,6 +175,7 @@ class DeliveryShardRecord:
     authorization_begun: bool = False
     local_terminal: Optional[TransportState] = None
     progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    sparse_manifest: Optional[SparseDeliveryManifest] = None
 
     def to_dict(self):
         return {
@@ -180,13 +186,18 @@ class DeliveryShardRecord:
             "created_at": self.created_at,
             "deadline": self.deadline,
             "error": self.error,
+            "sparse_fingerprint": (
+                self.sparse_manifest.fingerprint if self.sparse_manifest else None
+            ),
             "write_identity": (
                 self.authorization.identity.to_dict() if self.authorization else None
             ),
             "transport_state": (
                 self.transfer_handle.transport_state.value
                 if self.transfer_handle
-                else self.local_terminal.value if self.local_terminal else "preparing"
+                else self.local_terminal.value
+                if self.local_terminal
+                else "preparing"
             ),
         }
 
@@ -306,8 +317,8 @@ class VectorKVStore:
             metadata={"role": "vector", "page_bytes": page_bytes},
         )
         # Optional retrieval index over stored prompts. None by default, so a
-        # store built without one behaves exactly as before. Delivery never
-        # consults it: an Entry is deliverable whatever its index state.
+        # store built without one behaves exactly as before. Full-Prompt
+        # delivery stays index-independent; explicit sparse delivery leases it.
         self.prompt_index = prompt_index
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         self.worker_epoch = uuid.uuid4().hex
@@ -660,6 +671,12 @@ class VectorKVStore:
                         "delivery id already exists with a different destination"
                     )
                 return existing
+            sparse = None
+            if SPARSE_DELIVERY_KEY in destination.backend_metadata:
+                sparse = SparseDeliveryManifest.from_dict(
+                    destination.backend_metadata[SPARSE_DELIVERY_KEY]
+                )
+                self._validate_sparse_destination(entry, destination, sparse)
             now = time.monotonic()
             state = (
                 DeliveryState.D_RESERVED
@@ -673,6 +690,7 @@ class VectorKVStore:
                 state=state,
                 created_at=now,
                 deadline=now + self.delivery_timeout_secs,
+                sparse_manifest=sparse,
             )
             delivery.source_guard = entry.allocation_guard
             metadata = destination.backend_metadata
@@ -752,12 +770,17 @@ class VectorKVStore:
                 delivery.transfer_handle = handle
         except Exception as exc:
             with self._lock:
+                uncertain = (
+                    attempted
+                    or not packing_safe
+                    or delivery.local_terminal == TransportState.UNKNOWN
+                )
                 delivery.local_terminal = (
                     TransportState.UNKNOWN
-                    if attempted or not packing_safe
+                    if uncertain
                     else TransportState.NOT_SUBMITTED
                 )
-                if attempted or not packing_safe:
+                if uncertain:
                     self._isolated_reason = (
                         "V submission or GPU packing safety is unknown"
                     )
@@ -772,6 +795,8 @@ class VectorKVStore:
         return delivery
 
     def _prepare_delivery_source(self, entry, delivery) -> MemorySlice:
+        if delivery.sparse_manifest is not None:
+            return self._prepare_sparse_source(entry, delivery)
         allocation_offset = entry.allocation.start_page * self.page_bytes
         local = MemorySlice(
             self.registration, allocation_offset, entry.manifest.expected_bytes
@@ -847,6 +872,115 @@ class VectorKVStore:
         guard.request_release()
         return MemorySlice(registration, 0, staging.numel())
 
+    def _validate_sparse_destination(self, entry, destination, manifest):
+        # CPU packing is an explicit validation stage. Do not silently move a
+        # production GPU pool to host or pretend the offline packer is a kernel.
+        if self.pool.device.type != "cpu":
+            raise EntryConflictError("sparse GPU packing is not implemented")
+        metadata = destination.backend_metadata
+        if (
+            self.prompt_index is None
+            or budget_of(self.transfer_engine) is None
+            or "pvd_layout" in metadata
+            or PVD_RECEIVER_EPOCH_METADATA_KEY not in metadata
+            or PVD_GENERATION_METADATA_KEY not in metadata
+        ):
+            raise EntryConflictError(
+                "sparse delivery requires index, budget and lifecycle authorization; no dense layout"
+            )
+        first = manifest.specs[0]
+        shard, layout = entry.manifest, entry.layout
+        if (
+            first.entry_transfer_id != entry.key.transfer_id
+            or first.layout_fingerprint != layout.fingerprint
+            or (manifest.dtype, manifest.head_dim) != (layout.kv_dtype, layout.head_dim)
+            or destination.length != manifest.nbytes
+        ):
+            raise EntryConflictError(
+                "sparse Entry/layout/destination byte extent mismatch"
+            )
+        valid = (shard.page_count - 1) * layout.page_size + shard.last_page_valid_tokens
+        start_head = self.rank * layout.kv_heads_per_rank
+        for spec in manifest.specs:
+            if (
+                not shard.layer_start <= spec.layer < shard.layer_end
+                or not start_head
+                <= spec.kv_head
+                < start_head + layout.kv_heads_per_rank
+                or any(t >= valid for t in spec.token_ids)
+            ):
+                raise EntryConflictError(
+                    "sparse selection is outside this source shard"
+                )
+        # Revalidated under a pinned index record when copying at start_delivery.
+        with self.prompt_index.pin_selection(manifest):
+            pass
+
+    def _prepare_sparse_source(self, entry, delivery):
+        manifest = delivery.sparse_manifest
+        budget = budget_of(self.transfer_engine)
+        owner = f"v-sparse:{delivery.owner}"
+        budget.reserve(owner, manifest.nbytes, 0)
+        try:
+            staging = torch.empty(manifest.nbytes, dtype=torch.uint8)
+        except BaseException:
+            budget.release(owner)
+            raise
+        registered = [None]
+
+        def release():
+            if registered[0] is not None:
+                self.transfer_engine.release_memory(registered[0])
+            budget.release(owner)
+
+        guard = ResourceGuard(staging, release)
+        guard.pin(delivery.owner)
+        with self._lock:
+            delivery.staging_guard = guard
+        guard.request_release()  # only terminal progress may remove the owner
+        offset = entry.allocation.start_page * self.page_bytes
+        source = self.pool[offset : offset + entry.manifest.expected_bytes]
+        with self.prompt_index.pin_selection(manifest) as descriptor:
+            cursor = 0
+            for spec in manifest.specs:
+                # One temporary group at a time, separately budgeted before
+                # allocation; no full-Prompt copy or unbounded torch.cat peak.
+                with pack_sparse_kv(
+                    source,
+                    layout=entry.layout,
+                    shard=entry.manifest,
+                    spec=spec,
+                    entry_transfer_id=entry.key.transfer_id,
+                    index_version=descriptor.index_version,
+                    id_mapping_version=descriptor.id_mapping_version,
+                    budget=budget,
+                ) as payload:
+                    end = cursor + payload.nbytes
+                    staging[cursor:end].copy_(
+                        payload.tensor.view(torch.uint8).reshape(-1)
+                    )
+                    cursor = end
+        try:
+            registration = self.transfer_engine.register_memory(
+                staging,
+                endpoint="pvd-vector-sparse",
+                rank=self.rank,
+                rail=self.rail,
+                metadata={
+                    "delivery_id": delivery.delivery_id,
+                    "sparse_fingerprint": manifest.fingerprint,
+                },
+            )
+        except BaseException:
+            # Registration may have reached native before raising. No handle
+            # means no safe unregister proof: quarantine, retain tensor/budget.
+            with self._lock:
+                delivery.local_terminal = TransportState.UNKNOWN
+                self._isolated_reason = "sparse staging registration outcome unknown"
+            raise
+        registered[0] = registration
+        return MemorySlice(registration, 0, manifest.nbytes)
+
     def _progress_delivery(self, entry, delivery) -> None:
         # One poll owner per delivery, including fencers and TTL/close callers.
         # Do not wait for another native poll under the store lock.
@@ -881,13 +1015,25 @@ class VectorKVStore:
                         terminal == TransportState.TERMINAL_SUCCESS
                         and handle.status == TransferStatus.SUCCESS
                     ):
-                        delivery.state = transition(
-                            delivery.state, DeliveryState.DELIVERED
-                        )
-                        self.metrics.increment(
-                            "vector_v_to_d_bytes", handle.transferred_bytes
-                        )
-                        self.metrics.increment("vector_deliveries_completed")
+                        if (
+                            delivery.sparse_manifest is not None
+                            and handle.transferred_bytes
+                            != delivery.sparse_manifest.nbytes
+                        ):
+                            self._cancel_delivery_locked(
+                                entry,
+                                delivery,
+                                "sparse transfer byte count mismatch",
+                                DeliveryState.FAILED,
+                            )
+                        else:
+                            delivery.state = transition(
+                                delivery.state, DeliveryState.DELIVERED
+                            )
+                            self.metrics.increment(
+                                "vector_v_to_d_bytes", handle.transferred_bytes
+                            )
+                            self.metrics.increment("vector_deliveries_completed")
                     elif handle.status in (
                         TransferStatus.FAILED,
                         TransferStatus.CANCELLED,

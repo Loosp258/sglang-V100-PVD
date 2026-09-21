@@ -8,9 +8,9 @@ identity checks.
 
 Deliberate properties:
 
-* **Delivery never waits for it.** Nothing here is consulted on the bootstrap
-  or refresh path, and ``IndexGate.deliverable`` stays independent of index
-  state. Turning this off changes nothing about how KV is served.
+* **Full-Prompt delivery never waits for it.** Bootstrap and the existing full
+  refresh path stay independent of index state. Explicit sparse deliveries
+  lease a ready index/version while packing their selected K/V bytes.
 * **Off unless a backend is supplied.** ``VectorKVStore`` constructs no
   manager by default, so the existing store behaves exactly as before.
 * **No autonomous driver.** ``build_pending`` is one bounded step a caller

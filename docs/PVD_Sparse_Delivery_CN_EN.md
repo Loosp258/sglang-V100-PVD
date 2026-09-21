@@ -25,8 +25,29 @@ destination authorization and native completion remain separate requirements.
 versions, stale/missing versions, foreign heads/tokens, and concurrent record
 retirement/rebuild accounting. CPU contract evidence only; no RDMA claim.
 
+## Step 2：V 的异步稀疏发送 / V-side asynchronous sparse send
+
+目的 descriptor 携带 `pvd_sparse_delivery` 时，现有 VectorKVStore 的
+reserve/start/poll/fence/ACK 使用该清单：校验真实 Entry 布局/源 shard/有效 token、
+精确 destination 长度、必需的 lifecycle-v1 元数据与 staging budget。
+无该字段时完整 Prompt 路径保持原行为。稀疏路径暂显式拒绝 GPU packing，
+不会静默把 V 的 GPU pool 搬到 CPU。
+
+源 Entry allocation 由原 write authorization pin；打包阶段额外 pin 当前 index，
+逐 group 打包到有预算的 staging，不复制整个 Prompt。staging 注册后由原 Delivery
+终态推进保留/释放，业务取消、TTL 或超时本身不能释放。短字节 SUCCESS 判失败。
+注册抛异常且结果不明确时，整个 store 隔离并保留 tensor/budget；unregister 失败时
+预算保留，之后 progress 重试成功才退还。此保守 quarantine 不是可恢复性保证。
+
+Fourteen new tests use the real store/index/packing code with a delayed transfer
+engine. They verify exact paired bytes, Entry reuse, cancellation followed by
+late terminal success/failure, premature ACK refusal, stale selection, invalid
+destination, capacity failure, short successful writes, unregister retry and
+unknown-registration quarantine. Full Windows suite: 1408 passed / 11 skipped.
+No native RDMA/GPU evidence is claimed.
+
 ## 接下来 / Next
 
-将此契约接到 VectorKVStore 的已有 reserve/start/poll/fence/ACK，保留整个异步
-传输期间的 packed staging；然后接 D 的独立 destination 生命周期、安装与 ACK。
+V 已接原 reserve/start/poll/fence/ACK 并保留整个异步传输期间的 staging；
+下一步接 D 的独立 destination 生命周期、安装与 ACK，以及真实本地 HTTP 交付测试。
 完整 Prompt bootstrap 不依赖检索索引；新增稀疏路径必须显式启用，不能改变默认行为。
