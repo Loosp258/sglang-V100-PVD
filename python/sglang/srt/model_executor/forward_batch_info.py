@@ -379,6 +379,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
     # === Resolved from SB one-shot overrides (consumed + reset by init_new) ===
     capture_hidden_mode: CaptureHiddenMode = None
+    # Explicit batch-local PVD probe sink; normal/draft forwards leave it None.
+    # The initial implementation is offline CPU/TP1 Llama only.
+    pvd_query_capture: Optional[object] = None
     # For hidden states before normal
     return_hidden_states_before_norm: bool = False
 

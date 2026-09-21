@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 import tempfile
 
 import torch
@@ -266,6 +267,21 @@ def main() -> None:
             assert not torch.count_nonzero(req_pool.req_to_token[slot])
             assert (len(req_pool.free_slots), kv_pool.available_size()) == before
 
+        probe_evidence = None
+        if "--probe" in sys.argv[1:]:
+            from pvd_target_probe_smoke import validate_target_probe
+
+            probe_evidence = validate_target_probe(runner, full_prefix)
+        search_evidence = None
+        if "--search" in sys.argv[1:]:
+            from pvd_real_search_smoke import validate_real_search
+
+            search_evidence = validate_real_search(runner)
+        sparse_decode_evidence = None
+        if "--sparse-decode" in sys.argv[1:]:
+            from pvd_sparse_decode_smoke import validate_sparse_decode
+
+            sparse_decode_evidence = validate_sparse_decode(runner)
         print(
             json.dumps(
                 {
@@ -281,6 +297,9 @@ def main() -> None:
                     "real_handle_success_early_release_reuse": True,
                     "pool_capacity_restored": True,
                     "gpu_rdma_latency_validated": False,
+                    "probe_evidence": probe_evidence,
+                    "search_evidence": search_evidence,
+                    "sparse_decode_evidence": sparse_decode_evidence,
                 },
                 indent=2,
             )

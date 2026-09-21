@@ -1,5 +1,9 @@
 # PVD prediction-only draft reuse: audit and plan / PVD 仅预测 draft 复用：审计与方案
 
+Follow-up / 后续：[target-Q CPU probe](PVD_Target_Q_CPU_Probe_CN_EN.md) 已实现
+CPU/TP1 Llama 的离线真实 Q 捕获；本页旧阶段的“真实 target-Q 未实现”不再适用于
+该参考子集。生产/GPU probe 与并发服务接线仍待完成。
+
 Latest / 最新：2026-09-21 的 [真实 CPU forward 记录](PVD_Draft_CPU_Execution_CN_EN.md)
 补充了 33 次真实 ModelRunner 前向；覆盖下文旧阶段“从未执行”的历史陈述。
 GPU/RDMA、真实目标 Q 与生产服务接线仍未验证/未完成。

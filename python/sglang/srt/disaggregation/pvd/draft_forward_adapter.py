@@ -95,6 +95,7 @@ MUST_STAY_UNSET = (
     "spec_algorithm",
     "input_embeds",
     "token_type_ids",
+    "pvd_query_capture",
 )
 
 #: The only page size the token-wise allocation below is valid for. A paged

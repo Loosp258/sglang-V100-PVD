@@ -2,6 +2,25 @@
 
 Updated: 2026-09-21.
 
+Latest follow-up: [offline real target-Q probe](PVD_Target_Q_CPU_Probe_CN_EN.md)
+now reuses target weights and private CPU pools to capture post-RoPE Q for the
+explicit CPU/TP1 Llama subset. Real numerical/isolation/failure checks pass;
+No live Decode/GPU integration is implied.
+This supersedes historical blanket statements that no real target-Q path exists.
+
+Latest roadmap gates: [ordered implementation roadmap](PVD_Implementation_Roadmap_CN_EN.md)
+and [steps 1–3 evidence](PVD_Roadmap_Steps_1_3_CN_EN.md). Real target K/Q now pass
+local V HTTP exact search, sparse packing and per-shard CPU bank installation.
+Latest follow-up: [real sparse CPU Decode](PVD_Sparse_CPU_Decode_CN_EN.md) now
+executes a real Llama attention path with bank Prompt KV plus pool-generated KV.
+Full selection matches native logits exactly in the fixture; sparse per-layer
+attention matches independent softmax, with poison-pool and failure-cleanup checks.
+WSL: **1191 passed / 6 skipped**; Windows: **1186 passed / 11 skipped**.
+GQA decision: union/deduplicate Q-head token selections within each layer/KV head,
+with an explicit cap; overflow refuses the refresh, never silently truncates.
+Initial full Prompt is unchanged. Production D/GPU sparse attention, rank-coordinated
+installation, Scheduler prefetch, GPU/RDMA and CAGRA remain unimplemented/unverified.
+
 Latest execution evidence supersedes older "no forward executed" progress notes:
 [real CPU draft execution and remaining limits](PVD_Draft_CPU_Execution_CN_EN.md).
 33 real tiny-Llama CPU forwards now pass; this is not GPU/RDMA or production
@@ -425,16 +444,16 @@ It does not execute a real model, install KV, advance a clock or enter productio
 - **Sampling.** Selection is greedy, because sampling needs an RNG whose isolation has been established and it has not been.
 - **Measurement of the recompute-per-call prefix.** It is correct and self-contained, and its O(prefix) cost per round has never been measured against the prefetch window. Persistent caching is deliberately not implemented; the audit lists what it would need first.
 - **Evidence that concurrent execution is safe.** Execution is serialized as a conservative default, not because anything was measured.
-- Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
+- Online target-model probe execution and other architectures: the offline CPU/TP1 Llama probe now captures real post-RoPE Q, but cannot be concurrently attached to live Decode.
 - A **CAGRA backend**. Everything above it now exists and runs (see 5.2): a stored Entry is indexed through the exact CPU backend and searched under the gate's identity checks. Nothing calls cuVS, and no recall comparison against the exact reference has been made.
 - **A real query from D.** A standalone single-shard client now calls the retrieval route
-  in synthetic-query tests, but no production D path produces a probe query or invokes
-  it. Sparse selection is not consumed by transfer or attention. The caller must supply
+  with both synthetic and actual offline target-model Q, but no production D path produces a probe query or invokes
+  it. Sparse selections are consumed by offline packing and an explicit real-model CPU attention adapter, not the production serving pipeline. The caller must supply
   `SearchRequestIdentity` and trusted `SearchScope`; they are not inferred from V replies.
 - **Any GPU execution of the retrieval path.** The device policy is decided and enforced (see 5.2 item 11), and the CPU suite covers the placement chain using a declared non-CPU backend, but no index has ever been built from a CUDA pool and no query has ever crossed devices on real hardware. The two CUDA tests in `test_pvd_index_search.py` and the one in `test_pvd_prompt_index.py` skip on every CPU-only run.
 - **Any measurement of what the index budget should be.** `--prompt-index-budget-bytes` is required and enforced, but no figure has been measured for a real model, so the operator has nothing to size it from yet. The manager's behaviour when it is too small is backpressure, which is correct but untested against a real workload.
 - Page-level representative vectors, deliberately.
-- Sparse KV selection, packing, D installation, and attention integration.
+- Serving sparse KV packing/delivery, D installation, and attention integration; offline selection/packing and CPU current/next/numerical references now exist.
 - Actual active/next GPU buffers and prefetch Scheduler integration.
 - Hardware validation and performance measurement of the implemented asynchronous initial pull (see 5.2). Network/ACK waits yield to the scheduler, but TP coordination and GPU installation still cost time.
 - (Dropped, not pending.) Direct-to-final-page delivery is no longer a goal; see section 16. The pull reuses the existing `full_prompt` staging-and-unpack path by decision, not by omission.
@@ -900,13 +919,17 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/prompt_index.py` | Per-Entry gates, vectors and search on a V rank; driven by `VectorKVStore.progress_prompt_indexes()`. Off unless a manager is supplied. |
 | `python/sglang/srt/disaggregation/pvd/prompt_vectors.py` | Prompt K extraction from a stored shard: K only, padding excluded, per layer and global KV head, post-RoPE, owns its copy. |
 | `python/sglang/srt/disaggregation/pvd/index_search.py` | Backend seam, exact CPU reference, logical selection, explicit merge policy. No cuVS. |
-| `python/sglang/srt/disaggregation/pvd/search_client.py` | Standalone bounded single-shard HTTP search client; synthetic-query tests only, not wired into Decode. |
+| `python/sglang/srt/disaggregation/pvd/search_client.py` | Bounded single-shard HTTP client; synthetic and real offline target-Q validation, not wired into Decode. |
+| `python/sglang/srt/disaggregation/pvd/sparse_payload.py` | Offline identity-bound selected K/V packing; not an authorized transport or Entry lease. |
+| `python/sglang/srt/disaggregation/pvd/sparse_union.py` | Explicit bounded GQA token union within each layer/KV head; overflow refuses. |
+| `python/sglang/srt/disaggregation/pvd/sparse_working_set.py` | CPU-only current/next bank and attention reference; not a serving backend or GPU fence. |
+| `python/sglang/srt/disaggregation/pvd/sparse_cpu_backend.py` | Explicit offline CPU Llama Decode consumer and backend adapter; real model forwards validated, no production registration or distributed install. |
 | `python/sglang/srt/disaggregation/pvd/probe_search.py` | Scoped CPU probe-to-search bridge; explicit Q positions/head mapping and stale-window protection, not a serving pipeline. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |
 | `python/sglang/srt/disaggregation/pvd/draft_sglang.py` | Prediction-only `DraftProvider`: branch-owned handles, allowlist worker surface, storage-checked private pools, separate scratch and persistent budgets, private config translation, quarantine on failed cleanup. |
 | `python/sglang/srt/disaggregation/pvd/draft_runner_sglang.py` | The execution path: `DraftForwardInputs`, private slots, KV rows and request map, recompute-per-call prefix, bounded steps. |
-| `python/sglang/srt/disaggregation/pvd/draft_forward_adapter.py` | `DraftForwardInputs` -> `ForwardBatch` mapping and `PrivatePoolAllocator`. Never executed: the CPU suite cannot import the real `ForwardBatch`. |
+| `python/sglang/srt/disaggregation/pvd/draft_forward_adapter.py` | `DraftForwardInputs` -> `ForwardBatch` and private allocator; real tiny-Llama CPU forwards validated, not GPU/production checkpoints. |
 | `python/sglang/srt/speculative/standalone_worker.py` | Upstream standalone draft worker. **Shares the target's pools**; read the reuse audit before calling anything on it. |
 | `python/sglang/srt/speculative/eagle_worker.py` | Upstream EAGLE draft/verify/extend. `_draft_preprocess_decode` is the method the audit enumerates. |
 | `docs/PVD_Draft_Worker_Reuse_Audit_CN_EN.md` | Why `draft()` is not the reuse point, what is reused, and what stays architecture-dependent. |

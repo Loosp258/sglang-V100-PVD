@@ -2,6 +2,21 @@
 
 更新日期：2026-09-21。
 
+最新推进：[离线真实 target-Q probe](PVD_Target_Q_CPU_Probe_CN_EN.md)
+已复用目标权重与独立 CPU 池，实现明确限定 CPU/TP1 Llama 的 post-RoPE Q 捕获，
+通过真实模型数值、状态隔离与异常检查。
+这覆盖历史“完全没有真实 target-Q 路径”的描述，不代表已接入在线 Decode 或 GPU。
+
+最新进度见[顺序推进计划](PVD_Implementation_Roadmap_CN_EN.md)与
+[第 1–3 步验收记录](PVD_Roadmap_Steps_1_3_CN_EN.md)。真实 K/Q 已通过 V 本地 HTTP
+精确检索、稀疏配对 K/V 打包与分片 CPU 工作集安装。最新
+[真实模型稀疏 CPU Decode](PVD_Sparse_CPU_Decode_CN_EN.md) 已执行真实 Llama attention：
+全选 logits 与原后端误差为 0，子集通过逐层独立 softmax、Prompt 池毒化与异常清理验证。
+WSL 回归 **1191 passed / 6 skipped**，Windows **1186 passed / 11 skipped**。
+GQA 已确认：同层同 KV head 的 Q heads 检索
+token 取并集去重；显式上限，超限拒绝更新，不静默截断。首轮完整 Prompt 不变。
+正式 D 稀疏 attention、跨 rank 安装、在线预取调度、GPU/RDMA 与 CAGRA 仍未完成或未验证。
+
 最新执行证据覆盖下文历史进展中“尚无前向执行”的描述：
 [真实 CPU draft 前向与剩余限制](PVD_Draft_CPU_Execution_CN_EN.md)。
 现已通过 33 次真实 tiny-Llama CPU forward；不代表 GPU/RDMA 或正式权重验证。
@@ -372,9 +387,10 @@ tokenizer 兼容性复用 `VocabularySignature`（size、特殊 id **以及**编
 - **前缀重算方案的实测**。它正确且自洽，但其每轮 O(prefix) 的开销从未与预取窗口
   对比测量过。持久缓存刻意未实现；审计文档列出了它必须先定义的内容。
 - **并发执行安全性的证据**。执行串行化只是保守默认，并非测量结论。
-- 目标模型 probe、预测前缀重对齐、Q 捕获。
+- 在线目标模型 probe 与其他架构支持：离线 CPU/TP1 Llama 已捕获真实 post-RoPE Q，
+  但不能将其并发挂接到运行中的 Decode。
 - CAGRA 服务端索引生命周期和真实请求搜索。
-- **D 侧真实 query。** 独立单 shard 客户端已在合成 query 测试中调用检索路由，
+- **D 侧在线 query。** 独立单 shard 客户端已用合成及离线真实模型 Q 调用检索路由，
   但正式 D 服务尚无真实 probe 执行或客户端接线。调用者必须提供
   `SearchRequestIdentity` 和可信 `SearchScope`，不能从 V 回复反推身份与边界。
 - **检索路径的任何 GPU 执行。** 设备策略已决定并已强制执行，CPU 测试用一个声明了

@@ -248,6 +248,10 @@ class LlamaAttention(nn.Module):
                 forward_batch=forward_batch,
             )
 
+        if forward_batch.pvd_query_capture is not None:
+            # q has already passed rotary_emb above. Capture only this batch;
+            # never install hooks or retain state on the shared target model.
+            forward_batch.pvd_query_capture.capture(self.attn.layer_id, positions, q)
         attn_output = self.attn(q, k, v, forward_batch)
         output, _ = self.o_proj(attn_output)
         return output
