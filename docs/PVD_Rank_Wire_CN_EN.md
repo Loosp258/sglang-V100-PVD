@@ -60,11 +60,57 @@ resources. Timeouts and process loss are never GPU/MR completion evidence.
 56 unit tests cover strict wire framing, incarnation/channel binding, independent
 membership, both barriers, duplicate/reordered/stale messages, reader draining,
 partial install failure, retained charges and terminal cleanup. These are CPU
-contract tests. A separate multiprocess acceptance is the next step; production
-TP collectives, GPU attention, native RDMA and Scheduler integration remain open.
+contract tests. Multiprocess acceptance is implemented below; production TP
+collectives, GPU attention, native RDMA and Scheduler integration remain open.
 
-56 个 CPU 单测已覆盖协议边界和本地读门控；本阶段尚不是实际多进程验收，更不是
-生产 TP/GPU 集成。下一步用独立进程持有各自 bank，通过有界字节消息验证这些约束。
+56 个 CPU 单测已覆盖协议边界和本地读门控；单测本身不是生产 TP/GPU 集成。
+后续独立进程验收见下节，每个进程持有各自 bank，通过有界字节消息验证这些约束。
 
 Full regression: Windows 1549 passed / 14 skipped; WSL 1554 passed / 9 skipped.
 New modules/tests pass Ruff. Skipped hardware cases are not treated as passed.
+
+## Independent-process acceptance / 独立进程验收
+
+```bash
+python test/registered/disaggregation/run_pvd_rank_install_cpu_smoke.py --ranks 2
+python test/registered/disaggregation/run_pvd_rank_install_cpu_smoke.py --ranks 4
+python test/registered/disaggregation/run_pvd_rank_install_cpu_smoke.py --ranks 2 --fault install
+python test/registered/disaggregation/run_pvd_rank_install_cpu_smoke.py --ranks 2 --fault exit
+```
+
+This executable uses `multiprocessing` **spawn**, not forked copies of the parent's
+banks. Every child constructs its own real CPU K/V tensors and participant. The
+parent owns the coordinator only, verifies distinct PIDs, and exchanges bounded
+JSON bytes over local pipes. No tensor, pointer, pickled model or bank travels
+through the control channel. Fixture setup creates deterministic K/V inside each
+worker; it is not V-to-D payload delivery. Bootstrap bypasses package initializers
+only; the actual PVD coordinator, message codec, participant and CPU bank execute.
+
+The successful scenarios install the full Prompt at boundary zero, hold an old
+reader while preparing the next bank, refuse early park/installation, then install
+the selected token subset at boundary four. Exact paired K/V values are checked
+in each rank before and after. Duplicate commands do not install twice; an old
+RESUME cannot clear the next round. APPLIED is deliberately read-blocked until
+all ranks apply and RESUME arrives.
+
+The failure scenarios apply on one rank, then either raise after another rank's
+local swap or terminate that CPU fixture process. The coordinator closes the
+request without advancing its committed installation boundary. No global RESUME
+can be generated and the already-applied surviving rank remains unreadable.
+All live ranks close with zero bank charges. For a killed rank, cleanup is
+explicitly **not proven**; process death is not generalized to GPU/MR safety.
+
+新增独立可执行验收：使用 spawn 启动 2/4 个 CPU 进程，各自构造并持有真实 K/V；
+父进程只做协调，pipe 中只传有界 JSON 控制字节。验证首轮完整 Prompt、刷新子集、
+读者排空、旧消息拒绝、重复消息幂等和全体安装后才恢复读。故障场景在部分 rank
+安装后注入换 bank 异常或进程退出，协调端不能推进边界或发送 RESUME。
+存活 rank 的预算全部归零；被终止进程不宣称已证明资源清理。
+
+Four subprocess regression tests invoke these exact commands. This is **real
+multi-process CPU control**, but still **not model tensor parallelism**, NCCL/
+Gloo integration, cross-node control, CUDA reader completion, RDMA, CAGRA or a
+production Scheduler. Do not relabel `--ranks 4` as a working GPU TP4 deployment.
+
+Final full suite with all four real-process scenarios: Windows **1553 passed /
+14 skipped**, WSL **1558 passed / 9 skipped**. Both environments execute the
+process scenarios; these are not hardware skips. New source/tests pass Ruff.

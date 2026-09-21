@@ -5,8 +5,11 @@ Updated: 2026-09-21.
 Newest: [rank wire contract and CPU participant](PVD_Rank_Wire_CN_EN.md).
 Bounded messages bind worker incarnation and exact staging identity. Local
 APPLIED never permits reads without global RESUME. 56 new unit tests; full
-Windows 1549/14 skipped, WSL 1554/9 skipped. Multiprocess acceptance is next;
-this is not production TP, CUDA completion or Scheduler integration.
+Windows 1549/14 skipped, WSL 1554/9 skipped. Follow-up real **spawn-process**
+acceptance now passes with 2/4 independent CPU banks and bounded JSON pipe
+messages, including after-swap failure and peer exit. Full suite is now Windows
+1553/14 skipped, WSL 1558/9 skipped. This is not model TP, cross-node transport,
+CUDA completion or Scheduler integration. Protocol commit: `8d18e76c0`.
 
 Newest: [sparse delivery Step 7](PVD_Sparse_Delivery_CN_EN.md) closes the lost-
 reserve recovery gap. Known Entry + current V epoch + an atomic, retained

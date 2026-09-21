@@ -9,7 +9,10 @@
 最新：[rank 消息与本地读门控](PVD_Rank_Wire_CN_EN.md) 已实现：严格有界消息、
 worker epoch/通道绑定、全体 APPLIED 后才 RESUME、单 rank CPU bank 门控。
 56 个新单测；全量 Windows 1549 passed / 14 skipped，WSL 1554 passed / 9 skipped。
-尚未连接生产 TP collective/Scheduler；独立进程验收是下一步，不是已经完成。
+后续已完成 2/4 个独立 CPU 进程的真实字节控制消息验收：各 rank 独立持有 bank，
+覆盖首轮/刷新、reader 排空、重复/旧消息、部分换 bank 失败和进程退出。最新全量
+Windows 1553 passed / 14 skipped、WSL 1558 passed / 9 skipped。
+尚未连接生产 TP collective/Scheduler；这不是 GPU TP4 或跨节点 RDMA 验收。
 
 本节覆盖下面的历史未推送/未接交付记录。此前本地 commit 已推送；本轮已逐步推送
 `45c47a788`（清单与 index lease）、`46856081b`（V 稀疏 Delivery）、`de935b931`

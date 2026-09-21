@@ -4,8 +4,10 @@
 
 最新：[rank 消息与 CPU 参与者](PVD_Rank_Wire_CN_EN.md)：有界消息绑定 worker
 epoch 和精确 staging；本地 APPLIED 后仍等全局 RESUME 才能读取。56 个新单测，
-全量 Windows 1549/14 skipped、WSL 1554/9 skipped。下一步是实际独立进程验收；
-尚未连接生产 TP、CUDA 完成证明或 Scheduler。
+全量 Windows 1549/14 skipped、WSL 1554/9 skipped。后续实际 spawn 独立进程验收
+已通过：2/4 个 CPU rank 各自持有 bank，pipe 只传有界 JSON 控制消息；覆盖换 bank
+后异常和进程退出。最新全量 Windows 1553/14 skipped、WSL 1558/9 skipped。
+协议提交 `8d18e76c0`；尚未连接真实模型 TP、跨节点传输、CUDA 完成证明或 Scheduler。
 
 最新：[稀疏交付 Step 7](PVD_Sparse_Delivery_CN_EN.md) 修复 reserve 未抵达时的
 取消恢复。仅已知 Entry、当前 V epoch、原子建立并保留完整身份关闭标记后，才能
