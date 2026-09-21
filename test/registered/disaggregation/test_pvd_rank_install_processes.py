@@ -31,7 +31,8 @@ def test_independent_rank_banks_over_bounded_control_messages(ranks, fault):
 
 
 @pytest.mark.parametrize(
-    "fault", ["none", "install", "exit", "lost-resume", "lost-prepared"]
+    "fault",
+    ["none", "install", "exit", "lost-resume", "lost-prepared", "forward-cancel"],
 )
 def test_owner_runtime_drives_real_rank_processes_and_failures(fault):
     script = Path(__file__).with_name("run_pvd_rank_install_cpu_smoke.py")
@@ -45,6 +46,8 @@ def test_owner_runtime_drives_real_rank_processes_and_failures(fault):
     assert result.returncode == 0, result.stdout + result.stderr
     evidence = json.loads(result.stdout)
     assert evidence["status"] == "passed" and evidence["runtime"]
+    assert evidence["owned_forward_before_refresh"]
+    assert evidence["cancelled_forward_discarded"] == (fault == "forward-cancel")
     assert evidence["independent_processes"] == 2
     assert evidence["live_rank_budgets_restored"] == 2 - (fault == "exit")
     assert evidence["all_bound_peers_notified_on_failure"] == (fault != "none")

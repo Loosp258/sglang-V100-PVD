@@ -2,6 +2,14 @@
 
 Updated: 2026-09-21.
 
+Newest: [in-flight forward permit](PVD_Rank_Runtime_CN_EN.md) prevents INSTALL
+while an owner-local execution ticket remains active. Cancellation/timeout do
+not retire it; completion after caller-proven execution/readers drain decides
+accept vs discard without writing tokens. 13 new tests; all six runtime process
+scenarios hold actual CPU bank readers, including cancellation in flight. This
+is metadata admission, not native resource ownership or production Scheduler.
+Latest full suite: Windows 1604 passed / 14 skipped; WSL 1609 passed / 9 skipped.
+
 Newest: [owner-polled rank runtime](PVD_Rank_Runtime_CN_EN.md) adds bounded
 callback queues, fixed whole-round deadlines, automatic barrier progression,
 and scoped stop notifications to every bound peer, including missing PREPARED.

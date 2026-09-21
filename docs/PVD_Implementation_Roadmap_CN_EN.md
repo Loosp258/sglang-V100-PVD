@@ -6,6 +6,12 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新：[在途 forward 票据](PVD_Rank_Runtime_CN_EN.md)。rank 运行时新增单请求执行
+所有权，票据在途禁止 INSTALL；取消/超时不能自动退还，执行方确认 drain 后才
+决定接受或丢弃输出。13 个新单测，实际 CPU 子进程增加取消在途 forward 场景。
+这是准入元数据接点，不持有 tensor/MR，不写正式 token，仍不是生产 Scheduler 接入。
+最新全量：Windows 1604 passed / 14 skipped；WSL 1609 passed / 9 skipped。
+
 最新：[rank 运行时驱动](PVD_Rank_Runtime_CN_EN.md) 已提供线程安全有界队列、owner
 轮询、固定整轮截止时间、RESUMED 准入和请求级失败通知。新增 27 个单测及 5 个
 真实 CPU 子进程场景；不是已接入正式 Scheduler 或原生传输。前一门控提交

@@ -373,7 +373,15 @@ def run_runtime(ranks=2, fault="none"):
     if (
         type(ranks) is not int
         or not 2 <= ranks <= 8
-        or fault not in ("none", "install", "exit", "lost-resume", "lost-prepared")
+        or fault
+        not in (
+            "none",
+            "install",
+            "exit",
+            "lost-resume",
+            "lost-prepared",
+            "forward-cancel",
+        )
     ):
         raise ValueError("runtime fixture requires 2..8 ranks and a known fault")
     _bootstrap()
@@ -470,15 +478,58 @@ def run_runtime(ranks=2, fault="none"):
         assert len(pids) == ranks
         for count in (0, 3):
             epoch = runtime.begin(count, timeout_seconds=5)
+            permit = runtime.begin_forward(3) if count == 3 else None
+            if permit is not None:
+                for rank in range(ranks):
+                    assert (
+                        json.loads(rpc(rank, {"fixture": "hold", "count": 3}))[
+                            "fixture"
+                        ]
+                        == "held"
+                    )
             for rank in range(ranks):
                 reply = rpc(rank, {"fixture": "stage", "epoch": asdict(epoch)})
                 dropped = count == 3 and rank == ranks - 1 and fault == "lost-prepared"
                 if not dropped:
                     post(rank, reply)
+                    if permit is not None:
+                        assert (
+                            json.loads(rpc(rank, {"fixture": "park", "count": 4}))[
+                                "fixture"
+                            ]
+                            == "wait_reader"
+                        )
+                        assert (
+                            json.loads(rpc(rank, {"fixture": "release"}))["fixture"]
+                            == "reader_released"
+                        )
                     post(
                         rank,
                         rpc(rank, {"fixture": "park", "count": epoch.target_tokens}),
                     )
+                elif permit is not None:
+                    assert (
+                        json.loads(rpc(rank, {"fixture": "release"}))["fixture"]
+                        == "reader_released"
+                    )
+            if permit is not None:
+                pump()
+                assert runtime.snapshot()["phase"] == "preparing"
+                assert runtime.snapshot()["forward_operation_id"] == permit.operation_id
+                assert (
+                    not outgoing
+                )  # even drained rank readers don't retire host execution
+                if fault == "forward-cancel":
+                    runtime.cancel()
+                    assert (
+                        runtime.snapshot()["forward_operation_id"]
+                        == permit.operation_id
+                    )
+                accepted = runtime.finish_forward(
+                    permit, readers_drained=True, succeeded=True
+                )
+                assert accepted == (fault != "forward-cancel")
+                assert runtime.snapshot()["forward_operation_id"] is None
             pump()
             if count == 3 and fault != "none":
                 assert not runtime.can_decode(4)
@@ -509,6 +560,8 @@ def run_runtime(ranks=2, fault="none"):
         return {
             "status": "passed",
             "runtime": True,
+            "owned_forward_before_refresh": True,
+            "cancelled_forward_discarded": fault == "forward-cancel",
             "ranks": ranks,
             "fault": fault,
             "independent_processes": len(pids),
@@ -535,7 +588,14 @@ if __name__ == "__main__":
     parser.add_argument("--ranks", type=int, default=2)
     parser.add_argument(
         "--fault",
-        choices=("none", "install", "exit", "lost-resume", "lost-prepared"),
+        choices=(
+            "none",
+            "install",
+            "exit",
+            "lost-resume",
+            "lost-prepared",
+            "forward-cancel",
+        ),
         default="none",
     )
     parser.add_argument("--runtime", action="store_true")

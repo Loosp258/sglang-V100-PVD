@@ -2,6 +2,12 @@
 
 更新日期：2026-09-21。
 
+最新：[在途 forward 票据](PVD_Rank_Runtime_CN_EN.md) 在执行未结束时阻止 INSTALL。
+取消/超时不自动退还票据；执行方确认真实执行/读者结束后才决定接受或丢弃输出，
+不写正式 token。新增 13 个单测，六个实际运行时子进程场景均持有真实 CPU bank
+读者，并覆盖在途取消。这只是准入元数据，尚未持有原生资源或接入生产 Scheduler。
+最新全量 Windows 1604 passed / 14 skipped；WSL 1609 passed / 9 skipped。
+
 最新：[rank 运行时驱动](PVD_Rank_Runtime_CN_EN.md) 增加有界回调队列、固定整轮
 截止时间、自动屏障推进及全部绑定 rank 的请求级停止通知，包括 PREPARED 未收到
 的 rank。新增 27 个单测和 5 个实际 CPU 子进程场景；缺失 RESUMED 不能准入。

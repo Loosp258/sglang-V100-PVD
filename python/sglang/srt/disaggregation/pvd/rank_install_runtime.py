@@ -8,14 +8,29 @@ A successful callback is NOT a peer ACK, cleanup proof, or CUDA/RDMA fence.
 import math
 import threading
 import time
+import uuid
 from collections import deque
+from dataclasses import dataclass
 
 from sglang.srt.disaggregation.pvd.rank_install_wire import (
     MAX_FRAME_BYTES,
     RankInstallExchange,
     RankInstallMessage,
 )
-from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
+from sglang.srt.disaggregation.pvd.sparse_install import (
+    InstallEpoch,
+    InstallProtocolError,
+)
+
+
+@dataclass(frozen=True)
+class RankForwardPermit:
+    """Owner-local execution identity; not a wire message or native fence."""
+
+    operation_id: str
+    identity: tuple[str, str, str]
+    committed_tokens: int
+    installed_epoch: InstallEpoch
 
 
 class RankInstallRuntime:
@@ -51,6 +66,7 @@ class RankInstallRuntime:
         self._epoch = self._deadline = self._last_time = None
         self._phase, self._reason = "idle", None
         self._stop_pending, self._previous = set(), {}
+        self._forward = None
 
     def _bound(self, rank, epoch):
         return type(rank) is int and self.exchange.peer_epochs.get(rank) == epoch
@@ -95,7 +111,7 @@ class RankInstallRuntime:
 
     def begin(self, decode_tokens, *, timeout_seconds):
         self.exchange.coordinator._owner()
-        if self._progressing or self._phase != "idle":
+        if self._progressing or self._phase != "idle" or self._forward is not None:
             raise InstallProtocolError("idle owner runtime required")
         with self._lock:
             if self._fault or self._queue:
@@ -200,7 +216,12 @@ class RankInstallRuntime:
                     break
             with self._lock:
                 pending = bool(self._queue)
-            if self._guard() and not pending and self._epoch is not None:
+            if (
+                self._guard()
+                and not pending
+                and self._epoch is not None
+                and self._forward is None
+            ):
                 if self._phase == "preparing":
                     commands = self.exchange.install_commands(self._epoch)
                     if commands:
@@ -225,10 +246,63 @@ class RankInstallRuntime:
         self.exchange.coordinator._owner()
         if self._progressing or not self._guard():
             return False
+        if self._forward is not None:
+            return False
         with self._lock:
             if self._queue:
                 return False  # process potential failure notifications before dispatch
         return self.exchange.can_decode(decode_tokens)
+
+    def begin_forward(self, decode_tokens):
+        """Acquire one request execution slot after normal global admission.
+
+        An already launched refresh can progress while this slot is owned, but
+        INSTALL cannot be sent. The caller must also hold actual bank readers
+        and target-worker execution ownership; this metadata ticket replaces
+        neither. It never samples tokens or changes the committed-token clock.
+        """
+        if not self.can_decode(decode_tokens):
+            raise InstallProtocolError("request must wait or abort before forward")
+        self._forward = RankForwardPermit(
+            uuid.uuid4().hex,
+            self.exchange.coordinator.identity,
+            decode_tokens,
+            self.exchange.coordinator.snapshot()["completed"],
+        )
+        return self._forward
+
+    def finish_forward(self, permit, *, readers_drained, succeeded):
+        """Retire exactly this execution and decide whether to accept its output.
+
+        Call only AFTER all actual execution/readers drain. The booleans are
+        caller assertions, never evidence manufactured by this adapter. False
+        means discard the output and abort this request; no token is appended.
+        Apply the decision synchronously on the owner thread. Cancellation or
+        timeout by itself NEVER retires the in-flight ticket.
+        """
+        self.exchange.coordinator._owner()
+        if permit is None or permit is not self._forward or self._progressing:
+            raise InstallProtocolError("stale or foreign forward completion")
+        if readers_drained is not True or type(succeeded) is not bool:
+            raise InstallProtocolError(
+                "explicit execution drain and success status required"
+            )
+        self.progress(max_events=self._max_events)  # ticket still blocks INSTALL
+        with self._lock:
+            unresolved = bool(self._queue) or self._fault is not None
+        if not succeeded:
+            self._fail("target forward failed")
+        elif unresolved:
+            self._fail("unresolved rank control at forward completion")
+        elif (
+            self.exchange.coordinator.snapshot()["completed"] != permit.installed_epoch
+        ):
+            self._fail("installed bank changed during target forward")
+        accepted = self._guard()
+        self._forward = None
+        if not accepted:
+            self._notify_stops()
+        return accepted
 
     def cancel(self):
         self.exchange.coordinator._owner()
@@ -248,4 +322,7 @@ class RankInstallRuntime:
             "pending_bytes": size,
             "stop_notifications_pending": tuple(sorted(self._stop_pending)),
             "resource_cleanup_proven": False,
+            "forward_operation_id": self._forward.operation_id
+            if self._forward
+            else None,
         }

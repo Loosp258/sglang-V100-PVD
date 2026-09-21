@@ -43,16 +43,17 @@ obtain their own completion/fence evidence before freeing anything.
 
 This is an explicit nonblocking control adapter, not a background daemon. Its
 owner must poll it in a scheduling loop and route messages to the correct request.
-It supplies no model-forward execution lease, output discard policy, streaming
-callback or cache-release hook. Peer loss after a dispatch cannot undo an already
-running forward; production Scheduler integration must fail/discard that request
-and preserve actual resource ownership. No automatic command retransmission,
+It now supplies the owner-local forward admission ticket described below, but
+not target-worker ownership, a model executor, streaming or cache-release hooks.
+Peer loss after dispatch cannot undo a running forward; production Scheduler
+integration must apply the discard decision and preserve actual resource
+ownership. No automatic command retransmission,
 dynamic membership, failover or cross-restart recovery is added here. Direct
 Exchange users can explicitly retry RESUME, while this runtime's first policy
 is fixed-deadline failure for missing messages.
 
 这不是已经接入正式 Scheduler 的服务循环。调用方还需负责轮询、按请求路由消息、
-正式 forward 票据、失败后丢弃结果以及真实资源回收。不能把该门控当成 GPU event、
+目标执行器/共享模型互斥、执行拒绝结果提交的决定以及真实资源回收。不能把票据当成 GPU event、
 RDMA fence 或已经运行的 forward 的撤销证明。当前运行时丢失消息后采用固定超时
 失败，不擅自引入重传、换 rank 或跨进程重启恢复策略。
 
@@ -89,3 +90,49 @@ PREPARED 回包丢失。真实 pipe 控制消息不等于网络数据面/RDMA；
 Full regression: **Windows 1590 passed / 14 skipped**, **WSL 1595 passed /
 9 skipped**. All five runtime process scenarios executed in both environments.
 New source/tests pass Ruff. Skipped hardware cases remain unverified.
+
+## In-flight forward ticket / 在途 forward 票据
+
+`begin_forward(committed_tokens)` returns an owner-local immutable permit bound
+to the request identity, installed epoch, committed-token snapshot and unique
+execution id. One runtime can hold only one such permit. Starting a fresh round
+while a forward is owned is refused; a previously launched refresh can still
+receive PREPARED/PARKED while the old forward runs. The runtime must not issue
+INSTALL until the permit is retired, even if every rank already reports PARKED.
+
+After **all real execution and readers have drained**, the owner calls
+`finish_forward(permit, readers_drained=True, succeeded=...)`. Those flags are
+assertions by the execution owner, not proof manufactured by the runtime. It
+processes pending control while retaining the permit, rejects foreign/copied/
+replayed completions, and returns whether the result may be accepted. Cancellation,
+timeout, peer loss, bad pending events or execution failure reject late output.
+Cancellation alone never clears the permit. Apply the decision synchronously
+on the owner thread; this API does not append tokens or advance the formal D-token
+count. The existing sampler/Req result processor must remain the sole writer.
+
+The ticket owns **admission metadata only**. The caller must independently hold
+target-worker execution ownership and all tensor/bank/MR reader leases until
+their actual completion. No booleans or process-local ticket substitute for a
+native event/fence. This step does not wire production Scheduler or attention.
+
+在途票据绑定请求、已安装轮次和正式 token 计数快照。每个请求一次只允许一个
+forward；已启动的刷新仍可收准备回执，但票据未退还时禁止发 INSTALL。取消、
+超时或失联只关闭准入，不自动退还执行票据。只有执行方确认所有实际执行/读者
+结束后，才可完成票据并获得“接受或丢弃输出”的决定。接口不写 token，不推进
+正式输出计数，不能替代目标模型互斥、tensor 所有权、GPU event 或 MR fence。
+
+13 new unit cases cover duplicate dispatch, exact completion ownership, reader
+drain refusal, deferred INSTALL, queued failures and cancelled/late outputs.
+All six runtime subprocess scenarios now hold real CPU bank reader scopes in
+independent processes, prepare a refresh, drain the readers, and verify that the
+host execution ticket still blocks INSTALL until explicitly finished. These
+reader scopes model execution ownership; this test does not run a model forward.
+The new scenario cancels while the ticket is in flight and verifies output refusal:
+
+```bash
+python test/registered/disaggregation/run_pvd_rank_install_cpu_smoke.py --runtime --fault forward-cancel
+```
+
+Full regression after this step: **Windows 1604 passed / 14 skipped**, **WSL
+1609 passed / 9 skipped**. All ten manual/runtime process scenarios execute in
+both environments. Ruff check/format pass on the changed Python files.
