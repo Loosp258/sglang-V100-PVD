@@ -103,3 +103,45 @@ an old request's clock. See the linked note for current limits.
 
 真实 CPU Decode 消费已提交为 `8f482e631`，此前协议为 `3c4b0c479`，未推送。
 CPU 生命周期接点已提交 `81bfb64b4`，batch 执行器已提交 `1553d036c`，未推送。
+
+## 当前接续点 / Current handoff gate (2026-09-21)
+
+本轮验证后逐阶段提交（均未自动 push）：
+
+| Commit | 完成的阶段 / Completed stage |
+|---|---|
+| `1553d036c` | CPU batch dispatch / real multi-request execution |
+| `bef8a59c4` | Actual Req/ScheduleBatch result observation, one authoritative output writer |
+| `92ae30c23` | Real independent draft closed loop; backing-KV storage isolation fix |
+| `1e3c8ab83` | Request-local CPU refresh driver, boundary installation / actual-Q fallback |
+
+最新完整 suite：Windows 1373 passed / 11 skipped；WSL 1378 passed / 6 skipped。
+全部严格 CPU 组合验收通过，包括真实双模型、V 本地 HTTP、稀疏 attention 和正式 Req
+结果处理。**最终生产目标尚未完成。** 对真实 TP/GPU/RDMA/CAGRA 的未验证项目，仍有
+实际实现缺口，不能只运行一个 benchmark 就宣布完成。
+
+只读环境核对：WSL 可通过 nvidia-smi 看到 RTX 4060 Laptop（8188 MiB），不是 V100S。
+现用 `/home/loosp/torch311-env` 是 `torch 2.14.0+cpu`，`torch.version.cuda=None`，
+`torch.cuda.is_available()=False`；`/sys/class/infiniband` 无设备；未装 Mooncake、CuPy、
+cuVS。`check_cagra.py --mode inventory` 结果为 collected / not_run，绝不是 smoke pass。
+本轮没有为推进而更改依赖或把 CPU backend 注册成生产 GPU backend。
+
+下一阶段顺序：
+
+1. 明确可用 Linux GPU 实验环境（目标验收为 V100S + RDMA 节点）；使用隔离环境，
+   获取已有软件栈与模型/tokenizer 路径。模型保持用户可配置，不预设 checkpoint。
+   本地 RTX 可用于部分 CUDA 开发，但不能替代 V100S 或多节点 RDMA 验收。
+2. 实现并逐层数值验证 GPU sparse attention/current-next bank/stream 生命周期。
+   先全选对照原 attention，再子集对照独立参考，再故障/取消与读写重叠验证。
+3. 稀疏 payload 接入既有 Entry/source lease、Delivery 授权、目标 MR 注册与原生
+   submit/poll/fence/ACK；不得在尚有远端 WRITE 时释放/重用目标缓冲。
+4. 实际 TP 多 rank 激活与 Scheduler 队列/资源释放接通，替换目前单进程镜像与
+   测试 callback；初始完整 Prompt 的真实交付/ACK 必须保留。
+5. 在目标软件栈验证真实 CAGRA，接入 IndexBackend 的预算与生命周期，测真实目标 Q
+   的 recall/质量；最后测 TPOT/吞吐/尾延迟/显存/刷新等待，验证是否隐藏通信。
+
+Real GPU/RDMA integration needs an accessible experimental environment and
+model/tokenizer configuration. The local CPU suite cannot establish native
+write completion, stream safety, distributed installation or CAGRA support.
+Do not enable production sparse mode or declare the final goal achieved from
+the above CPU passes. Preserve the existing full-Prompt serving default.
