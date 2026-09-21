@@ -92,8 +92,11 @@ lease、完整 logits、按身份提交、wait-all、请求槽位绑定；真实
 新增[独立真实 draft CPU 闭环](PVD_Real_Draft_CPU_Loop_CN_EN.md)：真实较小 ModelRunner
 预测 → target Q → V HTTP → 稀疏安装 → target Decode → 原 Req 提交；私有池、
 目标状态/RNG 不变已验证，仍为随机 toy 模型而非质量/生产加载/性能证据。
-Next: automatic request-level CPU scheduling, preserving the existing
-production full-prompt path.
+新增[请求级 CPU 自动刷新驱动](PVD_CPU_Refresh_Driver_CN_EN.md)：由正式 token 时钟
+决定 capture/HTTP/边界安装与实际 Q fallback；真实双模型闭环使用该驱动通过。
+Next: the production GPU sparse-attention / authorized delivery / TP activation
+gate. The production Scheduler event loop and resource cleanup remain unwired;
+CPU callbacks and local rank mirrors cannot be substituted for GPU/MR fences.
 The CPU driver is still a standalone smoke, not Scheduler or GPU/TP evidence.
 CPU banks are not GPU fences or production allocators. No new request may reset
 an old request's clock. See the linked note for current limits.

@@ -2,6 +2,12 @@
 
 更新日期：2026-09-21。
 
+最新：[请求级 CPU 刷新驱动](PVD_CPU_Refresh_Driver_CN_EN.md)：根据各请求正式 token
+时钟选择边界末 token 的目标 Q，每次 poll 最多启动一次 capture，保留迟到任务，
+仅边界安装。真实独立 draft 闭环已使用；9 个 HTTP/CPU 新测试通过。
+此前真实 draft 阶段提交 `92ae30c23`，未推送。生产 Scheduler loop/cleanup、GPU 稀疏
+attention、授权 sparse MR 交付、TP 激活与 CAGRA 仍有代码缺口，不能说只缺 benchmark。
+
 最新：[独立真实 SGLang draft CPU 闭环](PVD_Real_Draft_CPU_Loop_CN_EN.md)。可选验收已
 不依赖固定候选，两个独立随机小 Llama 跑通 draft → target Q → V HTTP → 稀疏 Decode
 → 原 Req 提交；验证目标状态/RNG 不变与私有池，修复 backing KV alias 检查。

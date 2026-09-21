@@ -193,7 +193,10 @@ def validate_real_draft_loop(target, port):
         )
         assert provider.pool_ownership.storage_verified
         evidence = validate_batch_decode(
-            target, scheduled_results=True, draft_provider=provider
+            target,
+            scheduled_results=True,
+            draft_provider=provider,
+            automatic_refresh=True,
         )
         assert len(predictions) == 1 and predictions[0][0] == "old"
         assert (

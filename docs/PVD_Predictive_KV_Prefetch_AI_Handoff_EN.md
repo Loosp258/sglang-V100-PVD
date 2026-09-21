@@ -2,6 +2,14 @@
 
 Updated: 2026-09-21.
 
+Newest: [request-local CPU refresh driver](PVD_CPU_Refresh_Driver_CN_EN.md).
+Independent clocks now choose the last boundary-token target Q, launch one
+capture per poll, retain late queries and install only at the exact boundary.
+The real independent-draft loop uses it. Nine new HTTP/CPU contract tests pass.
+Previous real draft gate is committed `92ae30c23`, no push. Production Scheduler
+loop/cleanup, GPU sparse attention, authorized sparse MR delivery, TP activation
+and CAGRA remain implementation gaps, not just missing benchmark results.
+
 Newest: [independent real SGLang draft CPU loop](PVD_Real_Draft_CPU_Loop_CN_EN.md).
 Fixed candidates are no longer required in that opt-in smoke. Two independent
 random tiny Llamas run draft → target Q → V HTTP → sparse Decode → real Req

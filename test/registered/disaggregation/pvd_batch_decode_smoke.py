@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import torch
 
 
-def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=None):
+def validate_batch_decode(
+    runner, *, scheduled_results=False, draft_provider=None, automatic_refresh=False
+):
     from pvd_controlled_prefetch import ControlledFixture
     from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import (
         CPUBatchDispatcher,
@@ -72,6 +74,11 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
     budgets, tasks, hooks = [], [], []
     inject_failure = False
     processor = None
+    driver = None
+    if automatic_refresh:
+        from sglang.srt.disaggregation.pvd.cpu_refresh_driver import CPURefreshDriver
+
+        driver = CPURefreshDriver(arbiter)
     if scheduled_results:
         from pvd_scheduled_result_smoke import (
             deliver,
@@ -303,7 +310,10 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
             )
             for _ in range(3):
                 step(("old",))
-            async with old.fixture.clients() as clients:
+            async with (
+                old.fixture.clients() as clients,
+                new.fixture.clients() as newclients,
+            ):
                 entered, release = asyncio.Event(), asyncio.Event()
 
                 class Delayed:
@@ -313,16 +323,34 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
                         return await clients[1].search(*args, **kwargs)
 
                 prefix = old.life.snapshot()
-                task = old.life.launch_refresh(
-                    query_positions=(len(prefix.tokens),),
-                    clients={0: clients[0], 1: Delayed()},
-                    pack_source=old.fixture.pack_source,
-                    timeout_seconds=30,
-                )
+                if driver is not None:
+                    driver.register(
+                        old.life,
+                        clients={0: clients[0], 1: Delayed()},
+                        pack_source=old.fixture.pack_source,
+                        timeout_seconds=30,
+                    )
+                    launch = driver.progress().launched[0]
+                    assert launch.query_source == "predicted"
+                    task = launch.task
+                else:
+                    task = old.life.launch_refresh(
+                        query_positions=(len(prefix.tokens),),
+                        clients={0: clients[0], 1: Delayed()},
+                        pack_source=old.fixture.pack_source,
+                        timeout_seconds=30,
+                    )
                 tasks.append(task)
                 await asyncio.wait_for(entered.wait(), 5)
                 state = old.fixture.group.coordinator.snapshot()
                 new.life.admit(new.fixture.request)
+                if driver is not None:
+                    driver.register(
+                        new.life,
+                        clients=newclients,
+                        pack_source=new.fixture.pack_source,
+                        timeout_seconds=30,
+                    )
                 assert old.fixture.group.coordinator.snapshot() == state
                 step(("new", "old"))
                 counts = old.life.committed_tokens, new.life.committed_tokens
@@ -336,7 +364,10 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
                 assert not arbiter.busy and new.life._permit is None
                 release.set()
                 epoch = await task
-                assert old.life.try_install({0: 4, 1: 4})
+                if driver is None:
+                    assert old.life.try_install({0: 4, 1: 4})
+                else:
+                    assert driver.progress().installed == ("old",)
                 assert epoch.target_tokens == 4
                 step(("old", "new"))  # reorder membership, unlike previous forward
                 step(("new", "old"), cancel_after_forward="new")
@@ -344,15 +375,25 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
                 while old.life.committed_tokens < 8:
                     step(("old",))
                 prefix = old.life.snapshot()
-                task = old.life.launch_refresh(
-                    query_positions=(len(prefix.tokens) - 1,),
-                    clients=clients,
-                    pack_source=old.fixture.pack_source,
-                    timeout_seconds=30,
-                )
+                if driver is not None:
+                    # Deliberately omitted progress during 6->8 to exercise a
+                    # missed prefetch window, not a replacement of a late query.
+                    launch = driver.progress().launched[0]
+                    assert launch.query_source == "committed"
+                    task = launch.task
+                else:
+                    task = old.life.launch_refresh(
+                        query_positions=(len(prefix.tokens) - 1,),
+                        clients=clients,
+                        pack_source=old.fixture.pack_source,
+                        timeout_seconds=30,
+                    )
                 tasks.append(task)
                 await task
-                assert old.life.try_install({0: 8, 1: 8})
+                if driver is None:
+                    assert old.life.try_install({0: 8, 1: 8})
+                else:
+                    assert driver.progress().installed == ("old",)
                 step(("old",))
             third = create("third", (1, 12, 25, 8))
             third.life.admit(third.fixture.request)
@@ -394,6 +435,7 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
                 "real_req_schedule_batch_result_processor": scheduled_results,
                 "real_req_retraction_and_length_limit": scheduled_results,
                 "independent_real_draft": draft_provider is not None,
+                "request_local_refresh_driver": driver is not None,
                 "production_scheduler_gpu_rdma_validated": False,
             }
         finally:
@@ -402,6 +444,8 @@ def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=Non
                     task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            if driver is not None:
+                await driver.close()
             for hook in hooks:
                 hook.remove()
             runner.attn_backend = native
