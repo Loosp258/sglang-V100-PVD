@@ -52,10 +52,25 @@ class SparseReceiveRegistry:
         if threading.get_ident() != self._thread:
             raise SparseReceiveError("receiver must run on its owner thread")
 
-    def prepare(self, manifest, *, key, rank, rail, endpoint, sender_epoch, client):
+    def prepare(
+        self,
+        manifest,
+        *,
+        key,
+        rank,
+        rail,
+        endpoint,
+        sender_epoch,
+        client,
+        owner_scope=None,
+    ):
         self._owner()
         if not isinstance(manifest, SparseDeliveryManifest):
             raise SparseReceiveError("explicit sparse manifest required")
+        if owner_scope is not None and (
+            not isinstance(owner_scope, str) or not owner_scope.strip()
+        ):
+            raise SparseReceiveError("owner scope must be a nonempty string")
         delivery_id, generation = uuid.uuid4().hex, uuid.uuid4().hex
         # Validate identity before charging or allocating. The actual region is
         # filled only after registration; never learned from a response.
@@ -74,6 +89,7 @@ class SparseReceiveRegistry:
         if any(not isinstance(s, str) or not s.strip() for s in (rail, endpoint)):
             raise SparseReceiveError("explicit endpoint and rail required")
         record = SparseReceiveRecord(self, manifest, identity, client)
+        record._scope = owner_scope
         self.budget.reserve(record.owner, manifest.nbytes, 1)
         self._records[delivery_id] = record
         try:
@@ -106,15 +122,21 @@ class SparseReceiveRegistry:
         record._registration_unknown = False
         return record
 
-    def snapshot(self):
+    def snapshot(self, *, owner_scope=None):
         self._owner()
-        return {key: record.snapshot() for key, record in self._records.items()}
+        return {
+            key: record.snapshot()
+            for key, record in self._records.items()
+            if owner_scope is None or record._scope == owner_scope
+        }
 
-    async def close(self):
+    async def close(self, *, owner_scope=None):
         """Bounded by each client's RPC timeout; unresolved owners stay here."""
         self._owner()
         errors = {}
         for key, record in tuple(self._records.items()):
+            if owner_scope is not None and record._scope != owner_scope:
+                continue
             try:
                 if not await record.close():
                     errors[key] = "remote write or registration is not fenced"
@@ -229,14 +251,7 @@ class SparseReceiveRecord:
     async def ack(self):
         async with self._lock:
             self._live()
-            if not self._installed:
-                if self._group is None or not self._group.installation_complete(
-                    self._receipt
-                ):
-                    raise SparseReceiveError(
-                        "all ranks must install before delivery ACK"
-                    )
-                self._installed = True  # persists if an ACK response is lost
+            self.confirm_install()
             reply = await self._client.ack_delivery(
                 self.identity.key, self.identity.transfer_id
             )
@@ -244,6 +259,16 @@ class SparseReceiveRecord:
             if reply.get("state") != "released":
                 raise SparseReceiveError("delivery ACK was not confirmed")
             self._acknowledged = True
+
+    def confirm_install(self):
+        """Latch the exact CPU completion before a later round can replace it."""
+        self._live()
+        if not self._installed:
+            if self._group is None or not self._group.installation_complete(
+                self._receipt
+            ):
+                raise SparseReceiveError("all ranks must install before delivery ACK")
+            self._installed = True
 
     async def close(self):
         async with self._lock:
@@ -253,7 +278,9 @@ class SparseReceiveRecord:
             self._closing = True
             if self._registration_unknown:
                 return False
-            if self._published and not self._safe:
+            # An unacknowledged successful transfer also needs business closure
+            # on V, otherwise its Entry retains an active Delivery until TTL.
+            if self._published and (not self._safe or not self._acknowledged):
                 self._safe = self._fenced(
                     await self._client.fence_delivery(self.identity)
                 )

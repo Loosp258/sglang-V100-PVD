@@ -51,6 +51,32 @@ No native RDMA/GPU evidence is claimed.
 V 已接原 reserve/start/poll/fence/ACK 并保留整个异步传输期间的 staging；
 下一步接 D 的独立 destination 生命周期、安装与 ACK，以及真实本地 HTTP 交付测试。
 完整 Prompt bootstrap 不依赖检索索引；新增稀疏路径必须显式启用，不能改变默认行为。
+# Step 4 / 第四步：Request-local HTTP sparse delivery integration
+
+The controlled `CPUPrefetchRequest` can now select an explicit `CPUSparseDelivery`
+sink instead of a local packing callback; configuring both is refused. After one
+shared draft/probe and the rank searches, each selected V shard packs and writes
+only the selected paired K/V into an owned D destination. All receiving ranks
+must stage before boundary installation. Completion is latched synchronously;
+remote ACK/cleanup run asynchronously with visible errors and explicit retries.
+New requests do not reset or cancel any existing request's clock or retrieval.
+
+`CPURefreshDriver` and `CPUDecodeLifecycle` accept this path and asynchronously
+drain it on close. Per-request scopes prevent a shared receive registry from
+closing another request's buffers, including registrations whose creation raised.
+The original local packing path remains an explicit reference option. Initial
+full-Prompt admission remains independent of retrieval and unchanged.
+
+CPU 请求级流水线已可通过真实 shard HTTP Delivery 获取稀疏 KV，不再必须在 D
+测试流程里直接读取 V 的内存。本地打包与远端 Delivery 二选一；跨 rank 等待、
+边界安装、新请求不干扰旧请求的时钟均保留。安装后的 ACK 异步执行，失败显式报告
+并可重试；关闭时按请求范围处理资源，不能释放其他请求的目标缓冲区。
+
+Tests use exact CPU search, localhost HTTP and a fake byte-copy transport. They
+verify two rounds, delayed delivery at a boundary, new admission independence,
+stale source indexes, ACK loss/retry, scoped cleanup and the automatic refresh
+driver. This does not claim a production Scheduler, CUDA or native RDMA path.
+
 # Step 3 / 第三步：D-owned sparse receive lifecycle
 
 `SparseReceiveRegistry` now owns CPU receive allocations before registration or

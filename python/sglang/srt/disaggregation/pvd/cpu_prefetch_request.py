@@ -1,9 +1,10 @@
 """Controlled CPU request loop: shared capture -> shard search -> rank install.
 
-Not Scheduler wiring or a transport. Bootstrap must already have installed the
-complete Prompt via the owned CPUInstallGroup. pack_source(rank, specs) returns
-a context manager over locally copied, independently version-checked payloads;
-it must own/pin the source for that scope. This module grants no RDMA writes.
+Not production Scheduler wiring. Bootstrap must already have installed the
+complete Prompt via the owned CPUInstallGroup. Select either an explicit HTTP
+Delivery sink or pack_source(rank, specs), a local reference context manager
+over independently version-checked payloads. The local path must own/pin its
+source for the scope. Only the Delivery sink publishes write destinations.
 """
 
 import asyncio
@@ -26,7 +27,16 @@ class LatePrefetchStart(ValueError):
 
 
 class CPUPrefetchRequest:
-    def __init__(self, group, pipeline, *, head_mapping, rank_routes, max_union_tokens):
+    def __init__(
+        self,
+        group,
+        pipeline,
+        *,
+        head_mapping,
+        rank_routes,
+        max_union_tokens,
+        delivery=None,
+    ):
         if not isinstance(group, CPUInstallGroup):
             raise TypeError("an exclusively owned CPUInstallGroup is required")
         state = group.coordinator.snapshot()
@@ -39,6 +49,17 @@ class CPUPrefetchRequest:
                 "complete initial Prompt must be installed first"
             )
         self.group, self.pipeline, self.mapping = group, pipeline, head_mapping
+        if delivery is not None:
+            from sglang.srt.disaggregation.pvd.cpu_sparse_delivery import (
+                CPUSparseDelivery,
+            )
+
+            if (
+                not isinstance(delivery, CPUSparseDelivery)
+                or delivery.group is not group
+            ):
+                raise ValueError("Delivery sink must own this exact CPU install group")
+        self.delivery = delivery
         self._metadata = group.describe_banks()
         self._routes = {rank: tuple(routes) for rank, routes in rank_routes.items()}
         if set(self._routes) != set(self._metadata) or any(
@@ -69,7 +90,13 @@ class CPUPrefetchRequest:
             raise StaleProbeSearch("CPU prefetch request is closed")
 
     async def refresh(
-        self, prefix, *, query_positions, clients, pack_source, execution_scope=None
+        self,
+        prefix,
+        *,
+        query_positions,
+        clients,
+        pack_source=None,
+        execution_scope=None,
     ):
         """Predict ahead of boundary; a first start AT it uses committed Q.
 
@@ -78,6 +105,10 @@ class CPUPrefetchRequest:
         Predictions are CPU synchronous; network searches alone run concurrently.
         """
         self._live()
+        if (self.delivery is None and not callable(pack_source)) or (
+            self.delivery is not None and pack_source is not None
+        ):
+            raise ValueError("choose exactly one local source or owned Delivery sink")
         if self._active is not None or self._tasks:
             raise ValueError("one outstanding refresh per request")
         if (
@@ -131,6 +162,7 @@ class CPUPrefetchRequest:
             self.group.coordinator._match(epoch)
             if self._active is not epoch:
                 raise StaleProbeSearch("refresh no longer belongs to active request")
+            selections = {}
             for rank, (child, _) in children.items():
                 selection = child.take_selection(window)
                 specs = union_query_head_selections(
@@ -139,10 +171,20 @@ class CPUPrefetchRequest:
                     layout_fingerprint=self._metadata[rank]["identity"][3],
                     max_union_tokens=self._limit,
                 )
-                # Source validates its current Entry/index/mapping, not values
-                # copied back from the reply. No await inside this local scope.
-                with pack_source(rank, specs) as payloads:
-                    self.group.stage(epoch, rank, payloads)
+                selections[rank] = specs
+            if self.delivery is None:
+                for rank, specs in selections.items():
+                    # Local reference source remains independently version checked.
+                    with pack_source(rank, specs) as payloads:
+                        self.group.stage(epoch, rank, payloads)
+            else:
+                self._tasks = tuple(
+                    asyncio.create_task(self.delivery.stage(epoch, rank, specs))
+                    for rank, specs in selections.items()
+                )
+                await asyncio.gather(*self._tasks)
+                self._live()
+                self.group.coordinator._match(epoch)
             self._session.invalidate()
             self._ready = epoch
             return epoch  # ready-to-install only; clock has NOT advanced
@@ -169,7 +211,11 @@ class CPUPrefetchRequest:
         if self._ready is None:
             return False
         try:
+            if self.delivery is not None:
+                self.delivery.require_installable(self._ready)
             done = self.group.try_install(self._ready, rank_counts)
+            if done and self.delivery is not None:
+                self.delivery.installed(self._ready)
         except BaseException:
             self.cancel("CPU install failed")
             raise
@@ -181,10 +227,29 @@ class CPUPrefetchRequest:
         self.group.coordinator.cancel(reason)
         self._closed = True
         self._session.close()
+        if self.delivery is not None:
+            self.delivery.cancel()
         self._active = self._ready = None
         for task in self._tasks:
             task.cancel()
 
     def close(self):
         self.cancel()
+        if self.delivery is not None and (
+            self.delivery.snapshot()["pending_rounds"]
+            or self.delivery.snapshot()["retained_destinations"]
+        ):
+            raise InstallProtocolError(
+                "await aclose() to drain remote Delivery ownership"
+            )
         self.group.close()  # CPU readers must drain; NOT a network/GPU fence
+
+    async def aclose(self):
+        self.cancel()
+        tasks = tuple(self._tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        errors = await self.delivery.close() if self.delivery is not None else {}
+        self.group.close()
+        if errors:
+            raise InstallProtocolError(f"remote Delivery ownership remains: {errors}")

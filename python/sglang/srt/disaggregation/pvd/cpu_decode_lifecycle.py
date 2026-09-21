@@ -162,7 +162,9 @@ class CPUDecodeLifecycle:
         finally:
             self._release_refresh_lease()
 
-    def launch_refresh(self, *, query_positions, clients, pack_source, timeout_seconds):
+    def launch_refresh(
+        self, *, query_positions, clients, pack_source=None, timeout_seconds
+    ):
         self.poll()
         if (
             self.state != "running"
@@ -335,4 +337,4 @@ class CPUDecodeLifecycle:
             await asyncio.gather(self._refresh, return_exceptions=True)
             self.poll()
         if self.controller is not None:
-            self.controller.close()
+            await self.controller.aclose()

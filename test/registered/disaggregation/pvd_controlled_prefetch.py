@@ -4,15 +4,24 @@ Not production serving: P->V copies bytes locally, no model Decode scheduling,
 source Entry ownership is held by the fixture, and no native RDMA is submitted.
 """
 
+import asyncio
 import uuid
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 
 import torch
 from aiohttp.test_utils import TestServer
-from sglang.srt.disaggregation.pvd.control_server import create_shard_app
+from sglang.srt.disaggregation.pvd.control_server import (
+    HttpShardClient,
+    create_shard_app,
+)
 from sglang.srt.disaggregation.pvd.cpu_prefetch_request import CPUPrefetchRequest
+from sglang.srt.disaggregation.pvd.cpu_sparse_delivery import (
+    CPUReceiveRoute,
+    CPUSparseDelivery,
+)
 from sglang.srt.disaggregation.pvd.kv_packer import (
     describe_kv_layout,
     pack_full_prompt_kv_head_shard,
@@ -39,6 +48,7 @@ from sglang.srt.disaggregation.pvd.sparse_payload import (
     SparseKVSpec,
     pack_sparse_kv,
 )
+from sglang.srt.disaggregation.pvd.sparse_receiver import SparseReceiveRegistry
 from sglang.srt.disaggregation.pvd.sparse_working_set import CPUSparseWorkingSet
 from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
@@ -265,16 +275,63 @@ class ControlledFixture:
         assert budget.snapshot()["used_staging_bytes"] == 0
 
     @asynccontextmanager
-    async def clients(self):
+    async def clients(self, *, wire_delivery=False):
         async with AsyncExitStack() as stack:
-            clients = {}
+            clients, delivery_routes = {}, {}
             for rank, store in self.stores.items():
                 server = await stack.enter_async_context(
                     TestServer(create_shard_app(store))
                 )
                 clients[rank] = PVDShardSearchClient(str(server.make_url("")))
                 stack.push_async_callback(clients[rank].close)
-            yield clients
+                if wire_delivery:
+                    control = HttpShardClient(rank, str(server.make_url("")))
+                    stack.push_async_callback(control.close)
+                    delivery_routes[rank] = CPUReceiveRoute(
+                        control, store.worker_epoch, f"cpu-D-{rank}", store.rail
+                    )
+                    budget = TransferBudget(8 << 20, 32)
+                    self.budgets.append(budget)
+                    store.transfer_engine.lifecycle_manager = SimpleNamespace(
+                        budget=budget
+                    )
+            delivery = None
+            if wire_delivery:
+                if getattr(self.request, "_lifecycle_claimed", False):
+                    raise ValueError("configure wire Delivery before fixture admission")
+                budget = TransferBudget(8 << 20, 32)
+                self.budgets.append(budget)
+                registry = SparseReceiveRegistry(
+                    FakeTransferEngine(), budget, receiver_epoch=self.incarnation
+                )
+                delivery = CPUSparseDelivery(
+                    self.group,
+                    registry,
+                    key=self.manifest.key,
+                    routes=delivery_routes,
+                    poll_interval_seconds=0.001,
+                )
+                prior = self.request
+                self.request = CPUPrefetchRequest(
+                    self.group,
+                    prior.pipeline,
+                    head_mapping=self.mapping,
+                    rank_routes=prior._routes,
+                    max_union_tokens=self.prompt_tokens,
+                    delivery=delivery,
+                )
+            try:
+                yield clients
+            finally:
+                if delivery is not None:
+
+                    async def drain():
+                        # Cancelling HTTP does not cancel its server-side thread.
+                        # Wait for actual fence proof; timeout never frees a MR.
+                        while await delivery.close():
+                            await asyncio.sleep(0.001)
+
+                    await asyncio.wait_for(drain(), 5)
 
     def close(self):
         try:

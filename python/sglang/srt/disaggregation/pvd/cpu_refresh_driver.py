@@ -55,7 +55,7 @@ class CPURefreshDriver:
         self.arbiter = arbiter
         self._records = {}
 
-    def register(self, life, *, clients, pack_source, timeout_seconds):
+    def register(self, life, *, clients, pack_source=None, timeout_seconds):
         self.arbiter.owner()
         if (
             not isinstance(life, CPUDecodeLifecycle)
@@ -69,7 +69,10 @@ class CPURefreshDriver:
         ranks = life.controller.group.describe_banks()
         if set(clients) != set(ranks) or any(type(rank) is not int for rank in clients):
             raise LifecycleError("search client membership must match local CPU ranks")
-        if not callable(pack_source) or (
+        if (
+            (life.controller.delivery is None and not callable(pack_source))
+            or (life.controller.delivery is not None and pack_source is not None)
+        ) or (
             type(timeout_seconds) not in (float, int)
             or not math.isfinite(timeout_seconds)
             or timeout_seconds <= 0
