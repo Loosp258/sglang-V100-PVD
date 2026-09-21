@@ -2,6 +2,15 @@
 
 Updated: 2026-09-22.
 
+Newest: [model-path fault gates](PVD_Rank_Model_Binding_CN_EN.md) cover lost
+RESUMED, failure after real CPU bank swap and close/retry across result drain.
+Both lifecycle and automatic refresh driver now finalize against the ready
+epoch's boundary, not the already-advanced coordinator next boundary. The old
+code failed both the focused regression and real-model lost-reply scenario.
+Schema v2 requires mode-specific observations; no hardware gate is relaxed.
+All four real-model cases passed in WSL. 20 new tests; full Windows 1722 passed /
+14 skipped, WSL 1727 passed / 9 skipped.
+
 Newest: the [strict rank-model acceptance CLI](PVD_Rank_Model_Binding_CN_EN.md)
 runs the actual dual-model branch and validates complete run-bound evidence.
 Missing/old/partial reports, unknown flags, disabled asserts, dependency failure

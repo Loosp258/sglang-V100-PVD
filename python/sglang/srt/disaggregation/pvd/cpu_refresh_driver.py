@@ -106,6 +106,11 @@ class CPURefreshDriver:
                 continue
             state = life.controller.group.coordinator.snapshot()
             n, boundary = life.committed_tokens, state["next_boundary"]
+            pending_boundary = life.controller.pending_install_boundary
+            if life._refresh is not None and pending_boundary is not None:
+                # APPLIED can advance next_boundary while this round still
+                # waits for RESUMED/Delivery finalization at its old count.
+                boundary = pending_boundary
             if n > boundary:
                 life.terminate("Decode crossed an uninstalled refresh boundary")
                 aborted.append(life.request_id)

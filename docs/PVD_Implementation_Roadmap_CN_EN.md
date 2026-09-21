@@ -6,6 +6,13 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新：[模型故障验收及迟到 RESUMED 修复](PVD_Rank_Model_Binding_CN_EN.md) 增加
+丢回执、真实 CPU bank 切换后异常、结果提交前清理/排空后重试三个场景。
+复现并修复生命周期和自动刷新驱动混用“本轮 ready 边界/下一边界”的卡住问题；
+没有跳过 RESUMED、重置时钟或放宽硬件能力门控。严格报告 v2 按所选故障核验证据。
+四场景实模矩阵已在 WSL 通过；新增 20 个测试。全量 Windows 1722 passed /
+14 skipped；WSL 1727 passed / 9 skipped。
+
 最新：[严格 rank/model 验收入口](PVD_Rank_Model_Binding_CN_EN.md) 实际启动完整
 CPU 双模型分支并校验本次运行证据；缺失/旧报告、错误计数、关闭断言或未知开关
 不能误报通过。56 个工具测试；严格入口已在 WSL 实际执行。硬件结论仍明确为 false。

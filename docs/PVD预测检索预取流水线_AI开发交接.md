@@ -2,6 +2,13 @@
 
 更新日期：2026-09-22。
 
+最新：[实模故障验收](PVD_Rank_Model_Binding_CN_EN.md) 覆盖丢 RESUMED、真实 CPU
+换 bank 后失败和结果排空前清理/之后重试。已复现并修复生命周期和自动驱动把
+“下一边界”误作“本轮待完成边界”导致迟到回执后卡住的问题；使用 ready epoch
+判断，不改变输出时钟或 RESUMED 要求。严格报告 v2 匹配实际所选故障场景。
+四场景实模矩阵已在 WSL 通过；新增 20 个测试，全量 Windows 1722 passed /
+14 skipped、WSL 1727 passed / 9 skipped。
+
 最新：[严格 rank/model 验收入口](PVD_Rank_Model_Binding_CN_EN.md) 已实际在 WSL
 启动双模型闭环并校验本次完整证据；报告缺失/过期/不全、未知开关、关闭断言、
 依赖失败或超时都不能误报通过/跳过。新增 56 个工具测试，硬件验收边界不变。

@@ -1,5 +1,6 @@
 """Exact model-bank binding and Req bridge; real model execution is a smoke gate."""
 
+import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace as NS
@@ -290,3 +291,67 @@ def test_missing_resumed_blocks_group_admission_and_delivery_install_ack(monkeyp
     finally:
         group.close()
         assert all(b.snapshot()["used_staging_bytes"] == 0 for b in budgets.values())
+
+
+@pytest.mark.parametrize("use_driver", [False, True])
+def test_lifecycle_can_finalize_refresh_after_delayed_resume_without_resetting_clock(
+    use_driver,
+):
+    async def run():
+        with setup() as (d, lives, fixtures):
+            old, group = lives[0], fixtures[0].group
+            for _ in range(3):
+                ticket = d.begin(lives)
+                d.complete(ticket, results(ticket))
+            async with fixtures[0].clients() as clients:
+                if use_driver:
+                    from sglang.srt.disaggregation.pvd.cpu_refresh_driver import (
+                        CPURefreshDriver,
+                    )
+
+                    driver = CPURefreshDriver(d.arbiter)
+                    driver.register(
+                        old,
+                        clients=clients,
+                        pack_source=fixtures[0].pack_source,
+                        timeout_seconds=30,
+                    )
+                    task = driver.progress().launched[0].task
+                else:
+                    task = old.launch_refresh(
+                        query_positions=(len(old.snapshot().tokens),),
+                        clients=clients,
+                        pack_source=fixtures[0].pack_source,
+                        timeout_seconds=30,
+                    )
+                epoch = await task
+                ticket = d.begin(lives)
+                d.complete(ticket, results(ticket))
+                assert old.committed_tokens == 4
+                post, dropped = group._post, []
+
+                def drop(rank, raw):
+                    if rank == 1 and RankInstallMessage.decode(raw).kind == "resumed":
+                        dropped.append(raw)
+                    else:
+                        post(rank, raw)
+
+                group._post = drop
+                try:
+                    assert not old.try_install({0: 4, 1: 4})
+                finally:
+                    group._post = post
+                assert group.coordinator.snapshot()["next_boundary"] == 8
+                assert fixtures[0].request._ready is epoch
+                assert not old.can_decode()
+                post(1, dropped[0])
+                if use_driver:
+                    assert driver.progress().installed == ("a",)
+                else:
+                    assert old.try_install({0: 4, 1: 4})
+                assert old.committed_tokens == 4 and old.can_decode()
+                assert fixtures[0].request._ready is None and old._deadline is None
+                if use_driver:
+                    await driver.close()
+
+    asyncio.run(run())

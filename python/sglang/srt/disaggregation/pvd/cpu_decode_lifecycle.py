@@ -295,10 +295,7 @@ class CPUDecodeLifecycle:
             for n in rank_counts.values()
         ):
             raise LifecycleError("rank counts must match actually committed D tokens")
-        if (
-            self.committed_tokens
-            != self.controller.group.coordinator.snapshot()["next_boundary"]
-        ):
+        if self.committed_tokens != self.controller.pending_install_boundary:
             return False
         try:
             installed = self.controller.try_install(rank_counts)

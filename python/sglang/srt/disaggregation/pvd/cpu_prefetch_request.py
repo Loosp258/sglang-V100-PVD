@@ -223,6 +223,16 @@ class CPUPrefetchRequest:
             self._active = self._ready = None
         return done
 
+    @property
+    def pending_install_boundary(self):
+        """The ready round's boundary, even after APPLIED advances the coordinator.
+
+        RESUMED/Delivery finalization may still be pending at the old committed
+        token count. The coordinator's next boundary is not this round's count.
+        """
+        self.group.coordinator._owner()
+        return None if self._ready is None else self._ready.target_tokens
+
     def cancel(self, reason="request cancelled or prefix/Entry replaced"):
         self.group.cancel(reason)
         self._closed = True

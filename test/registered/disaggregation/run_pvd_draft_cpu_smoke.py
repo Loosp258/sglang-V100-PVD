@@ -321,7 +321,11 @@ def main() -> None:
             from pvd_real_draft_loop_smoke import validate_real_draft_loop
 
             rank_runtime_loop_evidence = validate_real_draft_loop(
-                runner, port, wire_delivery=True, rank_runtime=True
+                runner,
+                port,
+                wire_delivery=True,
+                rank_runtime=True,
+                rank_fault=options.rank_runtime_fault,
             )
         print(
             (FRAME if options.acceptance_run_id else "")

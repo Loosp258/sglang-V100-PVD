@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from pvd_rank_model_acceptance import (
+    FAULT_CHECKS,
     FRAME,
     SCHEMA,
     AcceptanceError,
@@ -18,7 +19,7 @@ from pvd_rank_model_acceptance import (
 from run_pvd_rank_model_acceptance import main
 
 
-def evidence(run_id="test-run"):
+def evidence(run_id="test-run", fault="none"):
     loop = dict.fromkeys(
         (
             "wait_all_at_boundary",
@@ -39,6 +40,11 @@ def evidence(run_id="test-run"):
         True,
     )
     loop.update(
+        fault_evidence={
+            "mode": fault,
+            "cleanup_verified": True,
+            **dict.fromkeys(FAULT_CHECKS[fault], True),
+        },
         status="passed",
         production_scheduler_gpu_rdma_validated=False,
         model_quality_gpu_latency_validated=False,
@@ -58,6 +64,12 @@ def evidence(run_id="test-run"):
             "transport": "fake in-process byte copy; real localhost HTTP control",
         },
     )
+    if fault == "install":
+        loop.update(
+            committed_d_tokens={"old": 4, "new": 2},
+            batch_sizes=[1, 1, 1, 2, 1],
+            committed_boundary_fallback_did_not_call_draft=False,
+        )
     return {
         "acceptance_schema": SCHEMA,
         "acceptance_run_id": run_id,
@@ -226,3 +238,79 @@ def test_cli_failures_are_nonzero_never_skip_or_success(monkeypatch, capsys, fai
     assert main([]) == 1
     captured = capsys.readouterr()
     assert not captured.out and "acceptance failed" in captured.err
+
+
+@pytest.mark.parametrize("fault", ["lost-resume", "install", "cleanup"])
+def test_fault_report_requires_requested_scenario_and_cleanup(fault):
+    report = evidence(fault=fault)
+    assert validate_report(report, "test-run", fault=fault) is report
+    with pytest.raises(AcceptanceError, match="requested fault mode"):
+        validate_report(report, "test-run", fault="none")
+    report["rank_runtime_loop_evidence"]["fault_evidence"]["cleanup_verified"] = False
+    with pytest.raises(AcceptanceError, match="cleanup_verified"):
+        validate_report(report, "test-run", fault=fault)
+
+
+@pytest.mark.parametrize(
+    "fault,field",
+    [(fault, field) for fault, fields in FAULT_CHECKS.items() for field in fields],
+)
+def test_missing_fault_observation_never_counts_as_pass(fault, field):
+    report = evidence(fault=fault)
+    del report["rank_runtime_loop_evidence"]["fault_evidence"][field]
+    with pytest.raises(AcceptanceError, match=field):
+        validate_report(report, "test-run", fault=fault)
+
+
+def test_install_fault_cannot_claim_unexecuted_boundary_fallback():
+    report = evidence(fault="install")
+    report["rank_runtime_loop_evidence"][
+        "committed_boundary_fallback_did_not_call_draft"
+    ] = True
+    with pytest.raises(AcceptanceError, match="not executed"):
+        validate_report(report, "test-run", fault="install")
+
+
+def test_all_fault_cli_runs_every_case_in_fresh_child_with_unique_id(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def run(command, **kwargs):
+        fault, run_id = command[4], command[-1]
+        calls.append((fault, run_id))
+        return SimpleNamespace(
+            returncode=0, stdout=frame(evidence(run_id, fault)), stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert main(["--fault", "all"]) == 0
+    assert [fault for fault, _ in calls] == list(FAULT_CHECKS)
+    assert len({run_id for _, run_id in calls}) == 4
+    assert set(json.loads(capsys.readouterr().out)["evidence_by_fault"]) == set(
+        FAULT_CHECKS
+    )
+
+
+def test_all_fault_cli_cannot_hide_a_failed_middle_case(monkeypatch, capsys):
+    calls = []
+
+    def run(command, **kwargs):
+        fault, run_id = command[4], command[-1]
+        calls.append(fault)
+        return SimpleNamespace(
+            returncode=1 if fault == "install" else 0,
+            stdout=frame(evidence(run_id, fault)),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert main(["--fault", "all"]) == 1
+    assert calls == ["none", "lost-resume", "install"]
+    assert not capsys.readouterr().out
+
+
+def test_fault_flag_cannot_run_an_unrelated_smoke_branch():
+    with pytest.raises(SystemExit) as exc:
+        smoke_options(["--rank-runtime-fault", "install"])
+    assert exc.value.code == 2

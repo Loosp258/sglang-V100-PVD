@@ -12,7 +12,9 @@ from types import SimpleNamespace
 import torch
 
 
-def validate_real_draft_loop(target, port, *, wire_delivery=False, rank_runtime=False):
+def validate_real_draft_loop(
+    target, port, *, wire_delivery=False, rank_runtime=False, rank_fault="none"
+):
     from pvd_batch_decode_smoke import validate_batch_decode
     from sglang.srt.configs.model_config import ModelConfig
     from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
@@ -199,6 +201,7 @@ def validate_real_draft_loop(target, port, *, wire_delivery=False, rank_runtime=
             automatic_refresh=True,
             wire_delivery=wire_delivery,
             rank_runtime=rank_runtime,
+            rank_fault=rank_fault,
         )
         assert len(predictions) == 1 and predictions[0][0] == "old"
         assert (
@@ -213,7 +216,7 @@ def validate_real_draft_loop(target, port, *, wire_delivery=False, rank_runtime=
             target_state_rng_unchanged_during_draft=True,
             private_backing_storage_verified=True,
             draft_pool_capacity_restored=True,
-            committed_boundary_fallback_did_not_call_draft=True,
+            committed_boundary_fallback_did_not_call_draft=rank_fault != "install",
             draft_retained_tensor_bytes=retained,
             draft_persistent_charge_lifetime="until this standalone test process exits",
             fixture="two independent random Llamas and a shared toy tokenizer",

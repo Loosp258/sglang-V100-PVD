@@ -122,3 +122,55 @@ established. No production capability flags were relaxed.
 Next hardware-independent work: broader integration fault injection through the real result
 processor (lost receipts, bank-swap failures and cleanup recovery). Hardware
 gates remain pending, not silently enabled.
+
+## Model-path fault acceptance and delayed-RESUMED fix / 实模故障与迟到回执修复
+
+The strict CLI now accepts `--fault none|lost-resume|install|cleanup|all`:
+
+```bash
+PYTHONPATH=python python test/registered/disaggregation/run_pvd_rank_model_acceptance.py --fault all --timeout-seconds 300
+```
+
+`all` launches each case in a fresh child process with its own run id. The timeout
+applies per child. One failure fails the matrix; no partial success report is
+printed. Report schema v2 binds the expected fault mode and requires every
+scenario-specific observation plus cleanup evidence. Unknown/unexecuted branches
+cannot be substituted for a requested case.
+
+- `lost-resume`: drops one real local RESUMED message at the first refresh. No
+  new model forward/Req token or Delivery installation ACK may escape. Explicit
+  delayed delivery of that exact reply must let the pending round finalize.
+- `install`: raises **after** the second bank has actually swapped. The old
+  request remains aborted, its output unchanged and its Delivery unacknowledged
+  as installed; an unrelated request continues through the real result processor.
+  This case deliberately ends early and does not claim the normal late-fallback
+  or four-delivery checks ran.
+- `cleanup`: after actual forward completion but before result commit, tries to
+  close the cancelled member's group. The live ticket must prevent bank/budget
+  release. The real result processor discards its row; explicit close after the
+  result scope drains succeeds. Final fixture cleanup must restore budgets/pools.
+
+Fault injection reproduced a real integration defect in **both**
+`CPUDecodeLifecycle.try_install` and `CPURefreshDriver.progress`: after APPLIED,
+the coordinator advances `next_boundary` (e.g. 4 → 8), even though the request
+at token 4 may still await RESUMED. Both callers used that next boundary to
+decide whether to finalize the old round, leaving the request stuck after the
+missing reply arrived. The fix uses `CPUPrefetchRequest.pending_install_boundary`
+from the exact ready epoch. This does **not** bypass RESUMED, advance the D clock,
+reset deadlines or replace the in-flight query. Two regression cases exercise
+manual lifecycle and automatic-driver finalization independently.
+
+故障注入在单测及真实双模型路径中都复现了边界错误：APPLIED 后 coordinator 的
+下一边界已是 8，而 D 在 token 4 等待本轮 RESUMED；此前生命周期与自动驱动都
+因此不再尝试完成本轮。现改为以 ready epoch 的边界判断，收到全部 RESUMED 后
+才能完成交付、清除本轮等待。丢包等待策略和正式输出时钟均未改变。
+
+These remain CPU TP1 / local rank messages / fake payload transfers. An exception
+after CPU bank swap is not native RDMA fault injection. No production capability
+gate is relaxed and no GPU completion or remote MR cleanup is inferred.
+
+Executed: the entire four-case strict matrix passed in WSL after the fix.
+Normal/lost-resume/cleanup each performed 21 attention comparisons (max error
+about 3.58e-7); partial-install performed 10 (about 2.38e-7). All case cleanup
+checks passed. 20 new regression/report tests; full Windows **1722 passed /
+14 skipped**, WSL **1727 passed / 9 skipped**. Ruff check/format pass.

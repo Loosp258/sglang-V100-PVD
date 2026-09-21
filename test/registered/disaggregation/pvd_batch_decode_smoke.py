@@ -18,7 +18,13 @@ def validate_batch_decode(
     automatic_refresh=False,
     wire_delivery=False,
     rank_runtime=False,
+    rank_fault="none",
 ):
+    if rank_fault not in ("none", "lost-resume", "install", "cleanup") or (
+        rank_fault != "none"
+        and not (rank_runtime and scheduled_results and wire_delivery)
+    ):
+        raise ValueError("rank faults require the complete scheduled wire/rank loop")
     from pvd_controlled_prefetch import ControlledFixture
     from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import (
         CPUBatchDispatcher,
@@ -84,6 +90,7 @@ def validate_batch_decode(
     records, active, errors, sizes = {}, {}, [], []
     budgets, tasks, hooks = [], [], []
     inject_failure = False
+    fault_evidence = {"mode": rank_fault}
     processor = None
     driver = None
     if automatic_refresh:
@@ -275,7 +282,33 @@ def validate_batch_decode(
             # Simulate cancellation arriving while execution was in flight:
             # execution has stopped, but no output has yet been committed.
             if cancel_after_forward is not None:
-                if scheduled_results:
+                if rank_fault == "cleanup":
+                    from sglang.srt.disaggregation.pvd.sparse_install import (
+                        InstallProtocolError,
+                    )
+
+                    group = records[cancel_after_forward].fixture.group
+                    banks = tuple(group._banks.values())
+                    charges = [
+                        bank.budget.snapshot()["used_staging_bytes"] for bank in banks
+                    ]
+                    currents = [bank._current for bank in banks]
+                    try:
+                        group.close()
+                    except InstallProtocolError as exc:
+                        assert "drain before close" in str(exc)
+                    else:
+                        raise AssertionError("close freed an owned result ticket")
+                    assert group.runtime._forward is not None and arbiter.busy
+                    assert all(
+                        bank._current is current
+                        for bank, current in zip(banks, currents, strict=True)
+                    )
+                    assert charges == [
+                        bank.budget.snapshot()["used_staging_bytes"] for bank in banks
+                    ]
+                    fault_evidence["close_refused_without_releasing_bank"] = True
+                elif scheduled_results:
                     records[cancel_after_forward].req.is_retracted = True
                 else:
                     records[cancel_after_forward].life.terminate("client cancelled")
@@ -287,6 +320,17 @@ def validate_batch_decode(
                 )
             else:
                 committed = dispatcher.complete(ticket, tuple(reversed(results)))
+            if cancel_after_forward is not None and rank_fault == "cleanup":
+                group.close()
+                assert all(
+                    bank._current is None and bank._next is None for bank in banks
+                )
+                fault_evidence["close_retry_after_result_drain_succeeded"] = True
+                assert (
+                    tuple(records[cancel_after_forward].req.output_ids)
+                    == records[cancel_after_forward].life.outputs
+                )
+                fault_evidence["cancelled_output_discarded"] = True
             expected_ids = set(names) - (
                 {cancel_after_forward} if cancel_after_forward else set()
             )
@@ -378,6 +422,114 @@ def validate_batch_decode(
                 assert not arbiter.busy and new.life._permit is None
                 release.set()
                 epoch = await task
+                if rank_fault == "lost-resume":
+                    from sglang.srt.disaggregation.pvd.rank_install_wire import (
+                        RankInstallMessage,
+                    )
+
+                    group, dropped = old.fixture.group, []
+                    post = group._post
+
+                    def drop(rank, raw):
+                        if (
+                            rank == 1
+                            and RankInstallMessage.decode(raw).kind == "resumed"
+                        ):
+                            dropped.append(raw)
+                        else:
+                            post(rank, raw)
+
+                    before_outputs = (
+                        tuple(old.req.output_ids),
+                        tuple(new.req.output_ids),
+                    )
+                    before_forward = executor.forward_count
+                    group._post = drop
+                    try:
+                        assert not old.life.try_install({0: 4, 1: 4})
+                    finally:
+                        group._post = post
+                    assert len(dropped) == 1 and not old.life.can_decode()
+                    assert (
+                        old.fixture.request.delivery.snapshot()["retained_destinations"]
+                        == 2
+                    )
+                    assert old.fixture.request.delivery.snapshot()["ack_tasks"] == 0
+                    try:
+                        dispatcher.begin([new.life, old.life])
+                    except LifecycleError:
+                        pass
+                    else:
+                        raise AssertionError("missing RESUMED admitted model execution")
+                    assert executor.forward_count == before_forward
+                    assert before_outputs == (
+                        tuple(old.req.output_ids),
+                        tuple(new.req.output_ids),
+                    )
+                    post(1, dropped[0])  # explicit delayed reply; no timeout extension
+                    fault_evidence.update(
+                        wait_all_without_forward=True,
+                        delivery_ack_withheld=True,
+                        delayed_resume_replayed=True,
+                    )
+                elif rank_fault == "install":
+                    group = old.fixture.group
+                    bank = group._banks[1]
+                    install = bank.install
+                    before_outputs = tuple(old.req.output_ids)
+
+                    def fail_after_swap(*args, **kwargs):
+                        install(*args, **kwargs)
+                        fault_evidence["injected_after_actual_swap"] = True
+                        raise RuntimeError(
+                            "injected rank failure after actual bank swap"
+                        )
+
+                    bank.install = fail_after_swap
+                    try:
+                        try:
+                            old.life.try_install({0: 4, 1: 4})
+                        except RuntimeError as exc:
+                            assert "after actual bank swap" in str(exc)
+                        else:
+                            raise AssertionError("partial installation did not fail")
+                    finally:
+                        bank.install = install
+                    assert old.life.state == "aborted" and not old.life.can_decode()
+                    assert (
+                        tuple(old.req.output_ids) == before_outputs
+                        and old.life.committed_tokens == 4
+                    )
+                    assert old.fixture.request.delivery.snapshot()["ack_tasks"] == 0
+                    try:
+                        dispatcher.begin([old.life, new.life])
+                    except LifecycleError:
+                        pass
+                    else:
+                        raise AssertionError("partially swapped request admitted")
+                    step(("new",))
+                    assert new.life.committed_tokens == 2
+                    fault_evidence.update(
+                        failed_request_not_admitted=True,
+                        failed_request_output_unchanged=True,
+                        unrelated_req_committed=True,
+                        delivery_ack_withheld=True,
+                    )
+                    return {
+                        "status": "passed",
+                        "fault_evidence": fault_evidence,
+                        "rank_runtime_bound_to_model_banks": True,
+                        "real_req_schedule_batch_result_processor": True,
+                        "independent_real_draft": draft_provider is not None,
+                        "request_local_refresh_driver": driver is not None,
+                        "batch_sizes": sizes,
+                        "attention_checks": len(errors),
+                        "max_attention_error": max(errors),
+                        "committed_d_tokens": {
+                            name: r.life.committed_tokens for name, r in records.items()
+                        },
+                        "production_scheduler_gpu_rdma_validated": False,
+                    }
                 if driver is None:
                     assert old.life.try_install({0: 4, 1: 4})
                 else:
@@ -459,6 +611,7 @@ def validate_batch_decode(
                 assert ended.life.committed_tokens == 1
             return {
                 "status": "passed",
+                "fault_evidence": fault_evidence,
                 "batch_sizes": sizes,
                 "committed_d_tokens": {
                     name: r.life.committed_tokens for name, r in records.items()
@@ -504,5 +657,6 @@ def validate_batch_decode(
                 len(reqpool.free_slots),
                 runner.token_to_kv_pool_allocator.available_size(),
             ) == before
+            fault_evidence["cleanup_verified"] = True
 
     return asyncio.run(run())
