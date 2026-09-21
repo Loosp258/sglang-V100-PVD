@@ -595,6 +595,22 @@ class SchedulerBatchResultProcessor:
         batch: ScheduleBatch,
         result: GenerationBatchResult,
     ):
+        bridge = getattr(batch, "pvd_cpu_result_bridge", None)
+        if bridge is None:
+            return self._process_batch_result_decode(batch, result)
+        # Explicit controlled CPU adapter only; regular serving is unchanged.
+        from sglang.srt.disaggregation.pvd.cpu_schedule_bridge import CPUScheduleBridge
+
+        if not isinstance(bridge, CPUScheduleBridge):
+            raise TypeError("invalid PVD CPU result bridge")
+        with bridge.processing(self, batch, result):
+            return self._process_batch_result_decode(batch, result)
+
+    def _process_batch_result_decode(
+        self,
+        batch: ScheduleBatch,
+        result: GenerationBatchResult,
+    ):
         if result.copy_done is not None:
             result.copy_done.synchronize()
         if result.routed_experts_output is not None:
@@ -635,6 +651,10 @@ class SchedulerBatchResultProcessor:
 
         for i, req in enumerate(batch.reqs):
             req: Req
+
+            bridge = getattr(batch, "pvd_cpu_result_bridge", None)
+            if bridge is not None and not bridge.accepts(req):
+                continue
 
             if (self.enable_overlap or self.enable_overlap_mlx) and (
                 req.finished() or req.is_retracted

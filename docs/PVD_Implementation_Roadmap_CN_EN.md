@@ -1,7 +1,8 @@
 # PVD 最终目标推进步骤 / Implementation roadmap
 
 更新 / Updated: 2026-09-21. 按以下顺序推进；每一步记录实现和证据，
-不把接口、CPU 通过或硬件预检当成生产端到端验收。未明确要求时不自动 commit/push。
+不把接口、CPU 通过或硬件预检当成生产端到端验收。当前用户要求每阶段验证后 commit，
+继续推进；未要求时不自动 push。
 
 ## 固定目标 / Invariants
 
@@ -85,12 +86,14 @@ token 提交、共享目标互斥、超时/EOS/取消/drain，已驱动真实 CP
 新增[batch 执行器和真实多请求验收](PVD_CPU_Batch_Execution_CN_EN.md)：共享一次执行
 lease、完整 logits、按身份提交、wait-all、请求槽位绑定；真实 batch 加入/重排/取消/
 故障均通过，19 次 attention 对照最大误差约 `2.38e-7`。
-Next: wire actual ScheduleBatch/result-processing and request lifecycle through
-an explicit supported-mode gate. Preserve one production output commit point,
-target execution arbitration, initial bootstrap and independent request clocks.
+新增[真实 ScheduleBatch 结果接点](PVD_CPU_Schedule_Result_Bridge_CN_EN.md)：
+原结果处理器是 Req 唯一输出写入者，PVD 观察正式提交；真实请求撤回/停止条件、
+错配拒绝和重放保护通过。尚非完整 Scheduler 服务或生产缓存释放验收。
+Next: integrate a real independent draft provider and automatic request-level
+CPU scheduling, preserving the existing production full-prompt path.
 The CPU driver is still a standalone smoke, not Scheduler or GPU/TP evidence.
 CPU banks are not GPU fences or production allocators. No new request may reset
 an old request's clock. See the linked note for current limits.
 
 真实 CPU Decode 消费已提交为 `8f482e631`，此前协议为 `3c4b0c479`，未推送。
-CPU 生命周期接点已提交 `81bfb64b4`，未推送；后续 batch 执行器等尚未提交。
+CPU 生命周期接点已提交 `81bfb64b4`，batch 执行器已提交 `1553d036c`，未推送。

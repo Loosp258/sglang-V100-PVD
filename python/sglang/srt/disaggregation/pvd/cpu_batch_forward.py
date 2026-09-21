@@ -94,6 +94,7 @@ class CPUBatchForwardExecutor:
         )
         # Builder is used for fields only, never for admission or its KV budget.
         self._last_operation = None
+        self._completed_operation = None
         self._storage = {}
         self.forward_count = 0
 
@@ -174,6 +175,7 @@ class CPUBatchForwardExecutor:
             logits = output.logits_output.next_token_logits
             # Validate complete rows, not the draft adapter's last-row shortcut.
             batch_results_from_logits(ticket, logits, finished=(False,) * len(ordered))
+            self._completed_operation = ticket.operation_id
             return logits
         finally:
             self.runner.attn_backend = self.native

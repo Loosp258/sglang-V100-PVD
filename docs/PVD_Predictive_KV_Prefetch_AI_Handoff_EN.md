@@ -2,6 +2,15 @@
 
 Updated: 2026-09-21.
 
+Latest (supersedes historical status below): [actual ScheduleBatch result bridge](PVD_CPU_Schedule_Result_Bridge_CN_EN.md).
+The ordinary result processor is the sole Req output writer. The explicit CPU
+bridge validates dispatch identity, observes commits, rejects replay, and skips
+retracted members. 29 new tests; full WSL 1365 passed / 6 skipped; strict CPU
+Req/ScheduleBatch/model execution passes (21 attention checks). Metrics/streaming/
+cache-release callbacks remain test spies, not full serving verification.
+Previous batch work is committed `1553d036c`; no push. Next: real independent
+draft in the closed loop and request-level scheduling. GPU/TP/MR/CAGRA remain gaps.
+
 Newest combined gate: [batch execution and real multi-request validation](PVD_CPU_Batch_Execution_CN_EN.md).
 One batch lease, identity-safe whole-result validation/commit, registered request
 slots and a reusable real CPU forward executor now run variable membership and

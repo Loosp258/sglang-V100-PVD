@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新状态（覆盖下方历史记录）：[真实 ScheduleBatch 结果接点](PVD_CPU_Schedule_Result_Bridge_CN_EN.md)。
+原结果处理器保持 Req 唯一输出写入点；显式 CPU bridge 校验 dispatch 身份、观察提交、
+拒绝重放、跳过撤回成员。29 个新测试；WSL 全量 1365 passed / 6 skipped；真实 Req/
+ScheduleBatch/模型前向通过，21 次 attention 对照。metrics/stream/cache-release
+回调仍为测试 spy，尚非完整 serving 验收。前一阶段 batch 已提交 `1553d036c`，未推送。
+下一步连接独立真实 draft 与请求级调度；GPU/TP/MR/CAGRA 仍有实际实现缺口。
+
 最新组合推进：[batch 执行器与真实多请求验收](PVD_CPU_Batch_Execution_CN_EN.md)：
 共享 batch lease、完整结果身份校验/提交、固定请求槽位与可复用 CPU forward，
 已在真实多请求不同长度/成员变化下完成 HTTP 刷新和安装。39 个新单测、19 次真实

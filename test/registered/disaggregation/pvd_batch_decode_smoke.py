@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import torch
 
 
-def validate_batch_decode(runner):
+def validate_batch_decode(runner, *, scheduled_results=False):
     from pvd_controlled_prefetch import ControlledFixture
     from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import (
         CPUBatchDispatcher,
@@ -71,6 +71,17 @@ def validate_batch_decode(runner):
     records, active, errors, sizes = {}, {}, [], []
     budgets, tasks, hooks = [], [], []
     inject_failure = False
+    processor = None
+    if scheduled_results:
+        from pvd_scheduled_result_smoke import (
+            deliver,
+            make_batch,
+            make_processor,
+            make_req,
+        )
+        from sglang.srt.disaggregation.pvd.cpu_schedule_bridge import CPUScheduleBridge
+
+        processor = make_processor()
 
     def create(name, tokens):
         allocator = PrivatePoolAllocator(reqpool, runner.token_to_kv_pool_allocator)
@@ -131,6 +142,8 @@ def validate_batch_decode(runner):
                 name, tokens, int(logits.argmax()), arbiter=arbiter
             )
             executor.register_storage(r.life, r.slot)
+            if scheduled_results:
+                r.req = make_req(r.life, r.slot, config.vocab_size)
             for l in range(layers):
                 pool.get_key_buffer(l)[r.rows] = float("nan")
                 pool.get_value_buffer(l)[r.rows] = float("nan")
@@ -176,6 +189,9 @@ def validate_batch_decode(runner):
         ticket = dispatcher.begin([records[n].life for n in names])
         destinations, prior = [], []
         try:
+            if scheduled_results:
+                scheduled_batch = make_batch([records[n].req for n in names])
+                bridge = CPUScheduleBridge(executor, scheduled_batch, ticket)
             for member in ticket.members:
                 r, p = records[member.request_id], member.permit
                 old_rows = r.rows[len(r.prompt) :]
@@ -229,9 +245,18 @@ def validate_batch_decode(runner):
             # Simulate cancellation arriving while execution was in flight:
             # execution has stopped, but no output has yet been committed.
             if cancel_after_forward is not None:
-                records[cancel_after_forward].life.terminate("client cancelled")
+                if scheduled_results:
+                    records[cancel_after_forward].req.is_retracted = True
+                else:
+                    records[cancel_after_forward].life.terminate("client cancelled")
                 assert arbiter.busy
-            committed = dispatcher.complete(ticket, tuple(reversed(results)))
+            if scheduled_results:
+                deliver(processor, bridge, scheduled_batch, logits)
+                committed = tuple(
+                    r for r in results if r.request_id != cancel_after_forward
+                )
+            else:
+                committed = dispatcher.complete(ticket, tuple(reversed(results)))
             expected_ids = set(names) - (
                 {cancel_after_forward} if cancel_after_forward else set()
             )
@@ -335,6 +360,14 @@ def validate_batch_decode(runner):
             assert not arbiter.busy and backend.consumer._bound is None
             assert old.life.committed_tokens == 9
             assert new.fixture.request.pipeline.provider.calls == []
+            if scheduled_results:
+                ended = create("length-limit", (1, 14, 23))
+                ended.life.admit(ended.fixture.request)
+                ended.req.sampling_params.max_new_tokens = 2  # P's token + one D token
+                inject_failure = False
+                step(("length-limit",))
+                assert ended.life.state == "finished" and ended.req.finished()
+                assert ended.life.committed_tokens == 1
             return {
                 "status": "passed",
                 "batch_sizes": sizes,
@@ -348,6 +381,8 @@ def validate_batch_decode(runner):
                 "cancelled_member_output_discarded": True,
                 "real_batch_failure_commits_nothing": True,
                 "reusable_batch_executor": True,
+                "real_req_schedule_batch_result_processor": scheduled_results,
+                "real_req_retraction_and_length_limit": scheduled_results,
                 "production_scheduler_gpu_rdma_validated": False,
             }
         finally:
