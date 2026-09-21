@@ -17,6 +17,7 @@ def validate_batch_decode(
     draft_provider=None,
     automatic_refresh=False,
     wire_delivery=False,
+    rank_runtime=False,
 ):
     from pvd_controlled_prefetch import ControlledFixture
     from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import (
@@ -54,7 +55,12 @@ def validate_batch_decode(
         runner.attn_backend,
     )
     arbiter = TargetExecutionArbiter()
-    dispatcher = CPUBatchDispatcher(arbiter)
+    if rank_runtime:
+        from sglang.srt.disaggregation.pvd.cpu_rank_batch import CPURankBatchDispatcher
+
+        dispatcher = CPURankBatchDispatcher(arbiter, max_requests=8)
+    else:
+        dispatcher = CPUBatchDispatcher(arbiter)
     executor = CPUBatchForwardExecutor(runner, dispatcher)
     backend = executor.backend
     builder = DraftForwardAdapter(
@@ -157,7 +163,10 @@ def validate_batch_decode(
                 pc,
             )
             r.fixture = ControlledFixture(
-                stored, CommittedPrefix(name, tokens, 0, "prompt"), pipeline
+                stored,
+                CommittedPrefix(name, tokens, 0, "prompt"),
+                pipeline,
+                rank_runtime=rank_runtime,
             )
             r.life = CPUDecodeLifecycle(
                 name, tokens, int(logits.argmax()), arbiter=arbiter
@@ -462,6 +471,7 @@ def validate_batch_decode(
                 "real_batch_failure_commits_nothing": True,
                 "reusable_batch_executor": True,
                 "real_req_schedule_batch_result_processor": scheduled_results,
+                "rank_runtime_bound_to_model_banks": rank_runtime,
                 "real_req_retraction_and_length_limit": scheduled_results,
                 "independent_real_draft": draft_provider is not None,
                 "request_local_refresh_driver": driver is not None,

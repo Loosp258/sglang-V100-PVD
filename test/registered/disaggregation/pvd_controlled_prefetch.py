@@ -56,7 +56,7 @@ from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
 
 
 class ControlledFixture:
-    def __init__(self, pool, prefix, pipeline):
+    def __init__(self, pool, prefix, pipeline, *, rank_runtime=False):
         self.pool, self.prefix = pool, prefix
         self.prompt_tokens = len(prefix.tokens)
         self.incarnation = uuid.uuid4().hex
@@ -175,7 +175,22 @@ class ControlledFixture:
                 for qhead in range(self.mapping.num_query_heads)
                 if self.mapping.kv_head_for(qhead) == head
             )
-        self.group = CPUInstallGroup(banks, interval=4, lead_tokens=1)
+        if rank_runtime:
+            from sglang.srt.disaggregation.pvd.cpu_runtime_group import (
+                CPURuntimeInstallGroup,
+            )
+
+            self.group = CPURuntimeInstallGroup(
+                banks,
+                interval=4,
+                lead_tokens=1,
+                peer_epochs={r: f"cpu-model-worker-{r}" for r in banks},
+                timeout_seconds=30,
+                max_pending_events=32,
+                max_pending_bytes=65536,
+            )
+        else:
+            self.group = CPUInstallGroup(banks, interval=4, lead_tokens=1)
         initial = self.group.begin(0)
         # Bootstrap before any retrieval index build: no fake search prerequisite.
         for rank in (0, 1):

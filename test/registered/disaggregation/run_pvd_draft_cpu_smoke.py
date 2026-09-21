@@ -281,7 +281,9 @@ def main() -> None:
         controlled_decode_evidence = None
         batch_decode_evidence = None
         scheduled_decode_evidence = None
+        rank_runtime_decode_evidence = None
         real_draft_loop_evidence = None
+        rank_runtime_loop_evidence = None
         if "--sparse-decode" in sys.argv[1:]:
             from pvd_sparse_decode_smoke import validate_sparse_decode
 
@@ -300,11 +302,23 @@ def main() -> None:
             scheduled_decode_evidence = validate_batch_decode(
                 runner, scheduled_results=True
             )
+        if "--rank-runtime-decode" in sys.argv[1:]:
+            from pvd_batch_decode_smoke import validate_batch_decode
+
+            rank_runtime_decode_evidence = validate_batch_decode(
+                runner, scheduled_results=True, rank_runtime=True
+            )
         if "--real-draft-loop" in sys.argv[1:] or "--wire-sparse-loop" in sys.argv[1:]:
             from pvd_real_draft_loop_smoke import validate_real_draft_loop
 
             real_draft_loop_evidence = validate_real_draft_loop(
                 runner, port, wire_delivery="--wire-sparse-loop" in sys.argv[1:]
+            )
+        if "--rank-runtime-loop" in sys.argv[1:]:
+            from pvd_real_draft_loop_smoke import validate_real_draft_loop
+
+            rank_runtime_loop_evidence = validate_real_draft_loop(
+                runner, port, wire_delivery=True, rank_runtime=True
             )
         print(
             json.dumps(
@@ -327,7 +341,9 @@ def main() -> None:
                     "controlled_decode_evidence": controlled_decode_evidence,
                     "batch_decode_evidence": batch_decode_evidence,
                     "scheduled_decode_evidence": scheduled_decode_evidence,
+                    "rank_runtime_decode_evidence": rank_runtime_decode_evidence,
                     "real_draft_loop_evidence": real_draft_loop_evidence,
+                    "rank_runtime_loop_evidence": rank_runtime_loop_evidence,
                 },
                 indent=2,
             )

@@ -171,7 +171,8 @@ class CPUScheduleBridge:
         """Caller guarantees synchronous forward/readers have already unwound."""
         self.dispatcher.arbiter.owner()
         if self.state not in ("completed", "failed"):
-            self.dispatcher.fail(self.ticket, reason)
+            if self.dispatcher._ticket is not None:
+                self.dispatcher.fail(self.ticket, reason)
             self.state = "failed"
 
     @contextmanager
@@ -184,9 +185,10 @@ class CPUScheduleBridge:
         if self.state != "attached":
             raise LifecycleError("stale or replayed ScheduleBatch result")
         try:
-            self._prepare(processor, batch, result)
-            yield self
-            self._observe()
+            with self.dispatcher.result_scope(self.ticket):
+                self._prepare(processor, batch, result)
+                yield self
+                self._observe()
         except BaseException:
             # Normal output processing may already have committed some Req
             # tokens. Never roll those back; terminally stop this whole batch.

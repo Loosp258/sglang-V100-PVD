@@ -1,5 +1,9 @@
 # Owner-polled rank runtime / 协调线程推进的 rank 运行时
 
+Latest integration / 最新接入：见 [rank/model/Req 绑定](PVD_Rank_Model_Binding_CN_EN.md)。
+2026-09-22 已连接 opt-in CPU 模型执行路径；下文未接模型的描述是此前步骤的历史
+边界。生产 Scheduler、GPU 和 RDMA 仍未完成，不能外推 CPU 验收结果。
+
 ## Implementation / 实现
 
 `RankInstallRuntime` drives `RankInstallExchange` with three states of progress:

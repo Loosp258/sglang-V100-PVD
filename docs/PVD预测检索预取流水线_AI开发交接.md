@@ -1,6 +1,14 @@
 # PVD 预测检索预取流水线：AI 开发交接文档
 
-更新日期：2026-09-21。
+更新日期：2026-09-22。
+
+最新：[rank/model/Req 绑定](PVD_Rank_Model_Binding_CN_EN.md) 通过同一个
+coordinator/bank/epoch 连接此前独立的 rank 和 CPU 模型路径；正式 Req 结果
+处理器仍是唯一写入者。实际双 tiny Llama + HTTP Delivery + rank 运行时闭环
+通过：21 次 attention 对照，最大误差约 3.58e-7；4 次交付 / 1600 bytes。
+新增 15 个测试。仅 CPU TP1、本进程控制、fake payload copy；不是生产 Scheduler、
+模型 TP、GPU 或 RDMA 验收。下方“路径尚独立”的历史结论仅在此显式 CPU 路径被覆盖。
+完整回归：Windows 1646 passed / 14 skipped；WSL 1651 passed / 9 skipped。
 
 最新：[批量 wait-all/结果作用域](PVD_Rank_Runtime_CN_EN.md) 把 rank 运行时与共享
 目标执行锁组合，保留独立请求时钟，结果处理结束前禁止 INSTALL，并拒绝已取消/

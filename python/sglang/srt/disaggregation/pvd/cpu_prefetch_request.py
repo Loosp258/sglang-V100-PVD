@@ -202,7 +202,7 @@ class CPUPrefetchRequest:
     def can_decode(self, committed_tokens):
         if self._closed:
             return False
-        permitted = self.group.coordinator.can_decode(committed_tokens)
+        permitted = self.group.can_decode(committed_tokens)
         self._session.observe(committed_tokens)
         return permitted
 
@@ -224,7 +224,7 @@ class CPUPrefetchRequest:
         return done
 
     def cancel(self, reason="request cancelled or prefix/Entry replaced"):
-        self.group.coordinator.cancel(reason)
+        self.group.cancel(reason)
         self._closed = True
         self._session.close()
         if self.delivery is not None:

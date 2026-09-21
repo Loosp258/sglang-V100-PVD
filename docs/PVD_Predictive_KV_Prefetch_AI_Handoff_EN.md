@@ -1,6 +1,16 @@
 # PVD Predictive KV Retrieval and Prefetch Pipeline: AI Development Handoff
 
-Updated: 2026-09-21.
+Updated: 2026-09-22.
+
+Newest: [rank runtime/model/Req binding](PVD_Rank_Model_Binding_CN_EN.md) now
+connects the formerly separate paths through the same coordinator/banks/epoch.
+The original result processor remains the sole Req writer. Actual dual tiny
+Llama + HTTP Delivery + rank-runtime CPU loop passed: 21 attention checks, max
+error about 3.58e-7, four deliveries / 1600 bytes. 15 new focused tests. This is
+CPU TP1 with in-process rank control and fake payload copy, not production
+Scheduler, model TP, GPU or RDMA. The older separate-path limitation below is
+superseded only for this explicitly opt-in CPU path.
+Full regression: Windows 1646 passed / 14 skipped; WSL 1651 passed / 9 skipped.
 
 Newest: [batch wait-all/result scope](PVD_Rank_Runtime_CN_EN.md) composes rank
 runtimes with a shared target arbiter, preserves per-request clocks, blocks

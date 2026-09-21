@@ -157,6 +157,11 @@ class CPURankInstallParticipant:
         self._terminal = True
         self._bank.close()  # may refuse until existing CPU reader scopes drain
 
+    def stop(self):
+        """Close reads without releasing a bank or claiming reader completion."""
+        self._owner()
+        self._terminal = True
+
     def snapshot(self):
         self._owner()
         return {

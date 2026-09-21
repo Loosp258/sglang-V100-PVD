@@ -307,6 +307,12 @@ class CPUInstallGroup:
             for rank, bank in self._banks.items()
         }
 
+    def can_decode(self, decode_tokens):
+        return self.coordinator.can_decode(decode_tokens)
+
+    def cancel(self, reason="request cancelled"):
+        self.coordinator.cancel(reason)
+
     def stage(self, epoch, rank, payloads):
         self.coordinator._match(epoch)
         if type(rank) is not int or rank not in self._banks or rank in self._receipts:

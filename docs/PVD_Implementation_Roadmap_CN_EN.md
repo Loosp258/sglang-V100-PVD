@@ -1,10 +1,17 @@
 # PVD 最终目标推进步骤 / Implementation roadmap
 
-更新 / Updated: 2026-09-21. 按以下顺序推进；每一步记录实现和证据，
+更新 / Updated: 2026-09-22. 按以下顺序推进；每一步记录实现和证据，
 不把接口、CPU 通过或硬件预检当成生产端到端验收。当前用户要求每阶段验证后 commit，
 继续推进。当前用户已明确要求每步 commit 后推送 GitHub `pvd-disaggregation`。
 
 ### 当前权威状态 / Current authoritative status
+
+最新：[rank/model/Req 绑定](PVD_Rank_Model_Binding_CN_EN.md) 已把此前独立的
+rank 运行时和 CPU 模型路径连接到同一 coordinator/bank/epoch。原 Req 结果处理器
+仍是唯一正式写入者。真实双 tiny Llama + HTTP 稀疏交付 + rank 控制闭环已通过：
+21 次 attention 对照，最大误差约 3.58e-7；4 次交付、1600 bytes。新增 15 个测试。
+这是 CPU TP1、本进程 rank 控制和 fake payload copy，不是生产 Scheduler/GPU/RDMA。
+最终全量：Windows 1646 passed / 14 skipped；WSL 1651 passed / 9 skipped。
 
 最新：[批量 wait-all 与结果处理作用域](PVD_Rank_Runtime_CN_EN.md) 为 rank 运行时
 增加整批准入、独立请求时钟、执行票据和共享目标锁；结果处理结束前不允许

@@ -137,6 +137,7 @@ class CPUDecodeLifecycle:
             controller.group.coordinator.identity[0] != self.request_id
             or state["state"] != "idle"
             or state["installed_tokens"] != 0
+            or not controller.group.can_decode(0)
             or any(m["prompt_tokens"] != len(self.prompt) for m in metadata.values())
         ):
             raise LifecycleError(

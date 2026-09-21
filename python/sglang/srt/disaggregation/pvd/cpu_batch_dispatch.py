@@ -6,6 +6,7 @@ aborts all its members; there is no rollback of partially written generated KV.
 """
 
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
@@ -80,12 +81,21 @@ class CPUBatchDispatcher:
                 for m in members
             ),
         )
-        self._lease = self.arbiter.acquire()
+        self._lease = self._acquire(members)
         self._members, self._ticket = members, ticket
         for lifecycle, member in zip(members, ticket.members, strict=True):
             lifecycle._permit = member.permit
             lifecycle._batch_owner = self
         return ticket
+
+    def _acquire(self, members):
+        return self.arbiter.acquire()
+
+    @contextmanager
+    def result_scope(self, ticket):
+        """Default local-group path; rank-bound dispatch overrides this guard."""
+        self._match(ticket)
+        yield
 
     def _match(self, ticket):
         self.arbiter.owner()
