@@ -158,38 +158,93 @@ def probe(args, report):
     scores = cp.asnumpy(cp.asarray(distances))
 
     report["stage"] = "validate_results"
-    if ids.shape != (args.queries, args.k) or scores.shape != ids.shape:
+    report.update(
+        validate_search_results(
+            host_data,
+            host_queries,
+            ids,
+            scores,
+            metric=args.metric,
+            k=args.k,
+            min_recall=args.min_recall,
+        )
+    )
+    report["stage"] = "complete"
+
+
+def validate_search_results(
+    host_data, host_queries, ids, scores, *, metric, k, min_recall
+):
+    """Independent CPU oracle for returned IDs AND their metric-valued scores.
+
+    A recall-only test accepts a backend returning correct IDs but scores with
+    the wrong sign/metric. PVD consumes scores too, so that is not acceptance.
+    Import NumPy only here: inventory remains independent of GPU/numeric libs.
+    Ties at the exact kth value are interchangeable; tolerance applies to
+    numerical score verification, not to expanding the recall cutoff.
+    """
+    import numpy as np
+
+    if metric not in ("inner_product", "sqeuclidean"):
+        raise ValueError("unsupported CAGRA acceptance metric")
+    if (
+        type(k) is not int
+        or type(min_recall) not in (int, float)
+        or not 0 < min_recall <= 1
+    ):
+        raise ValueError("explicit integer k and finite recall threshold required")
+    if (
+        host_data.ndim != 2
+        or host_queries.ndim != 2
+        or host_data.shape[1] != host_queries.shape[1]
+        or not 0 < k <= len(host_data)
+        or len(host_queries) == 0
+        or not np.isfinite(host_data).all()
+        or not np.isfinite(host_queries).all()
+    ):
+        raise ValueError("finite matching data/query matrices and valid k required")
+    if ids.shape != (len(host_queries), k) or scores.shape != ids.shape:
         raise RuntimeError("invalid search result shape")
     if (
         not np.issubdtype(ids.dtype, np.integer)
         or np.any(ids < 0)
-        or np.any(ids >= args.rows)
+        or np.any(ids >= len(host_data))
     ):
         raise RuntimeError("invalid neighbor IDs")
-    if not np.isfinite(scores).all() or any(
-        len(set(row.tolist())) != args.k for row in ids
-    ):
+    if not np.isfinite(scores).all() or any(len(set(row.tolist())) != k for row in ids):
         raise RuntimeError("nonfinite scores or duplicate neighbor IDs")
-    reference = host_queries @ host_data.T
-    if args.metric == "sqeuclidean":
+    data = host_data.astype(np.float64, copy=False)
+    queries = host_queries.astype(np.float64, copy=False)
+    reference = queries @ data.T
+    if metric == "sqeuclidean":
         reference = (
-            np.sum(host_queries**2, axis=1)[:, None]
-            + np.sum(host_data**2, axis=1)[None, :]
+            np.sum(queries**2, axis=1)[:, None]
+            + np.sum(data**2, axis=1)[None, :]
             - 2 * reference
         )
-    else:
-        reference = -reference  # Largest dot products, not smallest.
-    expected = np.argsort(reference, axis=1)[:, : args.k]
-    recall = (
-        sum(len(set(a.tolist()) & set(b.tolist())) for a, b in zip(ids, expected))
-        / ids.size
-    )
-    report["synthetic_recall_at_k"] = recall
-    if recall < args.min_recall:
+    expected_scores = np.take_along_axis(reference, ids.astype(np.int64), axis=1)
+    if not np.allclose(scores, expected_scores, rtol=1e-3, atol=1e-3):
         raise RuntimeError(
-            f"synthetic recall {recall:.4f} below threshold {args.min_recall}"
+            "CAGRA scores disagree with the selected metric and neighbor IDs"
         )
-    report["stage"] = "complete"
+    ordering = -reference if metric == "inner_product" else reference
+    selected = np.take_along_axis(ordering, ids.astype(np.int64), axis=1)
+    cutoff = np.partition(ordering, k - 1, axis=1)[:, k - 1, None]
+    recall = float(np.count_nonzero(selected <= cutoff) / ids.size)
+    if recall < min_recall:
+        raise RuntimeError(
+            f"synthetic recall {recall:.4f} below threshold {min_recall}"
+        )
+    return {
+        "synthetic_recall_at_k": recall,
+        "score_max_abs_error": float(np.max(np.abs(scores - expected_scores))),
+        "score_convention": "higher_dot_product"
+        if metric == "inner_product"
+        else "lower_squared_distance",
+        "score_rtol": 1e-3,
+        "score_atol": 1e-3,
+        "recall_ties": "any exact kth-score tie is accepted",
+    }
 
 
 def main(argv=None):
