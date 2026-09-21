@@ -11,6 +11,7 @@ import torch
 
 
 def validate_real_search(runner):
+    from pvd_controlled_prefetch import verify_controlled_roundtrip
     from pvd_search_roundtrip import verify_exact_roundtrip
     from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
         DraftForwardAdapter,
@@ -88,9 +89,18 @@ def validate_real_search(runner):
         FakeDraftProvider(draft, tokens=(19, 27)), probe, draft, config
     )
     result = asyncio.run(verify_exact_roundtrip(prompt_pool, prefix, pipeline))
+    before_calls = len(pipeline.provider.calls)
+    controlled = asyncio.run(verify_controlled_roundtrip(prompt_pool, prefix, pipeline))
+    assert len(pipeline.provider.calls) == before_calls + 1
+    fallback = asyncio.run(
+        verify_controlled_roundtrip(prompt_pool, prefix, pipeline, boundary_start=True)
+    )
+    assert len(pipeline.provider.calls) == before_calls + 1  # no draft on fallback
     assert budget.snapshot()["used_staging_bytes"] == 0
     return {
         **result,
+        "controlled_prefetch": controlled,
+        "boundary_committed_query": fallback,
         "prompt_k_and_query_q": "real target model",
         "draft": "fixed token fixture, not a loaded draft model",
     }

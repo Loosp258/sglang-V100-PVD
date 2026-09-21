@@ -2,6 +2,15 @@
 
 Updated: 2026-09-21.
 
+Latest addition: [controlled request loop](PVD_Controlled_Request_Loop_CN_EN.md)
+binds a common control-owned epoch/prefix before one capture, shard HTTP search,
+GQA union, packing and [all-rank installation](PVD_Rank_Install_Contract_CN_EN.md).
+Confirmed late-start policy: at the boundary, use target Q from the actual
+committed prefix, without draft; already launched but late predictions simply
+wait. Both CPU/local-HTTP paths pass with real tiny Llama Q. The next gate is
+consuming these selections in the SAME real CPU Decode sequence. That remains
+separate today; no online Scheduler, distributed TP, GPU/RDMA or CAGRA claim.
+
 Latest follow-up: [offline real target-Q probe](PVD_Target_Q_CPU_Probe_CN_EN.md)
 now reuses target weights and private CPU pools to capture post-RoPE Q for the
 explicit CPU/TP1 Llama subset. Real numerical/isolation/failure checks pass;
@@ -924,6 +933,7 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/sparse_union.py` | Explicit bounded GQA token union within each layer/KV head; overflow refuses. |
 | `python/sglang/srt/disaggregation/pvd/sparse_working_set.py` | CPU-only current/next bank and attention reference; not a serving backend or GPU fence. |
 | `python/sglang/srt/disaggregation/pvd/sparse_cpu_backend.py` | Explicit offline CPU Llama Decode consumer and backend adapter; real model forwards validated, no production registration or distributed install. |
+| `python/sglang/srt/disaggregation/pvd/sparse_install.py` | Request-local rank agreement and in-process CPU bank driver; all applied ACKs gate resume. Not a collective, transport authorization or GPU fence. |
 | `python/sglang/srt/disaggregation/pvd/probe_search.py` | Scoped CPU probe-to-search bridge; explicit Q positions/head mapping and stale-window protection, not a serving pipeline. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |

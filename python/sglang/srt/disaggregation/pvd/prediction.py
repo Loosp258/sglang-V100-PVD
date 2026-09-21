@@ -315,6 +315,10 @@ class TargetProbe(abc.ABC):
     ) -> Tuple[QueryVectors, ...]:
         """Compute Q at the predicted positions, one entry per probed layer."""
 
+    def capture_committed(self, prefix: CommittedPrefix, positions: tuple[int, ...]):
+        """Explicit late-start path: no draft tokens or committed-state mutation."""
+        raise PredictionConfigError("probe does not support committed-prefix capture")
+
     @contextmanager
     def branch(self):
         """Own isolated append-KV/scratch until query materialization finishes.
@@ -409,6 +413,39 @@ class PredictionPipeline:
             raise PredictionConfigError("draft provider exceeded its token budget")
 
         queries = run_isolated(self.probe.capture, prefix, prediction)
+        return self._validate_queries(
+            prefix,
+            queries,
+            range(len(prefix.tokens), len(prefix.tokens) + len(prediction.tokens)),
+        )
+
+    @contextmanager
+    def committed_query_branch(self, prefix, positions):
+        """Recompute target Q from actual committed tokens; never invoke draft.
+
+        CPU, synchronous and isolated exactly like query_branch. Positions are
+        explicit absolute indices inside the snapshot, not refresh counters.
+        """
+        if not isinstance(prefix, CommittedPrefix) or (
+            not isinstance(positions, tuple)
+            or not 1 <= len(positions) <= 64
+            or any(
+                type(p) is not int or not 0 <= p < len(prefix.tokens) for p in positions
+            )
+            or tuple(sorted(set(positions))) != positions
+        ):
+            raise PredictionConfigError(
+                "committed query positions must be inside the prefix"
+            )
+        with (
+            torch.random.fork_rng(devices=[], enabled=True),
+            self.probe.branch(),
+            torch.inference_mode(),
+        ):
+            queries = self.probe.capture_committed(prefix, positions)
+            yield self._validate_queries(prefix, queries, positions)
+
+    def _validate_queries(self, prefix, queries, allowed_positions):
         if not isinstance(queries, tuple) or not queries:
             raise PredictionConfigError("probe produced no queries")
         seen = set()
@@ -435,15 +472,12 @@ class PredictionPipeline:
                 self.probe_config.head_count,
             ):
                 raise PredictionConfigError("probe returned unrequested query heads")
-            predicted_positions = range(
-                len(prefix.tokens), len(prefix.tokens) + len(prediction.tokens)
-            )
             if any(
-                p not in predicted_positions
+                p not in allowed_positions
                 for p in query.positions[: query.valid_length]
             ):
                 raise PredictionConfigError(
-                    "query position is outside the predicted continuation"
+                    "query position is outside the predicted continuation or requested committed positions"
                 )
             if (
                 query.prefix_version is not None
@@ -510,6 +544,14 @@ class FakeTargetProbe(TargetProbe):
         # prefix. committed_position is the refresh counter, not an index.
         start = len(prefix.tokens)
         positions = tuple(start + i for i in range(len(prediction.tokens)))
+        return self._queries(prefix, positions)
+
+    def capture_committed(self, prefix, positions):
+        self.calls.append((prefix.request_id, ()))
+        torch.rand(1)
+        return self._queries(prefix, positions)
+
+    def _queries(self, prefix, positions):
         return tuple(
             QueryVectors(
                 vector_space=self.vector_space,

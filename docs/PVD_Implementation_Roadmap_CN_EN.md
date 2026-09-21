@@ -57,6 +57,9 @@ The initial complete Prompt is not truncated by the later refresh union bound.
   后续已新增显式离线 CPU backend，14 次真实 Llama 前向执行（含一次注入故障），
   全选 logits 与原后端误差为 0，子集 attention 与独立 softmax 一致。
   详见[稀疏 CPU Decode 验收](PVD_Sparse_CPU_Decode_CN_EN.md)。
+  后续新增[跨 rank 安装协议与 CPU bank 驱动](PVD_Rank_Install_Contract_CN_EN.md)：
+  全部 prepared/parked/applied 后才提交请求时钟，部分失败后禁止恢复读取。
+  该验证是单进程 CPU，不是实际多进程 TP 或 GPU fence。
   **生产 D/GPU attention 与多 rank 原子安装仍未实现，因此第 3 步整体未完成。**
 - Step 4–7：未完成；没有宣称在线稀疏 attention、CAGRA 或网络隐藏已可用。
 
@@ -67,11 +70,16 @@ The strict smoke uses a tiny randomly initialized Llama and fixed draft token
 candidates; it is not an application-quality test or a loaded-draft-to-serving
 end-to-end experiment. P→V is a local byte copy, not RDMA.
 
-Next: define and test per-rank preparation/completion and safe request-level
-installation (same incarnation, operation and boundary; all ranks ready before
-resume; failure/cancel cannot expose a mixed generation), then wire supported
-backend execution into the online Scheduler. The CPU
-bank is deliberately single-owner/synchronous and must not be used as a GPU
-fence or a production allocator. No new request may reset an old request's clock.
+后续已接通[受控 CPU 请求刷新闭环](PVD_Controlled_Request_Loop_CN_EN.md)：从控制端
+创建共同 epoch，一次 draft/probe 后按 shard 搜索，经并集/打包/安装门控推进请求。
+用户已确认边界首次发起时用正式前缀目标 Q 补查；已提前发起但迟到时等待原结果。
+两条路径均已通过真实 CPU Llama + 本地 HTTP 验证，补查 Q 独立 oracle 误差为 0。
 
-最新提交为 `6dba510db`，后续 target-Q probe 等修改仍在本地。
+Next: feed these controlled retrieval/install results into the SAME real CPU
+Decode sequence, deriving snapshots from actual committed output and gating
+model reads through the group. Currently those gates remain separate fixtures.
+Then wire supported backend execution and actual rank agreement into the online
+Scheduler. CPU banks are not GPU fences or production allocators. No new request
+may reset an old request's clock. See the linked note for current limits.
+
+最新提交为 `9c09b7768`；安装协议、受控闭环与边界补查等修改尚未提交。

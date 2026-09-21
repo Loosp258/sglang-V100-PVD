@@ -46,7 +46,8 @@ class ProbeWindow:
 
     target_tokens counts committed D tokens, excluding P's first token. It is
     not a sequence position. query_positions explicitly selects predicted Q
-    positions; this module invents no last-token or cross-position policy.
+    positions, or in-prefix Q when query_source is committed at a late start.
+    This module invents no last-token or cross-position policy.
     """
 
     incarnation: str
@@ -55,6 +56,7 @@ class ProbeWindow:
     prefix: CommittedPrefix
     target_tokens: int
     query_positions: tuple[int, ...]
+    query_source: str = "predicted"
 
 
 @dataclass(frozen=True)
@@ -108,12 +110,17 @@ class ProbeSearchSession:
     Calls must be serialized on the owner thread; not a thread-safe registry.
     """
 
-    def __init__(self, request_id: str, entry_transfer_id: str):
+    def __init__(self, request_id: str, entry_transfer_id: str, *, incarnation=None):
         _text("request_id", request_id)
         _text("entry_transfer_id", entry_transfer_id)
         self.request_id = request_id
         self.entry_transfer_id = entry_transfer_id
-        self.incarnation = uuid.uuid4().hex
+        if incarnation is not None:
+            _text("incarnation", incarnation)
+        self.incarnation = incarnation if incarnation is not None else uuid.uuid4().hex
+        self._controlled = incarnation is not None
+        self._last_controlled_round = -1
+        self._children = ()
         self._closed = False
         self._observed = 0
         self._pending = None
@@ -131,6 +138,8 @@ class ProbeSearchSession:
         *,
         target_tokens: int,
         query_positions: tuple[int, ...],
+        install_epoch=None,
+        query_source="predicted",
     ) -> ProbeWindow:
         if self._closed:
             raise StaleProbeSearch("request is closed")
@@ -142,9 +151,39 @@ class ProbeSearchSession:
         ):
             raise ValueError("prefix belongs to another request")
         _count("target_tokens", target_tokens)
+        if self._controlled:
+            from sglang.srt.disaggregation.pvd.sparse_install import InstallEpoch
+
+            if not isinstance(install_epoch, InstallEpoch) or (
+                install_epoch.request_id,
+                install_epoch.incarnation,
+                install_epoch.entry_transfer_id,
+                install_epoch.target_tokens,
+            ) != (
+                self.request_id,
+                self.incarnation,
+                self.entry_transfer_id,
+                target_tokens,
+            ):
+                raise StaleProbeSearch(
+                    "controlled probe requires its exact installation epoch"
+                )
+            if install_epoch.round <= self._last_controlled_round:
+                raise StaleProbeSearch("controlled probe epoch cannot be replayed")
+        elif install_epoch is not None:
+            raise ValueError("standalone session cannot adopt an installation epoch")
         if prefix.committed_position < self._observed:
             raise StaleProbeSearch("committed token count regressed")
-        if target_tokens <= prefix.committed_position:
+        if query_source not in ("predicted", "committed"):
+            raise ValueError("unknown query source")
+        committed = query_source == "committed"
+        if committed and (
+            not self._controlled or target_tokens != prefix.committed_position
+        ):
+            raise ValueError(
+                "committed-prefix capture requires a controlled boundary start"
+            )
+        if not committed and target_tokens <= prefix.committed_position:
             raise ValueError(
                 "a periodic probe needs a future target boundary; bootstrap is separate"
             )
@@ -152,23 +191,32 @@ class ProbeSearchSession:
             not isinstance(query_positions, tuple)
             or not 1 <= len(query_positions) <= 64
             or any(
-                type(p) is not int or p < len(prefix.tokens) for p in query_positions
+                type(p) is not int
+                or (
+                    not 0 <= p < len(prefix.tokens)
+                    if committed
+                    else p < len(prefix.tokens)
+                )
+                for p in query_positions
             )
             or tuple(sorted(set(query_positions))) != query_positions
         ):
             raise ValueError(
-                "query positions must be 1..64 distinct ascending predicted positions"
+                "query positions must be 1..64 distinct ascending positions within the declared query source"
             )
         self._observed = prefix.committed_position
         window = ProbeWindow(
             self.incarnation,
-            uuid.uuid4().hex,
+            install_epoch.operation_id if self._controlled else uuid.uuid4().hex,
             self.entry_transfer_id,
             prefix,
             target_tokens,
             query_positions,
+            query_source,
         )
         self._pending = window
+        if self._controlled:
+            self._last_controlled_round = install_epoch.round
         return window
 
     def observe(self, committed_tokens: int):
@@ -187,11 +235,18 @@ class ProbeSearchSession:
 
     def invalidate(self):
         """Discard local results; never assume native/GPU work was cancelled."""
+        for child in self._children:
+            child.close()
+        self._children = ()
         self._pending = self._prepared = self._ready = None
 
     def replace_entry(self, entry_transfer_id: str):
         if self._closed:
             raise StaleProbeSearch("request is closed")
+        if self._controlled:
+            raise ValueError(
+                "controlled Entry replacement requires a new request controller"
+            )
         _text("entry_transfer_id", entry_transfer_id)
         self.invalidate()
         self.entry_transfer_id = entry_transfer_id
@@ -246,7 +301,12 @@ class ProbeSearchSession:
                     raise ValueError("duplicate layer/query-head route")
                 keys.add(key)
             prepared = []
-            with pipeline.query_branch(window.prefix) as queries:
+            branch = (
+                pipeline.committed_query_branch(window.prefix, window.query_positions)
+                if window.query_source == "committed"
+                else pipeline.query_branch(window.prefix)
+            )
+            with branch as queries:
                 by_layer = {q.layer: q for q in queries}
                 for route in routes:
                     query = by_layer.get(route.identity.layer)
@@ -312,6 +372,7 @@ class ProbeSearchSession:
             self._prepared is not prepared
             or self._searching is not None
             or self._ready is not None
+            or self._children
         ):
             raise ValueError("search requires this session's unused prepared operation")
         window = prepared.window
@@ -359,6 +420,50 @@ class ProbeSearchSession:
             raise
         finally:
             self._searching = None
+
+    def fork_prepared(self, prepared, partitions):
+        """Partition this actual capture BEFORE search; never relabel replies.
+
+        One draft/probe invocation supplies all shards. Each child keeps the
+        exact same immutable window, but pins its own shard's index version.
+        Parent invalidation closes every child, including in-flight searches.
+        Partition values are indices into prepared.queries, covering each once.
+        Aggregate routes remain limited to 64 by prepare(); not a serving API.
+        """
+        self._match(prepared.window)
+        if (
+            not self._controlled
+            or self._prepared is not prepared
+            or self._children
+            or self._searching is not None
+            or self._ready is not None
+        ):
+            raise ValueError("fork requires this controlled session's unused capture")
+        parts = {rank: tuple(indices) for rank, indices in partitions.items()}
+        flat = [i for indices in parts.values() for i in indices]
+        if (
+            not parts
+            or any(type(r) is not int or r < 0 for r in parts)
+            or any(not indices for indices in parts.values())
+            or any(type(i) is not int for i in flat)
+            or sorted(flat) != list(range(len(prepared.queries)))
+        ):
+            raise ValueError("shard partitions must cover every query exactly once")
+        result = {}
+        for rank, indices in parts.items():
+            child = ProbeSearchSession(
+                self.request_id, self.entry_transfer_id, incarnation=self.incarnation
+            )
+            child._pending = prepared.window
+            child._observed = self._observed
+            child._last_controlled_round = self._last_controlled_round
+            child_prepared = PreparedProbeSearch(
+                prepared.window, tuple(prepared.queries[i] for i in indices)
+            )
+            child._prepared = child_prepared
+            result[rank] = (child, child_prepared)
+        self._children = tuple(child for child, _ in result.values())
+        return result
 
     def take_selection(self, window: ProbeWindow) -> ProbeSelection:
         """Consume logical choices once, not install KV. Recheck before use.

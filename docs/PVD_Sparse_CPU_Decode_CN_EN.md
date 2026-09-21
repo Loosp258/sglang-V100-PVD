@@ -2,6 +2,9 @@
 
 2026-09-21。本轮未 commit/push；保留之前所有未提交工作。
 
+后续：[跨 rank 安装契约](PVD_Rank_Install_Contract_CN_EN.md) 已通过逻辑/CPU 驱动测试，
+但未与本文的模型 backend 组合为线上多 rank pipeline；下文 Next 为该变更前的记录。
+
 ## 本轮推进 / Implemented
 
 第三步从数学 reference 推进到真正的 SGLang 模型 attention 调用：
@@ -76,15 +79,17 @@ model forward through an actual transfer/scheduler pipeline.
 
 ## 没有完成 / Not established
 
-- 无生产后端注册/CLI 开关、无在线 Scheduler 接线、无跨 rank 切换协议。
+- 无生产后端注册/CLI 开关、无在线 Scheduler 接线、无实际多进程 TP 安装。
+  后续已有[CPU 安装协议](PVD_Rank_Install_Contract_CN_EN.md)与
+  [受控检索安装闭环](PVD_Controlled_Request_Loop_CN_EN.md)，但尚未门控此模型的读取。
 - 无 GPU、RDMA、CAGRA 或延迟隐藏验证；未实现生成 KV 压缩或清除。
 - attention 临时拼接/计算 workspace 尚无生产预算；CPU bank 预算只覆盖其持有副本。
 - 测试保留原完整 Prompt 的池分配（只将内容/映射毒化），**不是实际显存回收证据**。
 - 失败处置、source lease、异步传输授权/fence、TP head 分布仍不能由 CPU adapter 推导。
 
-Next: implement/test the rank-coordinated install contract before any multi-rank
-serving wiring. A request may resume only after all expected ranks acknowledge
-the same incarnation/operation/boundary; late/cancelled messages cannot switch
-a bank, a failed participant cannot expose a mixed generation, and an old
-forward's reader/fence must drain before resource retirement. Keep request clocks
-independent; new requests must not cancel or reset existing prefetches.
+Next: connect the now-tested controlled CPU search/install loop to this real
+model-consumption path, with group-gated reads and actual generated-prefix
+snapshots. A request may resume only after all expected ranks acknowledge the
+same incarnation/operation/boundary. The CPU protocol is not distributed TP
+evidence. Preserve generated KV and independent request clocks; new requests
+must not cancel or reset existing prefetches.

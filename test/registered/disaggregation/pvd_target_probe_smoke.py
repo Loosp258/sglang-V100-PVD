@@ -58,6 +58,12 @@ def validate_target_probe(runner, full_prefix):
             result = probe.capture(prefix, prediction)
             assert budget.snapshot()["used_staging_bytes"] == probe.reservation_bytes
             values = [query.vectors.clone() for query in result]
+        committed = CommittedPrefix(
+            "probe-r", prefix.tokens + prediction.tokens, 2, "actual-v2"
+        )
+        with probe.branch():
+            actual_queries = probe.capture_committed(committed, (5,))
+            actual_values = [query.vectors.clone() for query in actual_queries]
         assert get_forward_context() is context
     assert budget.snapshot()["used_staging_bytes"] == 0
     for before, after in zip(
@@ -109,6 +115,13 @@ def validate_target_probe(runner, full_prefix):
         assert not torch.allclose(value, raw), "oracle cannot distinguish pre/post RoPE"
         assert query.positions == (4, 5) and query.positional_encoding == "rope_applied"
         errors.append(float((value - expected).abs().max()))
+
+    committed_errors = []
+    for query, value in zip(actual_queries, actual_values, strict=True):
+        expected = oracle[query.layer].reshape(6, 4, 8)[5:6, 1:3]
+        torch.testing.assert_close(value, expected, rtol=2e-4, atol=2e-5)
+        assert query.positions == (5,) and query.prefix_version == "actual-v2"
+        committed_errors.append(float((value - expected).abs().max()))
 
     # Failed real forward still restores the context and branch reservation.
     def raise_after_capture(module, args, output):
@@ -200,6 +213,7 @@ def validate_target_probe(runner, full_prefix):
         "target_probe": "passed",
         "layers": len(values),
         "max_q_abs_error": max(errors),
+        "committed_prefix_q_max_abs_error": max(committed_errors),
         "matches_real_post_rope_not_pre_rope": True,
         "target_weights_pools_mapping_rng_unchanged": True,
         "failure_restores_context_budget_and_reuse": True,

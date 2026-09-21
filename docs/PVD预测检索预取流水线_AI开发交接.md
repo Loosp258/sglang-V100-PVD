@@ -2,6 +2,14 @@
 
 更新日期：2026-09-21。
 
+最新推进：[受控请求刷新闭环](PVD_Controlled_Request_Loop_CN_EN.md)，统一控制端
+epoch/prefix snapshot 从一次捕获贯穿分片 HTTP、GQA 并集、打包与
+[全部 rank 安装门控](PVD_Rank_Install_Contract_CN_EN.md)，不修改旧结果身份。
+边界补查策略已确认：到边界才首次发起时，暂停 D，用正式前缀的目标模型 Q，
+不调用 draft；已提前发起但迟到的结果仍等待原操作。两条路径都通过真实 CPU Llama
+和本地 HTTP 验证。下一步将结果交给同一个真实 CPU Decode 序列消费，目前仍分开
+验收；不代表已接入 Scheduler、实际分布式 TP、GPU/RDMA 或 CAGRA。
+
 最新推进：[离线真实 target-Q probe](PVD_Target_Q_CPU_Probe_CN_EN.md)
 已复用目标权重与独立 CPU 池，实现明确限定 CPU/TP1 Llama 的 post-RoPE Q 捕获，
 通过真实模型数值、状态隔离与异常检查。

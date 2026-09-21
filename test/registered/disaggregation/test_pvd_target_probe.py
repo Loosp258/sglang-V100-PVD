@@ -99,6 +99,39 @@ def test_close_prevents_late_writes():
         capture.capture(0, torch.arange(5), torch.zeros(5, 32))
 
 
+def test_committed_capture_selects_actual_prefix_rows_without_appending():
+    prefix = CommittedPrefix("r", (1, 2, 3), 2, "actual")
+    capture = PostRopeQueryCapture(
+        ProbeConfig("target", (0,), head_start=1, head_count=2),
+        prefix,
+        0,
+        query_heads=4,
+        head_dim=8,
+        committed_positions=(1, 2),
+    )
+    q = torch.arange(96.0).reshape(3, 32)
+    capture.capture(0, torch.arange(3), q)
+    result = capture.finish()[0]
+    assert result.positions == (1, 2)
+    assert result.prefix_version == "actual"
+    torch.testing.assert_close(result.vectors, q.reshape(3, 4, 8)[[1, 2], 1:3])
+    assert result.vectors.data_ptr() != q.data_ptr()
+    capture.close()
+
+
+@pytest.mark.parametrize("positions", [(), (3,), (-1,), (True,), (2, 1), (1, 1)])
+def test_committed_capture_refuses_invalid_positions(positions):
+    with pytest.raises(PredictionConfigError, match="in-prefix positions"):
+        PostRopeQueryCapture(
+            ProbeConfig("target", (0,)),
+            CommittedPrefix("r", (1, 2, 3), 2, "v"),
+            0,
+            query_heads=4,
+            head_dim=8,
+            committed_positions=positions,
+        )
+
+
 @pytest.mark.parametrize("bad", [0, -1, True, 1.5])
 def test_invalid_prediction_count_is_refused(bad):
     with pytest.raises(PredictionConfigError, match="positive integers"):

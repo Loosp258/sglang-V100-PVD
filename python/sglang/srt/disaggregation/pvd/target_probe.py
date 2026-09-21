@@ -36,8 +36,12 @@ class PostRopeQueryCapture:
         *,
         query_heads: int,
         head_dim: int,
+        committed_positions: tuple[int, ...] | None = None,
     ):
-        for value in (predicted, query_heads, head_dim):
+        for value in ((predicted,) if committed_positions is None else ()) + (
+            query_heads,
+            head_dim,
+        ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise PredictionConfigError(
                     "prediction/head dimensions must be positive integers"
@@ -46,9 +50,28 @@ class PostRopeQueryCapture:
             raise PredictionConfigError("probe Q heads exceed the target Q-head count")
         self.config = config
         self.prefix = prefix
-        self.positions = tuple(
-            range(len(prefix.tokens), len(prefix.tokens) + predicted)
-        )
+        if committed_positions is None:
+            self.positions = tuple(
+                range(len(prefix.tokens), len(prefix.tokens) + predicted)
+            )
+            self.sequence_length = len(prefix.tokens) + predicted
+        else:
+            if (
+                type(predicted) is not int
+                or predicted != 0
+                or not isinstance(committed_positions, tuple)
+                or not committed_positions
+                or any(
+                    type(p) is not int or not 0 <= p < len(prefix.tokens)
+                    for p in committed_positions
+                )
+                or tuple(sorted(set(committed_positions))) != committed_positions
+            ):
+                raise PredictionConfigError(
+                    "committed capture requires explicit in-prefix positions and no prediction"
+                )
+            self.positions = committed_positions
+            self.sequence_length = len(prefix.tokens)
         self.query_heads = query_heads
         self.head_dim = head_dim
         self.version = uuid.uuid4().hex
@@ -62,7 +85,7 @@ class PostRopeQueryCapture:
             return
         if layer in self._queries:
             raise PredictionConfigError("probe layer was captured twice")
-        expected = tuple(range(len(self.prefix.tokens) + len(self.positions)))
+        expected = tuple(range(self.sequence_length))
         if tuple(positions.tolist()) != expected:
             raise PredictionConfigError(
                 "probe positions must cover the complete prefix and prediction"
@@ -71,7 +94,7 @@ class PostRopeQueryCapture:
             raise PredictionConfigError("probe Q shape does not match target heads")
         selected = (
             q.reshape(len(expected), self.query_heads, self.head_dim)[
-                len(self.prefix.tokens) :,
+                list(self.positions),
                 self.config.head_start : self.config.head_start
                 + self.config.head_count,
             ]
@@ -260,6 +283,38 @@ class OfflineLlamaTargetProbe(TargetProbe):
             head_dim=self.head_dim,
         )
         return self._forward(tokens, self._state)
+
+    def capture_committed(self, prefix, positions):
+        self._require_main_thread()
+        if not self._active or self._used:
+            raise PredictionConfigError("capture requires an unused probe branch")
+        if (
+            not isinstance(prefix, CommittedPrefix)
+            or not prefix.tokens
+            or len(prefix.tokens) > self.max_tokens
+        ):
+            raise PredictionConfigError(
+                "committed probe input exceeds admitted bounds or has no prefix"
+            )
+        if (
+            not isinstance(positions, tuple)
+            or not 1 <= len(positions) <= self.max_predict_tokens
+        ):
+            raise PredictionConfigError(
+                "committed Q copies exceed the reserved query bound"
+            )
+        if any(t < 0 or t >= self.vocab_size for t in prefix.tokens):
+            raise PredictionConfigError("probe token is outside the target vocabulary")
+        self._state = PostRopeQueryCapture(
+            self.config,
+            prefix,
+            0,
+            query_heads=self.query_heads,
+            head_dim=self.head_dim,
+            committed_positions=positions,
+        )
+        self._used = True
+        return self._forward(prefix.tokens, self._state)
 
     def _forward(self, tokens, capture):
         from sglang.srt.compilation.piecewise_context_manager import get_forward_context

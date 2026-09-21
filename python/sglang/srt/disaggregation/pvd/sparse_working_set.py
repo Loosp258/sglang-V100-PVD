@@ -26,6 +26,16 @@ class _Bank:
     groups: dict
 
 
+@dataclass(frozen=True)
+class CPUInstallCandidate:
+    """Local staging identity, NOT a transport grant or GPU visibility proof."""
+
+    identity: tuple[str, str, str, str]
+    operation_id: str
+    target_tokens: int
+    staging_id: str
+
+
 class CPUSparseWorkingSet:
     def __init__(
         self,
@@ -129,8 +139,34 @@ class CPUSparseWorkingSet:
             self.budget.release(owner)
             raise
 
-    def install(self, committed_tokens):
+    def install_candidate(self):
         self._open()
+        if self._next is None:
+            raise SparsePayloadError("no staged bank")
+        spec = next(iter(self._next.groups.values()))[0]
+        return CPUInstallCandidate(
+            self.identity, spec.operation_id, self._next.boundary, self._next.owner
+        )
+
+    def can_install(self, candidate, committed_tokens):
+        """CPU preflight only. Caller must prevent new readers until install."""
+        self._open()
+        if (
+            not isinstance(candidate, CPUInstallCandidate)
+            or candidate != self.install_candidate()
+        ):
+            raise SparsePayloadError("stale or foreign staged bank")
+        if (
+            type(committed_tokens) is not int
+            or committed_tokens != candidate.target_tokens
+        ):
+            raise SparsePayloadError("install requires the exact prepared boundary")
+        return self._readers == 0
+
+    def install(self, committed_tokens, *, candidate=None):
+        self._open()
+        if candidate is not None and not self.can_install(candidate, committed_tokens):
+            raise SparsePayloadError("a current forward still owns the Prompt bank")
         if (
             type(committed_tokens) is not int
             or self._next is None
