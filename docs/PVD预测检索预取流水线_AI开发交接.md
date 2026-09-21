@@ -2,6 +2,11 @@
 
 更新日期：2026-09-21。
 
+最新：[rank 消息与 CPU 参与者](PVD_Rank_Wire_CN_EN.md)：有界消息绑定 worker
+epoch 和精确 staging；本地 APPLIED 后仍等全局 RESUME 才能读取。56 个新单测，
+全量 Windows 1549/14 skipped、WSL 1554/9 skipped。下一步是实际独立进程验收；
+尚未连接生产 TP、CUDA 完成证明或 Scheduler。
+
 最新：[稀疏交付 Step 7](PVD_Sparse_Delivery_CN_EN.md) 修复 reserve 未抵达时的
 取消恢复。仅已知 Entry、当前 V epoch、原子建立并保留完整身份关闭标记后，才能
 证明迟到 reserve/start 不会写向 D。单纯未找到记录、缺少证明、旧 epoch、原生

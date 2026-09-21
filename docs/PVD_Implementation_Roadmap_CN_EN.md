@@ -6,6 +6,11 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新：[rank 消息与本地读门控](PVD_Rank_Wire_CN_EN.md) 已实现：严格有界消息、
+worker epoch/通道绑定、全体 APPLIED 后才 RESUME、单 rank CPU bank 门控。
+56 个新单测；全量 Windows 1549 passed / 14 skipped，WSL 1554 passed / 9 skipped。
+尚未连接生产 TP collective/Scheduler；独立进程验收是下一步，不是已经完成。
+
 本节覆盖下面的历史未推送/未接交付记录。此前本地 commit 已推送；本轮已逐步推送
 `45c47a788`（清单与 index lease）、`46856081b`（V 稀疏 Delivery）、`de935b931`
 （D-owned receive/fence/install/ACK）、`309e464be`（请求级 HTTP Delivery 闭环）。
