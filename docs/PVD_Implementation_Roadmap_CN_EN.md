@@ -6,6 +6,11 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新：[严格 rank/model 验收入口](PVD_Rank_Model_Binding_CN_EN.md) 实际启动完整
+CPU 双模型分支并校验本次运行证据；缺失/旧报告、错误计数、关闭断言或未知开关
+不能误报通过。56 个工具测试；严格入口已在 WSL 实际执行。硬件结论仍明确为 false。
+全量 Windows 1702 passed / 14 skipped；WSL 1707 passed / 9 skipped。
+
 最新：[rank/model/Req 绑定](PVD_Rank_Model_Binding_CN_EN.md) 已把此前独立的
 rank 运行时和 CPU 模型路径连接到同一 coordinator/bank/epoch。原 Req 结果处理器
 仍是唯一正式写入者。真实双 tiny Llama + HTTP 稀疏交付 + rank 控制闭环已通过：

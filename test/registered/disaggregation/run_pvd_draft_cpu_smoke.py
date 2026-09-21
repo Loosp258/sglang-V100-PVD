@@ -23,6 +23,9 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 
 
 def main() -> None:
+    from pvd_rank_model_acceptance import FRAME, SCHEMA, smoke_options
+
+    options = smoke_options()
     from sglang.srt.configs.model_config import ModelConfig
     from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
         DraftForwardAdapter,
@@ -321,8 +324,11 @@ def main() -> None:
                 runner, port, wire_delivery=True, rank_runtime=True
             )
         print(
-            json.dumps(
+            (FRAME if options.acceptance_run_id else "")
+            + json.dumps(
                 {
+                    "acceptance_schema": SCHEMA,
+                    "acceptance_run_id": options.acceptance_run_id,
                     "status": "passed",
                     "device": "cpu",
                     "dtype": "float32",
@@ -345,7 +351,8 @@ def main() -> None:
                     "real_draft_loop_evidence": real_draft_loop_evidence,
                     "rank_runtime_loop_evidence": rank_runtime_loop_evidence,
                 },
-                indent=2,
+                indent=None if options.acceptance_run_id else 2,
+                allow_nan=False,
             )
         )
 

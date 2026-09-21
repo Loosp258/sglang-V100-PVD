@@ -2,6 +2,12 @@
 
 Updated: 2026-09-22.
 
+Newest: the [strict rank-model acceptance CLI](PVD_Rank_Model_Binding_CN_EN.md)
+runs the actual dual-model branch and validates complete run-bound evidence.
+Missing/old/partial reports, unknown flags, disabled asserts, dependency failure
+and timeout cannot pass or skip. 56 report/CLI tests; real WSL execution passed.
+Full Windows 1702 passed / 14 skipped; WSL 1707 passed / 9 skipped.
+
 Newest: [rank runtime/model/Req binding](PVD_Rank_Model_Binding_CN_EN.md) now
 connects the formerly separate paths through the same coordinator/banks/epoch.
 The original result processor remains the sole Req writer. Actual dual tiny

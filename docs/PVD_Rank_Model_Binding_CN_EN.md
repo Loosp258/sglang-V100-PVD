@@ -86,12 +86,39 @@ actual target sparse attention and actual Req result processing:
 
 ## Remaining gates / 尚未完成
 
+### Strict automated entrypoint / 严格自动验收入口
+
+```bash
+PYTHONPATH=python python test/registered/disaggregation/run_pvd_rank_model_acceptance.py --timeout-seconds 300
+```
+
+This entrypoint starts the real `--rank-runtime-loop` child with the current
+Python interpreter, a fresh run id and this checkout on PYTHONPATH. It requires
+one bounded framed report, zero exit status, the matching schema/run id, complete
+rank/model/Req/draft/Delivery evidence, finite numerical errors and independent
+request counts. A top-level `passed` without the required branch cannot pass.
+Import failures, timeouts, nonzero exits, missing/duplicate frames/keys and
+optimized Python (disabled asserts) are errors, never skips. Unknown smoke flags
+are now refused rather than silently running the baseline only.
+
+The strict entrypoint executed successfully in WSL against the actual dual-model
+loop. 56 focused tests validate the report/CLI contracts; those unit tests use
+synthetic reports and are not counted as model execution. This is a regression
+gate for a trusted test fixture, not cryptographic attestation of an arbitrary
+subprocess. Production GPU/RDMA claims must remain explicitly false.
+
+After this step: full Windows **1702 passed / 14 skipped**, WSL **1707 passed /
+9 skipped**; Ruff check/format pass. Hardware skips remain unverified.
+
+入口使用当前解释器实际启动模型闭环，检查本次运行标识、完整证据和数值结果；
+缺少环境、超时、报告不全、拼错开关或关闭断言均失败，不返回“跳过/通过”。
+严格入口仍只验证 CPU TP1、本地 rank 控制和 fake payload copy。
+
 No production Scheduler loop, real streaming/cache-release integration, CUDA
 sparse attention/current-next banks, distributed model TP, native Mooncake sparse
 execution, RDMA completion, V100S CAGRA or model-quality/performance gains are
 established. No production capability flags were relaxed.
 
-Next hardware-independent work: a strict automated rank-bound model acceptance
-entrypoint and broader integration fault injection through the real result
+Next hardware-independent work: broader integration fault injection through the real result
 processor (lost receipts, bank-swap failures and cleanup recovery). Hardware
 gates remain pending, not silently enabled.

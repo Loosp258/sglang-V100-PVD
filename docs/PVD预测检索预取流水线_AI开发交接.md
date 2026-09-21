@@ -2,6 +2,11 @@
 
 更新日期：2026-09-22。
 
+最新：[严格 rank/model 验收入口](PVD_Rank_Model_Binding_CN_EN.md) 已实际在 WSL
+启动双模型闭环并校验本次完整证据；报告缺失/过期/不全、未知开关、关闭断言、
+依赖失败或超时都不能误报通过/跳过。新增 56 个工具测试，硬件验收边界不变。
+全量 Windows 1702 passed / 14 skipped；WSL 1707 passed / 9 skipped。
+
 最新：[rank/model/Req 绑定](PVD_Rank_Model_Binding_CN_EN.md) 通过同一个
 coordinator/bank/epoch 连接此前独立的 rank 和 CPU 模型路径；正式 Req 结果
 处理器仍是唯一写入者。实际双 tiny Llama + HTTP Delivery + rank 运行时闭环
