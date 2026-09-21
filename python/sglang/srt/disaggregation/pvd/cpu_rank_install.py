@@ -104,7 +104,10 @@ class CPURankInstallParticipant:
             raise InstallProtocolError("rank channel/incarnation mismatch")
         if self._pending is None:
             if message.receipt == self._last and message.kind == "resume":
-                return None  # retry only the last completion; never advance twice
+                # A lost ACK is retryable without another swap/clock increment.
+                return RankInstallMessage(
+                    "resumed", self.peer_epoch, self._last
+                ).encode()
             if message.receipt == self._last and message.kind == "failed":
                 self._terminal = True
                 return None
@@ -133,7 +136,7 @@ class CPURankInstallParticipant:
             self._pending = self._candidate = self._phase = None
             self._round += 1
             self._boundary += self.interval
-            return None
+            return RankInstallMessage("resumed", self.peer_epoch, self._last).encode()
         raise InstallProtocolError("rank cannot receive participant events as commands")
 
     @contextmanager

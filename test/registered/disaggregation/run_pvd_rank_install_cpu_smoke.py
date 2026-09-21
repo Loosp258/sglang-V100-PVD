@@ -272,9 +272,13 @@ def run(ranks=2, fault="none"):
             blocked(rank, 0)
         old_resume = exchange.resume_commands(initial)
         for rank in range(ranks):
-            assert json.loads(rpc(rank, old_resume[rank]))["fixture"] == "command_done"
-            rpc(rank, old_resume[rank])  # idempotent duplicate
+            assert not exchange.can_decode(0)
+            reply = rpc(rank, old_resume[rank])
+            assert not exchange.can_decode(0)  # local reopen is not a global ACK
+            accept(rank, reply, "resumed")
+            accept(rank, rpc(rank, old_resume[rank]), "resumed")
             check_values(rank, 0, (0, 1, 2, 3))
+        assert exchange.can_decode(0)
 
         refresh = exchange.begin(3)
         assert fixture(0, "hold", count=3)["fixture"] == "held"
@@ -316,7 +320,7 @@ def run(ranks=2, fault="none"):
                         )
                 exchange.cancel_commands("peer failed; no partial resume")
                 cannot_resume(refresh)
-                assert not exchange.coordinator.can_decode(4)
+                assert not exchange.can_decode(4)
                 blocked(0, 4)
                 assert exchange.coordinator.snapshot()["installed_tokens"] == 0
                 break
@@ -325,8 +329,10 @@ def run(ranks=2, fault="none"):
             blocked(rank, 4)
         if fault == "none":
             for rank, command in exchange.resume_commands(refresh).items():
-                assert json.loads(rpc(rank, command))["fixture"] == "command_done"
+                assert not exchange.can_decode(4)
+                accept(rank, rpc(rank, command), "resumed")
                 check_values(rank, 4, (1, 3))
+            assert exchange.can_decode(4)
             assert exchange.coordinator.snapshot()["installed_tokens"] == 4
         for rank, process in processes.items():
             if process.is_alive():

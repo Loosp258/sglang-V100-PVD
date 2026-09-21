@@ -30,7 +30,7 @@ def event(kind, epoch, rank=0):
 
 
 @pytest.mark.parametrize(
-    "kind", ["prepared", "parked", "applied", "install", "resume", "failed"]
+    "kind", ["prepared", "parked", "applied", "install", "resume", "resumed", "failed"]
 )
 def test_all_message_kinds_roundtrip_exact_identity(kind):
     message = event(kind, protocol().begin(0))
@@ -177,6 +177,9 @@ def test_install_requires_all_parked_resume_requires_all_applied(ranks):
     resume = x.resume_commands(epoch)
     for rank in ranks:
         assert RankInstallMessage.decode(resume[rank]) == event("resume", epoch, rank)
+        assert not x.can_decode(0)
+        x.receive(event("resumed", epoch, rank).encode(), peer_rank=rank)
+    assert x.can_decode(0)
     assert x.coordinator.snapshot()["round"] == 1
     x.begin(3)
     with pytest.raises(InstallProtocolError, match="all ranks"):
@@ -219,3 +222,53 @@ def test_failure_with_wrong_prepared_bank_cannot_cancel_request():
     with pytest.raises(InstallProtocolError, match="prepared bank"):
         x.receive(failed.encode(), peer_rank=0)
     assert x.coordinator.snapshot()["state"] == "preparing"
+
+
+def test_resume_sending_is_not_receipt_and_retries_keep_ack_progress():
+    x = exchange()
+    epoch = x.begin(0)
+    for rank in (0, 1):
+        x.receive(event("prepared", epoch, rank).encode(), peer_rank=rank)
+        x.receive(event("parked", epoch, rank).encode(), peer_rank=rank)
+    x.install_commands(epoch)
+    for rank in (0, 1):
+        x.receive(event("applied", epoch, rank).encode(), peer_rank=rank)
+    assert x.coordinator.can_decode(0)  # logical-only API is insufficient on wire
+    assert not x.can_decode(0)
+    with pytest.raises(InstallProtocolError, match="issued resume"):
+        x.receive(event("resumed", epoch).encode(), peer_rank=0)
+    commands = x.resume_commands(epoch)
+    x.receive(event("resumed", epoch, 0).encode(), peer_rank=0)
+    assert not x.can_decode(0)
+    with pytest.raises(InstallProtocolError, match="acknowledge resume"):
+        x.begin(3)
+    assert x.resume_commands(epoch) == commands
+    x.receive(event("resumed", epoch, 1).encode(), peer_rank=1)
+    assert x.resume_complete(epoch) and x.can_decode(0)
+    x.begin(3)
+    x.receive(event("resumed", epoch, 0).encode(), peer_rank=0)  # exact old duplicate
+    assert x.can_decode(3)
+    assert not x.can_decode(4)
+    x.cancel_commands("stop")
+    assert not x.can_decode(3)
+
+
+@pytest.mark.parametrize("change", ["staging", "epoch", "peer"])
+def test_wrong_resume_ack_never_opens_gate(change):
+    x = exchange((0,))
+    epoch = x.begin(0)
+    for kind in ("prepared", "parked"):
+        x.receive(event(kind, epoch).encode(), peer_rank=0)
+    x.install_commands(epoch)
+    x.receive(event("applied", epoch).encode(), peer_rank=0)
+    x.resume_commands(epoch)
+    message = event("resumed", epoch)
+    if change == "staging":
+        message = replace(message, receipt=replace(message.receipt, staging_id="other"))
+    elif change == "epoch":
+        message = replace(message, receipt=receipt(replace(epoch, round=1), 0))
+    else:
+        message = replace(message, peer_epoch="other")
+    with pytest.raises(InstallProtocolError):
+        x.receive(message.encode(), peer_rank=0)
+    assert not x.can_decode(0)

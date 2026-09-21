@@ -36,7 +36,9 @@ _RECEIPT_FIELDS = frozenset(("epoch", "rank", "staging_id", "layout_fingerprint"
 _MESSAGE_FIELDS = frozenset(
     ("protocol", "kind", "peer_epoch", "receipt", "decode_tokens", "reason")
 )
-_KINDS = frozenset(("prepared", "parked", "applied", "install", "resume", "failed"))
+_KINDS = frozenset(
+    ("prepared", "parked", "applied", "install", "resume", "resumed", "failed")
+)
 
 
 def _text(value):
@@ -172,8 +174,15 @@ class RankInstallExchange:
             _text(epoch)
         self.coordinator = coordinator
         self._receipts = {}
+        self._resume_epoch = None
+        self._resume_receipts, self._resumed = {}, set()
 
     def begin(self, decode_tokens):
+        completed = self.coordinator.snapshot()["completed"]
+        if completed is not None and not self.resume_complete(completed):
+            raise InstallProtocolError(
+                "all ranks must acknowledge resume before next round"
+            )
         epoch = self.coordinator.begin(decode_tokens)
         self._receipts.clear()
         return epoch
@@ -188,7 +197,18 @@ class RankInstallExchange:
             or self.peer_epochs.get(peer_rank) != message.peer_epoch
         ):
             raise InstallProtocolError("rank channel/incarnation mismatch")
-        if message.kind == "prepared":
+        if message.kind == "resumed":
+            state = self.coordinator.snapshot()
+            if (
+                state["state"]
+                in (InstallState.FAILED.value, InstallState.CANCELLED.value)
+                or self._resume_receipts.get(peer_rank) != receipt
+            ):
+                raise InstallProtocolError(
+                    "resume ACK must name the issued resume command"
+                )
+            self._resumed.add(peer_rank)
+        elif message.kind == "prepared":
             self.coordinator.prepared(receipt)
             self._receipts[peer_rank] = receipt
         elif message.kind == "parked":
@@ -224,7 +244,35 @@ class RankInstallExchange:
             or set(self._receipts) != set(self.peer_epochs)
         ):
             raise InstallProtocolError("all ranks must apply before resume")
-        return self._commands("resume")
+        commands = self._commands("resume")
+        if self._resume_epoch != epoch:
+            self._resume_epoch = epoch
+            self._resume_receipts = dict(self._receipts)
+            self._resumed.clear()
+        return commands
+
+    def resume_complete(self, epoch):
+        state = self.coordinator.snapshot()
+        return (
+            state["state"]
+            not in (InstallState.FAILED.value, InstallState.CANCELLED.value)
+            and self._resume_epoch == epoch
+            and self._resumed == set(self.peer_epochs)
+        )
+
+    def can_decode(self, decode_tokens):
+        """Wire users must use this gate, not the logical coordinator directly.
+
+        APPLIED proves local swaps; RESUMED acknowledges release of local read
+        gates. Neither is native GPU/MR completion or a model forward receipt.
+        """
+        state = self.coordinator.snapshot()
+        completed = state["completed"]
+        return (
+            completed is not None
+            and self.resume_complete(completed)
+            and self.coordinator.can_decode(decode_tokens)
+        )
 
     def cancel_commands(self, reason):
         # Only known prepared receipts can be addressed. The transport owner

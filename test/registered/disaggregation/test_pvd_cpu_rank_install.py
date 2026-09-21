@@ -42,8 +42,8 @@ def complete(peers, exchange, count):
             pass
     resume = exchange.resume_commands(epoch)
     for rank, peer in peers.items():
-        peer.command(resume[rank])
-        peer.command(resume[rank])
+        exchange.receive(peer.command(resume[rank]), peer_rank=rank)
+        exchange.receive(peer.command(resume[rank]), peer_rank=rank)
     return epoch, commands, resume
 
 

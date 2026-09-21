@@ -3,7 +3,7 @@
 ## Contract / 契约
 
 `rank_install_wire.py` defines `pvd-rank-install-v1`: PREPARED, PARKED,
-APPLIED, INSTALL, RESUME and FAILED. Frames are UTF-8 JSON bytes, at most 16 KiB;
+APPLIED, INSTALL, RESUME, RESUMED and FAILED. Frames are UTF-8 JSON bytes, at most 16 KiB;
 individual strings are bounded to 1024 UTF-8 bytes and counts to signed-int64
 nonnegative values. Duplicate/unknown/missing fields, nonfinite numbers, boolean
 counts, wrong message direction and ambiguous schemas are refused.
@@ -114,3 +114,25 @@ production Scheduler. Do not relabel `--ranks 4` as a working GPU TP4 deployment
 Final full suite with all four real-process scenarios: Windows **1553 passed /
 14 skipped**, WSL **1558 passed / 9 skipped**. Both environments execute the
 process scenarios; these are not hardware skips. New source/tests pass Ruff.
+
+## Resume receipt gate / 恢复回执门控
+
+Sending RESUME is not evidence that a peer received it. Wire admission now uses
+`RankInstallExchange.can_decode`, not the logical coordinator's `can_decode`.
+Every peer sends RESUMED with its exact staging identity after reopening its
+local gate. No next round or global dispatch is allowed until every expected
+RESUMED arrives. A lost reply is retried by reissuing the same RESUME; the peer
+replies idempotently, without another bank swap or clock advance. Resending
+commands does not clear ACK progress. Stale/wrong worker, epoch or staging cannot
+open the gate; cancellation overrides collected ACKs. Update both ends together:
+older peers without RESUMED leave admission closed, not silently compatible.
+
+发送成功不代表对端收到 RESUME。线协议用户必须使用 Exchange 的准入门控；只有
+全部 rank 返回匹配的 RESUMED 后才允许全局执行或下一轮。回执丢失可重发同一
+RESUME；重复回执不会重复安装或推进时钟。旧端没有此回执时保持关闭，不能静默
+混用。该回执不是 GPU/RDMA 完成证明，也不替代 Scheduler 的正式 forward 调度。
+
+Five added cases and updated independent-process scenarios verify the added
+gate, including withholding the final ACK and idempotent retry. Windows full
+suite: 1558 passed / 14 skipped; WSL: 1563 passed / 9 skipped. GPU/TP serving
+remains unimplemented.

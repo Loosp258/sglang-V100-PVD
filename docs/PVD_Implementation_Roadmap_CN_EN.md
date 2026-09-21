@@ -6,6 +6,10 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新补充：[RESUMED 准入门控](PVD_Rank_Wire_CN_EN.md)。发送 RESUME 不再等于对端
+已经恢复；全部匹配回执后才允许全局执行/下一轮。更新了实际 CPU 子进程验收。
+完整回归 Windows 1558 passed / 14 skipped；WSL 1563 passed / 9 skipped。
+
 最新：[rank 消息与本地读门控](PVD_Rank_Wire_CN_EN.md) 已实现：严格有界消息、
 worker epoch/通道绑定、全体 APPLIED 后才 RESUME、单 rank CPU bank 门控。
 56 个新单测；全量 Windows 1549 passed / 14 skipped，WSL 1554 passed / 9 skipped。

@@ -2,6 +2,11 @@
 
 Updated: 2026-09-21.
 
+Newest: [RESUMED admission gate](PVD_Rank_Wire_CN_EN.md). Wire callers must use
+Exchange.can_decode, not the logical coordinator gate. Sending RESUME is not a
+peer receipt; all exact RESUMED ACKs are required before dispatch/next round.
+Lost ACK retry is idempotent. Full Windows 1558/14 skipped; WSL 1563/9 skipped.
+
 Newest: [rank wire contract and CPU participant](PVD_Rank_Wire_CN_EN.md).
 Bounded messages bind worker incarnation and exact staging identity. Local
 APPLIED never permits reads without global RESUME. 56 new unit tests; full

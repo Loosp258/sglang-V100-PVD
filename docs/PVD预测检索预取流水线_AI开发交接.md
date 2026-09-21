@@ -2,6 +2,10 @@
 
 更新日期：2026-09-21。
 
+最新：[RESUMED 准入门控](PVD_Rank_Wire_CN_EN.md)。线协议调用方必须使用 Exchange
+的 can_decode，不能绕过它调用逻辑 coordinator 门控。全部匹配回执后才允许执行/
+下一轮；丢失回执支持幂等重试。全量 Windows 1558/14 skipped；WSL 1563/9 skipped。
+
 最新：[rank 消息与 CPU 参与者](PVD_Rank_Wire_CN_EN.md)：有界消息绑定 worker
 epoch 和精确 staging；本地 APPLIED 后仍等全局 RESUME 才能读取。56 个新单测，
 全量 Windows 1549/14 skipped、WSL 1554/9 skipped。后续实际 spawn 独立进程验收
