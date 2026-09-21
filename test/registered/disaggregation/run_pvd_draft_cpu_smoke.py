@@ -281,6 +281,7 @@ def main() -> None:
         controlled_decode_evidence = None
         batch_decode_evidence = None
         scheduled_decode_evidence = None
+        real_draft_loop_evidence = None
         if "--sparse-decode" in sys.argv[1:]:
             from pvd_sparse_decode_smoke import validate_sparse_decode
 
@@ -299,6 +300,10 @@ def main() -> None:
             scheduled_decode_evidence = validate_batch_decode(
                 runner, scheduled_results=True
             )
+        if "--real-draft-loop" in sys.argv[1:]:
+            from pvd_real_draft_loop_smoke import validate_real_draft_loop
+
+            real_draft_loop_evidence = validate_real_draft_loop(runner, port)
         print(
             json.dumps(
                 {
@@ -320,6 +325,7 @@ def main() -> None:
                     "controlled_decode_evidence": controlled_decode_evidence,
                     "batch_decode_evidence": batch_decode_evidence,
                     "scheduled_decode_evidence": scheduled_decode_evidence,
+                    "real_draft_loop_evidence": real_draft_loop_evidence,
                 },
                 indent=2,
             )

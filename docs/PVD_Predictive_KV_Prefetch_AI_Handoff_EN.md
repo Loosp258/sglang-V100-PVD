@@ -2,6 +2,13 @@
 
 Updated: 2026-09-21.
 
+Newest: [independent real SGLang draft CPU loop](PVD_Real_Draft_CPU_Loop_CN_EN.md).
+Fixed candidates are no longer required in that opt-in smoke. Two independent
+random tiny Llamas run draft → target Q → V HTTP → sparse Decode → real Req
+commit, with target-state/RNG and private-pool checks. Backing-cache alias
+verification is fixed. No model quality/production loading/GPU claim. The
+preceding ScheduleBatch bridge is committed `bef8a59c4`, not pushed.
+
 Latest (supersedes historical status below): [actual ScheduleBatch result bridge](PVD_CPU_Schedule_Result_Bridge_CN_EN.md).
 The ordinary result processor is the sole Req output writer. The explicit CPU
 bridge validates dispatch identity, observes commits, rejects replay, and skips

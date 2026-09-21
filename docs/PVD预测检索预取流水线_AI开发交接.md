@@ -2,6 +2,11 @@
 
 更新日期：2026-09-21。
 
+最新：[独立真实 SGLang draft CPU 闭环](PVD_Real_Draft_CPU_Loop_CN_EN.md)。可选验收已
+不依赖固定候选，两个独立随机小 Llama 跑通 draft → target Q → V HTTP → 稀疏 Decode
+→ 原 Req 提交；验证目标状态/RNG 不变与私有池，修复 backing KV alias 检查。
+无质量/生产加载/GPU 结论。此前 ScheduleBatch 接点已提交 `bef8a59c4`，未推送。
+
 最新状态（覆盖下方历史记录）：[真实 ScheduleBatch 结果接点](PVD_CPU_Schedule_Result_Bridge_CN_EN.md)。
 原结果处理器保持 Req 唯一输出写入点；显式 CPU bridge 校验 dispatch 身份、观察提交、
 拒绝重放、跳过撤回成员。29 个新测试；WSL 全量 1365 passed / 6 skipped；真实 Req/

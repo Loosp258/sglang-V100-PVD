@@ -211,18 +211,6 @@ def _storage_keys(pool: Any) -> Tuple[int, ...]:
     keys: List[int] = []
     seen = set()
     candidates: List[Any] = [pool]
-    for name in (
-        "req_to_token",
-        "kv_buffer",
-        "k_buffer",
-        "v_buffer",
-        "buffer",
-        "_kv_buffer",
-        "data",
-    ):
-        value = getattr(pool, name, None)
-        if value is not None:
-            candidates.append(value)
     while candidates:
         item = candidates.pop()
         if id(item) in seen:
@@ -231,6 +219,26 @@ def _storage_keys(pool: Any) -> Tuple[int, ...]:
         if isinstance(item, (list, tuple)):
             candidates.extend(item)
             continue
+        # Real SGLang allocators own indices, not the K/V tensors directly.
+        # Follow their backing cache; inspecting only allocator identity misses
+        # two allocators writing the same physical target pool.
+        for name in (
+            "req_to_token",
+            "_kvcache",
+            "kv_buffer",
+            "k_buffer",
+            "v_buffer",
+            "buffer",
+            "_kv_buffer",
+            "data",
+        ):
+            # Tensor.data creates another tensor view on every access. Inspect
+            # tensor storage directly instead of recursively chasing that view.
+            if callable(getattr(item, "untyped_storage", None)):
+                break
+            value = getattr(item, name, None)
+            if value is not None:
+                candidates.append(value)
         storage = getattr(item, "untyped_storage", None)
         if callable(storage):
             try:

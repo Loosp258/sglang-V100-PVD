@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import torch
 
 
-def validate_batch_decode(runner, *, scheduled_results=False):
+def validate_batch_decode(runner, *, scheduled_results=False, draft_provider=None):
     from pvd_controlled_prefetch import ControlledFixture
     from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import (
         CPUBatchDispatcher,
@@ -120,7 +120,11 @@ def validate_batch_decode(runner, *, scheduled_results=False):
                 ],
             )
             pc = ProbeConfig("batch-target", tuple(range(layers)), head_count=qheads)
-            dc = DraftConfig("fixed-draft-fixture", predict_tokens=2)
+            dc = (
+                DraftConfig("fixed-draft-fixture", predict_tokens=2)
+                if draft_provider is None
+                else draft_provider.config
+            )
             budget = TransferBudget(2 << 20, 1)
             budgets.append(budget)
             probe = OfflineLlamaTargetProbe(
@@ -133,7 +137,12 @@ def validate_batch_decode(runner, *, scheduled_results=False):
                 budget=budget,
             )
             pipeline = PredictionPipeline(
-                FakeDraftProvider(dc, tokens=(19, 27)), probe, dc, pc
+                FakeDraftProvider(dc, tokens=(19, 27))
+                if draft_provider is None
+                else draft_provider,
+                probe,
+                dc,
+                pc,
             )
             r.fixture = ControlledFixture(
                 stored, CommittedPrefix(name, tokens, 0, "prompt"), pipeline
@@ -359,7 +368,8 @@ def validate_batch_decode(runner, *, scheduled_results=False):
             assert old.life.state == third.life.state == "aborted"
             assert not arbiter.busy and backend.consumer._bound is None
             assert old.life.committed_tokens == 9
-            assert new.fixture.request.pipeline.provider.calls == []
+            if draft_provider is None:
+                assert new.fixture.request.pipeline.provider.calls == []
             if scheduled_results:
                 ended = create("length-limit", (1, 14, 23))
                 ended.life.admit(ended.fixture.request)
@@ -383,6 +393,7 @@ def validate_batch_decode(runner, *, scheduled_results=False):
                 "reusable_batch_executor": True,
                 "real_req_schedule_batch_result_processor": scheduled_results,
                 "real_req_retraction_and_length_limit": scheduled_results,
+                "independent_real_draft": draft_provider is not None,
                 "production_scheduler_gpu_rdma_validated": False,
             }
         finally:

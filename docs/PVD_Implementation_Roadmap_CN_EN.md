@@ -89,8 +89,11 @@ lease、完整 logits、按身份提交、wait-all、请求槽位绑定；真实
 新增[真实 ScheduleBatch 结果接点](PVD_CPU_Schedule_Result_Bridge_CN_EN.md)：
 原结果处理器是 Req 唯一输出写入者，PVD 观察正式提交；真实请求撤回/停止条件、
 错配拒绝和重放保护通过。尚非完整 Scheduler 服务或生产缓存释放验收。
-Next: integrate a real independent draft provider and automatic request-level
-CPU scheduling, preserving the existing production full-prompt path.
+新增[独立真实 draft CPU 闭环](PVD_Real_Draft_CPU_Loop_CN_EN.md)：真实较小 ModelRunner
+预测 → target Q → V HTTP → 稀疏安装 → target Decode → 原 Req 提交；私有池、
+目标状态/RNG 不变已验证，仍为随机 toy 模型而非质量/生产加载/性能证据。
+Next: automatic request-level CPU scheduling, preserving the existing
+production full-prompt path.
 The CPU driver is still a standalone smoke, not Scheduler or GPU/TP evidence.
 CPU banks are not GPU fences or production allocators. No new request may reset
 an old request's clock. See the linked note for current limits.
