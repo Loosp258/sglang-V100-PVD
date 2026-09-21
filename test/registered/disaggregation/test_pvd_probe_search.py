@@ -1,0 +1,465 @@
+"""CPU fake probe -> actual V HTTP/exact index. No model/GPU acceptance."""
+
+import asyncio
+from contextlib import contextmanager
+from dataclasses import replace
+
+import pytest
+import torch
+from sglang.srt.disaggregation.pvd.prediction import (
+    DraftConfig,
+    FakeDraftProvider,
+    PredictionPipeline,
+    ProbeConfig,
+    QueryVectors,
+    TargetProbe,
+    snapshot_committed,
+)
+from sglang.srt.disaggregation.pvd.probe_search import (
+    ProbeSearchRoute,
+    ProbeSearchSession,
+    StaleProbeSearch,
+)
+from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
+from sglang.srt.disaggregation.pvd.search_client import (
+    PVDShardSearchClient,
+    SearchRefused,
+)
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+from test_pvd_prompt_index import shard_client
+from test_pvd_search_client import fixture
+
+
+class ScratchProbe(TargetProbe):
+    """Owns budgeted CPU scratch, poisons it on exit to expose borrowed Q."""
+
+    def __init__(self, vector, *, changes=None, fail=False, head_count=1):
+        self.vector = vector
+        self.changes = changes or {}
+        self.fail = fail
+        self.head_count = head_count
+        self.budget = TransferBudget(4096, 1)
+        self.tensor = None
+        self.closed = 0
+
+    @contextmanager
+    def branch(self):
+        self.budget.reserve("probe", 2 * self.head_count * len(self.vector) * 4, 1)
+        try:
+            self.tensor = torch.tensor(self.vector).repeat(2, self.head_count, 1)
+            torch.rand(1)  # scope entry/exit must be isolated too
+            yield
+        finally:
+            if self.tensor is not None:
+                self.tensor.fill_(float("nan"))
+            self.tensor = None
+            self.budget.release("probe")
+            self.closed += 1
+            torch.rand(1)
+
+    def capture(self, prefix, prediction):
+        assert not torch.is_grad_enabled()
+        assert self.budget.snapshot()["used_inflight"] == 1
+        torch.rand(1)
+        if self.fail:
+            raise RuntimeError("capture failed")
+        start = len(prefix.tokens)
+        query = QueryVectors(
+            vector_space="target/model-8b",
+            version="probe-output-v1",
+            layer=0,
+            head_start=0,
+            head_count=self.head_count,
+            positions=(start, start + 1),
+            valid_length=2,
+            vectors=self.tensor,
+            prefix_version=prefix.version,
+            positional_encoding="rope_applied",
+            request_id=prefix.request_id,
+        )
+        return (replace(query, **self.changes),)
+
+
+def setup(*, changes=None, fail=False, heads=1):
+    index, store, identity, rows, scope = fixture()
+    draft_config = DraftConfig("configurable/draft", predict_tokens=2)
+    probe = ScratchProbe(rows[0], changes=changes, fail=fail, head_count=heads)
+    pipeline = PredictionPipeline(
+        FakeDraftProvider(draft_config, tokens=(31, 32)),
+        probe,
+        draft_config,
+        ProbeConfig(identity.vector_space, (0,), head_count=heads),
+    )
+    session = ProbeSearchSession("request", identity.entry_transfer_id)
+    prefix = snapshot_committed("request", [10, 11, 12, 13], 2, "prefix-v1")
+    window = session.begin(prefix, target_tokens=4, query_positions=(5,))
+    route = ProbeSearchRoute(0, identity, scope, 1)
+    return index, store, session, window, pipeline, probe, route
+
+
+def prepare(session, window, pipeline, route, heads=1):
+    return session.prepare(
+        window, pipeline, routes=(route,), head_mapping=QueryHeadMapping(heads, 1)
+    )
+
+
+def test_probe_http_roundtrip_isolated_owned_and_consumed_once():
+    async def run():
+        _, store, session, window, pipeline, probe, route = setup()
+        rng = torch.random.get_rng_state().clone()
+        prepared = prepare(session, window, pipeline, route)
+        assert torch.equal(rng, torch.random.get_rng_state())
+        assert probe.tensor is None and probe.closed == 1
+        assert probe.budget.snapshot()["used_staging_bytes"] == 0
+        assert window.prefix.tokens == (10, 11, 12, 13)
+        assert window.prefix.committed_position == 2
+        assert len(prepared.queries[0].rows) == 1  # requested position only
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                await session.search(prepared, client)
+                session.observe(4)  # normal committed progress is not invalidation
+                result = session.take_selection(window)
+                assert result.selections[0].token_ids == (3,)
+                assert result.queries[0].query_version == "probe-output-v1"
+                assert result.window.target_tokens == 4
+                with pytest.raises(StaleProbeSearch):
+                    session.take_selection(window)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "changes,error",
+    [
+        ({"prefix_version": None}, "prefix identity"),
+        ({"request_id": None}, "request identity"),
+        ({"request_id": "another-request"}, "another request"),
+        ({"prefix_version": "old"}, "stale prefix"),
+        ({"positional_encoding": None}, "encoding mismatch"),
+        ({"positional_encoding": "none"}, "encoding mismatch"),
+        ({"positions": (3, 4)}, "outside the predicted"),
+        ({"valid_length": 1}, "padding"),
+        ({"vectors": torch.zeros(2, 8)}, "CPU float Q"),
+        ({"vectors": torch.zeros(2, 1, 7)}, "CPU float Q"),
+        ({"vectors": torch.zeros(2, 1, 8, dtype=torch.int64)}, "CPU float Q"),
+        ({"vectors": torch.full((2, 1, 8), float("nan"))}, "finite"),
+        ({"vectors": torch.full((2, 1, 8), 1e100, dtype=torch.float64)}, "finite"),
+        ({"head_start": 1}, "unrequested query heads"),
+        ({"layer": 1}, "unrequested layer"),
+        ({"vector_space": "draft"}, "but V searches"),
+    ],
+)
+def test_bad_probe_is_refused_and_releases_scratch(changes, error):
+    _, _, session, window, pipeline, probe, route = setup(changes=changes)
+    rng = torch.random.get_rng_state().clone()
+    with pytest.raises(ValueError, match=error):
+        prepare(session, window, pipeline, route)
+    assert probe.closed == 1
+    assert probe.budget.snapshot()["used_staging_bytes"] == 0
+    assert torch.equal(rng, torch.random.get_rng_state())
+    with pytest.raises(StaleProbeSearch):
+        session.take_selection(window)
+
+
+def test_exception_in_capture_releases_scope_and_restores_rng():
+    _, _, session, window, pipeline, probe, route = setup(fail=True)
+    rng = torch.random.get_rng_state().clone()
+    with pytest.raises(RuntimeError, match="capture failed"):
+        prepare(session, window, pipeline, route)
+    assert probe.closed == 1
+    assert probe.budget.snapshot()["reservations"] == 0
+    assert torch.equal(rng, torch.random.get_rng_state())
+
+
+class PausedClient(PVDShardSearchClient):
+    def __init__(self, url):
+        super().__init__(url)
+        self.arrived = asyncio.Event()
+        self.resume = asyncio.Event()
+
+    async def search(self, *args, **kwargs):
+        result = await super().search(*args, **kwargs)
+        self.arrived.set()
+        await self.resume.wait()
+        return result
+
+
+@pytest.mark.parametrize(
+    "action", ["close", "replace", "same_entry", "invalidate", "expire", "cancel"]
+)
+def test_late_response_cannot_become_a_selection(action):
+    async def run():
+        _, store, session, window, pipeline, probe, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        async with shard_client(store) as http:
+            client = PausedClient(str(http.make_url("")))
+            task = asyncio.create_task(session.search(prepared, client))
+            try:
+                await asyncio.wait_for(client.arrived.wait(), timeout=2)
+                assert probe.budget.snapshot()["used_staging_bytes"] == 0
+                if action == "close":
+                    session.close()
+                elif action == "replace":
+                    session.replace_entry("new-entry")
+                elif action == "same_entry":
+                    session.replace_entry(window.entry_transfer_id)
+                elif action == "invalidate":
+                    session.invalidate()
+                elif action == "expire":
+                    with pytest.raises(StaleProbeSearch, match="expired"):
+                        session.observe(5)
+                else:
+                    task.cancel()
+                client.resume.set()
+                with pytest.raises(
+                    asyncio.CancelledError if action == "cancel" else StaleProbeSearch
+                ):
+                    await task
+                with pytest.raises(StaleProbeSearch):
+                    session.take_selection(window)
+            finally:
+                client.resume.set()
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_new_request_does_not_invalidate_another_requests_window():
+    async def run():
+        _, store, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        async with shard_client(store) as http:
+            client = PausedClient(str(http.make_url("")))
+            task = asyncio.create_task(session.search(prepared, client))
+            try:
+                await asyncio.wait_for(client.arrived.wait(), timeout=2)
+                other = ProbeSearchSession("newcomer", "entry-2")
+                other.begin(
+                    snapshot_committed("newcomer", (1, 2), 0, "p"),
+                    target_tokens=8,
+                    query_positions=(2,),
+                )
+                other.close()
+                session.observe(3)
+                client.resume.set()
+                await task
+                assert session.take_selection(window).selections[0].token_ids == (3,)
+            finally:
+                client.resume.set()
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_request_id_reuse_and_forged_prepared_operation_are_refused():
+    _, _, session, window, pipeline, _, route = setup()
+    prepared = prepare(session, window, pipeline, route)
+    other = ProbeSearchSession(session.request_id, session.entry_transfer_id)
+    assert other.incarnation != session.incarnation
+    with pytest.raises(StaleProbeSearch):
+        other.take_selection(window)
+    with pytest.raises(StaleProbeSearch):
+        session.take_selection(replace(window))
+
+    async def run():
+        with pytest.raises(ValueError, match="unused prepared"):
+            await session.search(replace(prepared), None)
+
+    asyncio.run(run())
+
+
+def test_multiple_q_heads_stay_separate_and_pin_one_index_build():
+    async def run():
+        _, store, session, window, pipeline, _, route = setup(heads=2)
+        routes = (route, replace(route, query_head=1))
+        prepared = session.prepare(
+            window, pipeline, routes=routes, head_mapping=QueryHeadMapping(2, 1)
+        )
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                await session.search(prepared, client)
+                result = session.take_selection(window)
+                assert len(result.selections) == 2  # no implicit head union
+                assert [q.route.query_head for q in result.queries] == [0, 1]
+                assert "index_version" not in result.selections[0].validated
+                assert "index_version" in result.selections[1].validated
+                assert len({s.index_version for s in result.selections}) == 1
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_rebuild_between_heads_discards_the_entire_selection():
+    async def run():
+        index, store, session, window, pipeline, _, route = setup(heads=2)
+        prepared = session.prepare(
+            window,
+            pipeline,
+            routes=(route, replace(route, query_head=1)),
+            head_mapping=QueryHeadMapping(2, 1),
+        )
+
+        class RebuildingClient(PVDShardSearchClient):
+            async def search(self, *args, **kwargs):
+                result = await super().search(*args, **kwargs)
+                index.close(window.entry_transfer_id)
+                index.note_kv_readable(window.entry_transfer_id)
+                store.progress_prompt_indexes()
+                return result
+
+        async with shard_client(store) as http:
+            client = RebuildingClient(str(http.make_url("")))
+            try:
+                with pytest.raises(SearchRefused):
+                    await session.search(prepared, client)
+                with pytest.raises(StaleProbeSearch):
+                    session.take_selection(window)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "change,error",
+    [
+        ({"entry_transfer_id": "wrong"}, "another Entry"),
+        ({"vector_space": "draft"}, "vector space"),
+        ({"positional_encoding": "none"}, "post-RoPE"),
+        ({"kv_head": 1}, "mapping mismatch"),
+    ],
+)
+def test_bad_route_is_rejected_before_probe_allocation(change, error):
+    _, _, session, window, pipeline, probe, route = setup()
+    route = replace(route, identity=replace(route.identity, **change))
+    with pytest.raises(ValueError, match=error):
+        prepare(session, window, pipeline, route)
+    assert probe.closed == 0 and probe.tensor is None
+
+
+@pytest.mark.parametrize("positions", [(), (4, 4), (5, 4), (3,), (True,), [4]])
+def test_window_positions_are_explicit_and_not_guessed(positions):
+    session = ProbeSearchSession("r", "entry")
+    prefix = snapshot_committed("r", (1, 2, 3, 4), 2, "prefix")
+    with pytest.raises(ValueError, match="query positions"):
+        session.begin(prefix, target_tokens=4, query_positions=positions)
+
+
+def test_cpu_bridge_refuses_a_gpu_configuration_before_running_provider():
+    _, _, session, window, pipeline, probe, route = setup()
+    pipeline.draft_config = replace(pipeline.draft_config, device="cuda:0")
+    with pytest.raises(ValueError, match="CPU execution"):
+        prepare(session, window, pipeline, route)
+    assert probe.closed == 0
+
+
+def test_adapter_scopes_close_when_draft_raises_before_probe_capture():
+    _, _, session, window, pipeline, probe, route = setup()
+
+    class FailingDraft(FakeDraftProvider):
+        closed = False
+
+        @contextmanager
+        def branch(self):
+            torch.rand(1)
+            try:
+                yield
+            finally:
+                self.closed = True
+                torch.rand(1)
+
+        def predict(self, prefix, max_tokens):
+            raise RuntimeError("draft failed")
+
+    provider = FailingDraft(pipeline.draft_config)
+    pipeline.provider = provider
+    rng = torch.random.get_rng_state().clone()
+    with pytest.raises(RuntimeError, match="draft failed"):
+        prepare(session, window, pipeline, route)
+    assert provider.closed and probe.closed == 1
+    assert probe.budget.snapshot()["reservations"] == 0
+    assert torch.equal(rng, torch.random.get_rng_state())
+
+
+def test_missing_requested_layer_is_not_a_partial_success():
+    _, _, session, window, pipeline, probe, route = setup()
+    pipeline.probe_config = replace(pipeline.probe_config, layers=(0, 1))
+    with pytest.raises(ValueError, match="omitted a requested layer"):
+        prepare(session, window, pipeline, route)
+    assert probe.closed == 1
+
+
+def test_failed_search_clears_the_window_and_can_be_restarted_explicitly():
+    async def run():
+        index, store, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        index.close(window.entry_transfer_id)
+        index.note_kv_readable(window.entry_transfer_id)
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                with pytest.raises(SearchRefused) as caught:
+                    await session.search(prepared, client)
+                assert caught.value.retryable
+                replacement = session.begin(
+                    window.prefix, target_tokens=4, query_positions=(5,)
+                )
+                assert replacement.operation_id != window.operation_id
+                with pytest.raises(StaleProbeSearch):
+                    await session.search(prepared, client)
+                store.progress_prompt_indexes()
+                await session.search(
+                    prepare(session, replacement, pipeline, route), client
+                )
+                assert session.take_selection(replacement).selections[0].token_ids == (
+                    3,
+                )
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_ready_result_is_still_discarded_if_entry_changes_before_consumption():
+    async def run():
+        _, store, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                await session.search(prepared, client)
+                session.replace_entry("replacement")
+                with pytest.raises(StaleProbeSearch):
+                    session.take_selection(window)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("target", [0, 1, 2, True, 2.5, -1])
+def test_bootstrap_or_nonfuture_boundary_is_not_a_periodic_probe(target):
+    session = ProbeSearchSession("r", "entry")
+    with pytest.raises(ValueError):
+        session.begin(
+            snapshot_committed("r", (1, 2, 3), 2, "p"),
+            target_tokens=target,
+            query_positions=(3,),
+        )
+
+
+def test_no_parallel_window_and_no_implicit_committed_counter_regression():
+    _, _, session, window, _, _, _ = setup()
+    with pytest.raises(ValueError, match="outstanding"):
+        session.begin(window.prefix, target_tokens=4, query_positions=(5,))
+    with pytest.raises(ValueError, match="regressed"):
+        session.observe(1)
+    session.observe(3)
+    session.invalidate()
+    with pytest.raises(StaleProbeSearch, match="regressed"):
+        session.begin(window.prefix, target_tokens=4, query_positions=(5,))

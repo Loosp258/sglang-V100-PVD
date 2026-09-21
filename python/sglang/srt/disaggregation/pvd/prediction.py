@@ -22,9 +22,9 @@ Two rules are structural here rather than advisory:
   pipeline compares the probe's declared space against the configured target
   and refuses a mismatch instead of coercing it.
 
-RNG isolation is enforced by running every prediction and probe inside
-``run_isolated``, which forks the torch RNG state. A prediction branch that
-samples must not perturb the committed sampler.
+Sequential CPU RNG isolation is provided by ``run_isolated``, which forks
+the torch CPU RNG state. CUDA RNG and concurrent use of global generators
+are not covered; real serving adapters must establish those separately.
 
 Nothing here loads a model. Concrete providers are supplied at experiment
 time; ``FakeDraftProvider`` and ``FakeTargetProbe`` exist so the surrounding
@@ -34,6 +34,7 @@ machinery can be developed and tested without weights.
 from __future__ import annotations
 
 import abc
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -203,6 +204,15 @@ class DraftProvider(abc.ABC):
     def predict(self, prefix: CommittedPrefix, max_tokens: int) -> DraftPrediction:
         """Predict at most ``max_tokens`` continuations of ``prefix``."""
 
+    @contextmanager
+    def branch(self):
+        """Adapters may own per-call scratch here; release it in a finally block.
+
+        This does not unload shared model weights. Implementations must never
+        acquire a mutable alias to the committed request's KV or sampler.
+        """
+        yield
+
 
 # --------------------------------------------------------------------------
 # Probe side
@@ -243,7 +253,9 @@ class QueryVectors:
     is compared, never assumed: a query built from the draft model is not
     usable against target-model K, however similar the shapes happen to be.
     ``valid_length`` bounds how many positions are real; padding is never
-    searched.
+    searched. Searchable tensors use [positions, query_heads, head_dim];
+    head_start/head_count identify global Q heads, not KV heads. The bridge
+    requires explicit request/prefix and positional-encoding metadata.
     """
 
     vector_space: str
@@ -254,6 +266,10 @@ class QueryVectors:
     positions: Tuple[int, ...]
     valid_length: int
     vectors: Any = None
+    # Legacy interface-only callers may omit these; the search bridge may not.
+    prefix_version: Optional[str] = None
+    positional_encoding: Optional[str] = None
+    request_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         _require_text("vector_space", self.vector_space)
@@ -298,6 +314,16 @@ class TargetProbe(abc.ABC):
         self, prefix: CommittedPrefix, prediction: DraftPrediction
     ) -> Tuple[QueryVectors, ...]:
         """Compute Q at the predicted positions, one entry per probed layer."""
+
+    @contextmanager
+    def branch(self):
+        """Own isolated append-KV/scratch until query materialization finishes.
+
+        A concrete adapter overrides this scope to reserve before allocating
+        and release even on failure. Never reuse committed writable KV. The
+        default owns nothing, as is appropriate for the tensor-only fake.
+        """
+        yield
 
 
 # --------------------------------------------------------------------------
@@ -350,6 +376,23 @@ class PredictionPipeline:
             "layers": list(self.probe_config.layers),
         }
 
+    @contextmanager
+    def query_branch(self, prefix: CommittedPrefix):
+        """Synchronous, caller-thread scope; consume/copy Q before exiting.
+
+        No awaits or background threads: CPU fork_rng is not isolation from
+        concurrent users of the process-wide RNG. This foundation does not
+        establish CUDA RNG or real model KV isolation. Adapters must provide
+        those guarantees before serving integration.
+        """
+        with (
+            torch.random.fork_rng(devices=[], enabled=True),
+            self.provider.branch(),
+            self.probe.branch(),
+            torch.inference_mode(),
+        ):
+            yield self.run(prefix)
+
     def run(self, prefix: CommittedPrefix) -> Tuple[QueryVectors, ...]:
         if not isinstance(prefix, CommittedPrefix):
             raise PredictionConfigError("prediction requires a committed snapshot")
@@ -372,6 +415,8 @@ class PredictionPipeline:
         for query in queries:
             if not isinstance(query, QueryVectors):
                 raise PredictionConfigError("probe returned a non-query object")
+            if query.request_id is not None and query.request_id != prefix.request_id:
+                raise PredictionConfigError("query belongs to another request")
             if query.vector_space != self.probe_config.target_model_id:
                 raise VectorSpaceError(
                     f"query is in {query.vector_space!r} but V searches "
@@ -382,6 +427,29 @@ class PredictionPipeline:
             if query.layer in seen:
                 raise PredictionConfigError("probe returned a duplicate layer")
             seen.add(query.layer)
+        if seen != set(self.probe_config.layers):
+            raise PredictionConfigError("probe omitted a requested layer")
+        for query in queries:
+            if (query.head_start, query.head_count) != (
+                self.probe_config.head_start,
+                self.probe_config.head_count,
+            ):
+                raise PredictionConfigError("probe returned unrequested query heads")
+            predicted_positions = range(
+                len(prefix.tokens), len(prefix.tokens) + len(prediction.tokens)
+            )
+            if any(
+                p not in predicted_positions
+                for p in query.positions[: query.valid_length]
+            ):
+                raise PredictionConfigError(
+                    "query position is outside the predicted continuation"
+                )
+            if (
+                query.prefix_version is not None
+                and query.prefix_version != prefix.version
+            ):
+                raise PredictionConfigError("query was made against a stale prefix")
         return queries
 
 
@@ -421,9 +489,16 @@ class FakeDraftProvider(DraftProvider):
 class FakeTargetProbe(TargetProbe):
     """Stand-in probe. Emits one query per configured layer, in target space."""
 
-    def __init__(self, config: ProbeConfig, vector_space: Optional[str] = None):
+    def __init__(
+        self,
+        config: ProbeConfig,
+        vector_space: Optional[str] = None,
+        *,
+        head_dim: int = 1,
+    ):
         self.config = config
         self.vector_space = vector_space or config.target_model_id
+        self.head_dim = _require_positive_int("head_dim", head_dim)
         self.calls = []
 
     def capture(
@@ -444,7 +519,12 @@ class FakeTargetProbe(TargetProbe):
                 head_count=self.config.head_count,
                 positions=positions,
                 valid_length=len(positions),
-                vectors=torch.zeros(len(positions), self.config.head_count),
+                vectors=torch.zeros(
+                    len(positions), self.config.head_count, self.head_dim
+                ),
+                prefix_version=prefix.version,
+                positional_encoding="rope_applied",
+                request_id=prefix.request_id,
             )
             for layer in self.config.layers
         )

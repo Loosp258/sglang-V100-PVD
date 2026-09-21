@@ -2370,9 +2370,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         # Triton's SM70-specific split-K tuning (sm_count-based segments) outperforms
         # FlashInfer TileLang "auto" decode path, which lacks dynamic segment control.
         # Prefill stays on FlashInfer for proven TileLang paged performance.
-        major, minor = torch.cuda.get_device_capability()
         if (
-            major == 7
+            self.device == "cuda"
+            and torch.cuda.get_device_capability(self.gpu_id)[0] == 7
             and self.decode_attention_backend_str is None
             and self.prefill_attention_backend_str is None
             and self.server_args.attention_backend is None

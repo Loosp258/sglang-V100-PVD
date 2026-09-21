@@ -84,8 +84,9 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         if waiting_queue_bootstrap:
             logger.info(
                 "PVD initial KV is pulled at final-waiting-queue entry; a "
-                "request is not runnable until it is installed. The pull "
-                "itself is still synchronous in this version."
+                "request is not runnable until installation and ACK complete. "
+                "Delivery/ACK waits are asynchronous; TP coordination and "
+                "GPU installation remain on the scheduler thread."
             )
 
     # Reserve-before-allocate needs a budget before any staging tensor exists.
@@ -142,7 +143,36 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     if not server_args.pvd_strict_rdma_preflight:
         raise ValueError("PVD P/D roles require strict rank/rail GPUDirect preflight")
     if server_args.speculative_algorithm is not None:
+        # Unchanged and unconditional. PVD's prediction-only draft path is
+        # configured through --pvd-draft-* and never sets this, so reaching
+        # SGLang's speculative generation loop stays impossible under PVD.
         raise ValueError("PVD does not support speculative decoding")
+    if getattr(server_args, "pvd_draft_model_path", None):
+        # A prediction branch competes for the same device as the committed
+        # path, so its scratch is bounded explicitly rather than guessed.
+        if not getattr(server_args, "pvd_draft_scratch_budget_bytes", None):
+            raise ValueError(
+                "--pvd-draft-scratch-budget-bytes is required with "
+                "--pvd-draft-model-path: a prediction branch that is not "
+                "bounded can starve the committed decode path"
+            )
+        if server_args.pvd_draft_scratch_budget_bytes <= 0:
+            raise ValueError(
+                "--pvd-draft-scratch-budget-bytes must be a positive integer"
+            )
+        if server_args.pvd_draft_predict_tokens <= 0:
+            raise ValueError("--pvd-draft-predict-tokens must be positive")
+        logger.info(
+            "PVD prediction-only draft model configured (%s). Predictions "
+            "choose retrieval positions only: they are never verified, "
+            "accepted or committed, and speculative decoding remains off.",
+            server_args.pvd_draft_model_path,
+        )
+    elif getattr(server_args, "pvd_draft_scratch_budget_bytes", None):
+        raise ValueError(
+            "--pvd-draft-scratch-budget-bytes has no meaning without "
+            "--pvd-draft-model-path"
+        )
     if server_args.enable_hierarchical_cache:
         raise ValueError("PVD does not support hierarchical KV cache")
     if server_args.enable_hisparse:

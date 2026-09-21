@@ -1,6 +1,12 @@
 # PVD 预测检索预取流水线：AI 开发交接文档
 
-更新日期：2026-09-20。
+更新日期：2026-09-21。
+
+最新执行证据覆盖下文历史进展中“尚无前向执行”的描述：
+[真实 CPU draft 前向与剩余限制](PVD_Draft_CPU_Execution_CN_EN.md)。
+现已通过 33 次真实 tiny-Llama CPU forward；不代表 GPU/RDMA 或正式权重验证。
+非 KV 临时内存上限改为显式声明，未知上限拒绝 provider 准入。
+WSL 全量回归为 1104 passed / 6 skipped。
 
 本文供另一位 AI 在没有历史对话的情况下接手。请先完整阅读，再查看代码。
 本文整合用户当前要求，不需要通过历史对话猜测设计。
@@ -246,7 +252,126 @@ V 节点、V worker group、V rank/shard 不是同一概念。
 
 ### 5.3 尚未实现
 
-- draft provider 的真实权重运行与服务接线：已有可配置 HF provider，但未接入服务或验证真实模型。
+最新基础层进展（2026-09-21，第五轮）：针对真实接口做契约审计，发现并修复适配层的**七个缺陷**。
+**1091 passed / 6 skipped**；15 处变异验证修复有效。
+
+上一轮把剩余阻塞称为"环境问题"，这个判断是错的：适配层并未匹配它所依赖的接口，
+而测试替身之所以"同意"，是因为它们基于同一套假设写成。实际情况：
+
+| 假设 | 实际 |
+| --- | --- |
+| `req_pool.alloc(1)` / `free(index)` | `alloc(reqs: list[Req])` 原地赋值 `r.req_pool_idx`；`free(req: Req)` 断言其非空并清空；槽位 0 是 padding 行 |
+| `output.next_token_logits` | `ModelRunnerOutput.logits_output.next_token_logits`，形状 `[#seq, vocab]`，且为 Optional；也可能是 `PPProxyTensors` |
+| 用 `None` 关闭捕获 | 应为 `CaptureHiddenMode.NULL`；logits processor 会对其调用 `.need_capture()` |
+| `extend_start_loc = (0,)`、无 `extend_num_tokens` | extend 路径两者都必需，`extend_start_loc` 为前缀和 |
+| 释放索引用 CPU int64 | `free()` 会与 `free_pages` 拼接，后者是**分配器自身设备**上的 int64 |
+| 到处按 token 调 `alloc(1)` | 分页分配器断言页对齐并返回整页 |
+
+另有一个保留缺陷：每个 `ForwardBatch` 都被存入 `self.batches`，在适配器整个生命周期内
+钉住其设备张量。现已改为有界诊断（不持有任何张量），并加入回归测试：
+比较 1 次与 21 次前向之后适配器自身状态，要求不增长。
+
+**真实导入已不再受阻。** 准确链路为：PyPI 的 torchvision 构建自不同的 torch
+（`operator torchvision::nms does not exist`，需装 CPU wheel），`transformers` 需锁定
+`5.8.1`（`5.17` 会报 `'qwen3_asr' is already used by a Transformers config`），
+随后依次为 `openai`、`partial_json_parser`、`dill`、`sentencepiece`、`einops`、
+`compressed_tensors`、`gguf`。安装后，真实的 `ForwardBatch`、`ForwardMode`、
+`CaptureHiddenMode` 已能在两种模式下构造，真实的 `ReqToTokenPool` 与
+`TokenToKVPoolAllocator` 已能分配与释放。这些测试在其他环境会跳过，跳过原因携带精确异常文本。
+
+**构造不等于执行：从未运行过任何模型前向。** 详见
+[中英复用审计](PVD_Draft_Worker_Reuse_Audit_CN_EN.md)。
+
+最新基础层进展（2026-09-21，第四轮）：ForwardBatch 接缝已补齐，并修复了它暴露出的一个真实缺口。
+**1062 passed / 6 skipped**；新增 13 处变异验证有效。
+
+`draft_forward_adapter.py` 将 `DraftForwardInputs` 映射为 `ForwardBatch` 并在 draft
+`ModelRunner` 上执行。映射由 `forward_fields()` 以纯数据形式产出，构造经由可注入工厂完成，
+因为导入 `forward_batch_info` 会拉入 triton、torchvision 与 HTTP 栈，而 PVD CPU 测试套件
+并不需要它们。因此测试分别验证两件事，且都不越界声称：**取值**用记录型替身验证，
+**字段名**通过解析 `forward_batch_info.py` 源码验证——每个 key 必须是真实字段，
+每个无默认值的字段必须被提供，上游改名会直接让测试失败。
+`PrivatePoolAllocator` 驱动 draft 的 `ReqToTokenPool` 与 KV 分配器，缺少私有池时直接拒绝存在。
+
+编写适配器时暴露出 runner 的一个真实缺口：注意力后端通过
+`req_to_token_pool.req_to_token[req_index, :seq_len]` 定位 KV，而此前 runner 只分配行、
+从不登记，前向会读到该行中恰好残留的内容。现已为 `SlotAllocator` 增加
+`write_mapping`/`clear_mapping`：前缀在读取它的前向之前完成映射，每步恰好扩展一个位置，
+释放时**先**清空该行再归还槽位，使被复用的槽位不会继承不属于它的行。
+
+**从未构造过真实 `ForwardBatch`，也从未执行过任何前向。** 详见
+[中英复用审计](PVD_Draft_Worker_Reuse_Audit_CN_EN.md)。
+
+最新基础层进展（2026-09-21，第三轮）：修复了 draft 适配层的九个正确性缺口，
+并实现了仅预测的执行路径。**1035 passed / 6 skipped**；15 处变异验证修复有效。
+
+修复前已复现：`release()` 尚未执行时 scratch 就被退还；清理完成前准入名额已重新开放；
+多个分支共用一个 runner，其 `release()` 不带参数、无法说明释放的是谁的行；
+在 `branch()` 之外调用 `predict()` 可以成功，且没有预留也没有清理；
+worker 包装是黑名单，任何未列出的方法都能穿透；
+以及两个指向同一缓冲区的不同 pool **对象**被当作"私有内存池"接受。
+
+现在：每个分支拥有自己的 `DraftExecutionHandle`（请求槽、KV 行、scratch）；
+权重与内存池共享，并**一次性**计入独立的持久预算；预算与准入名额只在句柄释放**之后**
+归还，释放失败则隔离该分支，而不是把可能仍然存活的内存重新发放；
+`predict()` 在其分支之外（或跨线程）被拒绝；worker 表面改为**白名单**
+（`get_memory_pool`、`model_config`、`device`），上游明天新增的方法在被审查前不可达；
+内存池检查比较底层存储，并如实报告 `storage_verified`，不会在未验证时声称"私有"；
+tokenizer 兼容性复用 `VocabularySignature`（size、特殊 id **以及**编码指纹），
+并同时校验前缀与返回的 token id；`build_draft_server_args` 生成私有深拷贝，
+将 `--pvd-draft-*` 映射到 `model_path`/`tokenizer_path`/`revision`/`device`，
+并在副本内关闭推测与 disaggregation 字段，目标配置完全不被修改。
+
+`draft_runner_sglang.py` 是执行路径：私有请求槽、私有 KV 行、从零开始的绝对位置、
+每步一行、有界续写，成功/失败/取消都会清理。**前缀每次调用重算**，位于显式的
+`prepare_prefix` 接口之后——这是正确性基线，其 prefill 开销后续必须与预取窗口对比测量，
+并非最终的延迟方案。执行**串行化**：资源独立拥有并不等于 `ModelRunner` 可重入。
+
+`ForwardBatch.init_new` 需要 `ScheduleBatch`，因此 runner 产出 `DraftForwardInputs`
+并交给 `ModelExecutor`；把它们映射为真实 `ForwardBatch` 依赖具体架构与后端，
+**尚未实现**，也从未执行过任何一次前向。详见
+[中英复用审计](PVD_Draft_Worker_Reuse_Audit_CN_EN.md)。
+
+最新基础层进展（2026-09-21，第二轮）：`draft_sglang.py` 将 SGLang 自身的 draft worker
+构造适配到本项目的 `DraftProvider` 契约，作为**仅预测**路径。
+**1016 passed / 6 skipped**，其中本轮新增 48 项测试；11 处变异验证新增拒绝逻辑有效。
+详见[中英复用审计](PVD_Draft_Worker_Reuse_Audit_CN_EN.md)。
+
+审计结论：`StandaloneWorker.draft()` **不是**安全的复用点。一次调用会修改
+`req.decode_batch_idx`、已提交采样器的 penalizer、共享缓存（`maybe_evict_swa`）、
+活跃的 `req_to_token` 映射（经 `assign_draft_cache_locs`）以及四个 `batch` 字段，
+而只有分配器会回滚。`StandaloneWorker` 的两个内存池都取自 target worker，
+`clear_cache_pool()` 正因如此被刻意写成空操作。因此复用的是其下一层：
+以 `is_draft_worker=True` 构造 `TpModelWorker`，并使用**私有**内存池
+（两个池都传 `None` 时 `ModelRunner` 自行分配），同时由 `PredictionOnlyWorker`
+在属性访问层面拒绝 `draft`、`draft_extend`、`verify`、`forward_batch_generation`、
+`forward_target_extend`、`capture_for_decode`、`on_verify_complete_cpu`。
+
+配置使用 PVD 自有参数（`--pvd-draft-model-path`、`--pvd-draft-revision`、
+`--pvd-draft-device`、`--pvd-draft-predict-tokens`、`--pvd-draft-scratch-budget-bytes`）。
+**启动时对 `speculative_algorithm` 的禁止保持原样且无条件生效**；
+有回归测试断言：即使设置了 draft 参数，该禁止依然触发。
+
+未加载任何模型、未使用 GPU；由于尚未选定目标架构，
+"前缀 → 前向计算"这一步位于 `DraftRunner` 协议之后。
+
+上一轮（2026-09-21）：`probe_search.py` 已将带清理作用域的 CPU 测试 probe
+接入真实单 shard HTTP 客户端，增加请求/窗口失效保护和同版本多路线结果校验。
+**967 passed / 6 skipped**，其中该轮新增 50 项测试。详见
+[中英 probe/search 交接记录](PVD_Probe_Search_Foundation_CN_EN.md)。未执行真实模型、
+未安装 KV、未推进时钟、未接入正式 D 服务。
+
+- draft provider 的真实权重运行与服务接线：`draft_hf.py` 与 `draft_sglang.py` 都实现了
+  `DraftProvider` 契约（含加载、词表、放置与预算校验），但都未对真实权重运行过，
+  因此速度、显存与预测质量均无结论。`build_prediction_only_worker` 写出了 SGLang 的
+  构造路径以供审阅，CPU 测试刻意不会走到它。
+- **正式模型执行验证**。真实 tiny-Llama CPU `ModelRunner` 前向已通过，详见最新记录。
+  用户选定 checkpoint、`TpModelWorker` 构造入口、CUDA/V100S、TP>1 与生产峰值内存
+  仍待验证。CPU 随机权重夹具不是用户实验模型的默认选择。
+- **采样**。当前为贪心选择，因为采样需要已被确立的 RNG 隔离，而这尚未确立。
+- **前缀重算方案的实测**。它正确且自洽，但其每轮 O(prefix) 的开销从未与预取窗口
+  对比测量过。持久缓存刻意未实现；审计文档列出了它必须先定义的内容。
+- **并发执行安全性的证据**。执行串行化只是保守默认，并非测量结论。
 - 目标模型 probe、预测前缀重对齐、Q 捕获。
 - CAGRA 服务端索引生命周期和真实请求搜索。
 - **D 侧真实 query。** 独立单 shard 客户端已在合成 query 测试中调用检索路由，

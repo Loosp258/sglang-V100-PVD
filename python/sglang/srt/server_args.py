@@ -826,6 +826,14 @@ class ServerArgs:
     pvd_strict_rdma_preflight: bool = True
     pvd_kv_refresh_interval: int = 16
     pvd_waiting_queue_bootstrap: bool = False
+    # Prediction-only draft model on D. These never set speculative_algorithm:
+    # PVD's refusal to run SGLang's speculative generation loop stays in force,
+    # and this path only ever produces candidate tokens for retrieval.
+    pvd_draft_model_path: Optional[str] = None
+    pvd_draft_revision: Optional[str] = None
+    pvd_draft_device: Optional[str] = None
+    pvd_draft_predict_tokens: int = 8
+    pvd_draft_scratch_budget_bytes: Optional[int] = None
     # No default is guessed: a staging budget that fits one GPU can be fatal on
     # another, so PVD startup requires both values explicitly.
     pvd_transfer_staging_budget_bytes: Optional[int] = None
@@ -6970,8 +6978,49 @@ class ServerArgs:
             "into the final waiting queue, instead of on its first refresh "
             "inside the running batch. The request stays in the waiting queue "
             "and is not runnable until the KV is installed, so it never adds a "
-            "barrier to requests that are already decoding. This first cut is "
-            "synchronous: it does not yet overlap with decoding. Off by default.",
+            "network completion barrier to requests that are already decoding. "
+            "Delivery and ACK are polled asynchronously; TP coordination and "
+            "KV installation still run on the scheduler thread. Off by default.",
+        )
+        parser.add_argument(
+            "--pvd-draft-model-path",
+            type=str,
+            default=ServerArgs.pvd_draft_model_path,
+            help="Model name or local path for PVD's prediction-only draft "
+            "model on D. No model is hard-coded and there is no default. This "
+            "does NOT enable speculative decoding: predictions are used only "
+            "to choose retrieval positions and can never become output.",
+        )
+        parser.add_argument(
+            "--pvd-draft-revision",
+            type=str,
+            default=ServerArgs.pvd_draft_revision,
+            help="Optional revision for --pvd-draft-model-path, recorded for "
+            "reproducibility. Optional on purpose; development does not "
+            "require pinning one.",
+        )
+        parser.add_argument(
+            "--pvd-draft-device",
+            type=str,
+            default=ServerArgs.pvd_draft_device,
+            help="Where the prediction-only draft model runs, e.g. cuda:0. "
+            "Defaults to the server device when omitted.",
+        )
+        parser.add_argument(
+            "--pvd-draft-predict-tokens",
+            type=int,
+            default=ServerArgs.pvd_draft_predict_tokens,
+            help="How many tokens ahead the draft model predicts per round. "
+            "A bound on the prediction branch, not a quality claim.",
+        )
+        parser.add_argument(
+            "--pvd-draft-scratch-budget-bytes",
+            type=int,
+            default=ServerArgs.pvd_draft_scratch_budget_bytes,
+            help="Byte budget for the prediction branch's scratch on D. "
+            "Required with --pvd-draft-model-path; no default is guessed, "
+            "and it is separate from the transfer and index budgets so a "
+            "prediction cannot consume headroom they were admitted against.",
         )
         parser.add_argument(
             "--pvd-strict-rdma-preflight",

@@ -1,6 +1,12 @@
 # PVD Predictive KV Retrieval and Prefetch Pipeline: AI Development Handoff
 
-Updated: 2026-09-20.
+Updated: 2026-09-21.
+
+Latest execution evidence supersedes older "no forward executed" progress notes:
+[real CPU draft execution and remaining limits](PVD_Draft_CPU_Execution_CN_EN.md).
+33 real tiny-Llama CPU forwards now pass; this is not GPU/RDMA or production
+checkpoint evidence. Non-KV transient bounds are explicit and unknown bounds
+refuse provider admission. WSL regression: 1104 passed / 6 skipped.
 
 This document is intended for an AI taking over without access to the previous conversation. Read it in full before inspecting or modifying the implementation. It consolidates the user's current requirements; do not reconstruct the design from guesses about earlier discussions.
 
@@ -278,7 +284,147 @@ Route source and destination data by layer, KV head, and token/page ownership, n
 
 ### 5.3 Not yet implemented
 
-- Running a **real** draft model. `draft_hf.py` implements loading, vocabulary and placement validation (see 5.2), but it has never been run against actual weights, so nothing is known about its speed, memory or prediction quality. It is also not constructed by any server path yet.
+Latest foundation update (2026-09-21, fifth pass): a contract audit against the real
+interfaces found **seven defects** in the adapter, all fixed. **1091 passed / 6 skipped**;
+15 mutations confirm the fixes bite.
+
+The previous pass called the remaining blocker environmental. That was wrong: the adapter
+did not match the interfaces it was written against, and the doubles agreed with it
+because they had been written from the same assumptions. What was actually wrong:
+
+| Assumed | Actually |
+| --- | --- |
+| `req_pool.alloc(1)` / `free(index)` | `alloc(reqs: list[Req])` assigns `r.req_pool_idx` in place; `free(req: Req)` asserts it is set and clears it; slot 0 is a padding row |
+| `output.next_token_logits` | `ModelRunnerOutput.logits_output.next_token_logits`, `[#seq, vocab]`, Optional; may be `PPProxyTensors` |
+| capture disabled with `None` | `CaptureHiddenMode.NULL`; the logits processor calls `.need_capture()` on it |
+| `extend_start_loc = (0,)`, no `extend_num_tokens` | both required on the extend path; `extend_start_loc` is the prefix sum |
+| release indices as CPU int64 | `free()` concatenates onto `free_pages`, int64 **on the allocator's device** |
+| token-wise `alloc(1)` | a paged allocator asserts page alignment and returns whole pages |
+
+Plus one retention defect: every `ForwardBatch` was kept in `self.batches`, pinning its
+device tensors for the adapter's life. Diagnostics are now bounded and hold no tensors,
+and a regression measures the adapter's own state after 1 and 21 forwards.
+
+The fixes: a branch-owned `DraftRequestHandle` carrying only the three attributes the
+pool touches (never a committed request); real `ModelRunnerOutput` unwrapping with
+explicit refusal of pipeline-parallel output and of `None` logits; `CaptureHiddenMode.NULL`
+with the disabled value accepted and real capture modes refused; `extend_num_tokens` and a
+computed `extend_start_loc`; release tensors on the allocator's own device and dtype; and
+`page_size != 1` refused before anything is allocated.
+
+**The real imports are no longer blocked.** The exact chain was: torchvision from PyPI
+built against a different torch (`operator torchvision::nms does not exist`, needs the CPU
+wheel), then `transformers` pinned at `5.8.1` (`5.17` raises `'qwen3_asr' is already used
+by a Transformers config`), then `openai`, `partial_json_parser`, `dill`, `sentencepiece`,
+`einops`, `compressed_tensors`, `gguf`. With those installed, real `ForwardBatch`,
+`ForwardMode` and `CaptureHiddenMode` objects are constructed for both modes, and the real
+`ReqToTokenPool` and `TokenToKVPoolAllocator` are allocated from and freed. Those tests
+skip elsewhere, with the exact exception text as the reason.
+
+**Construction is not execution: no model forward has been run.** See
+[the bilingual reuse audit](PVD_Draft_Worker_Reuse_Audit_CN_EN.md).
+
+Latest foundation update (2026-09-21, fourth pass): the `ForwardBatch` seam is closed
+and a real gap it exposed is fixed. **1062 passed / 6 skipped**; 13 further mutations
+confirm the new assertions bite.
+
+`draft_forward_adapter.py` maps `DraftForwardInputs` onto a `ForwardBatch` and runs it
+on a draft `ModelRunner`. The mapping is produced as plain data by `forward_fields()`
+and constructed through an injectable factory, because importing
+`forward_batch_info` pulls in triton, torchvision and the HTTP stack that the PVD CPU
+suite does not require. The tests therefore check two separate things and claim only
+what each supports: the **values** against a recording double, and the **field names**
+by parsing `forward_batch_info.py` as source — every key must be a real `ForwardBatch`
+field and every field without a default must be supplied, so an upstream rename fails
+the suite. `PrivatePoolAllocator` drives a draft `ReqToTokenPool` and KV allocator and
+refuses to exist without private ones.
+
+Writing the adapter exposed a genuine gap in the runner: the attention backend finds a
+request's KV through `req_to_token_pool.req_to_token[req_index, :seq_len]`, and the
+runner allocated rows without ever recording them, so a forward would have read
+whatever the row contained. `SlotAllocator` now carries `write_mapping`/`clear_mapping`;
+the prefix is mapped before the forward that reads it, each step extends the map by
+exactly one position, and `release` clears the row **before** returning the slot so a
+reused slot cannot inherit rows it does not own.
+
+**No real `ForwardBatch` has been constructed and no forward has run**, here or
+anywhere. See [the bilingual reuse audit](PVD_Draft_Worker_Reuse_Audit_CN_EN.md).
+
+Latest foundation update (2026-09-21, third pass): nine correctness gaps in the draft
+adapter were reproduced and fixed, and the prediction-only execution path now exists.
+**1035 passed / 6 skipped**; 15 mutations confirm the fixes bite.
+
+Reproduced before fixing: scratch was refunded while `release()` had not yet run;
+admission reopened before cleanup finished; several branches shared one runner whose
+`release()` took no argument and could not say whose rows it freed; `predict()` outside
+`branch()` succeeded with no reservation and no cleanup; the worker wrapper was a deny
+list that passed through any unlisted method; and two distinct pool *objects* over one
+buffer were accepted as "private pools".
+
+Now: each branch owns a `DraftExecutionHandle` (its request slot, KV rows and scratch);
+weights and pools are shared and charged **once** against a separate persistent budget;
+budget and admission are released only *after* the handle, and a failed release
+quarantines the branch rather than reissuing memory that may still be live; `predict()`
+is refused outside its branch, on the same thread; the worker surface is an **allowlist**
+(`get_memory_pool`, `model_config`, `device`) so a method added upstream tomorrow is
+unreachable until reviewed; pool checks compare underlying storage and report
+`storage_verified` honestly rather than claiming "private" when nothing was verified;
+tokenizer compatibility reuses `VocabularySignature` (size, special ids **and** encoded
+fingerprint) and validates both the prefix and the returned ids; and
+`build_draft_server_args` makes a private deep copy that maps
+`--pvd-draft-*` onto `model_path`/`tokenizer_path`/`revision`/`device` and forces the
+speculative and disaggregation fields off inside the copy, leaving the target's
+configuration untouched.
+
+`draft_runner_sglang.py` is the execution path: private request slots, private KV rows,
+absolute positions from zero, one row per step, bounded continuation, cleanup on success,
+failure and cancellation. **The prefix is recomputed every call** behind an explicit
+`prepare_prefix` seam — a correctness baseline whose prefill cost must later be measured
+against the prefetch window, not the latency answer. Execution is **serialized**: owning
+resources separately is not a claim that `ModelRunner` is reentrant.
+
+`ForwardBatch.init_new` takes a `ScheduleBatch`, so the runner produces
+`DraftForwardInputs` and hands them to a `ModelExecutor`; mapping those onto a real
+`ForwardBatch` is architecture- and backend-specific and is **not implemented**. No
+forward has ever run. See [the bilingual reuse audit](PVD_Draft_Worker_Reuse_Audit_CN_EN.md).
+
+Latest foundation update (2026-09-21, second pass): `draft_sglang.py` adapts SGLang's
+own draft-worker construction to the project's `DraftProvider` contract as a
+**prediction-only** path. **1016 passed / 6 skipped**, including 48 new tests; 11
+mutations confirm the new refusals bite. See
+[the bilingual reuse audit](PVD_Draft_Worker_Reuse_Audit_CN_EN.md).
+
+The audit's finding is that `StandaloneWorker.draft()` is **not** a safe reuse point:
+one call mutates `req.decode_batch_idx`, the committed sampler's penalizer, the shared
+cache (`maybe_evict_swa`), the live `req_to_token` map (via `assign_draft_cache_locs`)
+and four `batch` fields, and only the allocator is rolled back. `StandaloneWorker` takes
+both memory pools from the target worker, and `clear_cache_pool()` is a deliberate no-op
+for exactly that reason. So what is reused is the layer underneath: `TpModelWorker`
+construction with `is_draft_worker=True`, with **private** pools (`ModelRunner` allocates
+its own when both are passed as `None`), and with the generation surface -- `draft`,
+`draft_extend`, `verify`, `forward_batch_generation`, `forward_target_extend`,
+`capture_for_decode`, `on_verify_complete_cpu` -- made unreachable by
+`PredictionOnlyWorker`, which raises on attribute access.
+
+Configuration is PVD-owned (`--pvd-draft-model-path`, `--pvd-draft-revision`,
+`--pvd-draft-device`, `--pvd-draft-predict-tokens`, `--pvd-draft-scratch-budget-bytes`).
+**The startup prohibition on `speculative_algorithm` is unchanged and unconditional**;
+a regression test asserts it still fires with the draft flags set.
+
+No model was loaded, no GPU was used, and the prefix-to-forward-pass step is behind the
+`DraftRunner` protocol because no target architecture has been selected.
+
+Previous pass (2026-09-21): `probe_search.py` connects a scoped CPU fake
+probe to the actual single-shard HTTP client, with request/window invalidation and
+same-index-version multi-route results. **967 passed / 6 skipped**, including 50 new
+tests. See [the bilingual probe/search handoff](PVD_Probe_Search_Foundation_CN_EN.md).
+It does not execute a real model, install KV, advance a clock or enter production D.
+
+- Running a **real** draft model. `draft_hf.py` and now `draft_sglang.py` both implement the `DraftProvider` contract with loading, vocabulary, placement and budget validation, but neither has been run against actual weights, so nothing is known about speed, memory or prediction quality. `build_prediction_only_worker` writes out the SGLang construction path so it is reviewable, and the CPU suite deliberately does not reach it.
+- **Production execution validation.** Real tiny-Llama CPU `ModelRunner` forwards now pass (see the latest execution record above). Chosen checkpoints, the `TpModelWorker` construction path, CUDA/V100S, TP>1 and production memory peaks are still unverified. The CPU fixture is not the user's model choice.
+- **Sampling.** Selection is greedy, because sampling needs an RNG whose isolation has been established and it has not been.
+- **Measurement of the recompute-per-call prefix.** It is correct and self-contained, and its O(prefix) cost per round has never been measured against the prefetch window. Persistent caching is deliberately not implemented; the audit lists what it would need first.
+- **Evidence that concurrent execution is safe.** Execution is serialized as a conservative default, not because anything was measured.
 - Actual target-model probe **execution**: architecture-specific Q capture, prefix realignment and hidden-state extraction. Only the interface and its safety checks exist.
 - A **CAGRA backend**. Everything above it now exists and runs (see 5.2): a stored Entry is indexed through the exact CPU backend and searched under the gate's identity checks. Nothing calls cuVS, and no recall comparison against the exact reference has been made.
 - **A real query from D.** A standalone single-shard client now calls the retrieval route
@@ -755,8 +901,15 @@ All paths below are relative to the actual repository root:
 | `python/sglang/srt/disaggregation/pvd/prompt_vectors.py` | Prompt K extraction from a stored shard: K only, padding excluded, per layer and global KV head, post-RoPE, owns its copy. |
 | `python/sglang/srt/disaggregation/pvd/index_search.py` | Backend seam, exact CPU reference, logical selection, explicit merge policy. No cuVS. |
 | `python/sglang/srt/disaggregation/pvd/search_client.py` | Standalone bounded single-shard HTTP search client; synthetic-query tests only, not wired into Decode. |
+| `python/sglang/srt/disaggregation/pvd/probe_search.py` | Scoped CPU probe-to-search bridge; explicit Q positions/head mapping and stale-window protection, not a serving pipeline. |
 | `python/sglang/srt/disaggregation/pvd/index_lifecycle.py` | V-side index state machine: build ordering, delivery independence, search identity. Builds nothing. |
 | `python/sglang/srt/disaggregation/pvd/draft_hf.py` | Hugging Face `DraftProvider`: lazy import, injectable loader, vocabulary/placement/budget guards. Never run against real weights. |
+| `python/sglang/srt/disaggregation/pvd/draft_sglang.py` | Prediction-only `DraftProvider`: branch-owned handles, allowlist worker surface, storage-checked private pools, separate scratch and persistent budgets, private config translation, quarantine on failed cleanup. |
+| `python/sglang/srt/disaggregation/pvd/draft_runner_sglang.py` | The execution path: `DraftForwardInputs`, private slots, KV rows and request map, recompute-per-call prefix, bounded steps. |
+| `python/sglang/srt/disaggregation/pvd/draft_forward_adapter.py` | `DraftForwardInputs` -> `ForwardBatch` mapping and `PrivatePoolAllocator`. Never executed: the CPU suite cannot import the real `ForwardBatch`. |
+| `python/sglang/srt/speculative/standalone_worker.py` | Upstream standalone draft worker. **Shares the target's pools**; read the reuse audit before calling anything on it. |
+| `python/sglang/srt/speculative/eagle_worker.py` | Upstream EAGLE draft/verify/extend. `_draft_preprocess_decode` is the method the audit enumerates. |
+| `docs/PVD_Draft_Worker_Reuse_Audit_CN_EN.md` | Why `draft()` is not the reuse point, what is reused, and what stays architecture-dependent. |
 | `python/sglang/srt/disaggregation/pvd/prediction.py` | Draft/probe interfaces, snapshot and RNG isolation, vector-space enforcement; fakes only, no model loading. |
 | `python/sglang/srt/disaggregation/pvd/selector.py` | Current identity lookup, not a complete vector-search interface. |
 | `python/sglang/srt/disaggregation/pvd/kv_packer.py` | KV layout and packing. |
