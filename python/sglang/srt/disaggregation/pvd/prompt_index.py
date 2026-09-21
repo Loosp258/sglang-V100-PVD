@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -475,6 +476,53 @@ class PromptIndexManager:
             id_mapping_version=descriptor.id_mapping_version,
             validated=validated,
         )
+
+    @contextmanager
+    def pin_selection(self, manifest):
+        """Validate and lease an immutable index/mapping during sparse packing.
+
+        The caller separately pins the source Entry bytes. Closing/rebuilding
+        the index while this lease exists cannot refund or replace its held
+        record. The copied payload needs no index lease after packing ends.
+        This is selection freshness validation, not destination authorization.
+        """
+        from sglang.srt.disaggregation.pvd.sparse_delivery import SparseDeliveryManifest
+
+        if not isinstance(manifest, SparseDeliveryManifest):
+            raise IndexSearchError("explicit sparse delivery manifest required")
+        first = manifest.specs[0]
+        with self._lock:
+            record = self._entries.get(first.entry_transfer_id)
+            if record is None or not record.gate.searchable:
+                raise IndexSearchError("sparse source index is not ready")
+            descriptor, _ = record.gate.authorize_search(
+                self.vector_space,
+                expected_index_version=first.index_version,
+                expected_id_mapping_version=first.id_mapping_version,
+                entry_transfer_id=first.entry_transfer_id,
+            )
+            for spec in manifest.specs:
+                item = record.vectors.get((spec.layer, spec.kv_head))
+                if item is None or (item.source_dtype, item.head_dim) != (
+                    manifest.dtype,
+                    manifest.head_dim,
+                ):
+                    raise IndexSearchError(
+                        "sparse group dtype/head does not match built index"
+                    )
+                if item.mapping.version != spec.id_mapping_version or any(
+                    token not in item.mapping.token_ids for token in spec.token_ids
+                ):
+                    raise IndexSearchError(
+                        "sparse token selection is outside the current mapping"
+                    )
+            record.users += 1
+        try:
+            yield descriptor
+        finally:
+            with self._lock:
+                record.users -= 1
+                self._retire_locked(record)
 
     # -- teardown -----------------------------------------------------------
 
