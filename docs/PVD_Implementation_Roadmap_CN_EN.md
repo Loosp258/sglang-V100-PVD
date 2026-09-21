@@ -6,6 +6,12 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新：[rank 运行时驱动](PVD_Rank_Runtime_CN_EN.md) 已提供线程安全有界队列、owner
+轮询、固定整轮截止时间、RESUMED 准入和请求级失败通知。新增 27 个单测及 5 个
+真实 CPU 子进程场景；不是已接入正式 Scheduler 或原生传输。前一门控提交
+`c9942b637` 已推送。GPU/MR 的释放仍需各自真实完成证明，停止通知不能替代。
+最新全量：Windows 1590 passed / 14 skipped，WSL 1595 passed / 9 skipped。
+
 最新补充：[RESUMED 准入门控](PVD_Rank_Wire_CN_EN.md)。发送 RESUME 不再等于对端
 已经恢复；全部匹配回执后才允许全局执行/下一轮。更新了实际 CPU 子进程验收。
 完整回归 Windows 1558 passed / 14 skipped；WSL 1563 passed / 9 skipped。

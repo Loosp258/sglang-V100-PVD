@@ -2,6 +2,15 @@
 
 Updated: 2026-09-21.
 
+Newest: [owner-polled rank runtime](PVD_Rank_Runtime_CN_EN.md) adds bounded
+callback queues, fixed whole-round deadlines, automatic barrier progression,
+and scoped stop notifications to every bound peer, including missing PREPARED.
+27 focused tests plus five actual CPU process scenarios exercise it. Missing
+RESUMED cannot admit Decode. Stop enqueue is NOT cleanup evidence. Production
+Scheduler/transport/resource integration is still open. Prior gate `c9942b637`
+is committed and pushed.
+Latest full suite: Windows 1590 passed / 14 skipped; WSL 1595 passed / 9 skipped.
+
 Newest: [RESUMED admission gate](PVD_Rank_Wire_CN_EN.md). Wire callers must use
 Exchange.can_decode, not the logical coordinator gate. Sending RESUME is not a
 peer receipt; all exact RESUMED ACKs are required before dispatch/next round.

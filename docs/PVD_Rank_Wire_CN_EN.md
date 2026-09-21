@@ -136,3 +136,9 @@ Five added cases and updated independent-process scenarios verify the added
 gate, including withholding the final ACK and idempotent retry. Windows full
 suite: 1558 passed / 14 skipped; WSL: 1563 passed / 9 skipped. GPU/TP serving
 remains unimplemented.
+
+Follow-up: [owner-polled rank runtime](PVD_Rank_Runtime_CN_EN.md) supplies bounded
+callback queues, fixed round deadlines, automatic barrier progression and
+request-scoped failure notifications. It uses the RESUMED gate above and has
+real CPU process tests for lost PREPARED/RESUMED and rank failure. It still needs
+production Scheduler, transport and resource-ownership integration.

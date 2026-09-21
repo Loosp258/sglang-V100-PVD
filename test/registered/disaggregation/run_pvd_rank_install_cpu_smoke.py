@@ -364,9 +364,181 @@ def run(ranks=2, fault="none"):
                 process.join(5)
 
 
+def run_runtime(ranks=2, fault="none"):
+    """Drive the real participants through the owner-polled runtime adapter.
+
+    Deadlines use an injected monotonic clock, never wall-clock timing claims.
+    Runtime callbacks enqueue locally; this fixture pumps actual pipe I/O later.
+    """
+    if (
+        type(ranks) is not int
+        or not 2 <= ranks <= 8
+        or fault not in ("none", "install", "exit", "lost-resume", "lost-prepared")
+    ):
+        raise ValueError("runtime fixture requires 2..8 ranks and a known fault")
+    _bootstrap()
+    from sglang.srt.disaggregation.pvd.rank_install_runtime import RankInstallRuntime
+    from sglang.srt.disaggregation.pvd.rank_install_wire import (
+        RankInstallExchange,
+        RankInstallMessage,
+    )
+    from sglang.srt.disaggregation.pvd.sparse_install import RankInstallCoordinator
+
+    context = multiprocessing.get_context("spawn")
+    processes, connections, pids = {}, {}, set()
+    epochs = {rank: uuid.uuid4().hex for rank in range(ranks)}
+    outgoing, stops, now = [], [], [0.0]
+    exchange = RankInstallExchange(
+        RankInstallCoordinator(
+            "request",
+            "request-inc",
+            "entry",
+            rank_layouts={r: f"layout-{r}" for r in epochs},
+            interval=4,
+            lead_tokens=1,
+        ),
+        peer_epochs=epochs,
+    )
+    runtime = RankInstallRuntime(
+        exchange,
+        send=lambda rank, raw: outgoing.append((rank, raw)),
+        stop_peer=lambda rank, identity, reason: stops.append((rank, identity, reason)),
+        max_pending_events=64,
+        max_pending_bytes=65536,
+        clock=lambda: now[0],
+    )
+
+    def receive(rank):
+        if not connections[rank].poll(30):
+            raise TimeoutError("rank fixture transport did not reply")
+        return connections[rank].recv_bytes(FRAME_LIMIT)
+
+    def rpc(rank, value):
+        connections[rank].send_bytes(value if type(value) is bytes else _json(value))
+        return receive(rank)
+
+    def post(rank, raw):
+        assert runtime.post(raw, peer_rank=rank, peer_epoch=epochs[rank])
+
+    def pump():
+        for _ in range(8):
+            runtime.progress()
+            if not outgoing:
+                return
+            batch, outgoing[:] = tuple(outgoing), []
+            for rank, raw in batch:
+                message = RankInstallMessage.decode(raw)
+                failing = rank == ranks - 1 and message.receipt.epoch.target_tokens == 4
+                if failing and fault == "exit" and message.kind == "install":
+                    processes[rank].terminate()
+                    processes[rank].join(5)
+                    assert not processes[rank].is_alive()
+                    assert runtime.peer_lost(peer_rank=rank, peer_epoch=epochs[rank])
+                    continue
+                if failing and fault == "install" and message.kind == "install":
+                    assert (
+                        json.loads(rpc(rank, {"fixture": "fail_install"}))["fixture"]
+                        == "armed"
+                    )
+                reply = rpc(rank, raw)
+                if failing and fault == "lost-resume" and message.kind == "resume":
+                    assert RankInstallMessage.decode(reply).kind == "resumed"
+                    continue  # peer reopened, but the ACK is deliberately lost
+                if failing and fault == "install" and message.kind == "install":
+                    error = json.loads(reply)
+                    assert error["fixture"] == "error" and error["state"]["terminal"]
+                    reply = RankInstallMessage(
+                        "failed",
+                        epochs[rank],
+                        message.receipt,
+                        reason="peer install failed",
+                    ).encode()
+                post(rank, reply)
+        raise AssertionError("fixture progress failed to quiesce")
+
+    try:
+        for rank in range(ranks):
+            parent, child = context.Pipe(duplex=True)
+            process = context.Process(target=_worker, args=(child, rank, epochs[rank]))
+            process.start()
+            child.close()
+            processes[rank], connections[rank] = process, parent
+        for rank in range(ranks):
+            ready = json.loads(receive(rank))
+            assert ready["peer_epoch"] == epochs[rank] and ready["pid"] != os.getpid()
+            pids.add(ready["pid"])
+        assert len(pids) == ranks
+        for count in (0, 3):
+            epoch = runtime.begin(count, timeout_seconds=5)
+            for rank in range(ranks):
+                reply = rpc(rank, {"fixture": "stage", "epoch": asdict(epoch)})
+                dropped = count == 3 and rank == ranks - 1 and fault == "lost-prepared"
+                if not dropped:
+                    post(rank, reply)
+                    post(
+                        rank,
+                        rpc(rank, {"fixture": "park", "count": epoch.target_tokens}),
+                    )
+            pump()
+            if count == 3 and fault != "none":
+                assert not runtime.can_decode(4)
+                if fault in ("lost-resume", "lost-prepared"):
+                    assert runtime.snapshot()["phase"] != "failed"
+                    now[0] = 5.0  # explicit deadline injection, no timing measurement
+                    runtime.progress()
+                assert runtime.snapshot()["phase"] == "failed"
+                assert {rank for rank, _, _ in stops} == set(epochs)
+                assert all(
+                    identity == ("request", "request-inc", "entry")
+                    for _, identity, _ in stops
+                )
+                break
+            assert runtime.can_decode(epoch.target_tokens)
+            for rank in range(ranks):
+                result = json.loads(
+                    rpc(rank, {"fixture": "read", "count": epoch.target_tokens})
+                )
+                assert result["tokens"] == ([0, 1, 2, 3] if count == 0 else [1, 3])
+        closed = 0
+        for rank, process in processes.items():
+            if process.is_alive():
+                result = json.loads(rpc(rank, {"fixture": "stop"}))
+                assert result["fixture"] == "closed", result
+                assert result["budget"]["used_staging_bytes"] == 0
+                closed += 1
+        return {
+            "status": "passed",
+            "runtime": True,
+            "ranks": ranks,
+            "fault": fault,
+            "independent_processes": len(pids),
+            "live_rank_budgets_restored": closed,
+            "all_bound_peers_notified_on_failure": fault != "none",
+            "deadline_clock": "injected monotonic, no latency claim",
+            "resource_cleanup_proven_by_control": runtime.snapshot()[
+                "resource_cleanup_proven"
+            ],
+            "real_model_tp_gpu_rdma_scheduler_validated": False,
+        }
+    finally:
+        for connection in connections.values():
+            connection.close()
+        for process in processes.values():
+            process.join(2)
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ranks", type=int, default=2)
-    parser.add_argument("--fault", choices=("none", "install", "exit"), default="none")
+    parser.add_argument(
+        "--fault",
+        choices=("none", "install", "exit", "lost-resume", "lost-prepared"),
+        default="none",
+    )
+    parser.add_argument("--runtime", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(run(args.ranks, args.fault), indent=2))
+    execute = run_runtime if args.runtime else run
+    print(json.dumps(execute(args.ranks, args.fault), indent=2))

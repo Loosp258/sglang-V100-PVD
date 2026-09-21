@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新：[rank 运行时驱动](PVD_Rank_Runtime_CN_EN.md) 增加有界回调队列、固定整轮
+截止时间、自动屏障推进及全部绑定 rank 的请求级停止通知，包括 PREPARED 未收到
+的 rank。新增 27 个单测和 5 个实际 CPU 子进程场景；缺失 RESUMED 不能准入。
+停止通知不是资源清理证明；正式 Scheduler/原生传输/资源所有权仍需接入。
+前一步门控 `c9942b637` 已提交并推送。
+最新全量 Windows 1590 passed / 14 skipped，WSL 1595 passed / 9 skipped。
+
 最新：[RESUMED 准入门控](PVD_Rank_Wire_CN_EN.md)。线协议调用方必须使用 Exchange
 的 can_decode，不能绕过它调用逻辑 coordinator 门控。全部匹配回执后才允许执行/
 下一轮；丢失回执支持幂等重试。全量 Windows 1558/14 skipped；WSL 1563/9 skipped。
