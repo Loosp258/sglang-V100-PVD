@@ -2,6 +2,16 @@
 
 Updated: 2026-09-21.
 
+Newest gate: [controlled real CPU Decode](PVD_Controlled_CPU_Decode_CN_EN.md)
+now feeds HTTP retrieval results into the SAME model generation sequence through
+group-gated whole-forward readers, using actual committed-output snapshots.
+9 D tokens, boundaries 4/8, 18 independent attention comparisons; delayed replies,
+committed-prefix fallback and model-failure abort pass. This supersedes the
+older "separate fixtures" limitation below, NOT the lack of Scheduler/GPU/TP/
+RDMA/CAGRA evidence. Previous work was committed as `3c4b0c479` without push;
+this follow-up remains uncommitted. Next: Scheduler-owned lifecycle/dispatch
+contracts and tests before online wiring; do not register this reference as-is.
+
 Latest addition: [controlled request loop](PVD_Controlled_Request_Loop_CN_EN.md)
 binds a common control-owned epoch/prefix before one capture, shard HTTP search,
 GQA union, packing and [all-rank installation](PVD_Rank_Install_Contract_CN_EN.md).

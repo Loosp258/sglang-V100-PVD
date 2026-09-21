@@ -75,11 +75,17 @@ end-to-end experiment. P→V is a local byte copy, not RDMA.
 用户已确认边界首次发起时用正式前缀目标 Q 补查；已提前发起但迟到时等待原结果。
 两条路径均已通过真实 CPU Llama + 本地 HTTP 验证，补查 Q 独立 oracle 误差为 0。
 
-Next: feed these controlled retrieval/install results into the SAME real CPU
-Decode sequence, deriving snapshots from actual committed output and gating
-model reads through the group. Currently those gates remain separate fixtures.
-Then wire supported backend execution and actual rank agreement into the online
-Scheduler. CPU banks are not GPU fences or production allocators. No new request
-may reset an old request's clock. See the linked note for current limits.
+后续已完成[同一真实 CPU Decode 的检索消费](PVD_Controlled_CPU_Decode_CN_EN.md)：
+真实输出快照 → 查询 → 安装 → 模型消费；9 个 D token、边界 4/8、18 次 attention
+检查，最大误差约 `3.58e-7`，已覆盖延迟结果、边界补查及实际前向失败。
+单进程 group 视图持有所有 shard reader，整个模型前向期间不能切换 bank。
 
-最新提交为 `9c09b7768`；安装协议、受控闭环与边界补查等修改尚未提交。
+Next: define/test Scheduler-owned dispatch, completion, install and abort
+lifecycles, including target-execution arbitration, real committed counts,
+EOS/cancel/timeout and batch changes; then wire supported online execution.
+The CPU driver is still a standalone smoke, not Scheduler or GPU/TP evidence.
+CPU banks are not GPU fences or production allocators. No new request may reset
+an old request's clock. See the linked note for current limits.
+
+安装协议、受控闭环与边界补查已提交为 `3c4b0c479`，未推送。
+后续真实 CPU Decode 消费接线尚未提交。

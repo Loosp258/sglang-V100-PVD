@@ -3,6 +3,11 @@
 2026-09-21，基线 `9c09b7768`。本轮代码未提交、未推送。
 这是第三步的 CPU 协议验证，不是已上线的 TP collective。
 
+后续：本文工作已提交为 `3c4b0c479`。新增
+[受控 CPU Decode 消费](PVD_Controlled_CPU_Decode_CN_EN.md)通过 group 读取视图
+把本协议与真实 CPU 模型连接，覆盖下文“model adapter 尚未绑定”的历史限制。
+不代表分布式 TP、GPU 或 RDMA 验证；最新推进尚未提交。
+
 ## 实现 / Implementation
 
 `sparse_install.py` 新增 `RankInstallCoordinator`，每个请求实例独立持有

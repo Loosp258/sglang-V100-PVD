@@ -8,7 +8,7 @@ remote-memory evidence. No resource is freed by the logical coordinator.
 
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 
@@ -298,7 +298,12 @@ class CPUInstallGroup:
         """Immutable metadata copies, no tensors or mutable bank access."""
         self.coordinator._owner()
         return {
-            rank: {"identity": bank.identity, "groups": bank.expected_groups}
+            rank: {
+                "identity": bank.identity,
+                "groups": bank.expected_groups,
+                "prompt_tokens": bank.prompt_tokens,
+                "head_dim": bank.head_dim,
+            }
             for rank, bank in self._banks.items()
         }
 
@@ -395,3 +400,61 @@ class CPUInstallGroup:
             raise InstallProtocolError(
                 "CPU readers must drain before closing rank banks"
             ) from errors[0]
+
+
+class CPUInstalledPromptView:
+    """Read-only projection of all local shards into a TP1 CPU model forward.
+
+    NOT a TP gather: no copy/transport, all shards already live in this process.
+    Every bank read goes through the group's gate and remains held until the
+    whole forward ends. The consumer checks complete layer/head coverage.
+    """
+
+    def __init__(self, group, decode_tokens):
+        if not isinstance(group, CPUInstallGroup):
+            raise InstallProtocolError("an explicit CPU install group is required")
+        if type(decode_tokens) is not int or decode_tokens < 0:
+            raise InstallProtocolError("explicit committed D-token count required")
+        metadata = group.describe_banks()
+        first = next(iter(metadata.values()))
+        self.identity = first["identity"]
+        self.prompt_tokens, self.head_dim = first["prompt_tokens"], first["head_dim"]
+        groups = set()
+        for item in metadata.values():
+            if (
+                item["identity"] != self.identity
+                or item["prompt_tokens"] != self.prompt_tokens
+                or item["head_dim"] != self.head_dim
+                or groups.intersection(item["groups"])
+            ):
+                raise InstallProtocolError(
+                    "shard metadata differ or layer/head ownership overlaps"
+                )
+            groups.update(item["groups"])
+        self.expected_groups = frozenset(groups)
+        self.decode_tokens = decode_tokens
+        self._group, self._ranks = group, tuple(sorted(metadata))
+
+    @contextmanager
+    def read(self):
+        merged, generations = {}, set()
+        with ExitStack() as stack:
+            for rank in self._ranks:
+                groups = stack.enter_context(self._group.read(rank, self.decode_tokens))
+                for key, (spec, tensor) in groups.items():
+                    if key in merged:
+                        raise InstallProtocolError(
+                            "duplicate layer/head in installed shards"
+                        )
+                    generations.add((spec.operation_id, spec.target_tokens))
+                    merged[key] = (spec, tensor)
+            if set(merged) != self.expected_groups or len(generations) != 1:
+                raise InstallProtocolError("incomplete or mixed-generation Prompt view")
+            if (
+                next(iter(generations))[1]
+                != self._group.coordinator.snapshot()["installed_tokens"]
+            ):
+                raise InstallProtocolError(
+                    "Prompt generation is not the coordinator's installed generation"
+                )
+            yield merged

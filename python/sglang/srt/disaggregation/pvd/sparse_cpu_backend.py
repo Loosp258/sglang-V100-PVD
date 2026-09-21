@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import torch
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
+from sglang.srt.disaggregation.pvd.sparse_install import CPUInstalledPromptView
 from sglang.srt.disaggregation.pvd.sparse_payload import SparsePayloadError
 from sglang.srt.disaggregation.pvd.sparse_working_set import CPUSparseWorkingSet
 from torch.nn.functional import scaled_dot_product_attention
@@ -25,7 +26,7 @@ class SparseDecodeBinding:
     request_id: str
     incarnation: str
     query_position: int
-    bank: CPUSparseWorkingSet
+    bank: CPUSparseWorkingSet | CPUInstalledPromptView
 
 
 class CPUSparseDecodeConsumer:
@@ -86,7 +87,7 @@ class CPUSparseDecodeConsumer:
                 ):
                     raise SparsePayloadError("duplicate or invalid request slot")
                 if (
-                    not isinstance(bank, CPUSparseWorkingSet)
+                    not isinstance(bank, (CPUSparseWorkingSet, CPUInstalledPromptView))
                     or bank.identity[:2] != (binding.request_id, binding.incarnation)
                     or bank.expected_groups != expected_groups
                 ):
@@ -99,6 +100,11 @@ class CPUSparseDecodeConsumer:
                 if (
                     type(binding.query_position) is not int
                     or binding.query_position < bank.prompt_tokens
+                    or (
+                        isinstance(bank, CPUInstalledPromptView)
+                        and binding.query_position
+                        != bank.prompt_tokens + bank.decode_tokens
+                    )
                 ):
                     raise SparsePayloadError(
                         "decode position must follow the complete Prompt"

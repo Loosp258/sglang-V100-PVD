@@ -5,6 +5,10 @@
 后续：[跨 rank 安装契约](PVD_Rank_Install_Contract_CN_EN.md) 已通过逻辑/CPU 驱动测试，
 但未与本文的模型 backend 组合为线上多 rank pipeline；下文 Next 为该变更前的记录。
 
+最新：[同一真实 CPU Decode 闭环](PVD_Controlled_CPU_Decode_CN_EN.md) 已接通 HTTP
+检索结果到实际模型消费，并以统一 group 视图门控整个前向的读取；覆盖下文“检索与
+模型消费仍分开”的历史限制。它依然是离线 CPU 驱动，不是线上多 rank pipeline。
+
 ## 本轮推进 / Implemented
 
 第三步从数学 reference 推进到真正的 SGLang 模型 attention 调用：

@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新验收：[同一真实 CPU Decode 的检索消费](PVD_Controlled_CPU_Decode_CN_EN.md)
+已将真实输出快照、HTTP 检索、组门控安装与同一个模型生成序列连通。9 个 D token，
+边界 4/8，18 次独立 attention 对照；迟到等待、正式前缀补查、真实前向失败终止
+均通过。覆盖下文历史“仍为分开的 fixture”限制，但不代表 Scheduler/GPU/TP/RDMA/
+CAGRA 已通过。此前工作提交为 `3c4b0c479`，未推送；此后续修改尚未提交。
+下一步明确并测试 Scheduler 独占的生命周期/dispatch 接口，再接在线执行。
+
 最新推进：[受控请求刷新闭环](PVD_Controlled_Request_Loop_CN_EN.md)，统一控制端
 epoch/prefix snapshot 从一次捕获贯穿分片 HTTP、GQA 并集、打包与
 [全部 rank 安装门控](PVD_Rank_Install_Contract_CN_EN.md)，不修改旧结果身份。

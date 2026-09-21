@@ -2,6 +2,10 @@
 
 2026-09-21，基线 `9c09b7768`，本轮与前一轮安装协议修改尚未提交。
 
+后续状态：本文工作已提交为 `3c4b0c479`（未推送）。之后新增的
+[同一真实 CPU Decode 检索消费](PVD_Controlled_CPU_Decode_CN_EN.md)已覆盖下文第一项
+待办及“仍分开验收”的历史限制；依然不是在线 Scheduler/GPU/RDMA 验证。
+
 ## 本轮完成 / Implemented
 
 `cpu_prefetch_request.py` 的 `CPUPrefetchRequest` 把以下环节接成一个**离线 CPU**
