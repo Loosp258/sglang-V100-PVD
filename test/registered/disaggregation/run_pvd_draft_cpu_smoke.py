@@ -279,6 +279,7 @@ def main() -> None:
             search_evidence = validate_real_search(runner)
         sparse_decode_evidence = None
         controlled_decode_evidence = None
+        batch_decode_evidence = None
         if "--sparse-decode" in sys.argv[1:]:
             from pvd_sparse_decode_smoke import validate_sparse_decode
 
@@ -287,6 +288,10 @@ def main() -> None:
             from pvd_controlled_decode_smoke import validate_controlled_decode
 
             controlled_decode_evidence = validate_controlled_decode(runner)
+        if "--batch-decode" in sys.argv[1:]:
+            from pvd_batch_decode_smoke import validate_batch_decode
+
+            batch_decode_evidence = validate_batch_decode(runner)
         print(
             json.dumps(
                 {
@@ -306,6 +311,7 @@ def main() -> None:
                     "search_evidence": search_evidence,
                     "sparse_decode_evidence": sparse_decode_evidence,
                     "controlled_decode_evidence": controlled_decode_evidence,
+                    "batch_decode_evidence": batch_decode_evidence,
                 },
                 indent=2,
             )

@@ -93,6 +93,7 @@ class CPUDecodeLifecycle:
         self.state, self.reason = "waiting", None
         self.controller = None
         self._permit = self._decode_lease = None
+        self._batch_owner = None
         self._refresh = self._refresh_lease = self._deadline = None
         self._refresh_ready = False
 
@@ -246,6 +247,10 @@ class CPUDecodeLifecycle:
 
     def _match(self, permit):
         self.arbiter.owner()
+        if self._batch_owner is not None:
+            raise LifecycleError(
+                "batch-owned completion must go through its dispatcher"
+            )
         if permit is None or permit is not self._permit:
             raise LifecycleError("stale or foreign Decode completion")
 

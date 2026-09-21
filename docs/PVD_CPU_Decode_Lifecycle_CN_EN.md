@@ -3,6 +3,10 @@
 2026-09-21。上一阶段真实检索消费已提交为 `8f482e631`，未 push。
 本文新增生命周期代码、测试及 smoke 接线尚未提交。
 
+后续：本文工作已提交 `81bfb64b4`，未 push。
+[batch 级执行器与真实多请求验证](PVD_CPU_Batch_Execution_CN_EN.md)已完成下文的
+batch 契约待办，但不代表正式 ScheduleBatch 或 GPU/RDMA 接线完成。
+
 ## 本轮实现 / Implementation
 
 `cpu_decode_lifecycle.py` 提供 owner-thread-only 的 `CPUDecodeLifecycle` 与

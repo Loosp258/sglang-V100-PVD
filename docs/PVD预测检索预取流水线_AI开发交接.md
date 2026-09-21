@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新组合推进：[batch 执行器与真实多请求验收](PVD_CPU_Batch_Execution_CN_EN.md)：
+共享 batch lease、完整结果身份校验/提交、固定请求槽位与可复用 CPU forward，
+已在真实多请求不同长度/成员变化下完成 HTTP 刷新和安装。39 个新单测、19 次真实
+attention 对照，最大误差约 `2.38e-7`；wait-all、取消和整批失败均通过。
+此前生命周期已提交 `81bfb64b4`，未推送；本后续修改尚未提交。
+仍有正式 ScheduleBatch、GPU/RDMA/CAGRA 的实际实现缺口，非仅缺硬件测试。
+
 最新：[CPU 生命周期接点](PVD_CPU_Decode_Lifecycle_CN_EN.md)已驱动真实 CPU smoke，
 覆盖准入、唯一 Decode 票据、正式 token 提交、共享目标执行、超时/EOS/取消/drain；
 25 个新增契约测试通过。此前真实 Decode 消费提交为 `8f482e631`，未推送；

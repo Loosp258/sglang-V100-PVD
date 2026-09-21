@@ -2,6 +2,14 @@
 
 Updated: 2026-09-21.
 
+Newest combined gate: [batch execution and real multi-request validation](PVD_CPU_Batch_Execution_CN_EN.md).
+One batch lease, identity-safe whole-result validation/commit, registered request
+slots and a reusable real CPU forward executor now run variable membership and
+sequence lengths through HTTP refresh/install. 39 new unit tests; 19 real-model
+attention checks (max error ~2.38e-7), including wait-all, cancellation and actual
+batch failure. Previous lifecycle is committed as `81bfb64b4`, no push; this
+follow-up is uncommitted. Production ScheduleBatch/GPU/RDMA/CAGRA gaps remain.
+
 Newest follow-up: [CPU lifecycle seam](PVD_CPU_Decode_Lifecycle_CN_EN.md) drives
 the real CPU smoke with admission, unique Decode permits, actual-output commits,
 shared target execution, timeout/EOS/cancel and drain. 25 new contract tests pass.
