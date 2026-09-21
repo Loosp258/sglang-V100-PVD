@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新：此前未能推送的 `d44dd9ebf` 已成功推送。V 稀疏打包改为直接写入持有生命周期
+与预算的最终 staging，消除逐组临时副本。底层提供显式 CUDA copy 入口，但其返回
+不是 GPU 完成证明，不管理注册或资源释放；生产 CUDA sparse 仍拒绝启动此路径。
+详见[稀疏交付 Step 6](PVD_Sparse_Delivery_CN_EN.md)。最新 Windows 1476 passed /
+14 skipped，WSL 1481 passed / 9 skipped；新增 3 个真实 CUDA 测试跳过，尚未验收。
+以下固定设计目标不变。
+
 当前权威更新（覆盖下面历史“未推送”等状态）：见[稀疏 Delivery 推进](PVD_Sparse_Delivery_CN_EN.md)。
 历史本地 commit 与交付步骤至 `309e464be` 均已推送 GitHub `pvd-disaggregation`；
 用户现在要求每一步 commit 后 push。V 在 Entry/index lease 下打包所选 K/V；D

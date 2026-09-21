@@ -92,20 +92,21 @@ class SparseKVPayload:
         self._tensor = None
 
 
-def _views(packed, layout, shard):
+def _views(packed, layout, shard, *, allow_cuda=False):
     if not isinstance(layout, KVLayoutSignature) or not isinstance(
         shard, KVShardManifest
     ):
         raise SparsePayloadError("explicit storage layout and shard manifest required")
     if (
         not isinstance(packed, torch.Tensor)
-        or packed.device.type != "cpu"
+        or packed.device.type
+        not in (("cpu", "cuda") if allow_cuda is True else ("cpu",))
         or packed.dtype != torch.uint8
         or packed.ndim != 1
         or not packed.is_contiguous()
     ):
         raise SparsePayloadError(
-            "offline sparse packer needs a flat contiguous CPU byte buffer"
+            "sparse packer needs a flat contiguous CPU byte buffer or explicit CUDA opt-in"
         )
     if layout.tensor_layout != PVD_TENSOR_LAYOUT:
         raise SparsePayloadError("unsupported storage tensor layout")
@@ -136,7 +137,7 @@ def _views(packed, layout, shard):
         or (shard.rank + 1) * layout.kv_heads_per_rank > layout.total_kv_heads
     ):
         raise SparsePayloadError("invalid source pages or head ownership")
-    element_size = torch.empty(0, dtype=dtype).element_size()
+    element_size = {torch.float16: 2, torch.bfloat16: 2, torch.float32: 4}[dtype]
     per_token = layout.kv_heads_per_rank * layout.head_dim * element_size
     expected_shape = [layout.kv_heads_per_rank, layout.head_dim]
     if any(

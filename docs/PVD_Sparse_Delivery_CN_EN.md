@@ -34,7 +34,7 @@ reserve/start/poll/fence/ACK 使用该清单：校验真实 Entry 布局/源 sha
 不会静默把 V 的 GPU pool 搬到 CPU。
 
 源 Entry allocation 由原 write authorization pin；打包阶段额外 pin 当前 index，
-逐 group 打包到有预算的 staging，不复制整个 Prompt。staging 注册后由原 Delivery
+直接将各 group 的配对 K/V 写到有预算的最终 staging，不复制整个 Prompt。staging 注册后由原 Delivery
 终态推进保留/释放，业务取消、TTL 或超时本身不能释放。短字节 SUCCESS 判失败。
 注册抛异常且结果不明确时，整个 store 隔离并保留 tensor/budget；unregister 失败时
 预算保留，之后 progress 重试成功才退还。此保守 quarantine 不是可恢复性保证。
@@ -137,6 +137,38 @@ Mooncake/RDMA. Models are randomly initialized tiny Llamas with a toy tokenizer.
 No output-quality, throughput, GPU memory saving or network-hiding claim follows.
 Full suite at the Step 4 gate: Windows 1436 passed / 11 skipped; WSL 1441 passed /
 6 skipped. Step 5 additionally executes the strict real-model command above.
+
+## Step 6 / 第六步：Direct copies into owned staging
+
+`copy_sparse_kv_into` validates the complete manifest, source layout and versions,
+all selected token/head/layer coordinates, destination device/extent/alignment,
+and distinct backing storage before writing. It copies paired rows directly into
+the final owned buffer: no per-group payload allocation, gather or device move.
+V uses it under the existing Entry/index leases and registration lifetime guard.
+A transfer budget fitting only the final payload now suffices for this packing
+step. This is a memory-accounting improvement, not a throughput measurement.
+
+The primitive has an explicit CUDA opt-in and uses the caller's current stream.
+Returning is NOT completion proof. Callers must retain both allocations and
+leases and drain queued work on success AND exceptions before reuse/release.
+Production V CUDA sparse packing is still refused; neither registration nor
+native stream/transport ownership is supplied by this copy function. A runtime
+copy failure can partially write the destination; that generation is unusable.
+
+直接打包现在省去逐组临时副本，只需要最终载荷的 staging 预算；所有布局、版本、
+有效 token、归属、地址重叠和对齐检查在写入前完成。运行时拷贝异常可能留下部分
+结果，不能当作交付成功。新增的 CUDA 入口仅是显式底层原语，返回不表示 GPU 完成；
+调用方必须在成功和异常时都保留资源直到真正完成。默认服务仍拒绝 GPU sparse。
+
+Validation: 25 new CPU tests cover FP16/BF16/FP32, two shards, exact bytes,
+pre-write refusal, aliasing, partial-copy failure and real store Delivery with
+exactly one final-buffer budget. Three real CUDA stream/event tests are present
+but skipped in this CPU environment. Full Windows: 1476 passed / 14 skipped;
+WSL: 1481 passed / 9 skipped. Skips are not hardware acceptance.
+The strict `--wire-sparse-loop` real CPU two-model command also passes after
+this change: four Deliveries, 1600 bytes, 21 attention comparisons, maximum
+error `3.5762786865234375e-7`, and restored receive budget. Existing legacy
+typing/style warnings in `vector_store.py` are not broadly rewritten here.
 
 ## Remaining production gates / 尚未完成
 

@@ -2,6 +2,14 @@
 
 Updated: 2026-09-21.
 
+Latest: the previously blocked `d44dd9ebf` push succeeded. Sparse V packing now
+copies directly into the owned final staging buffer, eliminating per-group
+payload copies/budget peaks. The reusable copy primitive offers explicit CUDA
+opt-in, NOT completion or registration ownership; production CUDA sparse serving
+remains refused. See Step 6 of [sparse delivery](PVD_Sparse_Delivery_CN_EN.md).
+Windows: 1476 passed / 14 skipped; WSL: 1481 passed / 9 skipped. Three new real
+CUDA tests are skipped, not validated. All design invariants below still apply.
+
 Current authoritative update (supersedes historical status/"not pushed" notes
 below): [sparse Delivery integration](PVD_Sparse_Delivery_CN_EN.md). Existing
 local commits and the four delivery steps through `309e464be` are on GitHub

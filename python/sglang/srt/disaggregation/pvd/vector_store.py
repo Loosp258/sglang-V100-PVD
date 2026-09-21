@@ -11,7 +11,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
@@ -36,11 +35,11 @@ from sglang.srt.disaggregation.pvd.sharding import (
     layout_from_destination,
     source_rank_and_head_offset,
 )
+from sglang.srt.disaggregation.pvd.sparse_copy import copy_sparse_kv_into
 from sglang.srt.disaggregation.pvd.sparse_delivery import (
     SPARSE_DELIVERY_KEY,
     SparseDeliveryManifest,
 )
-from sglang.srt.disaggregation.pvd.sparse_payload import pack_sparse_kv
 from sglang.srt.disaggregation.pvd.transfer_authorization import WriteAuthorization
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
@@ -967,25 +966,16 @@ class VectorKVStore:
         offset = entry.allocation.start_page * self.page_bytes
         source = self.pool[offset : offset + entry.manifest.expected_bytes]
         with self.prompt_index.pin_selection(manifest) as descriptor:
-            cursor = 0
-            for spec in manifest.specs:
-                # One temporary group at a time, separately budgeted before
-                # allocation; no full-Prompt copy or unbounded torch.cat peak.
-                with pack_sparse_kv(
-                    source,
-                    layout=entry.layout,
-                    shard=entry.manifest,
-                    spec=spec,
-                    entry_transfer_id=entry.key.transfer_id,
-                    index_version=descriptor.index_version,
-                    id_mapping_version=descriptor.id_mapping_version,
-                    budget=budget,
-                ) as payload:
-                    end = cursor + payload.nbytes
-                    staging[cursor:end].copy_(
-                        payload.tensor.view(torch.uint8).reshape(-1)
-                    )
-                    cursor = end
+            copy_sparse_kv_into(
+                source,
+                staging,
+                manifest=manifest,
+                layout=entry.layout,
+                shard=entry.manifest,
+                entry_transfer_id=entry.key.transfer_id,
+                index_version=descriptor.index_version,
+                id_mapping_version=descriptor.id_mapping_version,
+            )
         try:
             registration = self.transfer_engine.register_memory(
                 staging,
