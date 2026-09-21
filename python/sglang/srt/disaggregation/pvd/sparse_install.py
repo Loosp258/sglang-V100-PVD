@@ -388,6 +388,20 @@ class CPUInstallGroup:
         with self._banks[rank].read() as groups:
             yield groups
 
+    def installation_complete(self, receipt):
+        """Exact last all-rank completion, not merely a staged local bank.
+
+        The consumer must observe this before starting another round. A wire
+        receiver may latch this fact to retry an ACK whose response was lost.
+        """
+        state = self.coordinator.snapshot()
+        return (
+            isinstance(receipt, RankInstallReceipt)
+            and state["state"] == InstallState.IDLE.value
+            and state["completed"] == receipt.epoch
+            and self._receipts.get(receipt.rank) == receipt
+        )
+
     def close(self):
         self.coordinator.cancel()
         errors = []

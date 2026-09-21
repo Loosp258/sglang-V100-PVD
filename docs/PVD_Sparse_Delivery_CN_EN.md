@@ -51,3 +51,35 @@ No native RDMA/GPU evidence is claimed.
 V 已接原 reserve/start/poll/fence/ACK 并保留整个异步传输期间的 staging；
 下一步接 D 的独立 destination 生命周期、安装与 ACK，以及真实本地 HTTP 交付测试。
 完整 Prompt bootstrap 不依赖检索索引；新增稀疏路径必须显式启用，不能改变默认行为。
+# Step 3 / 第三步：D-owned sparse receive lifecycle
+
+`SparseReceiveRegistry` now owns CPU receive allocations before registration or
+descriptor publication. It charges bytes and one in-flight slot, reconstructs
+the complete expected write identity from its own descriptor plus the selected
+V incarnation, and rejects mismatched manifests, generations, byte counts and
+terminal proofs. V Delivery replies expose a non-mutating `write_fence` snapshot;
+reading that proof does not cancel a successfully delivered operation.
+
+CPU FP32 payloads are copied into `CPUInstallGroup` only after successful,
+exact-length fenced delivery. ACK requires the exact all-rank installation
+receipt, not merely receipt or staging of the bytes. Lost ACKs can be retried
+without reinstalling. Cancellation, a lost reserve/start response, and unknown
+registration retain the destination and its budget until actual fence evidence
+exists. Unregister failure retains storage and charges for a later retry.
+
+新增 D 端接收注册表：注册/发布之前就建立资源所有者并计费。只有匹配完整身份、
+manifest、字节数和写入终态证明后，才允许读取。CPU FP32 安装使用真实工作集副本；
+所有 rank 安装完成后才能 ACK。取消、回包丢失、注册结果不明均不能提前释放目标内存。
+V 回包中的终态快照仅用于观察，不会像取消型 fence RPC 一样关闭正常交付的业务流程。
+
+Validation uses real localhost HTTP routes and the real V store/index/packer,
+with a controlled delayed byte-copy engine. It tests late writes after cancel,
+foreign completion identities, short/invalid success, lost replies, ACK retry,
+and cleanup failure. This is **not Mooncake, RDMA, GPU or production Scheduler
+acceptance**. The controlled request loop is not yet wired to this receiver;
+CPU installation deliberately refuses FP16/BF16 rather than allocating an
+unaccounted conversion. An unknown reservation not found on V remains pinned:
+absence is not a fence against a late request; recovery/tombstones are future work.
+
+真实本地 HTTP 已覆盖正常交付与故障路径，但未证明 GPU/RDMA 正确性或性能。
+下一步是把该接收器接入现有 CPU 请求级预取流水线，再单独推进生产运行时集成。

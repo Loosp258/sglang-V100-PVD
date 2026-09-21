@@ -192,6 +192,16 @@ class DeliveryShardRecord:
             "write_identity": (
                 self.authorization.identity.to_dict() if self.authorization else None
             ),
+            # Observation only: unlike fence_write(), this does not cancel the
+            # Delivery. D needs terminal proof before reading, then can ACK it.
+            "write_fence": (
+                self.authorization.fence(self.authorization.identity)
+                if self.authorization
+                else None
+            ),
+            "transferred_bytes": (
+                self.transfer_handle.transferred_bytes if self.transfer_handle else 0
+            ),
             "transport_state": (
                 self.transfer_handle.transport_state.value
                 if self.transfer_handle
