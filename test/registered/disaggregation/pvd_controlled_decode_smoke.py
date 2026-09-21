@@ -12,6 +12,10 @@ import torch
 
 def validate_controlled_decode(runner):
     from pvd_controlled_prefetch import ControlledFixture
+    from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
+        CPUDecodeLifecycle,
+        TargetExecutionArbiter,
+    )
     from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
         DraftForwardAdapter,
         PrivatePoolAllocator,
@@ -60,6 +64,7 @@ def validate_controlled_decode(runner):
             device="cpu",
         )
         slot, rows, fixture, task = allocator.alloc_request(), [], None, None
+        lifecycle = None
         hooks, errors, seen_generations = [], [], []
         generated, snapshots, epochs = [], [], []
         active = {}
@@ -102,15 +107,17 @@ def validate_controlled_decode(runner):
 
         def snapshot():
             n = len(generated) - 1  # P first token is output but not a D refresh tick
-            result = CommittedPrefix(
-                "controlled-decode", prompt + tuple(generated), n, f"actual-{n}"
+            result = lifecycle.snapshot()
+            assert result.committed_position == n and result.tokens == prompt + tuple(
+                generated
             )
             snapshots.append(result)
             return result
 
         def step():
             n = len(generated) - 1
-            assert fixture.request.can_decode(n)
+            assert lifecycle.can_decode()
+            assert lifecycle.committed_tokens == n
             view = CPUInstalledPromptView(fixture.group, n)
             position = len(prompt) + n
             old_rows = rows[len(prompt) :]
@@ -126,6 +133,11 @@ def validate_controlled_decode(runner):
             allocator.write_mapping(slot, position, new_rows)
             active.update(view=view, count=n)
             runner.attn_backend = backend
+            permit = lifecycle.begin_decode()
+            assert (
+                permit.input_token == generated[-1]
+                and permit.query_position == position
+            )
             try:
                 with backend.consumer.bind(
                     [
@@ -149,9 +161,14 @@ def validate_controlled_decode(runner):
                         )
                     )
                 assert torch.isfinite(logits).all()
-                generated.append(int(logits.argmax()))  # ONLY target output commits
+                token = int(logits.argmax())
+                assert lifecycle.complete_decode(permit, token)
+                generated.append(token)  # ONLY target output commits
             except BaseException:
-                fixture.request.cancel("model forward failed; no retry/rollback")
+                if lifecycle._permit is permit:
+                    lifecycle.fail_decode(
+                        permit, "model forward failed; no retry/rollback"
+                    )
                 raise
             finally:
                 runner.attn_backend = native
@@ -230,6 +247,13 @@ def validate_controlled_decode(runner):
                 CommittedPrefix("controlled-decode", prompt, 0, "prompt"),
                 pipeline,
             )
+            lifecycle = CPUDecodeLifecycle(
+                "controlled-decode",
+                prompt,
+                generated[0],
+                arbiter=TargetExecutionArbiter(),
+            )
+            lifecycle.admit(fixture.request)
             for l in range(layers):
                 pool.get_key_buffer(l)[rows] = float("nan")
                 pool.get_value_buffer(l)[rows] = float("nan")
@@ -250,22 +274,20 @@ def validate_controlled_decode(runner):
                         await release.wait()
                         return await clients[1].search(*args, **kwargs)
 
-                task = asyncio.create_task(
-                    fixture.request.refresh(
-                        prefix,
-                        query_positions=(len(prefix.tokens),),
-                        clients={0: clients[0], 1: Delayed()},
-                        pack_source=fixture.pack_source,
-                    )
+                task = lifecycle.launch_refresh(
+                    query_positions=(len(prefix.tokens),),
+                    clients={0: clients[0], 1: Delayed()},
+                    pack_source=fixture.pack_source,
+                    timeout_seconds=30,
                 )
                 await asyncio.wait_for(entered.wait(), 5)
                 step()  # n=3->4 while shard HTTP result is delayed
-                assert not fixture.request.can_decode(4)
-                assert not fixture.request.try_install({0: 4, 1: 4})
+                assert not lifecycle.can_decode()
+                assert not lifecycle.try_install({0: 4, 1: 4})
                 assert_parked(4)
                 release.set()
                 epochs.append(await asyncio.wait_for(task, 5))
-                assert fixture.request.try_install({0: 4, 1: 4})
+                assert lifecycle.try_install({0: 4, 1: 4})
                 while len(generated) - 1 < 8:
                     step()
                 # Intentionally miss the next prefetch window: actual-prefix
@@ -273,14 +295,14 @@ def validate_controlled_decode(runner):
                 assert_parked(8)
                 prefix = snapshot()
                 epochs.append(
-                    await fixture.request.refresh(
-                        prefix,
+                    await lifecycle.launch_refresh(
                         query_positions=(len(prefix.tokens) - 1,),
                         clients=clients,
                         pack_source=fixture.pack_source,
+                        timeout_seconds=30,
                     )
                 )
-                assert fixture.request.try_install({0: 8, 1: 8})
+                assert lifecycle.try_install({0: 8, 1: 8})
                 step()
             assert len(provider.calls) == 1
             assert [p.committed_position for p in snapshots] == [3, 8]
@@ -302,12 +324,14 @@ def validate_controlled_decode(runner):
                 "actual_prefixes": True,
                 "delayed_http_overlaps_one_cpu_decode": True,
                 "poisoned_prompt_pool_not_read": True,
+                "lifecycle_dispatch_commit_install": True,
             }
         except RuntimeError as exc:
             if not inject_failure or "controlled model failure" not in str(exc):
                 raise
             assert len(generated) - 1 == 5  # failed forward emitted nothing
             assert not fixture.request.can_decode(5)
+            assert lifecycle.state == "aborted" and lifecycle.committed_tokens == 5
             assert backend.consumer._bound is None
             return {"failure_aborts_without_committing_token": True}
         finally:
@@ -318,6 +342,8 @@ def validate_controlled_decode(runner):
             for hook in hooks:
                 hook.remove()
             runner.attn_backend = native
+            if lifecycle is not None:
+                await lifecycle.close()
             if fixture is not None:
                 fixture.close()
             allocator.clear_mapping(slot)

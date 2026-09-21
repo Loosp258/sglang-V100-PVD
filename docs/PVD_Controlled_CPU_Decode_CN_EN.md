@@ -2,6 +2,10 @@
 
 2026-09-21。上一阶段已提交为 `3c4b0c479`（未推送）；本文所述后续修改尚未提交。
 
+后续状态：本文工作已提交为 `8f482e631`，未推送。新增
+[CPU 生命周期接点](PVD_CPU_Decode_Lifecycle_CN_EN.md)已驱动同一真实模型 smoke，
+覆盖下文下一步中的单请求生命周期；batch 级/正式 Scheduler 接线仍未完成。
+
 ## 完成了什么 / What now runs
 
 新增 `CPUInstalledPromptView`：在同一进程内，把 `CPUInstallGroup` 的各分片

@@ -80,12 +80,14 @@ end-to-end experiment. P→V is a local byte copy, not RDMA.
 检查，最大误差约 `3.58e-7`，已覆盖延迟结果、边界补查及实际前向失败。
 单进程 group 视图持有所有 shard reader，整个模型前向期间不能切换 bank。
 
-Next: define/test Scheduler-owned dispatch, completion, install and abort
-lifecycles, including target-execution arbitration, real committed counts,
-EOS/cancel/timeout and batch changes; then wire supported online execution.
+新增[CPU 生命周期接点](PVD_CPU_Decode_Lifecycle_CN_EN.md)：准入、唯一执行票据、正式
+token 提交、共享目标互斥、超时/EOS/取消/drain，已驱动真实 CPU smoke。
+Next: define/test batch-owned execution and identity-safe result mapping before
+actual ScheduleBatch wiring. The per-request permit currently owns an exclusive
+target lease; it cannot simply be acquired once per member of a model batch.
 The CPU driver is still a standalone smoke, not Scheduler or GPU/TP evidence.
 CPU banks are not GPU fences or production allocators. No new request may reset
 an old request's clock. See the linked note for current limits.
 
-安装协议、受控闭环与边界补查已提交为 `3c4b0c479`，未推送。
-后续真实 CPU Decode 消费接线尚未提交。
+真实 CPU Decode 消费已提交为 `8f482e631`，此前协议为 `3c4b0c479`，未推送。
+后续 CPU 生命周期接点尚未提交。

@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新：[CPU 生命周期接点](PVD_CPU_Decode_Lifecycle_CN_EN.md)已驱动真实 CPU smoke，
+覆盖准入、唯一 Decode 票据、正式 token 提交、共享目标执行、超时/EOS/取消/drain；
+25 个新增契约测试通过。此前真实 Decode 消费提交为 `8f482e631`，未推送；
+此后续修改尚未提交。正式 Scheduler 只核对未修改。下一步实现 batch 级共享执行
+lease 与按身份匹配的结果提交，不能给 batch 每个成员申请一个独占 lease，
+也不能与服务的 `req.output_ids` 追加形成重复提交。
+
 最新验收：[同一真实 CPU Decode 的检索消费](PVD_Controlled_CPU_Decode_CN_EN.md)
 已将真实输出快照、HTTP 检索、组门控安装与同一个模型生成序列连通。9 个 D token，
 边界 4/8，18 次独立 attention 对照；迟到等待、正式前缀补查、真实前向失败终止

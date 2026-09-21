@@ -7,6 +7,7 @@ it must own/pin the source for that scope. This module grants no RDMA writes.
 """
 
 import asyncio
+from contextlib import nullcontext
 
 from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
 from sglang.srt.disaggregation.pvd.probe_search import (
@@ -67,7 +68,9 @@ class CPUPrefetchRequest:
         if self._closed:
             raise StaleProbeSearch("CPU prefetch request is closed")
 
-    async def refresh(self, prefix, *, query_positions, clients, pack_source):
+    async def refresh(
+        self, prefix, *, query_positions, clients, pack_source, execution_scope=None
+    ):
         """Predict ahead of boundary; a first start AT it uses committed Q.
 
         Boundary fallback probes explicit positions inside the actual prefix,
@@ -109,9 +112,15 @@ class CPUPrefetchRequest:
                 start = len(routes)
                 routes.extend(self._routes[rank])
                 partitions[rank] = tuple(range(start, len(routes)))
-            prepared = self._session.prepare(
-                window, self.pipeline, routes=tuple(routes), head_mapping=self.mapping
-            )
+            # The optional scheduler-owned scope covers synchronous draft/probe
+            # only; it MUST NOT remain held over HTTP waits.
+            with nullcontext() if execution_scope is None else execution_scope():
+                prepared = self._session.prepare(
+                    window,
+                    self.pipeline,
+                    routes=tuple(routes),
+                    head_mapping=self.mapping,
+                )
             children = self._session.fork_prepared(prepared, partitions)
             self._tasks = tuple(
                 asyncio.create_task(child.search(part, clients[rank]))

@@ -2,6 +2,14 @@
 
 Updated: 2026-09-21.
 
+Newest follow-up: [CPU lifecycle seam](PVD_CPU_Decode_Lifecycle_CN_EN.md) drives
+the real CPU smoke with admission, unique Decode permits, actual-output commits,
+shared target execution, timeout/EOS/cancel and drain. 25 new contract tests pass.
+Previous controlled Decode was committed as `8f482e631`, no push; this follow-up
+is uncommitted. Production Scheduler is inspected but unchanged. Next: a batch-
+owned execution lease and identity-safe result mapping, NOT one exclusive
+per-request lease per member. Do not duplicate the production output commit.
+
 Newest gate: [controlled real CPU Decode](PVD_Controlled_CPU_Decode_CN_EN.md)
 now feeds HTTP retrieval results into the SAME model generation sequence through
 group-gated whole-forward readers, using actual committed-output snapshots.
