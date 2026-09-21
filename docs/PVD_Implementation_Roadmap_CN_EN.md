@@ -6,6 +6,14 @@
 
 ### 当前权威状态 / Current authoritative status
 
+最新：[批量 wait-all 与结果处理作用域](PVD_Rank_Runtime_CN_EN.md) 为 rank 运行时
+增加整批准入、独立请求时钟、执行票据和共享目标锁；结果处理结束前不允许
+INSTALL。单请求失败丢弃对应行，整批 forward 失败丢弃全部行；不新增 token
+写入者。实际 CPU bank 测试使用同一 coordinator/epoch 验证读者排空与切换，
+但尚未连接生产 Scheduler 或原有 CPU 模型执行路径，不能称为端到端模型验收。
+新增 27 个测试；完整回归 Windows 1631 passed / 14 skipped，WSL 1636 passed /
+9 skipped。原有十个独立 CPU 子进程场景仍通过；本步新 bank 联动为进程内验证。
+
 最新：[在途 forward 票据](PVD_Rank_Runtime_CN_EN.md)。rank 运行时新增单请求执行
 所有权，票据在途禁止 INSTALL；取消/超时不能自动退还，执行方确认 drain 后才
 决定接受或丢弃输出。13 个新单测，实际 CPU 子进程增加取消在途 forward 场景。

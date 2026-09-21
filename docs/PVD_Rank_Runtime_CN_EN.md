@@ -136,3 +136,64 @@ python test/registered/disaggregation/run_pvd_rank_install_cpu_smoke.py --runtim
 Full regression after this step: **Windows 1604 passed / 14 skipped**, **WSL
 1609 passed / 9 skipped**. All ten manual/runtime process scenarios execute in
 both environments. Ruff check/format pass on the changed Python files.
+
+## Batch wait-all and result scope / 批量准入和结果提交作用域
+
+`RankBatchDispatcher` composes the real rank runtimes with one explicit shared
+`TargetExecutionArbiter`. It accepts a bounded, immutable tuple of
+`RankBatchMember(runtime, committed_tokens)`. Membership must have unique request
+ids/runtimes and the same trusted rank/worker-epoch bindings. Each request keeps
+its own installed epoch, refresh deadline and committed-token snapshot. Joining
+a batch neither starts a refresh nor resets another request's clock.
+
+All selected requests must pass admission before any permit is acquired. A
+missing initial installation, refresh boundary wait, missing RESUMED or queued
+control event blocks the **entire selected batch**, not a silently filtered
+subset. If a producer reports failure between preflight and permit acquisition,
+only permits acquired by this not-yet-returned `begin()` are rolled back. No
+forward has escaped at that point; this is not a cancellation/drain shortcut.
+
+After the actual whole-batch execution and readers drain, the caller enters
+`processing(ticket, readers_drained=True, succeeded=...)`. It validates all
+permit ownership before changing any member. Invalid/copy/replayed completion
+or a missing drain assertion keeps all tickets and the shared target lease.
+The scope yields dispatch-order `RankBatchDecision(permit, accepted)` records:
+
+- A failed shared forward rejects every result.
+- With a successful forward, a failed/cancelled request rejects only its row;
+  unrelated live requests may commit their normal sampled results.
+- All tickets and the target lease remain owned through result processing.
+  INSTALL cannot run during this scope, and single-request `finish_forward`
+  cannot steal a batch-owned permit.
+- The caller must use the existing authoritative result writer synchronously,
+  without awaiting or pumping callbacks. Decisions are not reusable permits.
+  Notifications after the decision snapshot apply at the next owner poll; no
+  already committed token is rolled back. A result-processor exception aborts
+  all members and retires the drained execution, never retries partial output.
+
+该批量适配器实现整批 wait-all，失败时不偷偷筛选子 batch；每个请求保留自己的
+刷新时钟。正式输出仍由原结果处理器写入，适配器只提供按原 batch 顺序排列的
+接受/丢弃决定。执行和真实读者全部结束前不能完成票据；取消、超时、失联不能
+提前释放整批执行锁。结果处理作用域结束前保留全部票据，防止 INSTALL 穿过
+提交阶段。若结果处理器部分写入后异常，终止整批而不回滚已发出的 token。
+
+The focused tests use actual runtimes/exchanges. An additional integration case
+uses two requests with two real CPU banks each: the runtime controls the exact
+same coordinator/epochs as its participants, real readers block PARKED, host
+tickets block INSTALL after readers drain, and the result scope keeps it blocked
+until exit. A refresh of request A leaves B's full-prompt bank unchanged; explicit
+close returns all four bank budgets to zero. This is an in-process CPU control
+and bank test, **not a model forward or a cross-process batch experiment**.
+
+该接点尚未接入生产 Scheduler、正式 Req 结果处理器或 GPU bank。原有
+`CPUBatchDispatcher` / `CPUScheduleBridge` 的模型验收路径仍独立存在，不能把两套
+路径的通过记录拼接成“rank 控制已驱动模型执行”。下一步需要显式绑定同一
+request/incarnation/Entry、安装 epoch 和实际执行 bank 后，验证结果处理器接入。
+MR fence、原生传输、模型 TP 和 GPU 生命周期仍需要各自实现/验收。
+
+Evidence for this step: **27 new tests**, full regression **Windows 1631 passed /
+14 skipped**, **WSL 1636 passed / 9 skipped** (three existing platform warnings).
+All ten previous independent-process scenarios still execute. Ruff check/format
+and `git diff --check` pass. The new bank/batch case is in-process; skipped GPU
+cases remain unverified. Refactoring also preserves single-forward stop callback
+ordering: notification cannot reenter and complete the same execution twice.

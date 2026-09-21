@@ -2,6 +2,15 @@
 
 更新日期：2026-09-21。
 
+最新：[批量 wait-all/结果作用域](PVD_Rank_Runtime_CN_EN.md) 把 rank 运行时与共享
+目标执行锁组合，保留独立请求时钟，结果处理结束前禁止 INSTALL，并拒绝已取消/
+失败请求的输出。不新增采样器或 token 写入者。真实 CPU bank 测试绑定同一
+coordinator/epoch；原 CPU 模型执行器/Req bridge 仍是独立路径，下一步需要连接
+确切的执行 bank 身份，尚不能声称已验收生产 Scheduler。
+新增 27 个测试；全量 Windows 1631 passed / 14 skipped，WSL 1636 passed /
+9 skipped。原有十个独立子进程场景仍通过，本步新增 bank 联动为进程内验证，
+不代表模型 forward、GPU 或 RDMA 验收。
+
 最新：[在途 forward 票据](PVD_Rank_Runtime_CN_EN.md) 在执行未结束时阻止 INSTALL。
 取消/超时不自动退还票据；执行方确认真实执行/读者结束后才决定接受或丢弃输出，
 不写正式 token。新增 13 个单测，六个实际运行时子进程场景均持有真实 CPU bank

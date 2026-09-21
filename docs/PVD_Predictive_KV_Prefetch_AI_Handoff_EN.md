@@ -2,6 +2,17 @@
 
 Updated: 2026-09-21.
 
+Newest: [batch wait-all/result scope](PVD_Rank_Runtime_CN_EN.md) composes rank
+runtimes with a shared target arbiter, preserves per-request clocks, blocks
+INSTALL through result processing and rejects cancelled/failed result rows.
+No second token writer or sampler. Real CPU-bank tests bind the runtime and
+participants to the same coordinator/epochs. The existing CPU model executor
+and Req bridge are still separate: connecting exact execution-bank identity is
+the next integration task, not already validated production Scheduler work.
+27 new tests; full Windows 1631 passed / 14 skipped, WSL 1636 passed / 9 skipped.
+The ten existing independent-process scenarios remain passing; new batch/bank
+integration is in-process, with no model forward, GPU or RDMA claim.
+
 Newest: [in-flight forward permit](PVD_Rank_Runtime_CN_EN.md) prevents INSTALL
 while an owner-local execution ticket remains active. Cancellation/timeout do
 not retire it; completion after caller-proven execution/readers drain decides

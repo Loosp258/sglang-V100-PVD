@@ -67,6 +67,7 @@ class RankInstallRuntime:
         self._phase, self._reason = "idle", None
         self._stop_pending, self._previous = set(), {}
         self._forward = None
+        self._forward_batch = None
 
     def _bound(self, rank, epoch):
         return type(rank) is int and self.exchange.peer_epochs.get(rank) == epoch
@@ -280,13 +281,32 @@ class RankInstallRuntime:
         Apply the decision synchronously on the owner thread. Cancellation or
         timeout by itself NEVER retires the in-flight ticket.
         """
-        self.exchange.coordinator._owner()
-        if permit is None or permit is not self._forward or self._progressing:
-            raise InstallProtocolError("stale or foreign forward completion")
+        self._check_forward(permit)
         if readers_drained is not True or type(succeeded) is not bool:
             raise InstallProtocolError(
                 "explicit execution drain and success status required"
             )
+        accepted = self._prepare_forward_result(permit, succeeded=succeeded)
+        self._retire_forward(permit)
+        if not accepted:
+            self._notify_stops()
+        return accepted
+
+    def _check_forward(self, permit, *, batch=None):
+        self.exchange.coordinator._owner()
+        if (
+            permit is None
+            or permit is not self._forward
+            or self._progressing
+            or batch is not self._forward_batch
+        ):
+            raise InstallProtocolError(
+                "stale or foreign forward completion (or batch-owned)"
+            )
+
+    def _prepare_forward_result(self, permit, *, succeeded, batch=None):
+        """Internal: decide while retaining the ticket through result processing."""
+        self._check_forward(permit, batch=batch)
         self.progress(max_events=self._max_events)  # ticket still blocks INSTALL
         with self._lock:
             unresolved = bool(self._queue) or self._fault is not None
@@ -299,10 +319,13 @@ class RankInstallRuntime:
         ):
             self._fail("installed bank changed during target forward")
         accepted = self._guard()
-        self._forward = None
-        if not accepted:
+        if not accepted and batch is not None:
             self._notify_stops()
         return accepted
+
+    def _retire_forward(self, permit, *, batch=None):
+        self._check_forward(permit, batch=batch)
+        self._forward = self._forward_batch = None
 
     def cancel(self):
         self.exchange.coordinator._owner()
