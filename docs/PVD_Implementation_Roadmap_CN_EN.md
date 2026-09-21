@@ -25,6 +25,12 @@ WSL 1456 passed / 6 skipped。该修复 `d44dd9ebf` 已重试推送成功。
 serving。最新完整回归为 Windows 1476 passed / 14 skipped、WSL 1481 passed /
 9 skipped；新增 3 个真实 CUDA 测试在本地跳过，不能当作硬件验收。
 
+再后续：[缺失 reserve 的安全取消恢复](PVD_Sparse_Delivery_CN_EN.md)（Step 7）
+为当前 V epoch 中的已知 Entry 建立有界、不淘汰的完整身份关闭标记；只有关闭
+迟到 reserve/start 的入口后才允许 D 释放。已提交/UNKNOWN 传输保持原有 fence。
+17 个新测试覆盖 HTTP 丢包、并发先后顺序、容量上限、重试与过期；不涉及 GPU 验收。
+最新完整回归：Windows 1493 passed / 14 skipped；WSL 1498 passed / 9 skipped。
+
 These are CPU/local-HTTP gates. Payload transfer remains a fake in-process byte
 copy. Production GPU packing/attention, native Mooncake, real TP activation,
 Scheduler loop/cleanup and V100S CAGRA are still implementation/validation gaps.

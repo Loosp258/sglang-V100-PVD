@@ -99,8 +99,9 @@ foreign completion identities, short/invalid success, lost replies, ACK retry,
 and cleanup failure. This is **not Mooncake, RDMA, GPU or production Scheduler
 acceptance**. Step 4 above connects the controlled request loop to this receiver;
 CPU installation deliberately refuses FP16/BF16 rather than allocating an
-unaccounted conversion. An unknown reservation not found on V remains pinned:
-absence is not a fence against a late request; recovery/tombstones are future work.
+unaccounted conversion. An unknown reservation cannot be freed on absence alone.
+Step 7 below now supplies an explicit closed gate for the known-Entry/current-V
+case; unavailable, stale or capacity-refused proofs still retain the receiver.
 
 真实本地 HTTP 已覆盖正常交付与故障路径，但未证明 GPU/RDMA 正确性或性能。
 CPU 请求级预取流水线接入见 Step 4；生产运行时集成仍需单独推进。
@@ -169,6 +170,48 @@ The strict `--wire-sparse-loop` real CPU two-model command also passes after
 this change: four Deliveries, 1600 bytes, 21 attention comparisons, maximum
 error `3.5762786865234375e-7`, and restored receive budget. Existing legacy
 typing/style warnings in `vector_store.py` are not broadly rewritten here.
+
+## Step 7 / 第七步：Fence a reserve request that has not arrived
+
+Reproduced the recovery gap through real localhost HTTP before fixing it: D
+published a destination, reserve did not reach V, and receiver close returned
+`unknown write authorization`, permanently retaining its buffer and budget.
+
+For a known Entry in the current V worker epoch, `fence_write` now checks for an
+absent Delivery and installs a full-identity tombstone under the SAME store lock
+used by reserve/start. It then returns an identity-complete fence. A delayed
+reserve or start with that Entry/Delivery id is refused, even if it changes the
+destination. An existing Delivery always follows its original authorization and
+native completion path; in-flight/UNKNOWN writes are never treated as absent.
+
+This relies on Entry/Delivery history being retained for the worker epoch (as
+the current store does). Future record pruning MUST retain equivalent write
+history or revoke this proof. An unknown Entry or old worker epoch is refused.
+The proof closes a write gate; it is NOT successful delivery, installation or ACK.
+
+Tombstones retain exact identity until the worker epoch ends: no TTL or LRU
+eviction. `VectorKVStore(max_absent_write_fences=4096)` bounds the number of new
+absence proofs; snapshots expose usage and limit. This is a constructor option,
+not a new launcher flag. At capacity, old identical proofs remain retryable but
+new proofs are refused and D retains memory. This step does not bound all
+historical Entry/Delivery records, nor implement cross-restart recovery.
+
+已补充“reserve 尚未抵达 V”的取消恢复：V 在 reserve/start 共用的锁内确认尚无
+Delivery，并先保存完整身份的永久关闭标记，才允许 D 根据返回证明释放缓冲。
+迟到的 reserve/start 因此无法向已释放地址发起写入。已提交或 UNKNOWN 的传输
+仍走原有完成证明，绝不按“未提交”回收。关闭标记不代表 KV 已交付或已安装。
+
+同一 V epoch 内关闭标记不淘汰；默认最多 4096 个，达到上限拒绝新的缺失证明，
+不删除旧标记。未知 Entry、旧 V epoch、证明回包丢失或容量不足时 D 继续持有缓冲。
+该安全性依赖当前 Entry/Delivery 历史保留规则，未来做历史清理不能直接删除依据。
+
+Seventeen new tests cover late reserve/start, exact-identity retries, stale V,
+unknown Entry, capacity, TTL, lost fence replies, retained D budget on refusal,
+both threaded reserve/fence orders and existing UNKNOWN writes. Tests use real
+HTTP and controlled in-process transport; no RDMA/GPU evidence is implied.
+Full regression after this step: Windows **1493 passed / 14 skipped**, WSL
+**1498 passed / 9 skipped**. New test files pass Ruff; existing broad-exception
+and legacy-typing/style findings in `vector_store.py` remain outside this change.
 
 ## Remaining production gates / 尚未完成
 

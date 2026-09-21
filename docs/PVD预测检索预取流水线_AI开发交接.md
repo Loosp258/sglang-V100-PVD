@@ -2,6 +2,13 @@
 
 更新日期：2026-09-21。
 
+最新：[稀疏交付 Step 7](PVD_Sparse_Delivery_CN_EN.md) 修复 reserve 未抵达时的
+取消恢复。仅已知 Entry、当前 V epoch、原子建立并保留完整身份关闭标记后，才能
+证明迟到 reserve/start 不会写向 D。单纯未找到记录、缺少证明、旧 epoch、原生
+UNKNOWN 或容量不足仍不能释放。新增 17 个 HTTP/并发测试。直接打包步骤已作为
+`2220a1d6e` 提交并推送。
+最新完整回归：Windows 1493 passed / 14 skipped；WSL 1498 passed / 9 skipped。
+
 最新：此前未能推送的 `d44dd9ebf` 已成功推送。V 稀疏打包改为直接写入持有生命周期
 与预算的最终 staging，消除逐组临时副本。底层提供显式 CUDA copy 入口，但其返回
 不是 GPU 完成证明，不管理注册或资源释放；生产 CUDA sparse 仍拒绝启动此路径。

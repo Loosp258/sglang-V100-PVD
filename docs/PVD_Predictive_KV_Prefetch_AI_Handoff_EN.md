@@ -2,6 +2,14 @@
 
 Updated: 2026-09-21.
 
+Newest: [sparse delivery Step 7](PVD_Sparse_Delivery_CN_EN.md) closes the lost-
+reserve recovery gap. Known Entry + current V epoch + an atomic, retained
+full-identity gate can now prove no late reserve/start will write to D. Absence
+alone, missing proof, old epoch, UNKNOWN native writes or capacity exhaustion
+still cannot free the receiver. Seventeen new HTTP/threaded tests cover this.
+Direct staging copies are committed/pushed as `2220a1d6e`.
+Latest full suite: Windows 1493 passed / 14 skipped; WSL 1498 passed / 9 skipped.
+
 Latest: the previously blocked `d44dd9ebf` push succeeded. Sparse V packing now
 copies directly into the owned final staging buffer, eliminating per-group
 payload copies/budget peaks. The reusable copy primitive offers explicit CUDA

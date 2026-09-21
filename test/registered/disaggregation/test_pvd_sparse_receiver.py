@@ -346,7 +346,7 @@ def test_registration_failure_remains_visible_and_charged(monkeypatch):
     asyncio.run(run())
 
 
-def test_request_lost_before_reservation_cannot_be_assumed_fenced(monkeypatch):
+def test_absence_without_a_successful_fence_reply_keeps_buffer_owned(monkeypatch):
     async def run():
         async with receiving() as c:
 
@@ -354,9 +354,10 @@ def test_request_lost_before_reservation_cannot_be_assumed_fenced(monkeypatch):
                 raise TimeoutError("submission outcome unknown")
 
             monkeypatch.setattr(c.client, "reserve_delivery", lost)
+            monkeypatch.setattr(c.client, "fence_delivery", lost)
             with pytest.raises(TimeoutError):
                 await c.record.start()
-            errors = await c.registry.close()  # V has no gate to fence
+            errors = await c.registry.close()  # absence/timeout is still not proof
             assert c.record.identity.transfer_id in errors
             assert c.record._buffer is not None
             assert not c.record.snapshot()["fenced"]

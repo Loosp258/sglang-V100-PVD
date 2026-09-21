@@ -290,6 +290,7 @@ class VectorKVStore:
         allow_cpu_for_tests: bool = False,
         metrics: Optional[PVDMetrics] = None,
         prompt_index: Optional[Any] = None,
+        max_absent_write_fences: int = 4096,
     ) -> None:
         if rank < 0 or rank >= world_size:
             raise ValueError(f"rank {rank} is outside world size {world_size}")
@@ -297,6 +298,8 @@ class VectorKVStore:
             raise ValueError("PVD requires exactly two V storage ranks")
         if page_bytes <= 0:
             raise ValueError("page_bytes must be positive")
+        if type(max_absent_write_fences) is not int or max_absent_write_fences <= 0:
+            raise ValueError("max_absent_write_fences must be a positive integer")
         if device == "cpu" and not allow_cpu_for_tests:
             raise RuntimeError("PVD V storage cannot silently fall back to CPU")
         if device.startswith("cuda") and not torch.cuda.is_available():
@@ -338,6 +341,12 @@ class VectorKVStore:
             lambda: self.transfer_engine.release_memory(self.registration),
         )
         self._fenced_deliveries = set()
+        # Lost reserve requests can arrive after D asks to close its receiver.
+        # Keep full identities until this worker epoch ends. Never TTL/LRU-evict
+        # a returned fence: delayed reserve/start must still be denied. At the
+        # bound refuse NEW absence proofs; existing proofs remain retryable.
+        self._absent_write_fences = {}
+        self._max_absent_write_fences = max_absent_write_fences
         self._lock = threading.RLock()
         self._refresh_metrics()
 
@@ -1153,9 +1162,31 @@ class VectorKVStore:
 
     def fence_write(self, identity: WriteIdentity):
         with self._lock:
+            if not isinstance(identity, WriteIdentity):
+                raise EntryConflictError("complete write identity required")
+            if identity.sender_epoch != self.worker_epoch:
+                raise EntryConflictError("write authorization identity mismatch")
             entry = self._entry(identity.key)
             delivery = entry.deliveries.get(identity.transfer_id)
-            if delivery is None or delivery.authorization is None:
+            if delivery is None:
+                # Entry/delivery records are retained for this worker's life.
+                # No record means no write was submitted under this key/id.
+                # Check AND close under the SAME lock as reserve/start. Absence
+                # alone is NOT proof: the tombstone prevents a delayed request
+                # from publishing a write after the receiver unregisters.
+                token = (identity.key, identity.transfer_id)
+                previous = self._absent_write_fences.get(token)
+                if previous is not None and previous != identity:
+                    raise EntryConflictError("write authorization identity mismatch")
+                if previous is None:
+                    if len(self._absent_write_fences) >= self._max_absent_write_fences:
+                        raise ResourceExhaustedError(
+                            "absent write fence capacity exceeded"
+                        )
+                    self._absent_write_fences[token] = identity
+                    self._fenced_deliveries.add(token)
+                return {**identity.to_dict(), "fenced": True}
+            if delivery.authorization is None:
                 raise EntryConflictError("unknown write authorization")
             if (
                 identity != delivery.authorization.identity
@@ -1393,6 +1424,8 @@ class VectorKVStore:
                 "worker_epoch": self.worker_epoch,
                 "closed": self._closed,
                 "isolated_reason": self._isolated_reason,
+                "absent_write_fences": len(self._absent_write_fences),
+                "max_absent_write_fences": self._max_absent_write_fences,
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],
