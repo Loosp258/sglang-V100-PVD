@@ -836,50 +836,66 @@ class VectorKVStore:
         source_region = self.pool[
             allocation_offset : allocation_offset + entry.manifest.expected_bytes
         ]
-        # Reserve the packing PEAK before allocating anything: the per-component
-        # chunks and the final concatenation are live at the same moment, so the
-        # peak is twice the destination size, not the final tensor alone.
+        # Preallocate the final buffer and copy component views directly. No
+        # per-component materialization or concatenation peak is necessary.
         final_bytes = sum(destination_bytes) * token_count
         budget = budget_of(self.transfer_engine)
-        budget_owner = f"v-repack:{delivery.delivery_id}"
+        budget_owner = f"v-repack:{delivery.owner}"
         if budget is not None:
-            budget.reserve(budget_owner, final_bytes * 2, 0)
-        chunks = []
-        component_base = 0
-        for source_bpt, destination_bpt in zip(source_bytes, destination_bytes):
-            bytes_per_head = source_bpt // entry.layout.kv_heads_per_rank
-            byte_start = source_head_offset * bytes_per_head
-            component = source_region[
-                component_base : component_base + token_count * source_bpt
-            ]
-            component = component.reshape(token_count, source_bpt)
-            chunks.append(
-                component[:, byte_start : byte_start + destination_bpt]
-                .contiguous()
-                .reshape(-1)
+            budget.reserve(budget_owner, final_bytes, 0)
+        try:
+            staging = torch.empty(
+                final_bytes, dtype=torch.uint8, device=self.pool.device
             )
-            component_base += token_count * source_bpt
-        staging = torch.cat(chunks).contiguous()
-        registration = self.transfer_engine.register_memory(
-            staging,
-            endpoint="pvd-vector-slice",
-            rank=self.rank,
-            rail=self.rail,
-            metadata={"delivery_id": delivery.delivery_id},
-        )
+        except BaseException:
+            if budget is not None:
+                budget.release(budget_owner)
+            raise
+        registered = [None]
 
         def _release_staging():
-            self.transfer_engine.release_memory(registration)
+            if registered[0] is not None:
+                self.transfer_engine.release_memory(registered[0])
             if budget is not None:
-                # Refunded only once the registration is actually gone, so a
-                # retried unregister cannot free budget it still occupies.
                 budget.release(budget_owner)
 
-        guard = ResourceGuard(registration, _release_staging)
+        # Own backing bytes BEFORE copies or native registration. On CUDA the
+        # start_delivery finally block synchronizes packing before safe release;
+        # failure to synchronize quarantines this guard along with the Entry.
+        guard = ResourceGuard(staging, _release_staging)
         guard.pin(delivery.owner)
         with self._lock:
             delivery.staging_guard = guard
         guard.request_release()
+        component_base = destination_base = 0
+        for source_bpt, destination_bpt in zip(
+            source_bytes, destination_bytes, strict=True
+        ):
+            bytes_per_head = source_bpt // entry.layout.kv_heads_per_rank
+            byte_start = source_head_offset * bytes_per_head
+            source = source_region[
+                component_base : component_base + token_count * source_bpt
+            ].reshape(token_count, source_bpt)
+            extent = token_count * destination_bpt
+            staging[destination_base : destination_base + extent].reshape(
+                token_count, destination_bpt
+            ).copy_(source[:, byte_start : byte_start + destination_bpt])
+            component_base += token_count * source_bpt
+            destination_base += extent
+        try:
+            registration = self.transfer_engine.register_memory(
+                staging,
+                endpoint="pvd-vector-slice",
+                rank=self.rank,
+                rail=self.rail,
+                metadata={"delivery_id": delivery.delivery_id},
+            )
+        except BaseException:
+            with self._lock:
+                delivery.local_terminal = TransportState.UNKNOWN
+                self._isolated_reason = "repack staging registration outcome unknown"
+            raise
+        registered[0] = registration
         return MemorySlice(registration, 0, staging.numel())
 
     def _validate_sparse_destination(self, entry, destination, manifest):

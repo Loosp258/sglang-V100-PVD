@@ -15,6 +15,12 @@
 attention 对照，最大误差约 3.58e-7；不再使用本地 pack_source 回调。Windows 完整
 suite 1436 passed / 11 skipped；WSL 1441 passed / 6 skipped。
 
+后续新增[真实双模型 Delivery 严格验收](PVD_Sparse_Delivery_CN_EN.md)（`b74614cf0`）与
+[CAGRA 分数验收修复](PVD_CAGRA_Acceptance_CN_EN.md)（`751637275`），均已推送。
+再后续[异构 TP 重打包资源修复](PVD_Repack_Ownership_CN_EN.md)复现并修复 3 项原路径
+缺陷，新增 5 个测试。最新完整回归：Windows 1451 passed / 11 skipped；
+WSL 1456 passed / 6 skipped。这里的跳过项没有当作已验证通过。
+
 These are CPU/local-HTTP gates. Payload transfer remains a fake in-process byte
 copy. Production GPU packing/attention, native Mooncake, real TP activation,
 Scheduler loop/cleanup and V100S CAGRA are still implementation/validation gaps.
