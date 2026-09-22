@@ -26,7 +26,7 @@ class LatePrefetchStart(ValueError):
     """Decode illegally advanced past an uninstalled refresh boundary."""
 
 
-class CPUPrefetchRequest:
+class _PrefetchRequestCore:
     def __init__(
         self,
         group,
@@ -37,8 +37,7 @@ class CPUPrefetchRequest:
         max_union_tokens,
         delivery=None,
     ):
-        if not isinstance(group, CPUInstallGroup):
-            raise TypeError("an exclusively owned CPUInstallGroup is required")
+        self._validate_group(group)
         state = group.coordinator.snapshot()
         if state["lead_tokens"] <= 0:
             raise ValueError(
@@ -49,16 +48,7 @@ class CPUPrefetchRequest:
                 "complete initial Prompt must be installed first"
             )
         self.group, self.pipeline, self.mapping = group, pipeline, head_mapping
-        if delivery is not None:
-            from sglang.srt.disaggregation.pvd.cpu_sparse_delivery import (
-                CPUSparseDelivery,
-            )
-
-            if (
-                not isinstance(delivery, CPUSparseDelivery)
-                or delivery.group is not group
-            ):
-                raise ValueError("Delivery sink must own this exact CPU install group")
+        self._validate_delivery(delivery, group)
         self.delivery = delivery
         self._metadata = group.describe_banks()
         self._routes = {rank: tuple(routes) for rank, routes in rank_routes.items()}
@@ -79,7 +69,7 @@ class CPUPrefetchRequest:
             raise ValueError("explicit positive union limit required")
         self._limit = max_union_tokens
         request, incarnation, entry = group.coordinator.identity
-        self._session = ProbeSearchSession(request, entry, incarnation=incarnation)
+        self._session = self._create_session(request, entry, incarnation=incarnation)
         self._active = self._ready = None
         self._tasks = ()
         self._closed = False
@@ -87,7 +77,7 @@ class CPUPrefetchRequest:
     def _live(self):
         self.group.coordinator._live()
         if self._closed:
-            raise StaleProbeSearch("CPU prefetch request is closed")
+            raise StaleProbeSearch("prefetch request is closed")
 
     async def refresh(
         self,
@@ -189,7 +179,7 @@ class CPUPrefetchRequest:
             self._ready = epoch
             return epoch  # ready-to-install only; clock has NOT advanced
         except BaseException:
-            self.cancel("CPU probe/search/packing failed or was cancelled")
+            self.cancel("probe/search/packing failed or was cancelled")
             raise
         finally:
             tasks, self._tasks = self._tasks, ()
@@ -217,7 +207,7 @@ class CPUPrefetchRequest:
             if done and self.delivery is not None:
                 self.delivery.installed(self._ready)
         except BaseException:
-            self.cancel("CPU install failed")
+            self.cancel("install failed")
             raise
         if done:
             self._active = self._ready = None
@@ -252,7 +242,11 @@ class CPUPrefetchRequest:
             raise InstallProtocolError(
                 "await aclose() to drain remote Delivery ownership"
             )
-        self.group.close()  # CPU readers must drain; NOT a network/GPU fence
+        self._require_query_drained()
+        self.group.close()  # Group-specific reader/fence policy; never force free.
+
+    def _require_query_drained(self):
+        """Device subclasses refuse successful close after UNKNOWN query work."""
 
     async def aclose(self):
         self.cancel()
@@ -260,6 +254,24 @@ class CPUPrefetchRequest:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         errors = await self.delivery.close() if self.delivery is not None else {}
+        self._require_query_drained()
         self.group.close()
         if errors:
             raise InstallProtocolError(f"remote Delivery ownership remains: {errors}")
+
+
+class CPUPrefetchRequest(_PrefetchRequestCore):
+    def _validate_group(self, group):
+        if not isinstance(group, CPUInstallGroup):
+            raise TypeError("an exclusively owned CPUInstallGroup is required")
+
+    def _validate_delivery(self, delivery, group):
+        from sglang.srt.disaggregation.pvd.cpu_sparse_delivery import CPUSparseDelivery
+
+        if delivery is not None and (
+            not isinstance(delivery, CPUSparseDelivery) or delivery.group is not group
+        ):
+            raise ValueError("Delivery sink must own this exact CPU install group")
+
+    def _create_session(self, *args, **kwargs):
+        return ProbeSearchSession(*args, **kwargs)
