@@ -21,6 +21,33 @@ activation.
 
 ## 最新增量 / Latest increment
 
+多 V 检索路由已区分 D compute rank 与 V storage rank：同一 D 的不同全局 KV
+heads 可以查询不同 V 源，每源独立固定版本；完整 D selection 可拆为各源 wire
+manifest，分别保留 storage/compute layout 身份。新增 30 项 CPU 测试。前 22 项
+加入后的 Windows 全量 **2473 passed / 31 skipped**；随后 8 项分源 plan 用例
+加入后定向 **30 passed**。共享查询路径修改后严格 v5 CPU 实模四场景再次通过。
+见 [多源检索说明](PVD_Sparse_Source_Routing_CN_EN.md)。
+
+Multi-V search now separates D compute ranks from V storage shards, pins versions
+per source, and splits complete D selections into source manifests while retaining
+both storage/compute layout identities. Thirty new CPU cases; Windows full after
+the first 22: **2473 passed / 31 skipped**; focused file after eight plan cases:
+**30 passed**. All four strict v5 real-model CPU cases passed after the shared query
+change. This is logical routing, not sparse multi-source delivery activation.
+
+发现的下一项实际阻断：旧 sparse Delivery 仍一 D bank 对一 V sender；CUDA stage
+仅接受单个受 guard 保护的连续源 buffer。还需接多源接收/完成/有界聚合/安装后 ACK，
+之后才能自动装配生产预测 Scheduler。不能只因为完整 Prompt fan-in 已接通就
+声称稀疏刷新支持 V TP2 → D TP1。
+
+Next concrete blocker: legacy sparse Delivery assumes one V sender per D bank,
+and CUDA staging requires one guarded contiguous source. Owned multi-source
+receives, all-source completion, bounded aggregation and post-install ACK still
+need implementation before automatic predictive Scheduler assembly. Full-Prompt
+fan-in does not by itself enable V TP2 → D TP1 sparse refresh.
+
+以下为前序步骤的当时边界 / Earlier steps retain their historical scope.
+
 V 已新增可显式选择的原生 CAGRA 后端：`--prompt-index-backend cagra`，需独立
 索引总预算与每 layer/KV-head native cap。工厂传入实际 V device；原生 build/
 search workspace 计入整个索引生命周期的 cap，显式输出 buffer 和失败 fence，

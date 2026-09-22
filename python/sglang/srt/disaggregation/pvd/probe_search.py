@@ -392,10 +392,25 @@ class ProbeSearchSession:
         self._searching = window
         try:
             results = []
-            versions = None
-            for query in prepared.queries:
+            # D compute rank is not a V version namespace: TP1 D can search
+            # several V shards. Route identity is trusted local configuration,
+            # never a server-provided key. Legacy single-shard clients retain
+            # exactly their old one-version-per-window behaviour.
+            from sglang.srt.disaggregation.pvd.search_routing import (
+                RoutedShardSearchClient,
+            )
+
+            source_scopes = tuple(
+                client.version_scope(query.route.identity)
+                if isinstance(client, RoutedShardSearchClient)
+                else 0
+                for query in prepared.queries
+            )
+            source_versions = {}
+            for query, source in zip(prepared.queries, source_scopes, strict=True):
                 self._match(window)
                 identity = query.route.identity
+                versions = source_versions.get(source)
                 if versions is not None:
                     if identity.expected_index_version not in (
                         None,
@@ -424,7 +439,7 @@ class ProbeSearchSession:
                 current_versions = (reply.index_version, reply.id_mapping_version)
                 if versions is not None and current_versions != versions:
                     raise ValueError("index changed within a probe window")
-                versions = current_versions
+                source_versions[source] = current_versions
                 results.append(reply)
             self._ready = ProbeSelection(window, prepared.queries, tuple(results))
         except BaseException:
