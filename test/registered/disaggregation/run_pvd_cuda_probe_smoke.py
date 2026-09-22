@@ -155,14 +155,14 @@ def validate(runner):
     }
 
 
-def main(argv=None):
+def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dtype", choices=("float16", "float32"), default="float16")
     args = parser.parse_args(argv)
     if not __debug__:
         parser.error("assertions must be enabled")
     report = {
-        "schema": "pvd-cuda-target-probe-v1",
+        "schema": schema,
         "status": "blocked",
         "fixture": "random tiny Llama; not a production checkpoint",
         "production_gpu_rdma_validated": False,
@@ -254,7 +254,7 @@ def main(argv=None):
                         parameter.fill_(1)
                     else:
                         parameter.normal_(mean=0, std=0.12)
-            report["evidence"] = validate(runner)
+            report["evidence"] = validator(runner)
             report.update(
                 status="passed",
                 device=torch.cuda.get_device_name(0),
