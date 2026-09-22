@@ -1,13 +1,15 @@
-"""Offline CPU/TP1 Llama target-Q reference path, NOT wired into serving.
+"""Shared private-pool Llama target-Q core and offline CPU reference.
 
 Reuses target weights, never swaps target pools/backend or installs hooks.
 The caller must keep the target quiescent: ForwardContext is process-global,
-so this reference is main-thread-only and makes no concurrency claim.
+so this reference is main-thread-only and makes no concurrency claim. The
+separate CUDA subclass adds placement, completion and target-execution locking.
 """
 
 from __future__ import annotations
 
 import threading
+import traceback
 import uuid
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -127,7 +129,7 @@ class PostRopeQueryCapture:
         self._queries.clear()
 
 
-class OfflineLlamaTargetProbe(TargetProbe):
+class _LlamaTargetProbeCore(TargetProbe):
     """Full-prefix recomputation with private CPU pools and existing weights.
 
     ``target_model_id`` is an explicit deployment identity binding, not a hash
@@ -153,8 +155,8 @@ class OfflineLlamaTargetProbe(TargetProbe):
             raise PredictionConfigError(
                 "offline probe supports the exact LlamaForCausalLM class only"
             )
-        if runner.device != "cpu" or runner.tp_size != 1 or runner.pp_size != 1:
-            raise PredictionConfigError("offline probe requires CPU, TP1 and PP1")
+        if runner.tp_size != 1 or runner.pp_size != 1:
+            raise PredictionConfigError("probe requires TP1 and PP1")
         if (
             runner.server_args.attention_backend != "torch_native"
             or runner.server_args.enable_dp_attention
@@ -187,13 +189,7 @@ class OfflineLlamaTargetProbe(TargetProbe):
             or max_predict_tokens >= max_tokens
         ):
             raise PredictionConfigError("probe bounds exceed the target context")
-        if any(
-            p.device.type != "cpu" or p.dtype != torch.float32
-            for p in runner.model.parameters()
-        ):
-            raise PredictionConfigError(
-                "offline probe requires CPU FP32 target weights"
-            )
+        self._validate_placement(runner)
         hf = runner.model.config
         if any(layer >= hf.num_hidden_layers for layer in config.layers):
             raise PredictionConfigError("probe layer exceeds the target layer count")
@@ -224,6 +220,20 @@ class OfflineLlamaTargetProbe(TargetProbe):
         self._state = None
         self._quarantined = False
         self._private_state = None
+        self._private_failure = None
+
+    def _validate_placement(self, runner):
+        if runner.device != "cpu" or any(
+            p.device.type != "cpu" or p.dtype != torch.float32
+            for p in runner.model.parameters()
+        ):
+            raise PredictionConfigError(
+                "offline probe requires CPU FP32 target weights"
+            )
+        self.device, self.dtype = "cpu", torch.float32
+
+    def _drain_private(self):
+        """CPU is synchronous; CUDA subclass fences before any pool cleanup."""
 
     @staticmethod
     def _require_main_thread():
@@ -338,39 +348,45 @@ class OfflineLlamaTargetProbe(TargetProbe):
                 "probe cannot execute inside a piecewise graph context"
             )
 
-        requests = ReqToTokenPool(1, self.max_tokens, "cpu", False)
-        pool = MHATokenToKVPool(
-            self.max_tokens,
-            1,
-            torch.float32,
-            self.kv_heads,
-            self.head_dim,
-            self.layers,
-            "cpu",
-            False,
-        )
-        kv = TokenToKVPoolAllocator(self.max_tokens, torch.float32, "cpu", pool, False)
-        allocator = PrivatePoolAllocator(requests, kv)
-        backend = TorchNativeAttnBackend(
-            SimpleNamespace(
-                device="cpu",
-                req_to_token_pool=requests,
-                token_to_kv_pool=pool,
-            )
-        )
-        self._private_state = (allocator, backend)
-        builder = DraftForwardAdapter(
-            None,
-            architecture="LlamaForCausalLM",
-            attention_backend="torch_native",
-            bytes_per_token=self.layers * self.kv_heads * self.head_dim * 2 * 4,
-            device="cpu",
-        )
-        slot, rows = allocator.alloc_request(), []
+        # Publish the owner BEFORE any constructor can allocate. A constructor
+        # may raise after creating tensors and leave them in its traceback.
+        resources = SimpleNamespace()
+        self._private_state = resources
+        slot, rows = None, []
         try:
-            rows = allocator.alloc_kv(len(tokens))
-            allocator.write_mapping(slot, 0, rows)
-            batch = builder.build_forward_batch(
+            resources.requests = ReqToTokenPool(1, self.max_tokens, self.device, False)
+            resources.pool = MHATokenToKVPool(
+                self.max_tokens,
+                1,
+                self.dtype,
+                self.kv_heads,
+                self.head_dim,
+                self.layers,
+                self.device,
+                False,
+            )
+            resources.kv = TokenToKVPoolAllocator(
+                self.max_tokens, self.dtype, self.device, resources.pool, False
+            )
+            resources.allocator = PrivatePoolAllocator(resources.requests, resources.kv)
+            resources.backend = TorchNativeAttnBackend(
+                SimpleNamespace(
+                    device=self.device,
+                    req_to_token_pool=resources.requests,
+                    token_to_kv_pool=resources.pool,
+                )
+            )
+            resources.builder = DraftForwardAdapter(
+                None,
+                architecture="LlamaForCausalLM",
+                attention_backend="torch_native",
+                bytes_per_token=self.layers * self.kv_heads * self.head_dim * 2 * 4,
+                device=self.device,
+            )
+            slot = resources.allocator.alloc_request()
+            rows = resources.allocator.alloc_kv(len(tokens))
+            resources.allocator.write_mapping(slot, 0, rows)
+            resources.batch = resources.builder.build_forward_batch(
                 DraftForwardInputs(
                     "extend",
                     tokens,
@@ -382,24 +398,43 @@ class OfflineLlamaTargetProbe(TargetProbe):
                     (len(tokens),),
                 )
             )
-            batch.pvd_query_capture = capture
-            backend.init_forward_metadata(batch)
+            resources.batch.pvd_query_capture = capture
+            resources.backend.init_forward_metadata(resources.batch)
             with (
                 torch.inference_mode(),
-                forward_context(ForwardContext(attn_backend=backend)),
+                forward_context(ForwardContext(attn_backend=resources.backend)),
             ):
                 # Backbone only: no sampler, output commit, or LM-head logits.
-                self.model.model(batch.input_ids, batch.positions, batch)
+                self.model.model(
+                    resources.batch.input_ids,
+                    resources.batch.positions,
+                    resources.batch,
+                )
             return capture.finish()
+        except BaseException as exc:
+            self._private_failure = exc
+            raise
         finally:
             try:
-                allocator.clear_mapping(slot)
-                allocator.free_kv(rows)
-                allocator.free_request(slot)
+                self._drain_private()
+                if slot is not None:
+                    resources.allocator.clear_mapping(slot)
+                    resources.allocator.free_kv(rows)
+                    resources.allocator.free_request(slot)
+                # CUDA clear_mapping/free may themselves enqueue operations.
+                self._drain_private()
             except BaseException:
                 # Do not refund or reuse possibly-live rows after failed
                 # cleanup. Keep the private state and reservation for diagnosis.
                 self._quarantined = True
                 raise
             else:
+                if self._private_failure is not None:
+                    traceback.clear_frames(self._private_failure.__traceback__)
+                    self._private_failure = None
+                vars(resources).clear()
                 self._private_state = None
+
+
+class OfflineLlamaTargetProbe(_LlamaTargetProbeCore):
+    """CPU FP32 reference; CUDA probes use a distinct public type."""

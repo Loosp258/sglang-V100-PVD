@@ -27,13 +27,12 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**1997 passed / 24 skipped**；WSL 接收/协议/验收入口
-定向：**110 passed / 1 skipped**。此前 bank 核心修改后，严格 v5 四场景真实 CPU
-模型矩阵通过；后续 participant/独立 attention 增量未重复声称已跑模型矩阵。
-Latest full Windows regression is 1997/24; WSL receive/protocol/acceptance
-regression is 110/1.
-The strict real-model CPU matrix passed after the bank-core change. Later
-standalone participant/attention additions do not claim another matrix run.
+最新 Windows 全量：**2013 passed / 24 skipped**；WSL CUDA probe CPU 策略
+定向：**16 passed**。probe 共享核心修改后，严格 v5 四场景真实 CPU 模型矩阵
+再次全部通过。这不是 CUDA probe 的 GPU forward 证据。
+Latest full Windows regression is 2013/24; WSL CUDA-probe CPU policy regression
+is 16 passed. All four strict real-model CPU cases passed again after the shared
+probe-core change. This does not validate a CUDA model forward.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
@@ -147,6 +146,12 @@ result remains blocked, and a future component pass will not certify RDMA/servin
 The explicit CUDA receive component now connects registration ordering and remote
 proofs to bank staging and all-rank ACK. Production factory wiring and native
 NIC/GPU acceptance remain separate tasks, not completed by CPU policy tests.
+
+[CUDA target-Q probe](PVD_CUDA_Target_Probe_CN_EN.md) 已增加显式 CUDA placement、
+私有池、与正式目标共用的 execution lock 和失败排空/隔离；共享核心的构造失败
+回收路径也已补齐。仍限 Llama/TP1/torch_native，尚未由生产 Scheduler 构造。
+The CUDA probe component and strict real-GPU smoke are implemented. Local evidence
+is CPU policy coverage plus the re-run real CPU model matrix, not GPU execution.
 
 CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
 预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
