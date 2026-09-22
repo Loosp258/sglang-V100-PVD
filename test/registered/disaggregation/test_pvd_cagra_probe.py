@@ -2,7 +2,9 @@
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -37,6 +39,7 @@ def test_defaults_collect_only_and_keep_v100s_smoke_target(probe_module):
         ("--expected-gpu", " "),
         ("--min-recall", "0"),
         ("--min-recall", "nan"),
+        ("--expect-cuvs-version", " "),
     ],
 )
 def test_invalid_settings_fail_before_gpu_work(
@@ -81,7 +84,7 @@ def test_inventory_needs_no_gpu_or_cupy(probe_module, monkeypatch, capsys, argv)
     monkeypatch.setattr(probe_module, "probe", forbidden)
     assert probe_module.main(argv) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["schema"] == "pvd_cagra_probe_v2"
+    assert report["schema"] == "pvd_cagra_probe_v3"
     assert report["status"] == "collected"
     assert report["cagra_test"] == "not_run"
     assert report["environment"] == environment
@@ -190,3 +193,75 @@ def test_tied_exact_neighbors_are_not_false_recall_failures(probe_module):
         min_recall=1,
     )
     assert evidence["synthetic_recall_at_k"] == 1
+
+
+@pytest.fixture
+def imported_cagra(monkeypatch):
+    # This tests import identity/refusal only; these modules never execute CAGRA.
+    cuvs = ModuleType("cuvs")
+    cuvs.__version__ = "25.2.0"
+    cuvs.__file__ = "/test/editable/cuvs/__init__.py"
+    neighbors = ModuleType("cuvs.neighbors")
+    cagra = ModuleType("cuvs.neighbors.cagra")
+    cagra.__file__ = "/test/editable/cuvs/neighbors/cagra.so"
+    for name in ("IndexParams", "SearchParams", "build", "search"):
+        setattr(cagra, name, lambda *a, **kw: pytest.fail("no native work in test"))
+    neighbors.cagra = cagra
+    cuvs.neighbors = neighbors
+    for module in (cuvs, neighbors, cagra):
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    # A contract failure must happen before CuPy is even imported.
+    monkeypatch.setitem(sys.modules, "cupy", None)
+    return cuvs, cagra
+
+
+@pytest.mark.parametrize("expected", [None, "25.2.0"])
+def test_import_identity_is_explicit_not_a_hardware_claim(
+    probe_module, imported_cagra, expected
+):
+    args = probe_module.parser().parse_args(
+        [] if expected is None else ["--expect-cuvs-version", expected]
+    )
+    report = {}
+    assert probe_module.load_cagra(args, report) is imported_cagra[1]
+    identity = report["cuvs_runtime"]
+    assert identity["version"] == "25.2.0"
+    assert identity["module"] == imported_cagra[0].__file__
+    assert identity["cagra_module"] == imported_cagra[1].__file__
+    assert identity["version_assertion"] == (
+        "not_requested" if expected is None else "matched"
+    )
+    assert identity["architecture_support"] == "unverified"
+
+
+@pytest.mark.parametrize("actual", ["26.8.0", None, 25])
+def test_wrong_imported_version_fails_before_cuda(
+    probe_module, imported_cagra, monkeypatch, capsys, actual
+):
+    imported_cagra[0].__version__ = actual
+    # Distribution inventory agreeing with the request cannot override import.
+    monkeypatch.setattr(
+        probe_module, "inventory", lambda: {"packages": {"cuvs-cu12": "25.2.0"}}
+    )
+    assert (
+        probe_module.main(["--mode", "smoke", "--expect-cuvs-version", "25.2.0"]) == 1
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["stage"] == "check_cagra_contract"
+    assert report["error"]["type"] == "RuntimeError"
+    assert "does not match" in report["error"]["message"]
+    assert report["cagra_test"] == "failed"
+    assert report["cuvs_runtime"]["version_assertion"] == "failed"
+    assert "gpu" not in report
+
+
+@pytest.mark.parametrize("missing", ["IndexParams", "SearchParams", "build", "search"])
+def test_incomplete_imported_api_fails_before_cuda(
+    probe_module, imported_cagra, missing
+):
+    setattr(imported_cagra[1], missing, None)
+    report = {}
+    with pytest.raises(TypeError, match=f"missing callable {missing}"):
+        probe_module.probe(probe_module.parser().parse_args([]), report)
+    assert report["stage"] == "check_cagra_contract"
+    assert "gpu" not in report

@@ -32,6 +32,10 @@ def parser():
     )
     result.add_argument("--device", type=int, default=0)
     result.add_argument("--expected-gpu", default="V100S")
+    result.add_argument(
+        "--expect-cuvs-version",
+        help="Optional exact imported cuvs.__version__ assertion; no version is installed or selected",
+    )
     result.add_argument("--rows", type=int, default=4096)
     result.add_argument("--queries", type=int, default=32)
     result.add_argument("--dim", type=int, default=128)
@@ -69,6 +73,8 @@ def validate(args):
         )
     if not 0 < args.min_recall <= 1:
         raise ValueError("min-recall must be in (0, 1]")
+    if args.expect_cuvs_version is not None and not args.expect_cuvs_version.strip():
+        raise ValueError("expect-cuvs-version must be non-empty when supplied")
 
 
 def inventory():
@@ -106,7 +112,43 @@ def inventory():
     return result
 
 
+def load_cagra(args, report):
+    """Record the imported implementation, not just installed distributions.
+
+    An editable checkout or PYTHONPATH can shadow a correctly versioned wheel.
+    Inventory alone therefore does not identify the implementation being tested.
+    A version match is an assertion, NOT proof of architecture/API compatibility.
+    """
+    report["stage"] = "import_cagra"
+    import cuvs
+    from cuvs.neighbors import cagra
+
+    version = getattr(cuvs, "__version__", None)
+    report["cuvs_runtime"] = {
+        "version": version if isinstance(version, str) else None,
+        "module": getattr(cuvs, "__file__", None),
+        "cagra_module": getattr(cagra, "__file__", None),
+        "version_assertion": "not_requested",
+        "architecture_support": "unverified",
+    }
+    report["stage"] = "check_cagra_contract"
+    if args.expect_cuvs_version is not None:
+        if version != args.expect_cuvs_version:
+            report["cuvs_runtime"]["version_assertion"] = "failed"
+            raise RuntimeError(
+                f"imported cuVS version {version!r} does not match "
+                f"--expect-cuvs-version {args.expect_cuvs_version!r}"
+            )
+        report["cuvs_runtime"]["version_assertion"] = "matched"
+    for name in ("IndexParams", "SearchParams", "build", "search"):
+        if not callable(getattr(cagra, name, None)):
+            raise TypeError(f"imported CAGRA is missing callable {name}")
+    return cagra
+
+
 def probe(args, report):
+    # Fail a shadowed/wrong implementation before any CUDA context or allocation.
+    cagra = load_cagra(args, report)
     report["stage"] = "import_cupy"
     import cupy as cp
     import numpy as np
@@ -129,10 +171,6 @@ def probe(args, report):
             f"selected GPU {name!r} does not match {args.expected_gpu!r}"
         )
 
-    report["stage"] = "import_cagra"
-    from cuvs.neighbors import cagra
-
-    report["cagra_module"] = getattr(cagra, "__file__", None)
     report["stage"] = "allocate"
     rng = np.random.default_rng(20260920)
     # Non-normalized independent queries test metric handling, not self lookup.
@@ -250,7 +288,7 @@ def validate_search_results(
 def main(argv=None):
     args = parser().parse_args(argv)
     report = {
-        "schema": "pvd_cagra_probe_v2",
+        "schema": "pvd_cagra_probe_v3",
         "status": "failed",
         "cagra_test": "not_run",
         "stage": "validate_args",

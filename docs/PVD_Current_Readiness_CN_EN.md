@@ -86,6 +86,13 @@ implementation remains. Implement and validate together when the target stack
 is available; do not remove CPU-only guards or relabel fake transport as native.
 Model/checkpoint choice remains configurable.
 
+CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
+预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
+cuVS 历史版本和当前版本的架构要求不同，尚未据此宣布 V100S 实测通过。
+See the [CAGRA compatibility note](PVD_CAGRA_Compatibility_CN_EN.md): probe v3
+records imported identity and optional version assertions without imposing a pin.
+Release-specific architecture requirements are not V100S execution evidence.
+
 ## 固定设计约束 / Invariants to preserve
 
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。
