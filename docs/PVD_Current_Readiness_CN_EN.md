@@ -111,6 +111,34 @@ WSL 索引、回收与 CAGRA 预检定向 **121 passed / 1 skipped**。6 个新�
 实际 storage；CAGRA 实际 build/search 未执行。
 Six new retirement cases observe actual CPU storage; native CAGRA was not executed.
 
+### 检索后端结果边界 / Retrieval backend result boundary
+
+`select()` 不再将后端结果直接 flatten/zip 后转换：先检查返回结构、query/top-k、
+精确形状、行号整数类型、score 浮点类型、设备、范围、有限性及每条 query 内无重复。
+不同 query 选择同一 token 仍取最高分并去重，GQA 语义不变。错误不能因 zip 截断、
+`int(0.5)` 或 NaN 比较而成为看似有效的工作集。29 个新增 CPU 契约测试；其中
+16 个在修复前失败。`l2` 的实际 score 约定以 -5 而非 -25 的数值例固定。
+
+`select()` now validates result structure, query/top-k, exact shape, integer rows,
+floating scores, device, range, finiteness and per-query uniqueness before mapping.
+Cross-query deduplication/best-score union is unchanged. Truncated zip results,
+coerced fractional IDs and NaNs cannot silently become a working set. Twenty-nine
+new CPU contract cases include sixteen that failed before the fix; an explicit
+-5 versus -25 example fixes negative-Euclidean `l2` semantics.
+
+检索契约修改后 Windows 全量 **1878 passed / 15 skipped**，WSL 定向 **203 passed /
+6 skipped**；严格 v5 四场景实模 CPU 矩阵再次全部通过。完整场景仍为 21 次
+attention 对照，最大误差约 3.58e-7。传输仍为 fake byte copy；这些结果不是原生
+CAGRA、生产 Scheduler、GPU 或 RDMA 验收。
+After the contract change, Windows full regression is **1878 passed / 15 skipped**
+and WSL focused regression is **203 passed / 6 skipped**. All four strict v5
+real-model CPU cases passed again (21 attention checks in full cases, about
+3.58e-7 max error). Payload transport remains fake; no native CAGRA, full serving,
+GPU or RDMA claim follows.
+
+WSL 全量补验 / WSL full regression: **1884 passed / 9 skipped**，3 条已有 CPU
+平台警告 / three existing CPU-platform warnings.
+
 ## 固定设计约束 / Invariants to preserve
 
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。

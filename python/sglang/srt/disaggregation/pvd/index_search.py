@@ -40,6 +40,7 @@ Nothing here registers memory, touches the transport or frees anything.
 from __future__ import annotations
 
 import abc
+import math
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
@@ -180,7 +181,13 @@ class IndexBackend(abc.ABC):
     def search(
         self, index: BuiltIndex, queries: torch.Tensor, *, top_k: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return (rows, scores), both [num_queries, top_k], higher is better."""
+        """Return (rows, scores), both [num_queries, top_k], on ``device``.
+
+        Rows are integer vector IDs, unique within each query. Scores are finite
+        floats, higher is better: dot products for ``ip``, negative Euclidean
+        distances (NOT negative squared distances) for ``l2``. A native backend
+        returning squared distances must convert them, not change this contract.
+        """
 
     @abc.abstractmethod
     def build_footprint(self, rows: int, dim: int, *, metric: str) -> int:
@@ -503,14 +510,58 @@ def select(
         raise IndexSearchError(
             f"id mapping covers {len(mapping)} rows, index holds {index.count}"
         )
-    rows, scores = backend.search(index, queries, top_k=top_k)
+    _require_positive_int("top_k", top_k)
+    if top_k > index.count:
+        raise IndexSearchError("top_k exceeds indexed vector count")
+    if (
+        not isinstance(queries, torch.Tensor)
+        or queries.ndim != 2
+        or queries.shape[0] == 0
+        or queries.shape[1] != index.dim
+    ):
+        raise IndexSearchError("queries must have non-empty [num_queries, dim] shape")
+    result = backend.search(index, queries, top_k=top_k)
+    if not isinstance(result, (tuple, list)) or len(result) != 2:
+        raise IndexSearchError("backend must return (rows, scores)")
+    rows, scores = result
+    if not isinstance(rows, torch.Tensor) or not isinstance(scores, torch.Tensor):
+        raise IndexSearchError("backend rows and scores must be tensors")
+    expected_shape = (queries.shape[0], top_k)
+    if tuple(rows.shape) != expected_shape or tuple(scores.shape) != expected_shape:
+        raise IndexSearchError("backend result shape must be [num_queries, top_k]")
+    if rows.dtype not in (
+        torch.uint8,
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+        torch.uint16,
+        torch.uint32,
+        torch.uint64,
+    ):
+        raise IndexSearchError("backend rows must have integer dtype, not bool/float")
+    if not scores.dtype.is_floating_point:
+        raise IndexSearchError("backend scores must have floating dtype")
+    if any(not same_device(t.device, backend.device) for t in (rows, scores)):
+        raise IndexSearchError("backend result device differs from declared device")
+    # Materialize only the bounded result, as logical selection already does.
+    # Validate on the host without another CUDA sort/mask or reshape allocation.
+    host_rows, host_scores = rows.tolist(), scores.tolist()
+    for query_rows, query_scores in zip(host_rows, host_scores):
+        if any(not 0 <= row < index.count for row in query_rows):
+            raise IndexSearchError("backend row is outside the indexed vector range")
+        if len(set(query_rows)) != top_k:
+            raise IndexSearchError("backend returned duplicate rows within a query")
+        if any(not math.isfinite(score) for score in query_scores):
+            raise IndexSearchError("backend scores must be finite")
     # One ordered, de-duplicated selection per layer: the same Prompt token
     # chosen by several queries is fetched once, keeping its best score.
     best: Dict[int, float] = {}
-    for row, score in zip(rows.reshape(-1).tolist(), scores.reshape(-1).tolist()):
-        token = mapping.token_of(int(row))
-        if token not in best or score > best[token]:
-            best[token] = float(score)
+    for query_rows, query_scores in zip(host_rows, host_scores):
+        for row, score in zip(query_rows, query_scores):
+            token = mapping.token_of(row)
+            if token not in best or score > best[token]:
+                best[token] = float(score)
     ordered = sorted(best.items(), key=lambda item: (-item[1], item[0]))
     token_ids = tuple(token for token, _ in ordered)
     return Selection(
