@@ -1,5 +1,7 @@
 """A D GPU's two HCA destinations keep separate registration owners."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd.multi_rail_receive import (
@@ -79,3 +81,20 @@ def test_reused_adapter_or_mislabelled_rail_is_refused():
         RailMappedReceiveEngine({"mlx5_0": engine, "mlx5_1": engine})
     with pytest.raises(MultiRailReceiveError, match="distinct explicit"):
         RailMappedReceiveEngine({"mlx5_1": engine})
+
+
+def test_startup_thread_can_hand_off_receive_adapter_to_control_thread():
+    receiver = RailMappedReceiveEngine({"mlx5_0": RailAdapter("mlx5_0")})
+
+    def control_turn():
+        registration = receiver.register_memory(
+            torch.empty(16, dtype=torch.uint8),
+            endpoint="D",
+            rank=0,
+            rail="mlx5_0",
+        )
+        receiver.release_memory(registration)
+        return receiver.health()["registered_destinations"]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(control_turn).result() == 0

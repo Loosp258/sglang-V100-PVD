@@ -46,6 +46,9 @@ This step passed **2506/31 skipped** in the full Windows CPU suite and
 同 rail adapter；注册和注销由同一 adapter 拥有。单 rail engine 仍拒绝
 混用 V rails。原生 engine 构造函数现可逐 HCA 建立 session 并严格预检；
 生产 Scheduler 尚未调用，GPU/RDMA 验收尚未完成。
+组合层的注册表现在可从 Scheduler 构造线程交接至接收控制线程使用，并锁定
+注册/注销操作；这不放松接收 Registry 本身的单线程 owner 约束。
+此线程交接修复 Windows 全量 **2515 passed / 31 skipped**，WSL 定向 **4 passed**。
 此工厂增量 Windows 全量 **2514 passed / 31 skipped**、WSL 定向 **11 passed**。
 本步 Windows 全量 **2501 passed / 31 skipped**，WSL 多 rail/工厂/双源定向
 **16 passed**（最终单 rail 绕过回归测试随后补充）。真实 GPU/Mooncake/RDMA
@@ -60,6 +63,11 @@ independently owned, matching D rail adapter. The single-rail engine still
 refuses mixed-rail V sources. A native factory can now initialize one session
 and strict local preflight per HCA, but the production Scheduler does not yet
 call it, and GPU/RDMA acceptance remains open.
+Its adapter registry now supports handoff from Scheduler construction to the
+receive control thread with locked registration/unregistration. The receive
+Registry itself remains single-owner-thread only.
+The handoff fix passed **2515/31 skipped** in the full Windows CPU suite and
+**4 passed** in focused WSL tests.
 The factory increment passed **2514/31 skipped** in the full Windows CPU
 suite and **11 passed** in focused WSL tests.
 This increment passed **2501/31 skipped** in the full Windows CPU suite and
