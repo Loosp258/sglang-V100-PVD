@@ -345,6 +345,7 @@ class VectorKVStore:
         # store built without one behaves exactly as before. Full-Prompt
         # delivery stays index-independent; explicit sparse delivery leases it.
         self.prompt_index = prompt_index
+        self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         self.worker_epoch = uuid.uuid4().hex
@@ -1307,7 +1308,8 @@ class VectorKVStore:
         Each candidate's allocation is pinned for the copy, so an Entry whose
         release has begun is skipped rather than read from: ResourceGuard.pin
         refuses once release is requested. Extraction happens outside the
-        store lock, and the pin is dropped whether or not the build succeeds.
+        store lock. The pin drops after proven completion, including ordinary
+        failure, but remains held if extraction/backend completion is unknown.
 
         Never raises for a build failure. An Entry that cannot be indexed is
         still deliverable, and delivery does not consult this at all.
@@ -1355,7 +1357,13 @@ class VectorKVStore:
                     "V prompt index build refused for %s: %s", entry.key, exc
                 )
             finally:
-                entry.allocation_guard.unpin(owner)
+                if getattr(self.prompt_index, "quarantined", False):
+                    # An unfinished CUDA extraction may still read the Entry.
+                    # Keep the real allocation pin, not merely the tensor view.
+                    with self._lock:
+                        self._quarantined_index_sources.append((entry, owner, packed))
+                else:
+                    entry.allocation_guard.unpin(owner)
             if ok:
                 built += 1
                 continue
@@ -1470,6 +1478,7 @@ class VectorKVStore:
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],
+                "quarantined_index_sources": len(self._quarantined_index_sources),
                 "metrics": self.metrics.snapshot(),
             }
         # Engine health may acquire the native submission manager's lock.

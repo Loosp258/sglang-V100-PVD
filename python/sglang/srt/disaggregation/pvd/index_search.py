@@ -60,6 +60,10 @@ class IndexNotReadyError(IndexSearchError):
     """The caller may retry after the index progresses."""
 
 
+class IndexCompletionUnknown(RuntimeError):
+    """Native completion/destruction was not proved; owners must be retained."""
+
+
 def _require_text(name: str, value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise IndexSearchError(f"{name} must be a non-empty string")
@@ -160,6 +164,20 @@ class IndexBackend(abc.ABC):
     """Swappable retrieval implementation. CAGRA plugs in here."""
 
     name: str = "abstract"
+
+    def synchronize(self) -> None:
+        """Complete backend work before publishing/refunding, including errors."""
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    def dispose(self, index: BuiltIndex) -> None:
+        """Release native index ownership, or raise with ownership retained.
+
+        Tensor-only indexes need no explicit destruction after synchronize().
+        A CUDA backend with opaque handles must implement its native teardown.
+        """
+        if self.device.type == "cuda" and not isinstance(index.handle, torch.Tensor):
+            raise IndexCompletionUnknown("opaque CUDA index needs explicit disposal")
 
     @property
     @abc.abstractmethod

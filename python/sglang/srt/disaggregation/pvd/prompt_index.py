@@ -58,6 +58,7 @@ from sglang.srt.disaggregation.pvd.index_search import (
     BruteForceIndexBackend,
     BuiltIndex,
     IndexBackend,
+    IndexCompletionUnknown,
     IndexNotReadyError,
     IndexSearchError,
     Selection,
@@ -178,6 +179,58 @@ class PromptIndexManager:
         # than build()/search(), so the registry is locked like every other
         # per-worker registry here. Heavy work happens outside the lock.
         self._lock = threading.RLock()
+        self._quarantine_reason = None
+        self._retained_operations = []
+        self._retained_records = []
+
+    @property
+    def quarantined(self):
+        with self._lock:
+            return self._quarantine_reason is not None
+
+    def _quarantine(self, reason):
+        with self._lock:
+            if self._quarantine_reason is None:
+                self._quarantine_reason = str(reason)
+
+    def _fence(self, *sources):
+        if self.quarantined:
+            raise IndexCompletionUnknown(self._quarantine_reason)
+        try:
+            sync = getattr(self.backend, "synchronize", None)
+            if callable(sync):
+                sync()
+            elif (
+                self.backend_device is not None
+                and torch.device(self.backend_device).type == "cuda"
+            ):
+                raise IndexCompletionUnknown("CUDA backend lacks completion contract")
+            # Extraction may read a CUDA pool even when the index is on CPU.
+            devices = {
+                x.device
+                for x in sources
+                if isinstance(x, torch.Tensor) and x.device.type == "cuda"
+            }
+            for device in devices:
+                torch.cuda.synchronize(device)
+        except BaseException as exc:
+            self._quarantine(exc)
+            raise IndexCompletionUnknown(str(exc)) from exc
+
+    def _dispose(self, indexes):
+        try:
+            dispose = getattr(self.backend, "dispose", None)
+            for index in indexes.values():
+                if isinstance(index, BuiltIndex) and callable(dispose):
+                    dispose(index)
+            self._fence()
+        except BaseException as exc:
+            self._quarantine(exc)
+            raise IndexCompletionUnknown(str(exc)) from exc
+
+    def _retain_operation(self, *owners):
+        with self._lock:
+            self._retained_operations.append(owners)
 
     # -- gates --------------------------------------------------------------
 
@@ -234,6 +287,17 @@ class PromptIndexManager:
             or self._entries.get(record.gate.entry_transfer_id) is record
         ):
             return
+        if self.quarantined:
+            if all(r is not record for r in self._retained_records):
+                self._retained_records.append(record)
+            return
+        try:
+            self._fence()
+            self._dispose(record.indexes)
+        except IndexCompletionUnknown as exc:
+            self._retained_records.append(record)
+            self._retain_operation(record, exc)
+            return
         record.vectors.clear()
         record.indexes.clear()
         self._release_budget_locked(record)
@@ -243,6 +307,8 @@ class PromptIndexManager:
         self.open(transfer_id).mark_kv_readable()
 
     def wants_build(self, transfer_id: str) -> bool:
+        if self.quarantined:
+            return False
         gate = self.gate_for(transfer_id)
         if gate is None or not gate.kv_readable:
             return False
@@ -289,6 +355,8 @@ class PromptIndexManager:
         abandoned and the Entry stays a candidate for the next round.
         """
         with self._lock:
+            if self.quarantined:
+                raise IndexCompletionUnknown(self._quarantine_reason)
             record = self._entries.get(transfer_id)
             if record is None:
                 raise IndexSearchError(f"no index gate for {transfer_id}")
@@ -364,10 +432,19 @@ class PromptIndexManager:
                     item.vectors, vector_space=self.vector_space, metric=self.metric
                 )
                 self._validate_built_index(built[(item.layer, item.kv_head)], item)
+            self._fence(packed)
             # The transient peak is over; give it back before the index is
             # installed, so an idle index is charged only for what it holds.
             self._release_owners((scratch_owner,))
         except TransferCapacityError as exc:
+            try:
+                self._fence(packed)
+                self._dispose(built)
+            except IndexCompletionUnknown:
+                self._retain_operation(
+                    record, owners, vectors, built, item, packed, exc
+                )
+                raise
             # Completed Python frames can keep allocations alive via traceback
             # locals. Drop our references AND those frames before advertising
             # capacity. This is not a CUDA/native completion fence.
@@ -382,7 +459,17 @@ class PromptIndexManager:
                 if self._entries.get(transfer_id) is record:
                     record.gate.abandon_build(str(exc))
             return False
-        except Exception as exc:
+        except BaseException as exc:
+            if isinstance(exc, IndexCompletionUnknown):
+                self._quarantine(exc)
+            try:
+                self._fence(packed)
+                self._dispose(built)
+            except IndexCompletionUnknown:
+                self._retain_operation(
+                    record, owners, vectors, built, item, packed, exc
+                )
+                raise
             traceback.clear_frames(exc.__traceback__)
             item = None
             vectors.clear()
@@ -394,11 +481,18 @@ class PromptIndexManager:
                 self._release_owners(owners)
                 if self._entries.get(transfer_id) is record:
                     record.gate.mark_failed(str(exc))
+            if not isinstance(exc, Exception):
+                raise
             return False
 
         with self._lock:
             if self._entries.get(transfer_id) is not record:
                 # Closed while we were building. Drop what we made and refund.
+                try:
+                    self._dispose(built)
+                except IndexCompletionUnknown:
+                    self._retain_operation(record, owners, vectors, built, item, packed)
+                    raise
                 item = None
                 vectors.clear()
                 built.clear()
@@ -448,6 +542,8 @@ class PromptIndexManager:
         transfer_id = identity.entry_transfer_id
         key = (identity.layer, identity.kv_head)
         with self._lock:
+            if self.quarantined:
+                raise IndexCompletionUnknown(self._quarantine_reason)
             record = self._entries.get(transfer_id)
             if record is None:
                 raise IndexSearchError(f"no index gate for {transfer_id}")
@@ -478,6 +574,7 @@ class PromptIndexManager:
             # place until this search returns them.
             record.users += 1
         scratch_owner = f"prompt-index-search:{transfer_id}:{uuid.uuid4().hex[:8]}"
+        failure = None
         try:
             # Encoding semantics and head dimension are the last two identity
             # checks, and like the rest they precede any backend call.
@@ -505,16 +602,26 @@ class PromptIndexManager:
                 top_k=top_k,
             )
         except BaseException as exc:
-            # Preserve the exception and traceback locations, but not finished
-            # backend/select frames' tensor locals while refunding scratch.
-            traceback.clear_frames(exc.__traceback__)
+            failure = exc
+            if isinstance(exc, IndexCompletionUnknown):
+                self._quarantine(exc)
             raise
         finally:
-            item = index = None
-            self._release_owners((scratch_owner,))
-            with self._lock:
-                record.users -= 1
-                self._retire_locked(record)
+            try:
+                self._fence(queries)
+            except IndexCompletionUnknown:
+                self._retain_operation(
+                    record, scratch_owner, item, index, queries, failure
+                )
+                raise
+            else:
+                if failure is not None:
+                    traceback.clear_frames(failure.__traceback__)
+                item = index = None
+                self._release_owners((scratch_owner,))
+                with self._lock:
+                    record.users -= 1
+                    self._retire_locked(record)
         return SearchResult(
             selection=selection,
             index_version=descriptor.index_version,
@@ -537,6 +644,8 @@ class PromptIndexManager:
             raise IndexSearchError("explicit sparse delivery manifest required")
         first = manifest.specs[0]
         with self._lock:
+            if self.quarantined:
+                raise IndexCompletionUnknown(self._quarantine_reason)
             record = self._entries.get(first.entry_transfer_id)
             if record is None or not record.gate.searchable:
                 raise IndexSearchError("sparse source index is not ready")
@@ -598,6 +707,10 @@ class PromptIndexManager:
             "backend": getattr(self.backend, "name", "unknown"),
             "device": str(self.backend_device) if self.backend_device else None,
             "metric": self.metric,
+            "quarantined": self.quarantined,
+            "quarantine_reason": self._quarantine_reason,
+            "retained_operations": len(self._retained_operations),
+            "retained_records": len(self._retained_records),
             "positional_encoding": self.positional_encoding,
             "budget": (None if self.budget is None else self.budget.snapshot()),
             "entries": {
