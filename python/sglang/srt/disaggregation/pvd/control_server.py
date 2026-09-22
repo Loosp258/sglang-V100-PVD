@@ -572,6 +572,26 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             raise CoordinatorError("full-KV fan-in coordinator is disabled")
         data = await _payload(request)
         operation = request.match_info["operation"]
+        if operation == "preflight":
+            health = await coordinator.health()
+            return web.json_response(
+                {
+                    "full_kv_fanin": health["full_kv_fanin"],
+                    "shards": [
+                        {
+                            k: shard.get(k)
+                            for k in (
+                                "rank",
+                                "worker_epoch",
+                                "rail",
+                                "ready",
+                                "full_kv_fanin",
+                            )
+                        }
+                        for shard in health["shards"]
+                    ],
+                }
+            )
         if operation in {"reserve", "fence"}:
             result = await getattr(coordinator.fanin, operation)(
                 data["manifest"], data["source_epochs"]

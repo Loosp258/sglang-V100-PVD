@@ -45,7 +45,7 @@ class FanInHTTPClient:
     async def request(self, operation, payload):
         if self._closed:
             raise RuntimeError("fan-in HTTP client is closed")
-        if operation not in {"reserve", "start", "poll", "ack", "fence"}:
+        if operation not in {"reserve", "start", "poll", "ack", "fence", "preflight"}:
             raise ValueError("unknown fan-in operation")
         if self._session is None:
             self._session = aiohttp.ClientSession()

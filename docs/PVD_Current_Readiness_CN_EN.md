@@ -21,6 +21,35 @@ activation.
 
 ## 最新增量 / Latest increment
 
+完整 Prompt fan-in 已接入现有 `PVDKVReceiver`、Decode session 和异步 waiting
+queue 驱动。D 配置 `--pvd-full-kv-fanin-max-slices`、
+`--pvd-full-kv-fanin-response-bytes`，并开启 waiting bootstrap 后启用。
+该路径允许 D TP1/TP2/TP4；V 仍是两个 storage ranks。每个 D rank 控制自身 MR，
+所有 ranks 先同意网络成功，再解包/本地 fence，再同意安装，最后 ACK 和生成
+原初始 receipt。周期刷新复用注册并更新 generation，保留生成 KV。
+
+Full-Prompt fan-in now uses the existing PVD receiver/session and asynchronous
+waiting-queue driver. Explicit Decode slice/response bounds plus waiting bootstrap
+activate it for D TP1/TP2/TP4 with V storage TP2. Each D rank controls its MR;
+all ranks agree on network completion, import/local fence, installation, then ACK
+and the original initial-Prompt receipt. Periodic refresh reuses the registration
+with a new generation and preserves generated KV. Required V sources must match
+the destination rail; multi-HCA receive registration is still pending.
+
+新增 8 项实际 store/HTTP/线程控制/解包集成测试，含真实 waiting gate；之后新增
+5 项参数准入测试，定向共 **13 passed**。Windows 全量在前 8 项加入后为
+**2412 passed / 29 skipped**；WSL 相关 **106 passed**。公共 Decode 路径修改后
+严格 v5 CPU 实模四场景再次通过。GPU/RDMA 未执行。预测检索 Scheduler 自动
+装配、原生 CAGRA、多 rail 和更通用拓扑仍需代码实现；不能据完整 Prompt 接入
+宣称预测流水线已经开启。
+
+Eight actual store/HTTP/thread-control/import integration cases include the real
+waiting gate; five additional configuration tests bring the focused file to **13
+passed**. Windows full after the eight integrations: **2412 passed / 29 skipped**;
+WSL related: **106 passed**. All four strict v5 CPU model scenarios passed after
+the shared Decode change. GPU/RDMA remain unexecuted. Predictive Scheduler assembly,
+native CAGRA, multiple rails and broader topology remain implementation work.
+
 D 显式 fan-in 会话也已接通 HTTP：首次 RPC 前固定完整源 epoch，验证完整响应
 及逐 writer 凭据，响应丢失/协程取消后转入 fence；关闭 HTTP 不等于排空。
 MR 网络 pin 与本地读取 pin 分离，本地回收失败后禁止重新发布。23 个新 CPU

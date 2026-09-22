@@ -1,5 +1,57 @@
 # 完整 Prompt KV 多源合并 / Full-Prompt KV fan-in
 
+## Decode 服务接入 / Decode serving integration
+
+当前已由 `PVDKVReceiver` 选择 `PVDDecodeFanInSession`，并由原
+`PVDDecodeRefresher` 的 bootstrap/periodic 驱动执行。以下是需添加到既有
+D 命令的参数，具体容量按 prompt 长度、KV components 和源数选择：
+
+```text
+--pvd-waiting-queue-bootstrap
+--pvd-full-kv-fanin-max-slices <positive-plan-bound>
+--pvd-full-kv-fanin-response-bytes <positive-HTTP-byte-bound>
+```
+
+V 同时启用本文的三项 fan-in bounds。仅该显式路径允许 D TP1（TP2/TP4 亦可）；
+V storage 仍 TP2。D TP1 合并两个 V source 时，两源必须能使用 D descriptor
+指定的同一 rail。双 rail 跨源目标注册尚未实现，预检不符会拒绝交付。
+`/v1/fanin/preflight` 只返回全局能力和各源 rank/epoch/rail/ready/bounds，
+避免把不断增大的 Entry 列表传给每个请求。
+
+Add the three Decode flags above to the existing launch command and enable the
+three V bounds documented below. This explicit path supports D TP1/TP2/TP4,
+with V storage still TP2. A TP1 destination combining both sources currently
+requires a matching rail for every writer. Multi-HCA destination registration
+is pending and incompatible rails fail preflight. Compact preflight returns
+only capabilities and per-source rank/epoch/rail/readiness/bounds.
+
+Scheduler 负责 prepare、TP 对齐、解包与本地 fence；控制线程创建/持有
+fan-in receiver 和异步 HTTP 会话。每个 D rank 都有自己的 Future，原
+bootstrap 驱动共同确认所有 Future 完成。解包前确认全部 ranks 成功，安装后
+再次对齐才 ACK，ACK 后对齐才放行 waiting gate、生成原始 Prompt receipt。
+控制结果使用本地对象身份绑定，外部 JSON 不能伪造解包凭据。
+
+The Scheduler owns preparation, TP agreement, import and local fences. The control
+thread owns the receiver and HTTP session. Every D rank has its own Future, and the
+existing bootstrap driver waits for agreement across all of them. Network agreement
+precedes import; installation agreement precedes ACK; ACK agreement precedes the
+waiting gate and original initial-Prompt receipt. A local object identity binds the
+network result to its session before unpack. Whole-operation timeout is 300 seconds;
+expiration keeps ownership for fencing instead of imposing a fixed poll-count limit
+that rejects long prompts. Registration persists across refresh generations.
+
+测试：8 项实际 V store/HTTP/线程模拟 TP 集成（D1/2/4、原 waiting gate、部分
+解包失败、取消、rail 拒绝、周期复用及生成 KV 保留）；5 项参数测试。
+Windows 全量在前 8 项加入后 **2412/29 skipped**；定向最终 **13 passed**；
+WSL 相关 **106 passed**；严格 v5 CPU 四场景再次通过。GPU、真实 TP collectives
+和 RDMA 未执行。以下内容保留此前步骤的历史集成边界。
+
+Eight actual-store/HTTP integration tests simulate TP with thread barriers; five
+configuration cases complete the focused suite. Full Windows after integration:
+**2412 passed / 29 skipped**; final focused: **13 passed**; WSL related: **106
+passed**. All four strict v5 CPU model cases passed again. No GPU, native TP
+collectives or RDMA execution. Older sections below preserve earlier boundaries.
+
 ## D 会话与下一接入点 / D session and next integration point
 
 `FullKVFanInDelivery` 包装一个尚未发布的真实 `FullKVFanInReceiver`；构造时

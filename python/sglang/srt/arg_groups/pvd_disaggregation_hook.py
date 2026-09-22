@@ -75,6 +75,13 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     waiting_queue_bootstrap = getattr(server_args, "pvd_waiting_queue_bootstrap", False)
     if not isinstance(waiting_queue_bootstrap, bool):
         raise ValueError("--pvd-waiting-queue-bootstrap must be a boolean")
+    fanin = getattr(server_args, "pvd_full_kv_fanin_max_slices", None)
+    fanin_bytes = getattr(server_args, "pvd_full_kv_fanin_response_bytes", None)
+    if (fanin, fanin_bytes) != (None, None):
+        _require_positive_int("--pvd-full-kv-fanin-max-slices", fanin)
+        _require_positive_int("--pvd-full-kv-fanin-response-bytes", fanin_bytes)
+        if server_args.disaggregation_mode != "decode" or not waiting_queue_bootstrap:
+            raise ValueError("full-KV fan-in requires Decode with waiting-queue bootstrap")
     if server_args.disaggregation_mode == "decode":
         server_args.disable_overlap_schedule = True
         logger.info(
@@ -111,6 +118,8 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     server_args.pvd_vector_coordinator_map = vector_groups
 
     supported_tp = (1, 2) if server_args.disaggregation_mode == "prefill" else (2, 4)
+    if fanin is not None:
+        supported_tp = (1, 2, 4)
     if server_args.tp_size not in supported_tp:
         raise ValueError(
             f"PVD 2.0 {server_args.disaggregation_mode} currently supports "

@@ -826,6 +826,8 @@ class ServerArgs:
     pvd_strict_rdma_preflight: bool = True
     pvd_kv_refresh_interval: int = 16
     pvd_waiting_queue_bootstrap: bool = False
+    pvd_full_kv_fanin_max_slices: Optional[int] = None
+    pvd_full_kv_fanin_response_bytes: Optional[int] = None
     # Prediction-only draft model on D. These never set speculative_algorithm:
     # PVD's refusal to run SGLang's speculative generation loop stays in force,
     # and this path only ever produces candidate tokens for retrieval.
@@ -6981,6 +6983,19 @@ class ServerArgs:
             "network completion barrier to requests that are already decoding. "
             "Delivery and ACK are polled asynchronously; TP coordination and "
             "KV installation still run on the scheduler thread. Off by default.",
+        )
+        parser.add_argument(
+            "--pvd-full-kv-fanin-max-slices",
+            type=int,
+            default=None,
+            help="Enable full Prompt fan-in on Decode with this plan slice bound; "
+            "requires waiting-queue bootstrap and V fan-in support.",
+        )
+        parser.add_argument(
+            "--pvd-full-kv-fanin-response-bytes",
+            type=int,
+            default=None,
+            help="Explicit HTTP response byte bound for Decode full-KV fan-in.",
         )
         parser.add_argument(
             "--pvd-draft-model-path",

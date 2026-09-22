@@ -614,6 +614,10 @@ class PVDDecodeRefresher:
         Yield only for control-plane futures. Never run this generator (which
         performs TP collectives and GPU copies) on the control-loop thread.
         """
+        if getattr(self.manager, "full_kv_fanin_max_slices", None) is not None:
+            from sglang.srt.disaggregation.pvd.decode_fanin import refresh_fanin_steps
+
+            return (yield from refresh_fanin_steps(self, reqs))
         sessions, due, error = [], [], None
         try:
             sessions = [

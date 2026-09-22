@@ -216,6 +216,9 @@ class PVDKVManager:
         self.waiting_queue_bootstrap = bool(
             getattr(scheduler.server_args, "pvd_waiting_queue_bootstrap", False)
         )
+        self.full_kv_fanin_max_slices = getattr(
+            scheduler.server_args, "pvd_full_kv_fanin_max_slices", None
+        )
         self.bootstrap_gates: Dict[Any, BootstrapGate] = {}
         # One bounded driver per worker. It never creates a task per failed
         # request; it advances the owners that already hold the resources.
@@ -837,7 +840,12 @@ class PVDKVReceiver:
         self._entry_record: Optional[Dict[str, Any]] = None
         self._entry_future: Optional[concurrent.futures.Future] = None
         self._admitted = False
-        self.session = PVDDecodeSession(mgr, req)
+        if getattr(mgr, "full_kv_fanin_max_slices", None) is not None:
+            from sglang.srt.disaggregation.pvd.decode_fanin import PVDDecodeFanInSession
+
+            self.session = PVDDecodeFanInSession(mgr, req)
+        else:
+            self.session = PVDDecodeSession(mgr, req)
         if self.key in mgr.decode_sessions:
             raise PVDConnectionError("duplicate active PVD Decode transfer identity")
         mgr.decode_sessions[self.key] = self.session
