@@ -139,6 +139,30 @@ GPU or RDMA claim follows.
 WSL 全量补验 / WSL full regression: **1884 passed / 9 skipped**，3 条已有 CPU
 平台警告 / three existing CPU-platform warnings.
 
+### 索引发布边界 / Index publication boundary
+
+构建返回值也新增验证：必须是 `BuiltIndex`，行数/维度须是精确整数并与该 head
+输入一致，vector space 和 metric 必须与本次请求一致。此前错误 space/metric
+可以被发布为 READY；错误对象或浮点 count 还可能在发布阶段抛异常，留下
+BUILDING 状态及预算。9 个用例先复现再修复，覆盖第二个 head 才出错时清理
+已建部分、保留完整 KV 交付能力，以及后续正确重试。校验不声称能证明不透明
+原生句柄里的向量内容正确。
+
+Build results must be `BuiltIndex` objects with exact integer shape and the requested
+vector space/metric before publication. Previously wrong identities could become
+READY, while a wrong object or float count could strand BUILDING state and budget
+during publication. Nine reproduced cases cover partial-build disposal, continued
+full-KV deliverability and a later successful retry. Metadata checks do not prove
+the contents of opaque native handles.
+
+发布校验完成后 / After publication validation: Windows 全量 **1887 passed /
+15 skipped**；WSL 构建/回收/索引定向 **95 passed / 1 skipped**。四场景 CPU
+矩阵在前一步结果契约修改后通过；本步骤只新增构建返回值检查，没有另称已重跑
+矩阵。仍未执行 GPU/cuVS/RDMA。
+The four-case CPU matrix passed at the preceding result-contract step; this final
+build-metadata guard does not claim a separate matrix rerun. GPU/cuVS/RDMA remain
+unexecuted.
+
 ## 固定设计约束 / Invariants to preserve
 
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。

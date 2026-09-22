@@ -252,6 +252,27 @@ class PromptIndexManager:
 
     # -- building -----------------------------------------------------------
 
+    def _validate_built_index(self, index: BuiltIndex, item: PromptKVectors) -> None:
+        """A backend call returning is not proof it built the requested index.
+
+        Keep this inside build's failure/refund scope, before publishing any
+        record. Otherwise malformed metadata can strand the gate in BUILDING
+        or authorize an index from another vector space/metric as READY.
+        This validates metadata, not an opaque native handle's contents.
+        """
+        if not isinstance(index, BuiltIndex):
+            raise IndexSearchError("backend built index must be a BuiltIndex")
+        if (
+            type(index.count) is not int
+            or type(index.dim) is not int
+            or (index.count, index.dim) != tuple(item.vectors.shape)
+            or index.vector_space != self.vector_space
+            or index.metric != self.metric
+        ):
+            raise IndexSearchError(
+                "backend built index metadata differs from requested vectors/space/metric"
+            )
+
     def build(
         self,
         transfer_id: str,
@@ -342,6 +363,7 @@ class PromptIndexManager:
                 built[(item.layer, item.kv_head)] = self.backend.build(
                     item.vectors, vector_space=self.vector_space, metric=self.metric
                 )
+                self._validate_built_index(built[(item.layer, item.kv_head)], item)
             # The transient peak is over; give it back before the index is
             # installed, so an idle index is charged only for what it holds.
             self._release_owners((scratch_owner,))
