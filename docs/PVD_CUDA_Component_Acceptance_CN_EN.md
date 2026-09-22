@@ -29,9 +29,9 @@ impose a model/software version or alter HCA/rail routing.
 
 ## 成功条件 / Success criteria
 
-- 必须精确执行 8 个固定真实 CUDA 用例，包括失败后 packing 回收、非默认 stream
+- 必须精确执行 9 个固定真实 CUDA 用例，包括实际 driver SYNC_MEMOPS 设置/回读、失败后 packing 回收、非默认 stream
   bank、rank 握手、FP16/FP32 attention 数值和两轮切换消费。
-  Exactly eight explicitly named CUDA tests must run and pass; missing,
+  Exactly nine explicitly named CUDA tests must run and pass; missing,
   duplicate, extra, skipped, failed or errored cases are rejected.
 - 使用独立 pytest 子进程和临时 JUnit 报告，不依赖解析“passed”字样。禁止
   `PYTEST_ADDOPTS` 隐式筛选测试；子进程关闭自动第三方插件加载和 Python 优化模式。

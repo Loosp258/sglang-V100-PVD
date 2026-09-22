@@ -274,6 +274,15 @@ class RankInstallExchange:
             and self.coordinator.can_decode(decode_tokens)
         )
 
+    def installation_complete(self, receipt):
+        """Exact all-rank RESUMED receipt for a receive owner's ACK latch."""
+        self.coordinator._owner()
+        return (
+            isinstance(receipt, RankInstallReceipt)
+            and self._resume_receipts.get(receipt.rank) == receipt
+            and self.resume_complete(receipt.epoch)
+        )
+
     def cancel_commands(self, reason):
         # Only known prepared receipts can be addressed. The transport owner
         # must also stop/close peers whose PREPARED reply was lost, not infer

@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 CASES = {
+    "test_pvd_cuda_receive_ordering": ("test_real_cuda_receive_sync_memops_roundtrip",),
     "test_pvd_cuda_sparse_packing": (
         "test_actual_cuda_store_pack_lifetime_and_bytes[False]",
         "test_actual_cuda_store_pack_lifetime_and_bytes[True]",

@@ -27,9 +27,9 @@ def xml(root):
     return ET.tostring(root, encoding="unicode")
 
 
-def test_exact_eight_cases_are_required():
+def test_exact_nine_cases_are_required():
     cases = acceptance.validate_junit(xml(evidence()), returncode=0)
-    assert len(cases) == 8
+    assert len(cases) == 9
 
 
 @pytest.mark.parametrize(
@@ -96,7 +96,7 @@ def test_runner_contract_and_machine_readable_status(monkeypatch, capsys, outcom
         assert "PYTHONOPTIMIZE" not in kwargs["env"]
         assert kwargs["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
         nodes = [part for part in command if "::" in part]
-        assert len(nodes) == 8 and len(set(nodes)) == 8
+        assert len(nodes) == 9 and len(set(nodes)) == 9
         assert Path(kwargs["cwd"]).joinpath("python", "sglang").is_dir()
         if outcome == "timeout":
             raise subprocess.TimeoutExpired(command, 71)

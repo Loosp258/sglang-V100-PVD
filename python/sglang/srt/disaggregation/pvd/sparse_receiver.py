@@ -52,6 +52,18 @@ class SparseReceiveRegistry:
         if threading.get_ident() != self._thread:
             raise SparseReceiveError("receiver must run on its owner thread")
 
+    def _new_record(self, manifest, identity, client):
+        return SparseReceiveRecord(self, manifest, identity, client)
+
+    def _allocate_buffer(self, byte_count):
+        return torch.empty(byte_count, dtype=torch.uint8, device="cpu")
+
+    def _before_register(self, record):
+        """Device-specific registration ordering; CPU needs no extra step."""
+
+    def _after_register(self, record):
+        """Device-specific local consumer ownership."""
+
     def prepare(
         self,
         manifest,
@@ -88,17 +100,18 @@ class SparseReceiveRegistry:
             raise SparseReceiveError("manifest and Entry identity differ")
         if any(not isinstance(s, str) or not s.strip() for s in (rail, endpoint)):
             raise SparseReceiveError("explicit endpoint and rail required")
-        record = SparseReceiveRecord(self, manifest, identity, client)
+        record = self._new_record(manifest, identity, client)
         record._scope = owner_scope
         self.budget.reserve(record.owner, manifest.nbytes, 1)
         self._records[delivery_id] = record
         try:
-            record._buffer = torch.empty(manifest.nbytes, dtype=torch.uint8)
+            record._buffer = self._allocate_buffer(manifest.nbytes)
         except BaseException:
             self.budget.release(record.owner)
             del self._records[delivery_id]
             raise
         record._registration_unknown = True
+        self._before_register(record)
         # A raising register_memory may have entered native code. Preserve its
         # backing storage rather than guessing that registration never happened.
         record._registration = self.engine.register_memory(
@@ -119,6 +132,7 @@ class SparseReceiveRegistry:
         record.identity.validate_destination(descriptor)
         if descriptor.length != manifest.nbytes:
             raise SparseReceiveError("registration extent differs from manifest")
+        self._after_register(record)
         record._registration_unknown = False
         return record
 
@@ -288,13 +302,19 @@ class SparseReceiveRecord:
                     return False
             # No concurrent CPU reader: stage() is synchronous on this owner
             # thread and rejects while this RPC/cleanup scope is held.
-            self._registry.engine.release_memory(self._registration)
-            self._registration = self._buffer = None
-            self._registry.budget.release(self.owner)
-            self._closed = True
-            self._group = self._receipt = None
-            self._registry._records.pop(self.identity.transfer_id, None)
-            return True
+            self._release_destination()
+            return self._closed
+
+    def _release_destination(self):
+        self._registry.engine.release_memory(self._registration)
+        self._registration = self._buffer = None
+        self._finish_close()
+
+    def _finish_close(self):
+        self._registry.budget.release(self.owner)
+        self._closed = True
+        self._group = self._receipt = None
+        self._registry._records.pop(self.identity.transfer_id, None)
 
     def snapshot(self):
         self._registry._owner()

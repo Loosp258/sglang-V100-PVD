@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**1974 passed / 23 skipped**；WSL attention/bank/rank
-定向：**73 passed / 6 skipped**，随后严格验收入口定向 **17 passed**。此前 bank 核心修改后，严格 v5 四场景真实 CPU
+最新 Windows 全量：**1997 passed / 24 skipped**；WSL 接收/协议/验收入口
+定向：**110 passed / 1 skipped**。此前 bank 核心修改后，严格 v5 四场景真实 CPU
 模型矩阵通过；后续 participant/独立 attention 增量未重复声称已跑模型矩阵。
-Latest full Windows regression is 1974/23; WSL component regression is 73/6,
-followed by 17 passing strict-acceptance harness tests.
+Latest full Windows regression is 1997/24; WSL receive/protocol/acceptance
+regression is 110/1.
 The strict real-model CPU matrix passed after the bank-core change. Later
 standalone participant/attention additions do not claim another matrix run.
 
@@ -137,9 +137,16 @@ adds fixed explicit scratch and guarded tiled consumption without concatenating
 full context. It is not a production backend or a total device-memory bound.
 
 设备可用后运行 [CUDA 组件严格验收](PVD_CUDA_Component_Acceptance_CN_EN.md)。入口要求
-8 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。
+9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。
 The strict CUDA component gate refuses missing/skipped evidence. Its local CPU-only
 result remains blocked, and a future component pass will not certify RDMA/serving.
+
+[CUDA sparse receive](PVD_CUDA_Sparse_Receive_CN_EN.md) 已将私有 GPU destination、
+注册前 SYNC_MEMOPS、精确远端成功证明、CUDA 排序和 bank staging/RESUMED ACK 接通。
+可使用 Mooncake adapter；生产工厂装配与真实 NIC/GPU 验证仍未完成。
+The explicit CUDA receive component now connects registration ordering and remote
+proofs to bank staging and all-rank ACK. Production factory wiring and native
+NIC/GPU acceptance remain separate tasks, not completed by CPU policy tests.
 
 CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
 预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
