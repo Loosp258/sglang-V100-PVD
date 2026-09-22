@@ -36,6 +36,11 @@ creates `sparse_receive_registry` on the Scheduler owner thread, sharing the
 worker's explicit transfer budget. No destination is registered until a
 request uses it. This does not switch the serving Scheduler from full-Prompt
 refresh to sparse retrieval.
+`PVDKVManager.start_selected_cuda_routes(req)` captures the Gateway's
+Entry/group identity on the Scheduler thread and fetches typed V shard routes
+asynchronously on its control loop. It rejects any V rail without a locally
+preflighted D adapter before request assembly. Route discovery itself neither
+registers a destination nor admits a predictive request.
 
 `assemble_routed_cuda_request()` 使用 Gateway 已选 V coordinator 返回的类型化
 shard 路由。调用方仍须提供已安装的 D TP1 工作集、接收注册表、真实 draft/目标 Q
@@ -63,6 +68,9 @@ Decode TP1 全量 KV fan-in 现在可用 `--pvd-d-receive-rails mlx5_2,mlx5_3`
 同一显式配置还会在 Scheduler owner 线程建立 `sparse_receive_registry`，与现有
 传输共用显式预算；请求使用前不会注册目标。它仍不会把生产 Scheduler 从完整
 Prompt KV 刷新切换到稀疏检索。
+`PVDKVManager.start_selected_cuda_routes(req)` 在 Scheduler 线程捕获
+Gateway 所选 Entry/group 身份，在控制线程异步获取 V shard 路由；未在 D
+预检过的 V rail 会在请求装配前拒绝。路由发现本身不注册目标、不准入预测请求。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;

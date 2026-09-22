@@ -509,6 +509,50 @@ class PVDKVManager:
             )
         return group_id
 
+    def start_selected_cuda_routes(self, req) -> concurrent.futures.Future:
+        """Resolve Gateway-selected V routes without blocking the Scheduler.
+
+        The selected Entry and group are captured before crossing threads.
+        This does not allocate a D destination or admit a prediction request.
+        """
+        from sglang.srt.disaggregation.pvd.client import PVDSelectedShardRoutes
+        from sglang.srt.disaggregation.pvd.multi_rail_receive import (
+            RailMappedReceiveEngine,
+        )
+
+        if self.sparse_receive_registry is None:
+            raise PVDConnectionError("D sparse receive was not initialized")
+        key = self.key_for(req)
+        client = self.clients[self.vector_group_for(req)]
+        engine = self.sparse_receive_engine
+
+        async def discover():
+            selected = await client.selected_shard_routes(key)
+            if (
+                not isinstance(selected, PVDSelectedShardRoutes)
+                or selected.manifest.key != key
+                or len(selected.shards) != 2
+                or tuple(route.rank for route in selected.shards) != (0, 1)
+            ):
+                raise PVDConnectionError("selected V route identity changed")
+            if isinstance(engine, RailMappedReceiveEngine):
+                missing = [
+                    route.rail
+                    for route in selected.shards
+                    if not engine.supports_rail(route.rail)
+                ]
+            else:
+                missing = [
+                    route.rail for route in selected.shards if route.rail != engine.rail
+                ]
+            if missing:
+                raise PVDConnectionError(
+                    f"D has no preflighted receive adapter for V rails {missing}"
+                )
+            return selected
+
+        return self.control.submit(discover())
+
     def client_for(self, req) -> PVDCoordinatorClient:
         return self.clients[self.vector_group_for(req)]
 

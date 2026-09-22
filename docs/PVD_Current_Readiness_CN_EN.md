@@ -55,6 +55,9 @@ Decode TP1 的 `--pvd-d-receive-rails` 已在启动参数与 PVD manager 接线�
 它仍不启用生产 Scheduler 稀疏检索。
 双 rail 请求工厂现为每个 V 源绑定原生 D rail session ID；无 session ID 的
 测试 adapter 需显式 `d_endpoints`，错误的原生 endpoint 在分配前拒绝。
+D manager 现可异步发现 Gateway 已选 V group 的 typed shard 路由，先核对
+Entry 和本地已预检的 rail 覆盖；生产预测请求准入尚未自动消费这个结果。
+此路由发现接线 Windows 全量 **2521 passed / 31 skipped**，WSL 定向 **31 passed**。
 此 endpoint 绑定回归 Windows 全量 **2518 passed / 31 skipped**、WSL 定向
 **13 passed**。
 此 Registry 接线 Windows 全量 **2518 passed / 31 skipped**，WSL 定向 **39 passed**。
@@ -86,6 +89,11 @@ activated in the serving Scheduler.
 The dual-rail request factory now binds each V source to its D rail's native
 session ID. Test adapters without session IDs need explicit `d_endpoints`, and
 a mismatched native endpoint is refused before request allocation.
+The D manager can now discover typed routes for the Gateway-selected V group
+asynchronously and check Entry plus preflighted HCA coverage. Production
+predictive admission does not yet consume this result automatically.
+The route-discovery wiring passed **2521/31 skipped** in the full Windows CPU
+suite and **31 passed** in focused WSL tests.
 This endpoint-binding regression passed **2518/31 skipped** in the full Windows
 CPU suite and **13 passed** in focused WSL tests.
 The registry wiring passed **2518/31 skipped** in the full Windows CPU suite
