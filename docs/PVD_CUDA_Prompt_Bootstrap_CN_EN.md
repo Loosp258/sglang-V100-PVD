@@ -9,6 +9,15 @@ CUDA bank/runtime at boundary zero, using the request's real `req_to_token` map.
 Noncontiguous physical rows preserve absolute Prompt IDs. Model pools and
 generated-token KV are never overwritten by the import.
 
+物理 KV 第 0 行是分配器的保留 padding 行，不能导入为 Prompt。新增回归测试先
+复现了唯一行列表中混入 0 仍被放行的问题；导入器现拒绝所有非正数行号。
+定向 CPU 测试（bootstrap + runtime group）22 passed；不代表 GPU 验证。
+
+Physical KV row zero is allocator-owned padding, never an allocated Prompt row.
+A regression first reproduced acceptance of zero even in an otherwise unique
+row list. Import now rejects every nonpositive row. Focused CPU bootstrap/runtime
+tests: 22 passed; this is not GPU validation.
+
 它不需要 V 检索、CAGRA 或 index READY。内部版本标记 `full-prompt:no-index`
 只标识初始完整内容，不得当作检索索引版本向 V 查询。后续稀疏刷新仍验证 V 返回
 的真实 index/mapping version。

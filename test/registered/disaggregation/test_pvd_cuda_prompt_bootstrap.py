@@ -53,7 +53,7 @@ def test_full_prompt_import_needs_no_index_and_preserves_absolute_positions(
     group.close()
 
 
-@pytest.mark.parametrize("fault", ["entry", "count", "slot", "rows", "dtype"])
+@pytest.mark.parametrize("fault", ["entry", "count", "slot", "rows", "padding", "dtype"])
 def test_bad_source_never_makes_decode_ready(monkeypatch, fault):
     c, group, importer, source, budget, _ = setup(monkeypatch)
     if fault == "entry":
@@ -64,6 +64,8 @@ def test_bad_source_never_makes_decode_ready(monkeypatch, fault):
         source = replace(source, slot=True)
     elif fault == "rows":
         c.req.req_to_token[1, 1] = c.req.req_to_token[1, 0]
+    elif fault == "padding":
+        c.req.req_to_token[1, 1] = 0
     else:
         c.pool.k = c.pool.k.to(torch.float16)
     with pytest.raises(InstallProtocolError):

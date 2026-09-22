@@ -149,7 +149,8 @@ class CUDAPromptBootstrap:
         ):
             raise InstallProtocolError("invalid Prompt request map")
         rows = table[source.slot, : source.prompt_tokens].tolist()
-        if any(row < 0 for row in rows) or len(set(rows)) != len(rows):
+        # TokenToKVPoolAllocator reserves row zero for padding, not Prompt KV.
+        if any(row <= 0 for row in rows) or len(set(rows)) != len(rows):
             raise InstallProtocolError("Prompt rows must be unique allocated positions")
         groups = sorted(self._bank.expected_groups)
         buffers = self._held["buffers"] = []
