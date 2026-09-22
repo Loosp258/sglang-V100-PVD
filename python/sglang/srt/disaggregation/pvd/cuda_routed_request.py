@@ -1,0 +1,194 @@
+"""Assemble one selected V group into a bounded TP1 CUDA refresh request.
+
+This is a request factory, not a Scheduler startup switch. The caller supplies
+the already-installed D bank, concrete draft/target pipeline and discovered
+routes from the Gateway-selected V coordinator. Client sessions outlive every
+remote destination and are closed only after the controller drains.
+"""
+
+from dataclasses import dataclass
+from types import MappingProxyType
+
+from sglang.srt.disaggregation.pvd.client import (
+    PVDSelectedShardRoute,
+    PVDSelectedShardRoutes,
+)
+from sglang.srt.disaggregation.pvd.control_server import HttpShardClient
+from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
+from sglang.srt.disaggregation.pvd.cuda_probe_search import CUDAPredictionPipeline
+from sglang.srt.disaggregation.pvd.cuda_runtime_group import CUDARuntimeInstallGroup
+from sglang.srt.disaggregation.pvd.cuda_sparse_delivery import (
+    CUDAReceiveRoute,
+    CUDASparseFanInDelivery,
+)
+from sglang.srt.disaggregation.pvd.cuda_sparse_receiver import CUDASparseReceiveRegistry
+from sglang.srt.disaggregation.pvd.probe_search import ProbeSearchRoute
+from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
+from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED, QueryHeadMapping
+from sglang.srt.disaggregation.pvd.protocol import KVEntryManifest, KVLayoutSignature
+from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
+from sglang.srt.disaggregation.pvd.search_routing import RoutedShardSearchClient
+from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+
+
+class CUDARoutedPrefetchRequest(CUDAPrefetchRequest):
+    """The request owns both HTTP client sets after native owners have drained."""
+
+    def __init__(self, *args, owned_clients, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._owned_clients = tuple(owned_clients)
+
+    def close(self):
+        raise InstallProtocolError(
+            "routed HTTP owners require aclose() after remote destinations drain"
+        )
+
+    async def aclose(self):
+        await super().aclose()
+        await self.delivery.routing.close()
+        for client in self._owned_clients:
+            await client.close()
+
+
+@dataclass(frozen=True)
+class CUDARoutedRequestAssembly:
+    controller: CUDARoutedPrefetchRequest
+    clients: object  # {D compute rank: routed V search client}, for the driver
+
+
+def assemble_routed_cuda_request(
+    selected: PVDSelectedShardRoutes,
+    *,
+    compute_layout: KVLayoutSignature,
+    compute_rank: int,
+    group,
+    registry,
+    pipeline: CUDAPredictionPipeline,
+    head_mapping: QueryHeadMapping,
+    vector_space: str,
+    metric: str,
+    top_k: int,
+    max_union_tokens: int,
+    max_head_dim: int,
+    copy_budget: TransferBudget,
+    aggregate_budget: TransferBudget,
+    d_endpoint: str,
+    d_rail: str,
+    poll_interval_seconds: float,
+) -> CUDARoutedRequestAssembly:
+    """Fail closed on mismatched Entry/layout/selected shard metadata.
+
+    The returned controller may be registered with CUDARefreshDriver. That
+    driver must call controller.aclose() on retirement; no URL is closed while
+    a write or its fence may still need the control client.
+    """
+    if (
+        not isinstance(selected, PVDSelectedShardRoutes)
+        or not isinstance(selected.manifest, KVEntryManifest)
+        or not isinstance(selected.shards, tuple)
+        or any(
+            not isinstance(route, PVDSelectedShardRoute) for route in selected.shards
+        )
+        or not isinstance(compute_layout, KVLayoutSignature)
+        or type(compute_rank) is not int
+        or not isinstance(group, CUDARuntimeInstallGroup)
+        or not isinstance(registry, CUDASparseReceiveRegistry)
+        or compute_rank not in group._banks
+        or not isinstance(pipeline, CUDAPredictionPipeline)
+        or not isinstance(head_mapping, QueryHeadMapping)
+        or not isinstance(copy_budget, TransferBudget)
+        or not isinstance(aggregate_budget, TransferBudget)
+        or not isinstance(vector_space, str)
+        or not vector_space.strip()
+        or not isinstance(d_endpoint, str)
+        or not d_endpoint.strip()
+        or not isinstance(d_rail, str)
+        or not d_rail.strip()
+        or type(top_k) is not int
+        or not 1 <= top_k <= min(512, selected.manifest.prompt_token_count)
+        or type(max_union_tokens) is not int
+        or not 0 < max_union_tokens <= group._banks[compute_rank].max_union_tokens
+        or head_mapping.total_kv_heads != compute_layout.total_kv_heads
+        or pipeline.probe_config.target_model_id != vector_space
+        or pipeline.probe_config.head_start != 0
+        or pipeline.probe_config.head_count != head_mapping.num_query_heads
+        or pipeline.probe_config.layers != tuple(range(compute_layout.num_layers))
+        or group.coordinator.identity[2] != selected.manifest.key.transfer_id
+        or len(selected.shards) != 2
+        or tuple(route.rank for route in selected.shards) != (0, 1)
+        or any(
+            route.rail != selected.manifest.shard(route.rank).rail
+            for route in selected.shards
+        )
+        or {route.rail for route in selected.shards} != {d_rail}
+        or getattr(registry.engine, "rail", d_rail) != d_rail
+    ):
+        raise ValueError(
+            "exact selected Entry, model and D routing required; a single-rail "
+            "D engine cannot receive from V shards on different rails"
+        )
+
+    search_clients = {
+        route.rank: PVDShardSearchClient(route.url) for route in selected.shards
+    }
+    control_clients = {
+        route.rank: HttpShardClient(route.rank, route.url) for route in selected.shards
+    }
+    routing = RoutedShardSearchClient(
+        storage_layout=selected.manifest.layout,
+        compute_layout=compute_layout,
+        compute_rank=compute_rank,
+        entry_transfer_id=selected.manifest.key.transfer_id,
+        prompt_tokens=selected.manifest.prompt_token_count,
+        vector_space=vector_space,
+        metric=metric,
+        clients=search_clients,
+        layers=tuple(range(compute_layout.num_layers)),
+    )
+    routes = {
+        route.rank: CUDAReceiveRoute(
+            control_clients[route.rank], route.sender_epoch, d_endpoint, d_rail
+        )
+        for route in selected.shards
+        if route.rank in routing.clients
+    }
+    delivery = CUDASparseFanInDelivery(
+        group,
+        registry,
+        routing,
+        key=selected.manifest.key,
+        routes=routes,
+        aggregate_budget=aggregate_budget,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    rank_routes = tuple(
+        ProbeSearchRoute(
+            query_head,
+            SearchRequestIdentity(
+                vector_space,
+                ROPE_APPLIED,
+                selected.manifest.key.transfer_id,
+                layer,
+                kv_head,
+            ),
+            routing.scope,
+            top_k,
+        )
+        for layer, kv_head in sorted(routing.groups)
+        for query_head in head_mapping.query_heads_for(kv_head)
+    )
+    controller = CUDARoutedPrefetchRequest(
+        group,
+        pipeline,
+        copy_budget=copy_budget,
+        max_head_dim=max_head_dim,
+        head_mapping=head_mapping,
+        rank_routes={compute_rank: rank_routes},
+        max_union_tokens=max_union_tokens,
+        delivery=delivery,
+        owned_clients=tuple(search_clients.values()) + tuple(control_clients.values()),
+    )
+    return CUDARoutedRequestAssembly(
+        controller, MappingProxyType({compute_rank: routing})
+    )

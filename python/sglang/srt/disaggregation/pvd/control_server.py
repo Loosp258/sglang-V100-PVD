@@ -120,8 +120,11 @@ class HttpShardClient(ShardClient):
         self._session = session
         self._owns_session = session is None
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self._closed = False
 
     async def _request(self, method: str, path: str, payload=None) -> Mapping:
+        if self._closed:
+            raise CoordinatorError("V shard control client is closed")
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         async with self._session.request(
@@ -260,6 +263,7 @@ class HttpShardClient(ShardClient):
         return await self._request("GET", "/internal/health")
 
     async def close(self) -> None:
+        self._closed = True
         if self._session is not None and self._owns_session:
             await self._session.close()
         self._session = None

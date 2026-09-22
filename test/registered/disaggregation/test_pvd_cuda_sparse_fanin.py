@@ -47,9 +47,16 @@ from test_pvd_vector_lifecycle import DelayedTransferEngine
 
 
 @asynccontextmanager
-async def two_source(monkeypatch, *, prepare_records=True, begin_refresh=True):
+async def two_source(
+    monkeypatch, *, prepare_records=True, begin_refresh=True, single_rail=False
+):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     pool, storage, manifest, _, _ = build_entry()
+    if single_rail:
+        manifest = replace(
+            manifest,
+            shards=[replace(shard, rail="mlx5_0") for shard in manifest.shards],
+        )
     compute = layout(storage, 1)
     engine = DelayedTransferEngine()
     engine.lifecycle_manager = SimpleNamespace(budget=TransferBudget(1 << 20, 32))
