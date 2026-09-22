@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import platform
 import re
+import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Iterable
 
 import torch
 from sglang.srt.disaggregation.pvd.transfer_engine import (
@@ -32,7 +34,7 @@ class PVDPreflightReport:
     gpu_memory_registered: bool
     local_gpu_transfer: bool
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
@@ -142,7 +144,10 @@ def run_rank_preflight(
     device: str,
     engine: TransferEngine,
     strict: bool = True,
+    transfer_timeout_seconds: float = 5.0,
 ) -> PVDPreflightReport:
+    if not math.isfinite(transfer_timeout_seconds) or transfer_timeout_seconds <= 0:
+        raise ValueError("preflight transfer timeout must be positive")
     rails = list(rails)
     rail_mode = validate_rank_rail_names(rails)
     rail = rails[rank]
@@ -165,6 +170,7 @@ def run_rank_preflight(
     local_transfer = False
     source_registration = None
     destination_registration = None
+    transfer_unknown = False
     try:
         source = torch.arange(256, dtype=torch.uint8, device=device)
         destination = torch.zeros(256, dtype=torch.uint8, device=device)
@@ -179,19 +185,50 @@ def run_rank_preflight(
             MemorySlice(source_registration, 0, 256),
             destination_registration.descriptor,
         )
-        local_transfer = engine.poll(handle) == TransferStatus.SUCCESS
+        deadline = time.monotonic() + transfer_timeout_seconds
+        while True:
+            try:
+                status = engine.poll(handle)
+            except Exception as exc:
+                transfer_unknown = True
+                raise PVDPreflightError(
+                    "preflight native poll is unknown; keep both GPU regions "
+                    "registered and restart the process"
+                ) from exc
+            if status in (TransferStatus.SUCCESS, TransferStatus.FAILED):
+                break
+            if status != TransferStatus.PENDING:
+                transfer_unknown = True
+                raise PVDPreflightError(
+                    f"preflight transfer returned {status!r} without a terminal "
+                    "completion proof; keep both GPU regions registered and "
+                    "restart the process"
+                )
+            if time.monotonic() >= deadline:
+                transfer_unknown = True
+                raise PVDPreflightError(
+                    "preflight transfer timed out; keep both GPU regions "
+                    "registered and restart the process"
+                )
+            time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+        local_transfer = status == TransferStatus.SUCCESS
         if local_transfer:
             torch.cuda.synchronize(torch.device(device))
             local_transfer = bool(torch.equal(source, destination))
+    except PVDPreflightError:
+        raise
     except Exception as exc:
         if strict:
             raise PVDPreflightError(
                 f"GPUDirect registration/transfer failed on rank {rank} rail {rail}: {exc}"
             ) from exc
     finally:
-        if source_registration is not None:
+        # A timed-out/poll-unknown PUT may still target the destination. Native
+        # abort is not a terminal completion proof, so neither MR can be
+        # unregistered safely in this process.
+        if source_registration is not None and not transfer_unknown:
             engine.release_memory(source_registration)
-        if destination_registration is not None:
+        if destination_registration is not None and not transfer_unknown:
             engine.release_memory(destination_registration)
 
     if strict and not (registered and local_transfer):

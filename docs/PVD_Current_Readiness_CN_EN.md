@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
+链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
+避免尚在飞行的写使用已注销 rkey。此本机 loopback 预检仍不能证明跨节点
+链路与真实 V100S GPUDirect；后者必须在实验机器单独验收。
+本步 Windows 全量 **2505 passed / 31 skipped**，WSL 定向 **29 passed**。
+
+The RDMA preflight now waits up to five seconds for an asynchronous PUT's
+terminal status instead of treating the first `PENDING` as failure. Timeout,
+poll error or an unknown status fails startup and retains both registered
+regions, since an in-flight write must not target an unregistered MR. This
+local loopback check still does not prove cross-node connectivity or V100S
+GPUDirect; those require native acceptance on the experiment machines.
+This step passed **2505/31 skipped** in the full Windows CPU suite and
+**29 passed** in focused WSL tests.
+
 新增 [CUDA 路由请求工厂](PVD_CUDA_Routed_Request_Factory_CN_EN.md)：把已选 V
 的双 shard 路由、真实 D 组件和显式预算组装成一个请求级检索/多源 Delivery；
 请求排空后才关闭它拥有的 HTTP 客户端。它仍需生产启动/准入逻辑提供真实组件，
