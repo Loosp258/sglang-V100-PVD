@@ -61,6 +61,7 @@ class CUDAScheduleBridge:
         self.pool_owner = pool_owner
         self.state = "attached"
         self._processor = self._result = None
+        self._committed_tokens = None
         self._check_batch()
         reqs = tuple(batch.reqs)
         if not 0 < len(reqs) <= executor.dispatcher.max_requests or len(
@@ -133,7 +134,13 @@ class CUDAScheduleBridge:
             ):
                 raise LifecycleError("Req changed during CUDA dispatch; commit nothing")
 
-    def run(self, *, forward, processor):
+    def run(self, *, forward, processor, result_handler=None):
+        """Run under permits; serving passes Scheduler.process_batch_result.
+
+        The scheduler wrapper owns metrics/health/load updates as well as the
+        real processor call. It must be synchronous and invoke that processor
+        exactly once inside this scope. The default is for component callers.
+        """
         self.driver._owner()
         if self.state != "attached":
             raise LifecycleError("stale or replayed CUDA batch")
@@ -142,6 +149,13 @@ class CUDAScheduleBridge:
             or inspect.iscoroutinefunction(forward)
             or processor.enable_overlap
             or processor.enable_overlap_mlx
+            or (
+                result_handler is not None
+                and (
+                    not callable(result_handler)
+                    or inspect.iscoroutinefunction(result_handler)
+                )
+            )
         ):
             raise LifecycleError(
                 "synchronous forward and non-overlap result processor required"
@@ -154,9 +168,14 @@ class CUDAScheduleBridge:
             # Called only inside the rank executor's drained result scope.
             self._unchanged()
             self._result, self.state = result, "awaiting_results"
-            value = processor.process_batch_result_decode(self.batch, result)
+            value = (
+                processor.process_batch_result_decode(self.batch, result)
+                if result_handler is None
+                else result_handler(self.batch, result)
+            )
             if self.state != "processed" or inspect.isawaitable(value):
                 raise LifecycleError("original synchronous result hook was bypassed")
+            self._validate_committed()
             return value
 
         try:
@@ -224,13 +243,26 @@ class CUDAScheduleBridge:
         ):
             raise LifecycleError("one sampled target token per dispatched Req required")
         tokens = tuple(tokens)  # The processor cannot rewrite the dispatch evidence.
+        self._committed_tokens = tokens
         self.state = "processing"
         yield self
         # Validate ALL authoritative writes before accepting this result scope.
-        for saved, token in zip(self.records, tokens, strict=True):
+        self._validate_committed()
+        for saved in self.records:
+            saved.registration.outputs = tuple(saved.registration.req.output_ids)
+        self.state = "processed"
+
+    def _validate_committed(self):
+        if len(self.batch.reqs) != len(self.records) or any(
+            req is not saved.registration.req
+            for req, saved in zip(self.batch.reqs, self.records, strict=True)
+        ):
+            raise LifecycleError("CUDA result wrapper changed batch membership")
+        for saved, token in zip(self.records, self._committed_tokens, strict=True):
             record, req = saved.registration, saved.registration.req
             if (
                 req.rid != saved.request_id
+                or self.driver._records.get(saved.request_id) is not record
                 or tuple(req.origin_input_ids) != record.prompt
                 or tuple(req.output_ids) != saved.outputs + (token,)
                 or (
@@ -241,6 +273,3 @@ class CUDAScheduleBridge:
                 raise LifecycleError(
                     "authoritative CUDA Req output differs from sampled dispatch"
                 )
-        for saved in self.records:
-            saved.registration.outputs = tuple(saved.registration.req.output_ids)
-        self.state = "processed"

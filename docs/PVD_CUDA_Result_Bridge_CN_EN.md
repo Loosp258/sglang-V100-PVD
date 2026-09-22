@@ -38,6 +38,34 @@ tokens or replaying the result. A completed bridge may be replaced by the next
 dispatch on the same executor/driver, allowing continuous ScheduleBatch reuse.
 Old results remain refused; active or failed owners cannot be overwritten.
 
+## Scheduler 外层处理 / Outer Scheduler result handling
+
+生产接入应将 `Scheduler.process_batch_result` 作为 `run(..., result_handler=...)`
+传入，同时仍传入真实的 `batch_result_processor`。只调用内层 Decode processor
+会跳过负载快照、统计/FPM、multimodal cleanup、health signal 和 device timer。
+外层和内层均在同一个已排空的 permits/池 lease scope 中执行；原 hook 必须恰好
+调用一次。外层返回后还会再次核对正式输出和 batch 成员，避免内层检查通过后
+又被外层改写。副作用失败不会回滚或重放已经正式追加的 token。
+
+Serving integration passes Scheduler.process_batch_result as result_handler while
+still supplying the real batch_result_processor. Calling only the inner Decode
+processor would omit load snapshots, statistics/FPM, multimodal cleanup, health
+signals and device timers. Both layers run inside the same drained permits/pool
+lease scope; the real hook must run exactly once. Output and batch membership are
+revalidated after the outer wrapper returns so a post-hook mutation cannot escape
+the check. Side-effect failure never rolls back or replays committed tokens.
+
+7 个新增 CPU 用例实际执行仓库中 Scheduler 外层方法的源码（以 stub 提供外围
+服务），验证完整调用顺序、skip/double-call、提交后统计失败、外层重写输出/
+成员和拒绝 async handler。其中两个“内层通过后再修改”的用例在补最后一次
+校验前失败。这仍不是生产 Scheduler 服务启动或 GPU 执行证据。
+
+Seven new CPU cases execute the shipped outer method's source with peripheral
+service stubs: full call order, skipped/double invocation, post-commit metrics
+failure, post-hook output/membership mutation, and async-handler refusal. The two
+post-hook mutation tests failed before the final revalidation was added. This is
+not a launched production Scheduler service or GPU execution evidence.
+
 ## 测试与限制 / Tests and limits
 
 新增测试涵盖两个请求的实际 CPU attention 数学、runtime permits、pool pin、

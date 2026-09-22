@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2229 passed / 28 skipped**；CUDA Delivery 定向 **7 passed**。
+最新 Windows 全量：**2236 passed / 28 skipped**；CUDA Delivery 定向 **7 passed**。
 新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
 清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
 详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
-Latest full Windows regression is 2229/28; CUDA Delivery policy tests pass 7 cases.
+Latest full Windows regression is 2236/28; CUDA Delivery policy tests pass 7 cases.
 Draft retirement now fences work/map clearing/allocator updates, retains actual
 owners on UNKNOWN, quarantines the shared provider and cleans up malformed
 allocations. Fourteen new CPU cases pass; the first five failed before the fix.
@@ -136,6 +136,14 @@ and release ownership. Legacy refresh stops pulling claimed requests. Sparse
 controller drain precedes source-session close and original pool retirement.
 Twelve new CPU cases, 66 focused WSL cases and all four strict v5 real-model CPU
 cases pass. Default factory/queue activation remains unimplemented.
+
+结果桥接进一步支持原 Scheduler 外层处理，保留负载/指标/健康回调，并在外层
+返回后复核正式输出与 batch 成员；7 个新增 CPU 用例通过，WSL 结果组合 21 项
+通过。实际运行生产 Scheduler 队列/工厂仍是后续实现任务。
+Result bridging now supports the original outer Scheduler handler, preserving
+load/metrics/health callbacks and rechecking output/membership afterwards. Seven
+new CPU cases and 21 focused WSL result cases pass. Actual serving queue/factory
+activation remains implementation work.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
