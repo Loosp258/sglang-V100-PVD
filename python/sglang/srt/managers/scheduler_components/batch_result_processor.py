@@ -595,6 +595,18 @@ class SchedulerBatchResultProcessor:
         batch: ScheduleBatch,
         result: GenerationBatchResult,
     ):
+        cuda_bridge = getattr(batch, "pvd_cuda_result_bridge", None)
+        if cuda_bridge is not None:
+            from sglang.srt.disaggregation.pvd.cuda_schedule_bridge import (
+                CUDAScheduleBridge,
+            )
+
+            if not isinstance(cuda_bridge, CUDAScheduleBridge) or getattr(
+                batch, "pvd_cpu_result_bridge", None
+            ) is not None:
+                raise TypeError("invalid or competing PVD CUDA result bridge")
+            with cuda_bridge.processing(self, batch, result):
+                return self._process_batch_result_decode(batch, result)
         bridge = getattr(batch, "pvd_cpu_result_bridge", None)
         if bridge is None:
             return self._process_batch_result_decode(batch, result)
