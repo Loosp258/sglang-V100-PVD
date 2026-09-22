@@ -21,6 +21,17 @@ activation.
 
 ## 最新增量 / Latest increment
 
+V store 和 shard HTTP 现可 opt-in 完整 KV fan-in：真实 Entry 授权、双参数
+容量限制、统一 start/poll/ACK/cancel、超时/关停排空和 absent-writer tombstone
+已接通。14 个 CPU 用例覆盖实际 store/allocator 与 localhost HTTP。尚待全局
+coordinator 聚合和 D 自动准入；不能解读为端到端预测检索已上线。
+
+Opt-in V store/shard HTTP fan-in now uses real Entry authorization, explicit bounds,
+shared delivery APIs, timeout/shutdown draining and absent-writer tombstones.
+Fourteen CPU cases exercise real stores/allocators and localhost HTTP. Global
+coordinator aggregation and automatic D admission remain; end-to-end predictive
+serving is not enabled.
+
 完整 KV fan-in 新增严格 wire plan 校验和有界 V writer：从实际源区间直接提交
 offset PUT，保留原生句柄并防止取消/重复启动提前释放或重放。21 个 CPU 用例；
 本步骤尚未接 V store/HTTP，不改变默认生产服务或 TP/rail 支持范围。

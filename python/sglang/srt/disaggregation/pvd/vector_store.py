@@ -12,6 +12,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
+    FULL_KV_FANIN_PROTOCOL,
+    validate_fanin_plan,
+)
+from sglang.srt.disaggregation.pvd.full_kv_fanin_writer import FullKVFanInWriter
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
@@ -178,9 +183,10 @@ class DeliveryShardRecord:
     sparse_manifest: Optional[SparseDeliveryManifest] = None
     # Retained on unknown CUDA completion; cancellation must not drop the lease.
     packing_index_lease: Optional[ExitStack] = field(default=None, repr=False)
+    fanin_writer: Optional[FullKVFanInWriter] = field(default=None, repr=False)
 
     def to_dict(self):
-        return {
+        result = {
             "delivery_id": self.delivery_id,
             "entry_key": self.entry_key.to_dict(),
             "destination": self.destination.to_dict(),
@@ -213,6 +219,14 @@ class DeliveryShardRecord:
                 else "preparing"
             ),
         }
+        if self.fanin_writer is not None:
+            proof = self.fanin_writer.snapshot()
+            result.update(
+                fanin_proof=proof,
+                transferred_bytes=proof["transferred_bytes"],
+                transport_state=proof["transport_state"],
+            )
+        return result
 
 
 @dataclass
@@ -296,6 +310,8 @@ class VectorKVStore:
         prompt_index: Optional[Any] = None,
         max_absent_write_fences: int = 4096,
         allow_cuda_sparse_packing: bool = False,
+        full_kv_fanin_max_slices: Optional[int] = None,
+        full_kv_fanin_max_inflight: Optional[int] = None,
     ) -> None:
         if rank < 0 or rank >= world_size:
             raise ValueError(f"rank {rank} is outside world size {world_size}")
@@ -303,6 +319,12 @@ class VectorKVStore:
             raise ValueError("PVD requires exactly two V storage ranks")
         if page_bytes <= 0:
             raise ValueError("page_bytes must be positive")
+        fanin_limits = (full_kv_fanin_max_slices, full_kv_fanin_max_inflight)
+        if fanin_limits != (None, None) and any(
+            type(v) is not int or v <= 0 for v in fanin_limits
+        ):
+            raise ValueError("both full-KV fan-in bounds must be positive integers")
+        self._fanin_max_slices, self._fanin_max_inflight = fanin_limits
         if type(max_absent_write_fences) is not int or max_absent_write_fences <= 0:
             raise ValueError("max_absent_write_fences must be a positive integer")
         if type(allow_cuda_sparse_packing) is not bool:
@@ -678,6 +700,127 @@ class VectorKVStore:
             "resources_released": bool(entry.resources_released),
         }
 
+    def _fanin_plan(self, manifest):
+        if self._fanin_max_slices is None:
+            raise EntryConflictError(
+                "full-KV fan-in is disabled; explicit bounds required"
+            )
+        return validate_fanin_plan(manifest, max_slices=self._fanin_max_slices)
+
+    def reserve_fanin_delivery(self, manifest) -> DeliveryShardRecord:
+        """Reserve against the actual Entry allocation under its business lock."""
+        manifest = copy.deepcopy(manifest)
+        plan = self._fanin_plan(manifest)
+        delivery_id = f"{plan.delivery_id}:d{plan.destination.rank}:v{self.rank}"
+        with self._lock:
+            if self._closed or self._isolated_reason:
+                raise EntryConflictError("V store is closed or isolated")
+            if (plan.key, delivery_id) in self._fenced_deliveries:
+                raise EntryConflictError("delivery has been fenced")
+            entry = self._entry(plan.key)
+            if entry.resources_released or entry.release_requested:
+                raise EntryConflictError("entry resources have already been released")
+            existing = entry.deliveries.get(delivery_id)
+            if existing is not None:
+                if (
+                    existing.fanin_writer is None
+                    or existing.fanin_writer.plan.fingerprint != plan.fingerprint
+                ):
+                    raise EntryConflictError(
+                        "delivery id already exists with a different fan-in plan"
+                    )
+                return existing
+            source = MemorySlice(
+                self.registration,
+                entry.allocation.start_page * self.page_bytes,
+                entry.manifest.expected_bytes,
+            )
+            writer = FullKVFanInWriter(
+                manifest,
+                engine=self.transfer_engine,
+                source=source,
+                source_guard=entry.allocation_guard,
+                source_key=entry.key,
+                source_layout=entry.layout,
+                source_rank=self.rank,
+                sender_epoch=self.worker_epoch,
+                max_slices=self._fanin_max_slices,
+                max_inflight=self._fanin_max_inflight,
+            )
+            now = time.monotonic()
+            delivery = DeliveryShardRecord(
+                delivery_id=delivery_id,
+                entry_key=plan.key,
+                destination=copy.deepcopy(plan.destination),
+                state=DeliveryState.D_RESERVED
+                if entry.state == EntryShardState.STORED
+                else DeliveryState.WAITING_SOURCE,
+                created_at=now,
+                deadline=now + self.delivery_timeout_secs,
+                source_guard=entry.allocation_guard,
+                authorization=writer._authorization,
+                fanin_writer=writer,
+            )
+            entry.deliveries[delivery_id] = delivery
+            entry.active_delivery_count += 1
+            self.metrics.increment("vector_deliveries_created")
+            return delivery
+
+    def fence_fanin_delivery(self, manifest, identity):
+        """Close a known writer, or tombstone an unreserved writer before proof."""
+        plan = self._fanin_plan(manifest)
+        if (
+            not isinstance(identity, WriteIdentity)
+            or identity.key != plan.key
+            or self.rank not in plan.writers
+            or identity.transfer_id
+            != f"{plan.delivery_id}:d{plan.destination.rank}:v{self.rank}"
+        ):
+            raise EntryConflictError("fan-in fence identity mismatch")
+        identity.validate_destination(plan.destination)
+        with self._lock:
+            if identity.sender_epoch != self.worker_epoch:
+                raise EntryConflictError("fan-in fence sender epoch mismatch")
+            entry = self._entry(plan.key)
+            if entry.layout.fingerprint != plan.storage.fingerprint:
+                raise EntryConflictError("fan-in fence storage layout mismatch")
+            delivery = entry.deliveries.get(identity.transfer_id)
+            if delivery is not None and (
+                delivery.fanin_writer is None
+                or delivery.fanin_writer.plan.fingerprint != plan.fingerprint
+            ):
+                raise EntryConflictError("fan-in fence plan mismatch")
+            if delivery is None:
+                token = (plan.key, identity.transfer_id)
+                previous = self._absent_write_fences.get(token)
+                if previous is not None and previous != identity:
+                    raise EntryConflictError("fan-in absent fence identity mismatch")
+                if previous is None:
+                    if len(self._absent_write_fences) >= self._max_absent_write_fences:
+                        raise ResourceExhaustedError(
+                            "absent write fence capacity exceeded"
+                        )
+                    self._absent_write_fences[token] = identity
+                self._fenced_deliveries.add(token)
+            else:
+                if delivery.authorization.identity != identity:
+                    raise EntryConflictError("fan-in stored writer identity mismatch")
+                self._cancel_delivery_locked(entry, delivery, "Decode fenced fan-in")
+        # Check and close under one lock; native progress must run outside it.
+        if delivery is not None:
+            self._progress_delivery(entry, delivery)
+            self._progress_releases()
+            return delivery.fanin_writer.snapshot()
+        return {
+            "protocol": FULL_KV_FANIN_PROTOCOL,
+            "plan_fingerprint": plan.fingerprint,
+            "source_rank": self.rank,
+            "identity": identity.to_dict(),
+            "fenced": True,
+            "transport_state": "not_submitted",
+            "transferred_bytes": 0,
+        }
+
     def reserve_delivery(
         self,
         key: KVEntryKey,
@@ -699,6 +842,8 @@ class VectorKVStore:
                 raise EntryConflictError("entry resources have already been released")
             existing = entry.deliveries.get(delivery_id)
             if existing is not None:
+                if existing.fanin_writer is not None:
+                    raise EntryConflictError("delivery id belongs to full-KV fan-in")
                 if existing.destination != destination:
                     raise EntryConflictError(
                         "delivery id already exists with a different destination"
@@ -772,6 +917,16 @@ class VectorKVStore:
             delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
             delivery.state = transition(delivery.state, DeliveryState.V_WRITING)
             delivery.submitting = True
+
+        if delivery.fanin_writer is not None:
+            try:
+                delivery.fanin_writer.start()
+            finally:
+                with self._lock:
+                    delivery.submitting = False
+                self._progress_delivery(entry, delivery)
+                self._progress_releases()
+            return delivery
 
         attempted = False
         packing_safe = True
@@ -1049,6 +1204,9 @@ class VectorKVStore:
         if not delivery.progress_lock.acquire(blocking=False):
             return
         try:
+            if delivery.fanin_writer is not None:
+                self._progress_fanin_delivery(entry, delivery)
+                return
             with self._lock:
                 if delivery.submitting:
                     return
@@ -1138,6 +1296,40 @@ class VectorKVStore:
         finally:
             delivery.progress_lock.release()
 
+    def _progress_fanin_delivery(self, entry, delivery):
+        with self._lock:
+            cancelled = delivery.state in DELIVERY_TERMINAL_STATES
+        writer = delivery.fanin_writer
+        proof = writer.cancel() if cancelled else writer.poll()
+        with self._lock:
+            state = TransportState(proof["transport_state"])
+            delivery.local_terminal = state
+            if state == TransportState.UNKNOWN:
+                self._isolated_reason = "V fan-in transport terminal state is unknown"
+                self._cancel_delivery_locked(
+                    entry,
+                    delivery,
+                    writer.error or "fan-in uncertain",
+                    DeliveryState.FAILED,
+                )
+            elif delivery.state == DeliveryState.V_WRITING:
+                if proof["fenced"] and state == TransportState.TERMINAL_SUCCESS:
+                    delivery.state = transition(delivery.state, DeliveryState.DELIVERED)
+                    self.metrics.increment(
+                        "vector_v_to_d_bytes", proof["transferred_bytes"]
+                    )
+                    self.metrics.increment("vector_deliveries_completed")
+                elif (
+                    state in (TransportState.TERMINAL_FAILED, TransportState.DRAINING)
+                    or proof["fenced"]
+                ):
+                    self._cancel_delivery_locked(
+                        entry,
+                        delivery,
+                        writer.error or "fan-in failed",
+                        DeliveryState.FAILED,
+                    )
+
     def progress_transfers(self) -> None:
         with self._lock:
             records = [
@@ -1180,7 +1372,8 @@ class VectorKVStore:
         if delivery.authorization:
             delivery.authorization.close()
         if (
-            not delivery.submitting
+            delivery.fanin_writer is None
+            and not delivery.submitting
             and delivery.transfer_handle is None
             and delivery.local_terminal is None
         ):

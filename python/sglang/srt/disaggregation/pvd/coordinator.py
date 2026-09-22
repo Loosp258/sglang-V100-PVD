@@ -71,6 +71,12 @@ class ShardClient(abc.ABC):
         destination: RemoteRegionDescriptor,
     ) -> Mapping: ...
 
+    async def reserve_fanin_delivery(self, manifest) -> Mapping:
+        raise NotImplementedError("shard does not support full-KV fan-in")
+
+    async def fence_fanin_delivery(self, manifest, identity: WriteIdentity) -> Mapping:
+        raise NotImplementedError("shard does not support full-KV fan-in fencing")
+
     @abc.abstractmethod
     async def start_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping: ...
 
@@ -139,6 +145,15 @@ class LocalShardClient(ShardClient):
         destination: RemoteRegionDescriptor,
     ) -> Mapping:
         return self.store.reserve_delivery(key, delivery_id, destination).to_dict()
+
+    async def reserve_fanin_delivery(self, manifest) -> Mapping:
+        result = await asyncio.to_thread(self.store.reserve_fanin_delivery, manifest)
+        return result.to_dict()
+
+    async def fence_fanin_delivery(self, manifest, identity: WriteIdentity) -> Mapping:
+        return await asyncio.to_thread(
+            self.store.fence_fanin_delivery, manifest, identity
+        )
 
     async def start_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
         result = await asyncio.to_thread(self.store.start_delivery, key, delivery_id)

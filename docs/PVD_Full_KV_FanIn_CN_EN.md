@@ -30,6 +30,48 @@ capabilities are unchanged. Planner coverage is not a deployable topology matrix
 
 ## 下一阶段必须满足 / Required before wire activation
 
+### V store 与 shard HTTP 已接入 / V store and shard HTTP integrated
+
+V launcher 增加两个必须同时提供的 opt-in 参数：
+`--full-kv-fanin-max-slices`（一个 D 计划中全部 writer 的 slice 总上限）和
+`--full-kv-fanin-max-inflight`（每个 V writer 的在途 PUT 上限）。不猜测默认值；
+不提供时新的 reserve 路由拒绝请求。engine 原有总 transfer budget 继续生效。
+
+新增 `/internal/v1/fanin/reserve` 和 `/internal/v1/fanin/fence`，Local/HTTP shard
+client 均有对应方法；start/poll/ACK/cancel 复用现有 delivery 接口。V store 从
+真实 Entry 取得 key/layout/源 allocation，而非相信调用者对源内存的声明。
+同 ID/同计划重试返回同一 writer；不同计划或旧协议不能替换已有授权。
+
+Entry 的 active delivery 计数、超时 reaper、cancel/close 及原 allocator 回收
+均已接入。UNKNOWN 隔离 V store，已取消但未完成的 PUT 继续保留 allocation。
+不存在的 writer 只有在同锁内写入有界 tombstone、阻止迟到 reserve 后，才返回
+NOT_SUBMITTED fence。网络完成与 source 本地 cleanup 仍独立处理。
+
+The V launcher exposes two opt-in bounds: all slices in one D plan, and outstanding
+PUTs per V writer. Both are required; existing engine-wide transfer budgets still
+apply. New internal shard reserve/fence routes and Local/HTTP client methods use
+the real Entry allocation, while start/poll/ACK/cancel reuse delivery APIs. Exact
+retries return one writer; changed plans or legacy protocol cannot replace it.
+Entry counts, TTL reaping, cancel/close and allocator retirement now drive fan-in
+writers. UNKNOWN isolates the store. Absent-writer fences require a bounded
+tombstone under the reservation lock before reporting NOT_SUBMITTED.
+
+14 个新增 CPU 测试覆盖实际 V store/allocator、localhost HTTP、双 writer 重建、
+部分完成、超时/关停、重复 reserve、Entry 复用、拒绝陈旧 fence 和 launcher 参数。
+**这一步尚未接全局 coordinator 聚合和 D 的自动 receiver/admission**；默认
+生产仍不是预测检索路径，也没有放宽 TP 或跨 rail 限制。
+
+Fourteen CPU cases cover real stores/allocators, localhost HTTP, two writers,
+partial completion, TTL/shutdown, retries, Entry reuse, stale-fence rejection and
+launcher arguments. **Global coordinator aggregation and automatic D admission
+are still pending.** Default serving and TP/cross-rail restrictions are unchanged.
+
+本步骤 Windows 全量 **2361 passed / 29 skipped**，WSL 定向 **165 passed**；
+严格 v5 CPU 实模四场景再次全部通过。原生 GPU/Mooncake 多源路径未执行。
+This step passes **2361 / 29 skipped** on Windows and **165** focused WSL cases;
+all four strict v5 real-model CPU scenarios pass again. Native GPU/Mooncake
+multi-source execution remains unverified.
+
 ### 发送端执行器已实现 / Sender executor implemented
 
 `validate_fanin_plan` 严格解析完整协议、重算 hash 和布局派生范围，拒绝已重新计算

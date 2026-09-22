@@ -157,6 +157,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument(
+        "--full-kv-fanin-max-slices",
+        type=_positive_int,
+        default=None,
+        help="Opt in to V full-KV fan-in routes with this per-destination plan bound. "
+        "Requires --full-kv-fanin-max-inflight; does not enable D predictive serving.",
+    )
+    parser.add_argument(
+        "--full-kv-fanin-max-inflight",
+        type=_positive_int,
+        default=None,
+        help="Maximum outstanding PUTs per fan-in writer. Both fan-in bounds are required.",
+    )
+    parser.add_argument(
         "--experimental-cuda-sparse-packing",
         action="store_true",
         help="Explicit V-only CUDA sparse copy baseline: synchronize before PUT. "
@@ -180,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_args(args: argparse.Namespace) -> List[str]:
+    bounds = (
+        getattr(args, "full_kv_fanin_max_slices", None),
+        getattr(args, "full_kv_fanin_max_inflight", None),
+    )
+    if bounds != (None, None) and any(type(v) is not int or v <= 0 for v in bounds):
+        raise ValueError("both full-KV fan-in bounds must be positive integers")
     if args.world_size != 2:
         raise ValueError("PVD requires exactly 2 V storage ranks")
     if args.rank is not None and args.rank not in (0, 1):
@@ -408,6 +427,8 @@ def _create_store(
         delivery_timeout_secs=args.delivery_timeout_secs,
         allow_cpu_for_tests=args.allow_cpu_for_tests,
         prompt_index=prompt_index,
+        full_kv_fanin_max_slices=getattr(args, "full_kv_fanin_max_slices", None),
+        full_kv_fanin_max_inflight=getattr(args, "full_kv_fanin_max_inflight", None),
         allow_cuda_sparse_packing=getattr(
             args, "experimental_cuda_sparse_packing", False
         ),

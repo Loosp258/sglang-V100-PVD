@@ -194,6 +194,18 @@ class HttpShardClient(ShardClient):
             {"key": key.to_dict(), "delivery_id": delivery_id},
         )
 
+    async def reserve_fanin_delivery(self, manifest) -> Mapping:
+        return await self._request(
+            "POST", "/internal/v1/fanin/reserve", {"manifest": manifest}
+        )
+
+    async def fence_fanin_delivery(self, manifest, identity: WriteIdentity) -> Mapping:
+        return await self._request(
+            "POST",
+            "/internal/v1/fanin/fence",
+            {"manifest": manifest, "identity": identity.to_dict()},
+        )
+
     async def poll_delivery(self, key: KVEntryKey, delivery_id: str) -> Mapping:
         return await self._request(
             "POST",
@@ -330,6 +342,20 @@ def create_shard_app(
                 RemoteRegionDescriptor.from_dict(data["destination"]),
             ).to_dict()
         )
+
+    async def reserve_fanin(request):
+        data = await _payload(request)
+        result = await asyncio.to_thread(store.reserve_fanin_delivery, data["manifest"])
+        return web.json_response(result.to_dict())
+
+    async def fence_fanin(request):
+        data = await _payload(request)
+        result = await asyncio.to_thread(
+            store.fence_fanin_delivery,
+            data["manifest"],
+            WriteIdentity.from_dict(data["identity"]),
+        )
+        return web.json_response(result)
 
     async def start_delivery(request):
         data = await _payload(request)
@@ -508,6 +534,8 @@ def create_shard_app(
             web.post("/internal/v1/entries/commit", commit_entry),
             web.post("/internal/v1/uploads/sync", sync_upload),
             web.post("/internal/v1/deliveries", reserve_delivery),
+            web.post("/internal/v1/fanin/reserve", reserve_fanin),
+            web.post("/internal/v1/fanin/fence", fence_fanin),
             web.post("/internal/v1/deliveries/start", start_delivery),
             web.post("/internal/v1/deliveries/poll", poll_delivery),
             web.post("/internal/v1/deliveries/ack", ack_delivery),
