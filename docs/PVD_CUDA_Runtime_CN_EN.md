@@ -52,3 +52,32 @@ PYTHONPATH=python python test/registered/disaggregation/run_pvd_cuda_model_smoke
 
 本地无 CUDA，检查只能返回 blocked；不证明 GPU/RDMA/CAGRA/服务性能。
 Locally it remains blocked and certifies none of GPU/RDMA/CAGRA/serving performance.
+
+## HTTP Delivery sink / HTTP 交付 owner
+
+`CUDASparseDelivery` 现在负责创建目的地、发布显式 V/D endpoint/rail、等待精确
+远端完成证明、调用同一 group 的 `stage_received`，以及安装后的 ACK 和回收。
+manifest dtype 来自目标 bank，不硬编码 FP32。CPU sink 明确拒绝 CUDA registry。
+
+The CUDA sink owns destination publication, remote-success polling, staging into
+the exact runtime, post-install ACK and retirement. Dtype comes from the bank;
+endpoint/rail comes from the explicit selected route. CPU sinks reject CUDA registries.
+
+丢失 ACK 响应可显式重试，不重复安装；取消时尚未完成的 WRITE 保留目的地/MR/预算；
+CUDA 可见性失败保留隔离对象，不发安装完成 ACK。新增 7 个实际 localhost HTTP
+测试采用 CPU tensor 和延迟 fake bytes，**不是 RDMA 或 GPU 证据**。
+
+Lost ACK responses can be retried without reinstalling. Cancellation does not
+retire an in-flight WRITE; unknown CUDA visibility retains the destination and
+prevents install ACK. Seven localhost HTTP tests use CPU tensors and delayed fake
+bytes, not RDMA/GPU execution.
+
+轮询也推进 runtime 的绝对超时；停止等待不等于 WRITE 排空。迟到传输完成前，
+MR/目的地预算依然保留。Polling enforces the runtime deadline, but timeout is
+not a WRITE fence: destination/MR/charges survive until actual transfer completion.
+
+测试中通过已就绪的 exact index/sparse API 安装 full Prompt 只是交付协议 fixture。
+生产初始 full-Prompt bootstrap 仍应独立于检索索引，不能改成等待 CAGRA READY。
+The test's full-Prompt round through the sparse API is a protocol fixture using
+an already-ready exact index. Production full-Prompt bootstrap must remain
+independent of retrieval readiness; it must not start waiting for CAGRA.

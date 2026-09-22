@@ -36,25 +36,21 @@ class CPUReceiveRoute:
             )
 
 
-class CPUSparseDelivery:
+class _SparseDeliveryCore:
+    _route_type = CPUReceiveRoute
+    _namespace = "sparse-delivery"
+
     def __init__(self, group, registry, *, key, routes, poll_interval_seconds):
-        if not isinstance(group, CPUInstallGroup) or not isinstance(
-            registry, SparseReceiveRegistry
-        ):
-            raise SparseReceiveError(
-                "explicit CPU install group and receive registry required"
-            )
+        self._validate_binding(group, registry)
         registry._owner()
         metadata = group.describe_banks()
         if group.coordinator.identity[2] != key.transfer_id:
             raise SparseReceiveError("Delivery Entry differs from installation Entry")
         if set(routes) != set(metadata) or any(
-            type(rank) is not int or not isinstance(route, CPUReceiveRoute)
+            type(rank) is not int or not isinstance(route, self._route_type)
             for rank, route in routes.items()
         ):
-            raise SparseReceiveError(
-                "one explicit Delivery route per CPU bank required"
-            )
+            raise SparseReceiveError("one explicit Delivery route per bank required")
         if (
             type(poll_interval_seconds) not in (int, float)
             or not math.isfinite(poll_interval_seconds)
@@ -66,12 +62,12 @@ class CPUSparseDelivery:
         self._interval = float(poll_interval_seconds)
         self._rounds, self._tasks, self._errors = {}, {}, {}
         self._closed = False
-        self._scope = "cpu-sparse-delivery:" + uuid.uuid4().hex
+        self._scope = self._namespace + ":" + uuid.uuid4().hex
 
     def _live(self):
         self.registry._owner()
         if self._closed:
-            raise SparseReceiveError("CPU sparse Delivery sink is closed")
+            raise SparseReceiveError("sparse Delivery sink is closed")
 
     async def stage(self, epoch, rank, specs):
         self._live()
@@ -82,7 +78,7 @@ class CPUSparseDelivery:
         if rank in records:
             raise SparseReceiveError("rank already has a destination for this epoch")
         manifest = SparseDeliveryManifest(
-            tuple(specs), "torch.float32", self._metadata[rank]["head_dim"]
+            tuple(specs), self._manifest_dtype(rank), self._metadata[rank]["head_dim"]
         )
         first = manifest.specs[0]
         if (
@@ -126,7 +122,7 @@ class CPUSparseDelivery:
             ready = await record.poll()
         self._live()
         self.group.coordinator._match(epoch)
-        return record.stage(self.group, epoch)
+        return self._stage_record(record, epoch)
 
     def require_installable(self, epoch):
         self._live()
@@ -209,3 +205,22 @@ class CPUSparseDelivery:
                 e.operation_id: dict(errors) for e, errors in self._errors.items()
             },
         }
+
+
+class CPUSparseDelivery(_SparseDeliveryCore):
+    _namespace = "cpu-sparse-delivery"
+
+    def _validate_binding(self, group, registry):
+        if (
+            not isinstance(group, CPUInstallGroup)
+            or type(registry) is not SparseReceiveRegistry
+        ):
+            raise SparseReceiveError(
+                "explicit CPU install group and CPU receive registry required"
+            )
+
+    def _manifest_dtype(self, rank):
+        return "torch.float32"
+
+    def _stage_record(self, record, epoch):
+        return record.stage(self.group, epoch)

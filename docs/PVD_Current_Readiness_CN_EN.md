@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2082 passed / 24 skipped**；CUDA runtime 定向 **11 passed**
-（含全量之后新增的 peer-loss 用例）。共享 runtime 核心修改后，严格 v5 四场景真实 CPU 模型矩阵
+最新 Windows 全量：**2089 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**
+（含全量之后新增的 timeout 用例）。共享 runtime 核心修改后，严格 v5 四场景真实 CPU 模型矩阵
 再次全部通过。这不是 CUDA probe 的 GPU forward 证据。
-Latest full Windows regression is 2082/24; CUDA runtime policy tests pass 11 cases
-(including a peer-loss case added afterwards). All four strict real-model CPU
+Latest full Windows regression is 2089/24; CUDA Delivery policy tests pass 7 cases
+(including a timeout case added afterwards). All four strict real-model CPU
 cases passed again after the shared runtime-core change. This is not CUDA evidence.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
@@ -154,6 +154,12 @@ model forward permit；输出只有在 runtime 接受后才能提交，UNKNOWN �
 The local CUDA runtime binds receive/install to a model execution permit and
 post-drain result admission. TP1/single-request scope only; not real TP2 or
 production multi-request batch assembly.
+
+HTTP sparse Delivery sink 已接入该 CUDA runtime，统一目的地、远端完成、staging、
+安装后 ACK 和回收。目标 dtype 来自 bank，等待中超时不会被当作 native fence。
+The CUDA HTTP sink now drives destination publication, successful receive,
+runtime staging, post-install ACK and retirement. Timeout never proves native
+completion; dtype is read from the destination bank. This is not production activation.
 
 设备可用后运行 [CUDA 组件严格验收](PVD_CUDA_Component_Acceptance_CN_EN.md)。入口要求
 9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。
