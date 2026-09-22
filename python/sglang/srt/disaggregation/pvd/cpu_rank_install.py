@@ -17,10 +17,13 @@ from sglang.srt.disaggregation.pvd.sparse_install import (
 from sglang.srt.disaggregation.pvd.sparse_working_set import CPUSparseWorkingSet
 
 
-class CPURankInstallParticipant:
+class _RankInstallParticipantCore:
+    _bank_type = CPUSparseWorkingSet
+    _bank_description = "CPU"
+
     def __init__(self, bank, *, rank, peer_epoch, interval):
         if (
-            not isinstance(bank, CPUSparseWorkingSet)
+            not isinstance(bank, self._bank_type)
             or type(rank) is not int
             or rank < 0
             or type(interval) is not int
@@ -29,7 +32,7 @@ class CPURankInstallParticipant:
             or not peer_epoch.strip()
         ):
             raise InstallProtocolError(
-                "explicit CPU bank/rank/incarnation/interval required"
+                f"explicit {self._bank_description} bank/rank/incarnation/interval required"
             )
         self._bank, self.rank, self.peer_epoch, self.interval = (
             bank,
@@ -56,7 +59,7 @@ class CPURankInstallParticipant:
             kind, self.peer_epoch, self._pending, decode_tokens, reason
         ).encode()
 
-    def stage(self, epoch, payloads):
+    def _stage(self, epoch, payloads, **bank_options):
         self._live()
         if self._pending is not None:
             raise InstallProtocolError("rank already has a pending bank")
@@ -75,7 +78,7 @@ class CPURankInstallParticipant:
             for p in payloads
         ):
             raise InstallProtocolError("payload does not match installation epoch")
-        self._bank.stage(payloads)
+        self._bank.stage(payloads, **bank_options)
         try:
             candidate = self._bank.install_candidate()
             receipt = RankInstallReceipt(
@@ -93,7 +96,7 @@ class CPURankInstallParticipant:
         if self._phase not in ("prepared", "parked"):
             raise InstallProtocolError("rank has no prepared bank to park")
         if not self._bank.can_install(self._candidate, decode_tokens):
-            return None  # old CPU forward still owns the bank; no parked receipt
+            return None  # old forward still owns the bank; no parked receipt
         self._phase = "parked"
         return self._message("parked", decode_tokens=decode_tokens)
 
@@ -155,7 +158,7 @@ class CPURankInstallParticipant:
     def close(self):
         self._owner()
         self._terminal = True
-        self._bank.close()  # may refuse until existing CPU reader scopes drain
+        self._bank.close()  # may refuse until existing reader scopes drain
 
     def stop(self):
         """Close reads without releasing a bank or claiming reader completion."""
@@ -172,3 +175,10 @@ class CPURankInstallParticipant:
             "phase": self._phase,
             "terminal": self._terminal,
         }
+
+
+class CPURankInstallParticipant(_RankInstallParticipantCore):
+    """Synchronous CPU participant; not a CUDA installation capability."""
+
+    def stage(self, epoch, payloads):
+        return self._stage(epoch, payloads)

@@ -100,6 +100,13 @@ D now has a separate [CUDA bank implementation](PVD_CUDA_Working_Set_CN_EN.md)
 with bounded copies and fail-closed completion ownership. Production attention,
 receive visibility and distributed installation are not activated by this change.
 
+进一步增加 [CUDA 逐 rank 安装 participant](PVD_CUDA_Rank_Install_CN_EN.md)，
+将 bank 接入 PREPARED/PARKED/APPLIED/RESUMED 协议；全组 ACK 门控保留。
+这是逻辑协议接点，不是实际 TP launcher、GPU attention 或 RDMA 接收集成。
+The [CUDA rank participant](PVD_CUDA_Rank_Install_CN_EN.md) connects bank completion
+to the existing rank agreement. Actual model-rank transport and serving assembly
+remain distinct implementation/acceptance work.
+
 CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
 预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
 cuVS 历史版本和当前版本的架构要求不同，尚未据此宣布 V100S 实测通过。
