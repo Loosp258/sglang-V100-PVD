@@ -13,6 +13,10 @@ def validate(runner):
         CUDAModelPools,
         make_cuda_sparse_backend,
     )
+    from sglang.srt.disaggregation.pvd.cuda_prompt_bootstrap import (
+        CUDAPromptBootstrap,
+        CUDAPromptPoolSource,
+    )
     from sglang.srt.disaggregation.pvd.cuda_runtime_group import CUDARuntimeInstallGroup
     from sglang.srt.disaggregation.pvd.cuda_sparse_attention import (
         CUDASparseAttentionWorkspace,
@@ -52,7 +56,7 @@ def validate(runner):
         bytes_per_token=layers * heads * dim * 2 * 4,
         device=device,
     )
-    lock = threading.Lock()
+    lock = threading.RLock()
     with lock:
         adapter.forward(
             DraftForwardInputs(
@@ -135,7 +139,6 @@ def validate(runner):
         assert group.try_install(epoch, {0: epoch.target_tokens})
         assert group.can_decode(epoch.target_tokens)
 
-    install(0, (0, 1, 2, 3))
     workspace = CUDASparseAttentionWorkspace(
         device=device, dtype=dtype, head_dim=dim, chunk_tokens=2, budget=scratch_budget
     )
@@ -158,6 +161,11 @@ def validate(runner):
         release_events.append(True)
 
     owner = ResourceGuard(CUDAModelPools(runner.req_to_token_pool, pool), retire)
+    bootstrap_budget = TransferBudget(16 << 20, 1)
+    bootstrap = CUDAPromptBootstrap(
+        group, execution_lock=lock, staging_budget=bootstrap_budget
+    )
+    bootstrap.install(CUDAPromptPoolSource(bank.identity, slot, 4, owner))
     native = backend.consumer.forward_decode
     tolerance = 5e-3 if dtype == torch.float16 else 3e-4
 
@@ -229,7 +237,7 @@ def validate(runner):
             token = next_token  # Runtime has accepted the completed forward.
             output_tokens.append(token)
             assert output_budget.snapshot()["used_staging_bytes"] == 0
-            assert not lock.locked()
+            assert not lock._is_owned()  # CPython smoke: no leaked recursive lease.
         assert len(errors) == layers * 5 and len(output_tokens) == 5
     finally:
         runner.attn_backend = dense_backend
@@ -242,13 +250,14 @@ def validate(runner):
     assert release_events == [True]
     assert all(
         b.snapshot()["used_staging_bytes"] == 0
-        for b in (bank_budget, scratch_budget, output_budget)
+        for b in (bank_budget, scratch_budget, output_budget, bootstrap_budget)
     )
     return {
         "model_forwards": 5,
         "layer_oracle_checks": len(errors),
         "max_attention_abs_error": max(errors),
         "initial_full_and_sparse_refresh": True,
+        "initial_prompt_index_independent": True,
         "allocator_retirement_completed": True,
         "tokens": output_tokens,
     }

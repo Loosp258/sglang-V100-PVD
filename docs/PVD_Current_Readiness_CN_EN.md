@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2132 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**。
+最新 Windows 全量：**2142 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**。
 新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
 清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
 详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
-Latest full Windows regression is 2132/24; CUDA Delivery policy tests pass 7 cases.
+Latest full Windows regression is 2142/24; CUDA Delivery policy tests pass 7 cases.
 Draft retirement now fences work/map clearing/allocator updates, retains actual
 owners on UNKNOWN, quarantines the shared provider and cleans up malformed
 allocations. Fourteen new CPU cases pass; the first five failed before the fix.
@@ -68,6 +68,16 @@ The CUDA multi-request executor now binds wait-all admission and model consumpti
 to permits, allocator leases and target locking through result processing. Ten
 new CPU cases and 59 focused WSL batch/runtime/model cases pass. Serving queues
 and factories do not yet invoke it; request batching is not actual model TP.
+
+[无索引完整 Prompt 引导](PVD_CUDA_Prompt_Bootstrap_CN_EN.md) 已增加有界 staging、
+实际请求映射导入及初始 runtime 安装。10 个 CPU 用例通过；全量之后加强的
+UNKNOWN 不重试规则另经 21 个定向用例复验。严格 CUDA smoke 已接此入口但未执行。
+调用者仍需先证明原完整 Prompt 接收/unpack 已完成，生产接收器自动挂接尚未完成。
+Index-independent full-Prompt bootstrap now imports actual request-mapped pool
+rows through budgeted staging and initial runtime installation. Ten CPU cases
+pass; the final sticky-UNKNOWN refinement passes 21 focused cases after the full
+suite. The CUDA smoke is wired but unexecuted. Serving must still provide proven
+full-receive/unpack completion and invoke the importer at the correct boundary.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
