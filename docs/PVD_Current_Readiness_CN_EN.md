@@ -21,6 +21,15 @@ activation.
 
 ## 最新增量 / Latest increment
 
+[完整 KV fan-in 字节规划](PVD_Full_KV_FanIn_CN_EN.md) 已新增全局 head 交集及
+各 source/destination 相对偏移计算。29 个 CPU 用例使用真实 packer 验证跨 V
+shard 重建；旧 wire 接口仍拒绝 fan-in，多 writer 的身份/完成/fence 协议尚待接入。
+
+Full-KV fan-in byte planning now computes global-head intersections and both
+source/destination offsets. Twenty-nine CPU cases reconstruct actual packer bytes.
+Legacy wire APIs still refuse fan-in; multi-writer identity/completion/fencing
+integration remains implementation work.
+
 [CUDA Scheduler 显式绑定](PVD_CUDA_Scheduler_Binding_CN_EN.md) 已接普通 Decode
 循环、waiting admission、分配前 wait-all 和原 Scheduler 结果包装器。未绑定时
 仍走旧路径。新增 25 个 CPU 用例；WSL 定向 59 项通过。KV 压力当前选择中止 batch
