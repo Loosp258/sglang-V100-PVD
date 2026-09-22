@@ -1,5 +1,9 @@
 # PVD 最终目标推进步骤 / Implementation roadmap
 
+最新子步：[实模自动回收](PVD_Rank_Model_Binding_CN_EN.md) 已替换正常手动 owner
+清理，接入实际 Scheduler polling 方法，验证取消后自动回收、真实 allocator
+槽位复用及关闭排空。严格证据升级 v5；仍不等于完整生产 Scheduler/GPU/RDMA。
+
 最新子步：[CPU owner 回收驱动](PVD_Rank_Model_Binding_CN_EN.md) 已增加有界注册、
 排空轮询、退避和关闭协议，普通 Decode 循环在暂停/空闲/结果处理后都轮询
 显式绑定的 driver；待回收资源阻止 idle 泄漏检查/休眠。

@@ -2,6 +2,14 @@
 
 更新日期：2026-09-22。
 
+最新：[实模自动回收](PVD_Rank_Model_Binding_CN_EN.md) 将真实 Req 回收交给
+有界 driver 和实际 Scheduler 轮询方法，取消请求无需 fixture 逐个调用 owner。
+刷新注册和真实 ChunkCache 行先排空再复用；映射清零只发生在缓存消费后，
+旧回调重放不碰新 owner。严格报告 v5 要求所有场景验证 driver/关闭排空，完整
+场景还要求自动取消回收证据。未启动完整生产 Scheduler 或 GPU/RDMA；严格 v5
+四场景真实 CPU 模型矩阵通过。Windows 1806 passed / 14 skipped，WSL 1811 passed /
+9 skipped；本步 Python 文件 Ruff 检查和格式检查通过。
+
 最新：[有界回收驱动](PVD_Rank_Model_Binding_CN_EN.md) 增加精确 owner 注册、
 非阻塞轮询、清理并发/退避限制和显式关闭。普通 Decode 循环在暂停/空闲时也
 轮询显式绑定的 CPU driver；持有待回收资源时不执行 idle 泄漏检查/休眠。

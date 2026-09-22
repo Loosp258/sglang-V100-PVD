@@ -9,7 +9,7 @@ import pytest
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cpu_refresh_driver import CPURefreshDriver
 from sglang.srt.disaggregation.pvd.cpu_release_driver import CPUReleaseDriver
-from test_pvd_cpu_decode_lifecycle import env
+from test_pvd_cpu_decode_lifecycle import advance, env
 from test_pvd_cpu_request_release import binding
 
 
@@ -156,6 +156,30 @@ def test_forward_lease_prevents_release_and_shutdown_does_not_cancel_it():
             life.complete_decode(permit, 17)
             await turns(driver)
             assert len(calls) == 1 and driver.snapshot()["drained"]
+
+    asyncio.run(run())
+
+
+def test_shutdown_drains_probe_cancelled_before_its_first_dispatch():
+    async def run():
+        with env() as (life, f, _):
+            life.admit(f.request)
+            advance(life, 3)
+            driver, req, owner, calls = setup(life)
+            task = life.launch_refresh(
+                query_positions=(len(life.snapshot().tokens),),
+                clients={0: object(), 1: object()},
+                pack_source=f.pack_source,
+                timeout_seconds=5,
+            )
+            assert life.arbiter.busy
+            driver.begin_shutdown()  # cancels the not-yet-started probe task
+            assert life.arbiter.busy and not calls  # cancellation is not drain
+            await turns(driver, 12)
+            assert task.cancelled() and not life.arbiter.busy
+            assert owner.state == "released" and req.req_pool_idx is None
+            assert len(calls) == 1 and driver.snapshot()["drained"]
+            driver.close_loop()
 
     asyncio.run(run())
 

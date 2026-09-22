@@ -94,6 +94,32 @@ def test_forward_and_result_lease_hold_pool_until_drain_and_release_once():
     asyncio.run(run())
 
 
+def test_mapping_clears_only_after_cache_consumes_it_and_never_on_replay():
+    async def run():
+        with env() as (life, f, _):
+            life.admit(f.request)
+            guard, req, cache, release, calls = binding(life)
+            table = guard.executor.runner.req_to_token_pool.req_to_token
+            table[1].fill_(17)
+            table[2].fill_(23)
+
+            def consume_then_free(*args, **kwargs):
+                assert torch.all(table[1] == 17)
+                release(*args, **kwargs)
+
+            guard.defer(req, cache, False, consume_then_free)
+            assert torch.all(table[1] == 17)  # pending owner still needs its map
+            assert await guard.progress()
+            assert torch.count_nonzero(table[1]) == 0
+            assert torch.all(table[2] == 23)
+            table[1].fill_(31)  # a successor now owns the reused row
+            guard.defer(req, cache, False, consume_then_free)
+            assert await guard.progress()
+            assert torch.all(table[1] == 31) and len(calls) == 1
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", ["error", "cancel"])
 def test_drain_failure_retains_storage_and_allows_retry(monkeypatch, failure):
     async def run():

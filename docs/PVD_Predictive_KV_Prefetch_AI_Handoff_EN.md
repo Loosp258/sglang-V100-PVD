@@ -2,6 +2,16 @@
 
 Updated: 2026-09-22.
 
+Newest: [automatic real-model retirement](PVD_Rank_Model_Binding_CN_EN.md) moves
+normal Req cleanup onto the bounded driver and actual Scheduler polling hook.
+Cancelled requests retire without fixture calls to individual owners; refresh
+registrations and real ChunkCache rows drain before reuse. Mapping clear is
+one-shot after cache consumption, never a replay action. Schema v5 requires
+driver/shutdown evidence in every fault case and automatic cancellation cleanup
+in full-length cases. No full serving Scheduler process or GPU/RDMA execution
+is claimed. Strict v5 four-case real CPU matrix passed; Windows 1806 passed /
+14 skipped, WSL 1811 passed / 9 skipped. Ruff check/format pass for changed files.
+
 Newest: [bounded release driver](PVD_Rank_Model_Binding_CN_EN.md) adds exact-owner
 registration, nonblocking owner-loop polling, bounded drain concurrency/backoff
 and explicit shutdown. The normal Decode loop polls an explicitly attached CPU

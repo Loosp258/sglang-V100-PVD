@@ -2,6 +2,43 @@
 
 Updated / 更新：2026-09-22。
 
+## Real-model automatic retirement / 实模自动回收接入
+
+The CPU dual-model fixture now registers every actual Req with `CPUReleaseDriver`
+and calls the actual Decode mixin's polling hook between forwards. Cancellation,
+real finish callbacks and waiting-queue abort all use this path. Normal cleanup
+no longer calls each guard's `progress()` directly; the one explicit replay call
+remains solely an idempotence/stale-owner test. Refresh registrations retire
+automatically before final cache release, and shutdown drains all registered
+owners before closing the driver. The fixture still does not launch the full
+production Scheduler event loop.
+
+Prompt mappings now remain valid for asynchronous ChunkCache release; native
+Prompt K/V are still poisoned with NaNs to detect accidental dense attention.
+`CPURequestRelease` clears the stale request mapping immediately after the real
+cache callback consumes it, on the same owner thread with no intervening await.
+Replay never clears the row again. The fixture invalidates its old allocation
+handle only; it must not touch memory after the driver frees it. Capacity-pressure
+reuse remains allocator-driven, including when automatic cleanup finished before
+pressure was applied. It does not mutate allocator free lists.
+
+Schema v5 requires registration, Scheduler-hook progress, normal retirement via
+the driver and drained shutdown evidence in **every** case, including the early
+partial-install failure. Full-length cases additionally require automatic
+cancelled-owner retirement. Tests reject absent/false/truthy-only evidence;
+these report tests use synthetic reports, not actual model execution.
+
+Executed: strict v5 four-case real CPU matrix passed. Full-length cases retain
+21 attention checks (max error 3.58e-7), four HTTP deliveries / 1600 bytes and
+unchanged committed-token counts; partial-install retains its early-exit scope.
+29 new regression/report cases: Windows **1806 passed / 14 skipped**, WSL
+**1811 passed / 9 skipped**. Ruff check/format pass for this step's Python files.
+
+真实 CPU 双模型路径已改为 owner 驱动回收，而非逐个手工调用 guard；正常取消、
+结束和等待队列取消共用该路径。Prompt 映射保留供真实 ChunkCache 随时正确释放，
+仍用 NaN Prompt KV 检测误走 dense attention。映射清零只发生在真实释放后同一
+owner 回合；重复回调不再触碰已复用的槽位。正式 GPU/TP/RDMA 能力仍未开启。
+
 ## Bounded owner-thread release driver / 有界回收轮询驱动
 
 `CPUReleaseDriver` registers exact CPU Req/lifecycle owners with explicit request,

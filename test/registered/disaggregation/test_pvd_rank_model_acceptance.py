@@ -10,6 +10,7 @@ import pytest
 from pvd_rank_model_acceptance import (
     FAULT_CHECKS,
     FRAME,
+    RELEASE_CHECKS,
     REUSE_CHECKS,
     SCHEMA,
     AcceptanceError,
@@ -48,6 +49,7 @@ def evidence(run_id="test-run", fault="none"):
         },
         status="passed",
         resource_reuse_evidence=dict.fromkeys(REUSE_CHECKS, True),
+        release_driver_evidence=dict.fromkeys(RELEASE_CHECKS, True),
         production_scheduler_gpu_rdma_validated=False,
         model_quality_gpu_latency_validated=False,
         attention_checks=21,
@@ -112,6 +114,16 @@ def test_reuse_must_be_exercised_not_inferred_from_final_cleanup(field, value):
     report["rank_runtime_loop_evidence"]["resource_reuse_evidence"][field] = value
     with pytest.raises(AcceptanceError, match=field):
         validate_report(report, "test-run")
+
+
+@pytest.mark.parametrize("field", RELEASE_CHECKS)
+@pytest.mark.parametrize("value", [None, False, 1])
+@pytest.mark.parametrize("fault", ["none", "install"])
+def test_every_case_requires_executed_release_driver_evidence(field, value, fault):
+    report = evidence(fault=fault)
+    report["rank_runtime_loop_evidence"]["release_driver_evidence"][field] = value
+    with pytest.raises(AcceptanceError, match=field):
+        validate_report(report, "test-run", fault=fault)
 
 
 @pytest.mark.parametrize(

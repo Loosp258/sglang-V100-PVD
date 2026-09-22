@@ -5,7 +5,13 @@ import json
 import math
 
 FRAME = "PVD_CPU_SMOKE_RESULT="
-SCHEMA = "pvd-rank-model-cpu-v4"
+SCHEMA = "pvd-rank-model-cpu-v5"
+RELEASE_CHECKS = (
+    "exact_cpu_owner_registration",
+    "scheduler_hook_progressed",
+    "bounded_shutdown_drained",
+    "normal_retirement_uses_driver",
+)
 REUSE_CHECKS = (
     "retired_before_next_admission",
     "allocator_reused_slot",
@@ -14,6 +20,7 @@ REUSE_CHECKS = (
     "real_finish_callback_deferred",
     "real_waiting_abort_callback_deferred",
     "real_chunk_cache_released_rows",
+    "cancelled_owner_auto_retired",
 )
 FAULT_CHECKS = {
     "none": (),
@@ -129,6 +136,9 @@ def validate_report(report, run_id, *, fault="none"):
     fault_report = _object(loop.get("fault_evidence"), "fault_evidence")
     _require(fault_report.get("mode") == fault, "requested fault mode")
     _true(fault_report, ("cleanup_verified", *FAULT_CHECKS[fault]))
+    _true(
+        _object(loop.get("release_driver_evidence"), "release driver"), RELEASE_CHECKS
+    )
     _true(
         loop,
         (

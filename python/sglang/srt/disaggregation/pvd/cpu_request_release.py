@@ -104,6 +104,10 @@ class CPURequestRelease:
                     raise LifecycleError(
                         "cache release did not retire the request slot"
                     )
+                # ChunkCache consumed this row before freeing the slot. Clear
+                # stale mappings in the same owner turn, before any new owner
+                # can acquire it; replayed cleanup must NEVER clear a reused row.
+                self.executor.runner.req_to_token_pool.req_to_token[self.slot].zero_()
             except BaseException:
                 self.state = "quarantined"
                 raise

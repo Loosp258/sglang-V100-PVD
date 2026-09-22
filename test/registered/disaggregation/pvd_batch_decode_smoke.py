@@ -98,6 +98,8 @@ def validate_batch_decode(
     )
     processor = None
     driver = None
+    release_driver = None
+    release_evidence = {}
     if automatic_refresh:
         from sglang.srt.disaggregation.pvd.cpu_refresh_driver import CPURefreshDriver
 
@@ -111,12 +113,18 @@ def validate_batch_decode(
             make_processor,
             make_req,
         )
-        from sglang.srt.disaggregation.pvd.cpu_request_release import CPURequestRelease
+        from sglang.srt.disaggregation.decode import SchedulerDisaggregationDecodeMixin
+        from sglang.srt.disaggregation.pvd.cpu_release_driver import CPUReleaseDriver
         from sglang.srt.disaggregation.pvd.cpu_schedule_bridge import CPUScheduleBridge
         from sglang.srt.mem_cache.common import release_kv_cache
 
         processor = make_processor()
         bind_real_cache_release(processor, runner)
+
+    def poll_releases():
+        if release_driver is not None:
+            return SchedulerDisaggregationDecodeMixin.poll_pvd_cpu_releases(processor)
+        return None
 
     def create(name, tokens):
         allocator = PrivatePoolAllocator(reqpool, runner.token_to_kv_pool_allocator)
@@ -197,11 +205,15 @@ def validate_batch_decode(
             if scheduled_results:
                 r.req = make_req(r.life, r.slot, config.vocab_size)
                 r.req.kv_committed_len = r.req.kv_allocated_len = len(r.rows)
-                r.release_guard = CPURequestRelease(r.req, r.life, executor)
+                r.release_guard = release_driver.register(r.req, r.life)
             for l in range(layers):
                 pool.get_key_buffer(l)[r.rows] = float("nan")
                 pool.get_value_buffer(l)[r.rows] = float("nan")
-            reqpool.req_to_token[slot, : len(tokens)] = -1
+            # The real cache callback needs valid owned-row mappings at any
+            # automatic retirement point. NaN Prompt K/V still catches dense
+            # attention fallback; only the non-Scheduler fixture poisons maps.
+            if not scheduled_results:
+                reqpool.req_to_token[slot, : len(tokens)] = -1
         finally:
             arbiter.release(lease)
         return r
@@ -216,7 +228,24 @@ def validate_batch_decode(
             return
         if r.releasing:
             raise AssertionError("ambiguous pool release is quarantined, not retried")
-        if r.life is not None:
+        if r.release_guard is not None:
+            release_kv_cache(r.req, processor.tree_cache, is_insert=False)
+            deadline = asyncio.get_running_loop().time() + 30
+            while r.release_guard.state != "released":
+                poll_releases()
+                if r.release_guard.state == "quarantined":
+                    raise AssertionError("automatic pool release is quarantined")
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError(
+                        "release driver did not drain; ownership retained"
+                    )
+                await asyncio.sleep(0.001)
+            poll_releases()  # harvest completed task and return admission
+            assert r.req.req_pool_idx is None
+            # The driver already freed/cleared the row. Touch metadata only:
+            # this alias must not free or clear a possibly reused slot.
+            r.allocator._request.req_pool_idx = None
+        elif r.life is not None:
             if r.refresh_registered:
                 await driver.remove(r.life)
                 r.refresh_registered = False
@@ -227,18 +256,7 @@ def validate_batch_decode(
         if r.fixture is not None:
             r.fixture.close()
         r.releasing = True
-        if r.release_guard is not None:
-            # Restore this fixture's poisoned Prompt mapping only after the
-            # readers drained. The real ChunkCache frees those owned rows.
-            r.allocator.write_mapping(r.slot, 0, r.rows)
-            release_kv_cache(r.req, processor.tree_cache, is_insert=False)
-            assert await r.release_guard.progress()
-            assert r.req.req_pool_idx is None
-            # Allocation initially used a draft-style handle; actual Req now
-            # retired that same slot. Invalidate the fixture's old alias too.
-            r.allocator._request.req_pool_idx = None
-            r.allocator.clear_mapping(r.slot)
-        else:
+        if r.release_guard is None:
             r.allocator.clear_mapping(r.slot)
             r.allocator.free_kv(r.rows)
             r.allocator.free_request(r.slot)
@@ -425,9 +443,21 @@ def validate_batch_decode(
         finally:
             runner.attn_backend = native
             active.clear()
+            poll_releases()
 
     async def run():
-        nonlocal inject_failure
+        nonlocal inject_failure, release_driver
+        if scheduled_results:
+            release_driver = CPUReleaseDriver(
+                executor,
+                processor.tree_cache,
+                max_requests=8,
+                max_inflight=2,
+                retry_seconds=0.01,
+                refresh_driver=driver,
+            )
+            processor.pvd_cpu_release_driver = release_driver
+            release_evidence.update(exact_cpu_owner_registration=True)
         try:
             old = create("old", (1, 4, 13, 7, 22))
             new = create("new", (1, 6, 17))  # different absolute positions in batch
@@ -590,6 +620,7 @@ def validate_batch_decode(
                     return {
                         "status": "passed",
                         "fault_evidence": fault_evidence,
+                        "release_driver_evidence": release_evidence,
                         "rank_runtime_bound_to_model_banks": True,
                         "real_req_schedule_batch_result_processor": True,
                         "independent_real_draft": draft_provider is not None,
@@ -659,6 +690,17 @@ def validate_batch_decode(
                 }
             # Force allocator-selected reuse, not a hand-edited free list.
             # Held capacity has no model users and is returned immediately.
+            if release_driver is not None:
+                # No fixture retire(new) or direct owner.progress(): normal
+                # owner polling must release the cancelled request itself.
+                for _ in range(100):
+                    poll_releases()
+                    await asyncio.sleep(0.001)
+                    if new.release_guard.state == "released":
+                        break
+                assert new.release_guard.state == "released"
+                assert driver is None or not driver.contains(new.life)
+                reuse_evidence["cancelled_owner_auto_retired"] = True
             while reqpool.free_slots:
                 holder = PrivatePoolAllocator(
                     reqpool, runner.token_to_kv_pool_allocator
@@ -669,6 +711,16 @@ def validate_batch_decode(
                     runner.token_to_kv_pool_allocator.available_size()
                 )
             )
+            if release_driver is not None:
+                # Automatic cleanup preceded pressure. These holders now own
+                # the old resources; release only those through real APIs.
+                old_holder = next(h for h in held_slots if h[1] == new.slot)
+                old_holder[0].free_request(old_holder[1])
+                held_slots.remove(old_holder)
+                recovered = [row for row in held_rows if row in set(new.rows)]
+                assert set(recovered) == set(new.rows)
+                pressure_allocator.free_kv(recovered)
+                held_rows[:] = [row for row in held_rows if row not in set(recovered)]
             await retire(new)
             assert new.life not in executor._storage
             assert torch.count_nonzero(reqpool.req_to_token[new.slot]).item() == 0
@@ -763,6 +815,7 @@ def validate_batch_decode(
             return {
                 "status": "passed",
                 "fault_evidence": fault_evidence,
+                "release_driver_evidence": release_evidence,
                 "resource_reuse_evidence": reuse_evidence,
                 "batch_sizes": sizes,
                 "committed_d_tokens": {
@@ -784,6 +837,8 @@ def validate_batch_decode(
                 "production_scheduler_gpu_rdma_validated": False,
             }
         finally:
+            if release_driver is not None:
+                release_driver.begin_shutdown()
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -797,6 +852,15 @@ def validate_batch_decode(
             release_pressure()
             if driver is not None:
                 await driver.close()
+            if release_driver is not None:
+                poll_releases()
+                assert release_driver.snapshot()["drained"]
+                release_driver.close_loop()
+                release_evidence.update(
+                    scheduler_hook_progressed=True,
+                    bounded_shutdown_drained=True,
+                    normal_retirement_uses_driver=True,
+                )
             assert not arbiter.busy and not executor._storage
             assert all(b.snapshot()["used_staging_bytes"] == 0 for b in budgets)
             assert (
