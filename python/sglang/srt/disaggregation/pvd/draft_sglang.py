@@ -421,7 +421,10 @@ class DraftRunnerFactory(Protocol):
     def open(
         self, *, branch_id: str, prefix_tokens: int, max_tokens: int
     ) -> DraftExecutionHandle:
-        """Allocate this branch's own execution state."""
+        """Mint branch-local metadata without allocating execution/device storage.
+
+        The provider reserves scratch before prepare_prefix may allocate it.
+        """
 
 
 @dataclass
@@ -786,7 +789,10 @@ class SGLangDraftProvider(DraftProvider):
         if record is None:  # pragma: no cover - defensive
             return
         try:
-            record.handle.release()
+            # Allocation/forward and cleanup share pool metadata and backend
+            # state. Distinct request handles do not make alloc/free reentrant.
+            with self._execution_lock:
+                record.handle.release()
         except BaseException as exc:
             # The resources may still be live. Keep the reservation and the
             # admission slot so nothing else is handed the same memory.

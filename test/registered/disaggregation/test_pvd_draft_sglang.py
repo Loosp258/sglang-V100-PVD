@@ -155,6 +155,11 @@ class FakeAllocator:
         self.req_to_token = torch.zeros(slots, width, dtype=torch.int32)
         self.mapping_writes = []
 
+    def fork_for_branch(self):
+        # This double stores a per-index ledger, not one mutable request handle.
+        # Real PrivatePoolAllocator forks an actual branch-local request object.
+        return self
+
     def write_mapping(self, request_index, start, locations):
         values = torch.tensor(list(locations), dtype=torch.int32)
         self.req_to_token[request_index, start : start + len(values)] = values

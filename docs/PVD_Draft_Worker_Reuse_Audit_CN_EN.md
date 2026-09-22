@@ -1,5 +1,38 @@
 # PVD prediction-only draft reuse: audit and plan / PVD 仅预测 draft 复用：审计与方案
 
+## 2026-09-22: actual branch-local allocator ownership / 分支分配器所有权
+
+Two failures were reproduced: a single `PrivatePoolAllocator` stored one mutable
+request handle and was reused by every factory handle, so the second live
+branch failed allocation despite independent handle/admission metadata. Also,
+cleanup did not hold the model execution lock and could interleave pool frees
+with another branch's allocation/forward.
+
+`SlotAllocator.fork_for_branch()` now explicitly mints branch ownership metadata
+without device allocation. The real adapter returns a new request handle over
+the SAME private request/KV pool storage, not new pools or copied weights.
+Factories refuse allocators missing this contract. Provider retirement uses the
+same execution lock as prediction; failed cleanup keeps quarantine/admission
+semantics. More than one branch may own rows, but model execution remains serial.
+The test allocator double uses a per-index ledger and explicitly opts into this
+contract; it must not be mistaken for the real single-request adapter.
+
+New tests cover two live handles, mapping survival after peer retirement,
+continuation after peer release, missing-contract refusal and two concurrently
+admitted threads. One variant uses actual CPU `ReqToTokenPool` and
+`TokenToKVPoolAllocator` in WSL; it still uses a model executor double and is
+not GPU/kernel concurrency evidence. The separate real-model gate covers the
+standard prediction/Decode path.
+
+Verification: new ownership tests Windows **4 passed / 1 skipped**, WSL **5
+passed**, including real CPU pools. Full regression Windows **1823 passed / 15
+skipped**, WSL **1829 passed / 9 skipped**. Strict v5 real CPU four-case matrix
+passed. Touched files pass formatting; pre-existing Ruff findings are retained.
+
+已复现并修复“多个 handle 共享同一个请求 owner”和“释放未持执行锁”两个问题。
+现在每个分支只新建请求所有权元数据，仍共享原私有池和模型权重；前向/分配/释放
+串行化，多个分支可以同时持有各自槽位。真实 CPU 分配器验证不等于 GPU 并行证明。
+
 ## 2026-09-22: shared-budget accounting / 共享预算计费修复
 
 Eleven regression cases reproduced before the fix: two independent 1024-byte

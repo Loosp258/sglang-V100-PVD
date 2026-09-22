@@ -435,6 +435,10 @@ class PrivatePoolAllocator:
         #: One request object per branch, created here and never borrowed.
         self._request = DraftRequestHandle()
 
+    def fork_for_branch(self) -> PrivatePoolAllocator:
+        """Independent request owner, same private KV and request pool storage."""
+        return type(self)(self._requests, self._kv)
+
     # -- request slots ------------------------------------------------------
 
     def alloc_request(self) -> int:

@@ -139,6 +139,12 @@ class SlotAllocator(Protocol):
     and the row written is always one this branch allocated.
     """
 
+    def fork_for_branch(self) -> SlotAllocator:
+        """Return branch-local ownership metadata over shared private pools.
+
+        Must not allocate device storage; admission has not reserved scratch yet.
+        """
+
     def alloc_request(self) -> int: ...
 
     def free_request(self, index: int) -> None: ...
@@ -427,6 +433,8 @@ class SGLangDraftRunnerFactory:
                 "persistent_bytes must be a non-negative integer"
             )
         self._executor = executor
+        if not callable(getattr(allocator, "fork_for_branch", None)):
+            raise DraftCapabilityError("allocator must provide branch-local ownership")
         self._allocator = allocator
         self._capabilities = capabilities
         self._persistent_bytes = persistent_bytes
@@ -464,7 +472,7 @@ class SGLangDraftRunnerFactory:
         return SGLangDraftHandle(
             branch_id,
             self._executor,
-            self._allocator,
+            self._allocator.fork_for_branch(),
             max_prefix_tokens=prefix_tokens,
             max_tokens=max_tokens,
             capabilities=self._capabilities,

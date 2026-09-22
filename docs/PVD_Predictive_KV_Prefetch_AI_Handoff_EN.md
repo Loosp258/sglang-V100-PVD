@@ -2,6 +2,12 @@
 
 Updated: 2026-09-22.
 
+Newest: [branch allocator ownership](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) fixes
+one mutable request handle being shared by all runner handles. Each branch now
+forks ownership metadata over the same private pools; cleanup and execution
+share a lock. Factories require the new `fork_for_branch` contract. Two defects
+reproduced before fixing; CPU pool/thread tests do not establish GPU concurrency.
+
 Newest: [draft accounting audit](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) fixes shared
 persistent-budget owner collisions, missing/aliased budgets, footprint coercion
 and per-provider-bound bypass. Diagnostic branch history is bounded to 64 ids

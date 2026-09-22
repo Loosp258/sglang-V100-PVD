@@ -2,6 +2,11 @@
 
 更新日期：2026-09-22。
 
+最新：[分支分配器所有权](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) 修复所有 handle
+共享一个可变请求 owner 的问题。每个分支通过 `fork_for_branch` 获得独立元数据，
+仍共享原私有池；释放与执行使用同一锁。修复前复现两个失败，真实 CPU 池/线程
+测试不等于 GPU 并发验收。
+
 最新：[draft 预算审计](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) 修复共享预算的
 owner 冲突漏计、无预算/混用预算、字节数强转和单 provider 上限绕过；诊断历史
 限制 64 条并保留加锁总计数。修复前复现 11 个失败；不声称模型卸载、加载峰值
