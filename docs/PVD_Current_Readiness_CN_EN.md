@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2013 passed / 24 skipped**；WSL CUDA probe CPU 策略
-定向：**16 passed**。probe 共享核心修改后，严格 v5 四场景真实 CPU 模型矩阵
+最新 Windows 全量：**2034 passed / 24 skipped**；WSL attention/bank/participant
+定向：**80 passed / 6 skipped**。probe 共享核心修改后，严格 v5 四场景真实 CPU 模型矩阵
 再次全部通过。这不是 CUDA probe 的 GPU forward 证据。
-Latest full Windows regression is 2013/24; WSL CUDA-probe CPU policy regression
-is 16 passed. All four strict real-model CPU cases passed again after the shared
+Latest full Windows regression is 2034/24; WSL attention/bank/participant regression
+is 80/6. All four strict real-model CPU cases passed again after the shared
 probe-core change. This does not validate a CUDA model forward.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
@@ -134,6 +134,10 @@ softmax、固定大小显式 scratch、participant reader 和输入/output guard
 The standalone [CUDA attention baseline](PVD_CUDA_Sparse_Attention_CN_EN.md)
 adds fixed explicit scratch and guarded tiled consumption without concatenating
 full context. It is not a production backend or a total device-memory bound.
+增量支持直接按非连续生成 KV 池行读取，未选中槽位不读；另修复后续 reader 排空
+失败时提前 unpin generated/output 的漏洞。CPU 数值/故障回归通过，GPU 用例未执行。
+Mapped generated-pool rows now feed fixed tiles directly. A reproduced late-reader
+drain failure no longer unpins generated/output ownership. GPU cases remain unrun.
 
 设备可用后运行 [CUDA 组件严格验收](PVD_CUDA_Component_Acceptance_CN_EN.md)。入口要求
 9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。

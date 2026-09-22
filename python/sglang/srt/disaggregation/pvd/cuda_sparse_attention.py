@@ -30,6 +30,11 @@ class AttentionBuffers:
     generated_k: torch.Tensor
     generated_v: torch.Tensor
     output: torch.Tensor
+    # None means compact generated KV. Otherwise K/V are the model pool and
+    # these immutable host indices select only this request's generated rows.
+    # The owner must pin those rows until execution completes. No device-sized
+    # gather of the generated context is performed.
+    generated_rows: tuple[int, ...] | None = None
 
 
 def scratch_elements(chunk_tokens, head_dim):
@@ -70,14 +75,27 @@ def _stream_attention(groups, buffers, mapping, layer, scale, scratch, chunk, di
             maximum.fill_(-float("inf"))
             denominator.zero_()
             accum.zero_()
-            for source_k, source_v in (
-                (prompt[0], prompt[1]),
-                (buffers.generated_k[:, kv_head], buffers.generated_v[:, kv_head]),
+            for source_k, source_v, rows in (
+                (prompt[0], prompt[1], None),
+                (
+                    buffers.generated_k[:, kv_head],
+                    buffers.generated_v[:, kv_head],
+                    buffers.generated_rows,
+                ),
             ):
-                for start in range(0, source_k.shape[0], chunk):
-                    count = min(chunk, source_k.shape[0] - start)
-                    keys[:count].copy_(source_k[start : start + count])
-                    values[:count].copy_(source_v[start : start + count])
+                length = source_k.shape[0] if rows is None else len(rows)
+                for start in range(0, length, chunk):
+                    count = min(chunk, length - start)
+                    if rows is None:
+                        keys[:count].copy_(source_k[start : start + count])
+                        values[:count].copy_(source_v[start : start + count])
+                    else:
+                        # Baseline avoids a dtype-sized index_select temporary:
+                        # copy selected rows directly into existing FP32 tiles.
+                        for tile_row in range(count):
+                            source_row = rows[start + tile_row]
+                            keys[tile_row].copy_(source_k[source_row])
+                            values[tile_row].copy_(source_v[source_row])
                     torch.mv(keys[:count], query, out=scores[:count])
                     scores[:count].mul_(scale)
                     torch.max(scores[:count], out=tile_max)
@@ -164,7 +182,21 @@ class CUDASparseAttentionWorkspace:
                 raise SparsePayloadError(
                     "bank and attention device/dtype/dimension mismatch"
                 )
-            shape = (decode_tokens + 1, mapping.total_kv_heads, self.head_dim)
+            pool_rows = decode_tokens + 1
+            if buffers.generated_rows is not None:
+                rows = buffers.generated_rows
+                if (
+                    type(rows) is not tuple
+                    or len(rows) != decode_tokens + 1
+                    or any(type(r) is not int or r <= 0 for r in rows)
+                    or len(set(rows)) != len(rows)
+                    or not isinstance(buffers.generated_k, torch.Tensor)
+                    or buffers.generated_k.ndim != 3
+                    or max(rows) >= buffers.generated_k.shape[0]
+                ):
+                    raise SparsePayloadError("invalid generated pool row mapping")
+                pool_rows = buffers.generated_k.shape[0]
+            shape = (pool_rows, mapping.total_kv_heads, self.head_dim)
             tensors = (
                 buffers.q,
                 buffers.generated_k,
@@ -231,6 +263,12 @@ class CUDASparseAttentionWorkspace:
                         raise
         finally:
             try:
+                # A later bank-reader drain can fail even after this workspace's
+                # compute drain succeeded. That uncertainty must retain the
+                # generated pool/output owner too, not just the Prompt bank.
+                if participant._bank.snapshot()["quarantine"] is not None:
+                    self._quarantine = "Prompt reader completion unknown"
+                    self._held = (resources, pin, participant)
                 if self._quarantine is None:
                     try:
                         resources.unpin(pin)

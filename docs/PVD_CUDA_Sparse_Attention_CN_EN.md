@@ -49,21 +49,33 @@ attention budgeting still need target-stack integration and measurement.
   所有 Q/K 已 post-RoPE；本类不从 shape 推断或证明这些语义。
   The caller supplies post-RoPE Q/K and every generated position in order, including
   the current token. Shape validation does not certify semantic origin or encoding.
+- 也可提供完整模型池视图和不可变 `generated_rows` tuple：长度必须为
+  `decode_tokens + 1`、正整数、无重复、均在池内。按映射直接复制到固定 tile，
+  不先 gather 全部生成上下文；未选中的池行完全不读。调用方仍负责证明这些行
+  属于该请求并保持 allocator 租约。逐行 copy 是正确性基线，不是优化 kernel。
+  Alternatively pass pool views plus immutable generated-row metadata. Selected
+  rows are copied directly into existing tiles without a context-sized gather.
+  The caller must prove row ownership and prevent reuse; per-row copies are a
+  correctness baseline, not a performance claim.
 - output 必须独立于输入、Prompt 和 scratch 的 storage。全部元数据检查在计算前；
   不修改 Prompt 或 generated KV。失败时 output 可能部分写入，调用方不得提交 token。
   Failed compute can leave partial output: discard it rather than committing it.
 - 计算结束或抛异常都同步该设备后才撤销 guard。同步未知保留 scratch 预算和全部
   guard；close 不强制回收。释放回调期间也不能重入 workspace。
   Unknown completion quarantines storage/charges. No force-free or CPU fallback.
+  后续 Prompt reader 退出同步失败也会保留 generated/output guard；不能因为更早的
+  attention 同步成功而解除 pin。该漏洞已用 CPU 故障注入先复现再修复。
+  A later Prompt-reader drain failure also retains generated/output guards. An
+  earlier successful compute drain does not override later completion uncertainty.
 
 ## 验证 / Validation
 
-27 个 CPU 数值/生命周期用例，含不允许 `torch.cat` 的对照、跨块最大值变化、
+48 个 CPU 数值/生命周期用例，含不允许 `torch.cat` 的对照、跨块最大值变化、
 部分计算失败、容量拒绝、源释放失败与回调重入。CPU 策略 fixture 不等于 CUDA。
 3 个独立真实 CUDA 用例分别覆盖 FP16/FP32 数值和两轮 bank/participant/workspace
 集成；本地无 CUDA 环境跳过。尚无真实模型 forward、V100S、RDMA 或性能证据。
 
-Twenty-seven CPU cases exercise the actual tiled math and explicit ownership
+Forty-eight CPU cases exercise the actual tiled math and explicit ownership
 policies. Three distinct real-CUDA cases cover FP16/FP32 math and two-round bank /
 participant / workspace composition; these skip locally. No real-model CUDA
 forward, V100S, RDMA, production activation or performance claim follows.

@@ -310,6 +310,96 @@ def test_release_callback_cannot_reenter_workspace(monkeypatch):
         peer.close()
 
 
+def test_reader_exit_failure_keeps_execution_resources_and_budget(monkeypatch):
+    peers, workspace, budget, _, resources, released = ready(monkeypatch)
+
+    def fail_reader():
+        peers[0]._bank._quarantine = "reader completion unknown"
+        raise RuntimeError("reader completion unknown")
+
+    monkeypatch.setattr(workspace, "_synchronize", resources.request_release)
+    monkeypatch.setattr(peers[0]._bank, "_drain_reader", fail_reader)
+    with pytest.raises(RuntimeError, match="reader completion unknown"):
+        execute(workspace, peers[0], resources)
+    assert not released
+    assert workspace.snapshot()["resources_held"]
+    assert budget.snapshot()["used_staging_bytes"] > 0
+    with pytest.raises(SparsePayloadError, match="quarantined"):
+        workspace.close()
+
+
+def mapped_buffers(data):
+    """Put compact generated KV in discontiguous rows; poison all others."""
+    count = data.generated_k.shape[0]
+    rows = tuple(range(2 * count, 0, -2))
+    shape = (2 * count + 3, *data.generated_k.shape[1:])
+    keys = torch.full(shape, float("nan"), dtype=data.q.dtype, device=data.q.device)
+    values = torch.full_like(keys, float("nan"))
+    for index, row in enumerate(rows):
+        keys[row].copy_(data.generated_k[index])
+        values[row].copy_(data.generated_v[index])
+    return replace(data, generated_k=keys, generated_v=values, generated_rows=rows)
+
+
+@pytest.mark.parametrize("chunk", [1, 2, 7])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("tokens", [(0, 1, 2, 3), (3, 1)])
+def test_mapped_pool_math_never_reads_unselected_rows(
+    monkeypatch, chunk, dtype, tokens
+):
+    prompt, data, mapping = (
+        groups(tokens, dtype=dtype),
+        buffers(10, dtype=dtype),
+        QueryHeadMapping(4, 2),
+    )
+    expected = oracle(prompt, data, mapping, 10)
+    mapped = mapped_buffers(data)
+    scratch = torch.empty(attention.scratch_elements(chunk, 3))
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("no context-sized concatenation or gather")
+
+    monkeypatch.setattr(torch, "cat", refuse)
+    monkeypatch.setattr(torch, "index_select", refuse)
+    attention._stream_attention(
+        prompt, mapped, mapping, 0, 1 / math.sqrt(3), scratch, chunk, 3
+    )
+    torch.testing.assert_close(
+        mapped.output.float(),
+        expected,
+        atol=0.025 if dtype == torch.float16 else 2e-5,
+        rtol=1e-3 if dtype == torch.float16 else 2e-5,
+    )
+
+
+@pytest.mark.parametrize("bad_rows", [(), (0,), (-1,), (999,), (True,), (1.0,), [1]])
+def test_invalid_pool_rows_refused_before_compute(monkeypatch, bad_rows):
+    peers, workspace, _, syncs, resources, _ = ready(monkeypatch)
+    data = replace(mapped_buffers(resources.value), generated_rows=bad_rows)
+    data.output.fill_(-123)
+    resources = ResourceGuard(data, lambda: None)
+    with pytest.raises(SparsePayloadError, match="pool row mapping"):
+        execute(workspace, peers[0], resources)
+    assert not syncs and torch.all(data.output == -123)
+    workspace.close()
+    resources.request_release()
+    for peer in peers.values():
+        peer.close()
+
+
+def test_mapped_pool_workspace_matches_compact_result(monkeypatch):
+    peers, workspace, _, _, resources, _ = ready(monkeypatch)
+    expected = oracle(groups(), resources.value, QueryHeadMapping(4, 2), 0)
+    data = mapped_buffers(resources.value)
+    resources = ResourceGuard(data, lambda: None)
+    execute(workspace, peers[0], resources)
+    torch.testing.assert_close(data.output, expected, atol=2e-5, rtol=2e-5)
+    workspace.close()
+    resources.request_release()
+    for peer in peers.values():
+        peer.close()
+
+
 @pytest.mark.skipif(
     not torch.cuda.is_available(),
     reason="real CUDA attention is unverified without CUDA",
@@ -338,6 +428,18 @@ def test_real_cuda_tiled_math_matches_cpu_oracle(dtype):
     torch.cuda.synchronize("cuda:0")
     torch.testing.assert_close(
         cuda_data.output.float().cpu(),
+        expected,
+        atol=0.025 if dtype == torch.float16 else 2e-4,
+        rtol=1e-3 if dtype == torch.float16 else 2e-4,
+    )
+    # Same real CUDA case also exercises a model-pool-shaped mapped source.
+    mapped = mapped_buffers(cuda_data)
+    attention._stream_attention(
+        cuda_groups, mapped, mapping, 0, 1 / math.sqrt(3), scratch, 3, 3
+    )
+    torch.cuda.synchronize("cuda:0")
+    torch.testing.assert_close(
+        mapped.output.float().cpu(),
         expected,
         atol=0.025 if dtype == torch.float16 else 2e-4,
         rtol=1e-3 if dtype == torch.float16 else 2e-4,
