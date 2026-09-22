@@ -150,25 +150,27 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     if getattr(server_args, "pvd_draft_model_path", None):
         # A prediction branch competes for the same device as the committed
         # path, so its scratch is bounded explicitly rather than guessed.
-        if not getattr(server_args, "pvd_draft_scratch_budget_bytes", None):
+        if getattr(server_args, "pvd_draft_scratch_budget_bytes", None) is None:
             raise ValueError(
                 "--pvd-draft-scratch-budget-bytes is required with "
                 "--pvd-draft-model-path: a prediction branch that is not "
                 "bounded can starve the committed decode path"
             )
-        if server_args.pvd_draft_scratch_budget_bytes <= 0:
-            raise ValueError(
-                "--pvd-draft-scratch-budget-bytes must be a positive integer"
-            )
-        if server_args.pvd_draft_predict_tokens <= 0:
-            raise ValueError("--pvd-draft-predict-tokens must be positive")
-        logger.info(
-            "PVD prediction-only draft model configured (%s). Predictions "
-            "choose retrieval positions only: they are never verified, "
-            "accepted or committed, and speculative decoding remains off.",
+        server_args.pvd_draft_scratch_budget_bytes = _require_positive_int(
+            "--pvd-draft-scratch-budget-bytes",
+            server_args.pvd_draft_scratch_budget_bytes,
+        )
+        server_args.pvd_draft_predict_tokens = _require_positive_int(
+            "--pvd-draft-predict-tokens", server_args.pvd_draft_predict_tokens
+        )
+        logger.warning(
+            "PVD draft configuration recorded (%s), but production predictive "
+            "retrieval is not active: --pvd-draft-* does not instantiate the "
+            "CPU reference pipeline in this serving Scheduler. The full-Prompt "
+            "refresh path remains in use; speculative decoding remains off.",
             server_args.pvd_draft_model_path,
         )
-    elif getattr(server_args, "pvd_draft_scratch_budget_bytes", None):
+    elif getattr(server_args, "pvd_draft_scratch_budget_bytes", None) is not None:
         raise ValueError(
             "--pvd-draft-scratch-budget-bytes has no meaning without "
             "--pvd-draft-model-path"

@@ -6989,7 +6989,9 @@ class ServerArgs:
             help="Model name or local path for PVD's prediction-only draft "
             "model on D. No model is hard-coded and there is no default. This "
             "does NOT enable speculative decoding: predictions are used only "
-            "to choose retrieval positions and can never become output.",
+            "to choose retrieval positions and can never become output. "
+            "Configuration only: this flag does not activate production "
+            "predictive retrieval; the serving path still refreshes full Prompt KV.",
         )
         parser.add_argument(
             "--pvd-draft-revision",

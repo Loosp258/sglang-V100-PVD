@@ -1184,7 +1184,7 @@ def test_a_scratch_budget_without_a_draft_model_is_refused():
         ({"pvd_draft_scratch_budget_bytes": -1}, "positive integer"),
         (
             {"pvd_draft_scratch_budget_bytes": 1 << 20, "pvd_draft_predict_tokens": 0},
-            "predict-tokens must be positive",
+            "predict-tokens must be a positive integer",
         ),
     ],
 )

@@ -1,5 +1,8 @@
 # PVD 最终目标推进步骤 / Implementation roadmap
 
+当前统一状态：[实现与验收边界](PVD_Current_Readiness_CN_EN.md)。下面保留历史推进
+记录；不得从 CPU 回归推导“生产实现或全部非硬件缺口已完成”。
+
 最新修复：[draft 分支私有请求 owner](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) 避免
 多个 runner handle 共用一个可变请求对象，且释放加入执行锁。仍只有一份模型
 和私有池；并发所有权不代表 GPU 前向可重入。

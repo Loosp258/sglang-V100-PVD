@@ -2,6 +2,11 @@
 
 Updated: 2026-09-22.
 
+Current consolidated scope: [implementation and acceptance](PVD_Current_Readiness_CN_EN.md).
+The entries below preserve history. Draft flags do not activate production
+prediction; startup/help now say so. CPU success is not proof that all
+hardware-independent work or production integration is finished.
+
 Newest: [branch allocator ownership](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) fixes
 one mutable request handle being shared by all runner handles. Each branch now
 forks ownership metadata over the same private pools; cleanup and execution

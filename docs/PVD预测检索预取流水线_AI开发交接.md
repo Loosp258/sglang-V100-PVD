@@ -2,6 +2,10 @@
 
 更新日期：2026-09-22。
 
+当前统一状态：[实现与验收边界](PVD_Current_Readiness_CN_EN.md)。以下保留历史
+记录；draft 参数不是生产预测检索开关，启动/帮助已明确说明。不能从 CPU 通过
+推导所有非硬件工作或生产接入已经完成。
+
 最新：[分支分配器所有权](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) 修复所有 handle
 共享一个可变请求 owner 的问题。每个分支通过 `fork_for_branch` 获得独立元数据，
 仍共享原私有池；释放与执行使用同一锁。修复前复现两个失败，真实 CPU 池/线程
