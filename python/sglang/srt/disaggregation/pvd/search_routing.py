@@ -95,6 +95,7 @@ class RoutedShardSearchClient:
         ):
             raise ValueError("explicit sorted unique target layers required")
         self.entry_transfer_id, self.vector_space = entry_transfer_id, vector_space
+        self.total_kv_heads = compute_layout.total_kv_heads
         self.scope = SearchScope(
             prompt_tokens, storage_layout.page_size, storage_layout.head_dim, metric
         )

@@ -21,6 +21,19 @@ activation.
 
 ## 最新增量 / Latest increment
 
+双源请求现将检索与 Delivery 的所选 V 路由绑定：构造时要求每个 D layer/KV head
+对应的全部 Q heads 不重不漏、Entry/向量空间/post-RoPE/范围一致；刷新前要求
+传入同一对象。错误路由在开启刷新 epoch、注册目标和网络请求之前即拒绝。
+Windows 全量 **2492 passed / 31 skipped**（增加精确 KV-head 数校验前），随后
+Windows/WSL 最新定向各 **47 passed**；仍需生产 Scheduler 工厂装配。
+
+The routed two-source request now binds search to the Delivery's exact selected
+V group. Q-head coverage and Entry/model/encoding/scope are checked during
+construction; each refresh requires the same routed client before opening its
+epoch, registering destinations or issuing HTTP. The full Windows run passed
+before the final exact KV-head count assertion; the latest focused Windows and
+WSL runs each passed 47 cases. Production Scheduler assembly remains open.
+
 新增 [稀疏多源请求交付](PVD_Sparse_FanIn_CN_EN.md)：`CUDAPrefetchRequest`
 现在可驱动 D TP1 的双 V 源：逐源检索、注册和完成证明，有界合并到 D 暂存区，
 提交完整工作集；安装后各源独立 ACK，UNKNOWN 保留 MR 和预算。CPU 策略

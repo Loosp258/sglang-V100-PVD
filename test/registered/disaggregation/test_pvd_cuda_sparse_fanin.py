@@ -581,20 +581,63 @@ def test_request_controller_predicts_searches_both_v_and_installs(monkeypatch):
                 for layer in route_config.layers
                 for qhead in range(8)
             )
-            request = CUDAPrefetchRequest(
-                c.group,
-                pipeline,
+            request_args = dict(
                 copy_budget=copy_budget,
                 max_head_dim=8,
                 head_mapping=QueryHeadMapping(8, 4),
-                rank_routes={0: route_list},
                 max_union_tokens=2,
                 delivery=sink,
+            )
+            with pytest.raises(ValueError, match="selected D bank"):
+                CUDAPrefetchRequest(
+                    c.group,
+                    pipeline,
+                    rank_routes={0: route_list},
+                    **{**request_args, "head_mapping": QueryHeadMapping(16, 8)},
+                )
+            with pytest.raises(ValueError, match="every Q head"):
+                CUDAPrefetchRequest(
+                    c.group,
+                    pipeline,
+                    rank_routes={0: route_list[:-1]},
+                    **request_args,
+                )
+            with pytest.raises(ValueError, match="every Q head"):
+                CUDAPrefetchRequest(
+                    c.group,
+                    pipeline,
+                    rank_routes={
+                        0: (
+                            replace(
+                                route_list[0],
+                                identity=replace(
+                                    route_list[0].identity,
+                                    vector_space="wrong-target-model",
+                                ),
+                            ),
+                            *route_list[1:],
+                        )
+                    },
+                    **request_args,
+                )
+            request = CUDAPrefetchRequest(
+                c.group,
+                pipeline,
+                rank_routes={0: route_list},
+                **request_args,
             )
             monkeypatch.setattr(
                 request._session, "_query_device", lambda t: t.device.type == "cpu"
             )
             prefix = snapshot_committed("request", [1] * 12, 3, "prefix3")
+            with pytest.raises(ValueError, match="selected V route"):
+                await request.refresh(
+                    prefix,
+                    query_positions=(len(prefix.tokens),),
+                    clients={0: c.routing.clients[0]},
+                )
+            assert c.group.coordinator.snapshot()["state"] == "idle"
+            assert not sink._rounds
 
             async def finish_remote():
                 while not sink._rounds:

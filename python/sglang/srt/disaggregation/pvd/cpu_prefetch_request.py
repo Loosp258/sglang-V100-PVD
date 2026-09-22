@@ -79,6 +79,9 @@ class _PrefetchRequestCore:
         if self._closed:
             raise StaleProbeSearch("prefetch request is closed")
 
+    def _validate_search_clients(self, clients):
+        """Concrete transports may bind search to their Delivery route."""
+
     async def refresh(
         self,
         prefix,
@@ -110,6 +113,7 @@ class _PrefetchRequestCore:
             type(r) is not int for r in clients
         ):
             raise ValueError("one search client per declared rank required")
+        self._validate_search_clients(clients)
         boundary = self.group.coordinator.snapshot()["next_boundary"]
         if prefix.committed_position > boundary:
             raise LatePrefetchStart(

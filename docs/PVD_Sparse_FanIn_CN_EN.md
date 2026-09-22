@@ -48,12 +48,24 @@ through its install/ACK lifecycle. The old one-source `CUDASparseDelivery`
 remains available. Neither class automatically registers with the production
 Scheduler; factory wiring and real CUDA/RDMA/multi-HCA acceptance remain.
 
+The request now requires an exact binding between its Q-head routes and the
+Delivery's selected V group: every query head for each D layer/KV head must
+appear exactly once, with matching Entry, model vector space, post-RoPE
+encoding and search scope. Each refresh must pass that same routed client
+object, before the coordinator opens an epoch or registers any destination.
+Search results from a different V selection cannot be reused for a write.
+
 `CUDASparseFanInDelivery` 现在绑定路由检索客户端、精确选中的 V shard 路由、
 一个 D runtime group、接收注册表和显式聚合拷贝预算。每轮刷新按 V 源拆分
 完整 D selection，先发布并保留全部目标，再等待各源最终凭据，最后仅调用一次
 `CUDASparseFanInStage`。现有 `CUDAPrefetchRequest` 接受该 sink，只有经过安装和
 ACK 生命周期才释放逐源记录。旧的单源 `CUDASparseDelivery` 保留。两者都尚未
 自动接入生产 Scheduler；仍需工厂接线及真实 CUDA/RDMA/多 HCA 验收。
+
+请求还要求 Q-head 路由与 Delivery 选中的 V group 精确一致：D 每个 layer/KV head
+对应的全部 Q head 恰好出现一次，Entry、模型向量空间、post-RoPE 编码和搜索范围
+必须匹配。每轮刷新在打开 epoch 或注册目标之前，还必须传入同一个路由客户端
+对象；不能拿另一组 V 的检索结果驱动当前组的 KV 写入。
 
 ## Verification / 验证
 
