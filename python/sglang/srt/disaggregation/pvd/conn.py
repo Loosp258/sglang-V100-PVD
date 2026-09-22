@@ -553,6 +553,66 @@ class PVDKVManager:
 
         return self.control.submit(discover())
 
+    def assemble_selected_cuda_request(
+        self,
+        req,
+        selected,
+        *,
+        group,
+        pipeline,
+        head_mapping,
+        vector_space,
+        metric,
+        top_k,
+        max_union_tokens,
+        max_head_dim,
+        copy_budget,
+        aggregate_budget,
+        poll_interval_seconds,
+    ):
+        """Bind a request factory to this worker's owned D receive resources."""
+        from sglang.srt.disaggregation.pvd.client import PVDSelectedShardRoutes
+        from sglang.srt.disaggregation.pvd.cuda_routed_request import (
+            assemble_routed_cuda_request,
+        )
+
+        registry = self.sparse_receive_registry
+        if (
+            registry is None
+            or registry.engine is not self.sparse_receive_engine
+            or self.tp_size != 1
+            or self.tp_rank != 0
+        ):
+            raise PVDConnectionError("D TP1 sparse receive is not initialized")
+        registry._owner()
+        if not isinstance(selected, PVDSelectedShardRoutes) or (
+            selected.manifest.key != self.key_for(req)
+        ):
+            raise PVDConnectionError("selected V routes differ from this D request")
+        endpoint = self.transfer_engine.health().get("session_id")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise PVDConnectionError("D compute Mooncake session is unavailable")
+        return assemble_routed_cuda_request(
+            selected,
+            compute_layout=self.layout(),
+            compute_rank=self.tp_rank,
+            group=group,
+            registry=registry,
+            pipeline=pipeline,
+            head_mapping=head_mapping,
+            vector_space=vector_space,
+            metric=metric,
+            top_k=top_k,
+            max_union_tokens=max_union_tokens,
+            max_head_dim=max_head_dim,
+            copy_budget=copy_budget,
+            aggregate_budget=aggregate_budget,
+            d_endpoint=endpoint,
+            d_rail=self.rail,
+            d_rails={route.rank: route.rail for route in selected.shards},
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
     def client_for(self, req) -> PVDCoordinatorClient:
         return self.clients[self.vector_group_for(req)]
 

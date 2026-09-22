@@ -57,6 +57,10 @@ Decode TP1 的 `--pvd-d-receive-rails` 已在启动参数与 PVD manager 接线�
 测试 adapter 需显式 `d_endpoints`，错误的原生 endpoint 在分配前拒绝。
 D manager 现可异步发现 Gateway 已选 V group 的 typed shard 路由，先核对
 Entry 和本地已预检的 rail 覆盖；生产预测请求准入尚未自动消费这个结果。
+D manager 现还可用自己的 CUDA Registry、compute layout、D rail/session
+装配已选 V 的请求，拒绝外来 Registry/Entry；真实 pipeline、工作集和生产
+请求准入仍待接线。
+此请求装配接线 Windows 全量 **2522 passed / 31 skipped**，WSL 定向 **7 passed**。
 此路由发现接线 Windows 全量 **2521 passed / 31 skipped**，WSL 定向 **31 passed**。
 此 endpoint 绑定回归 Windows 全量 **2518 passed / 31 skipped**、WSL 定向
 **13 passed**。
@@ -92,6 +96,11 @@ a mismatched native endpoint is refused before request allocation.
 The D manager can now discover typed routes for the Gateway-selected V group
 asynchronously and check Entry plus preflighted HCA coverage. Production
 predictive admission does not yet consume this result automatically.
+The D manager can also assemble a selected-V request with its own CUDA
+Registry, compute layout and D rail/session, refusing foreign Registry/Entry
+bindings. A real pipeline, working set and serving admission are still needed.
+This request-assembly wiring passed **2522/31 skipped** in the full Windows CPU
+suite and **7 passed** in focused WSL tests.
 The route-discovery wiring passed **2521/31 skipped** in the full Windows CPU
 suite and **31 passed** in focused WSL tests.
 This endpoint-binding regression passed **2518/31 skipped** in the full Windows

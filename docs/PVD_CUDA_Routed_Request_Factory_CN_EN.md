@@ -41,6 +41,11 @@ Entry/group identity on the Scheduler thread and fetches typed V shard routes
 asynchronously on its control loop. It rejects any V rail without a locally
 preflighted D adapter before request assembly. Route discovery itself neither
 registers a destination nor admits a predictive request.
+`PVDKVManager.assemble_selected_cuda_request()` then supplies that worker's
+actual CUDA Registry, compute layout, D rail and Mooncake session to the
+request factory. It refuses a foreign Registry or Entry. The caller still
+must provide a real per-request install group, draft/target-Q pipeline and
+explicit copy/aggregate budgets; no serving admission is turned on here.
 
 `assemble_routed_cuda_request()` 使用 Gateway 已选 V coordinator 返回的类型化
 shard 路由。调用方仍须提供已安装的 D TP1 工作集、接收注册表、真实 draft/目标 Q
@@ -71,6 +76,10 @@ Prompt KV 刷新切换到稀疏检索。
 `PVDKVManager.start_selected_cuda_routes(req)` 在 Scheduler 线程捕获
 Gateway 所选 Entry/group 身份，在控制线程异步获取 V shard 路由；未在 D
 预检过的 V rail 会在请求装配前拒绝。路由发现本身不注册目标、不准入预测请求。
+`PVDKVManager.assemble_selected_cuda_request()` 随后把该 worker 自己的
+CUDA Registry、compute layout、D rail 和 Mooncake session 交给请求工厂；
+外来 Registry 或 Entry 会被拒绝。调用方仍须提供真实请求级安装组、draft/目标 Q
+pipeline 和显式复制/聚合预算，这里尚不启动生产准入。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;

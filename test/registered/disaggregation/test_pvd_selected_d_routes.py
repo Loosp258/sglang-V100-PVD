@@ -89,3 +89,63 @@ def test_uninitialized_sparse_receiver_cannot_discover_routes():
     with pytest.raises(PVDConnectionError, match="not initialized"):
         manager.start_selected_cuda_routes(req)
     assert not client.keys
+
+
+def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatch):
+    from sglang.srt.disaggregation.pvd import cuda_routed_request
+
+    manager, req, selected, _ = manager_for(("mlx5_0", "mlx5_1"))
+    registry = SimpleNamespace(
+        engine=manager.sparse_receive_engine, _owner=lambda: None
+    )
+    manager.sparse_receive_registry = registry
+    manager.transfer_engine = SimpleNamespace(health=lambda: {"session_id": "D0"})
+    manager.tp_size = 1
+    manager.tp_rank = 0
+    manager.rail = "mlx5_0"
+    layout = object()
+    manager.layout = lambda: layout
+    calls = []
+    assembly = object()
+    monkeypatch.setattr(
+        cuda_routed_request,
+        "assemble_routed_cuda_request",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or assembly,
+    )
+    supplied = {
+        "group": object(),
+        "pipeline": object(),
+        "head_mapping": object(),
+        "vector_space": "model-space",
+        "metric": "l2",
+        "top_k": 4,
+        "max_union_tokens": 16,
+        "max_head_dim": 128,
+        "copy_budget": object(),
+        "aggregate_budget": object(),
+        "poll_interval_seconds": 0.01,
+    }
+    assert manager.assemble_selected_cuda_request(req, selected, **supplied) is assembly
+    assert calls == [
+        (
+            (selected,),
+            {
+                **supplied,
+                "compute_layout": layout,
+                "compute_rank": 0,
+                "registry": registry,
+                "d_endpoint": "D0",
+                "d_rail": "mlx5_0",
+                "d_rails": {0: "mlx5_0", 1: "mlx5_1"},
+            },
+        )
+    ]
+    manager.sparse_receive_registry = None
+    with pytest.raises(PVDConnectionError, match="not initialized"):
+        manager.assemble_selected_cuda_request(req, selected, **supplied)
+    manager.sparse_receive_registry = SimpleNamespace(
+        engine=object(), _owner=lambda: None
+    )
+    with pytest.raises(PVDConnectionError, match="not initialized"):
+        manager.assemble_selected_cuda_request(req, selected, **supplied)
+    assert len(calls) == 1
