@@ -1613,6 +1613,24 @@ class DecodeTransferQueue:
 
 
 class SchedulerDisaggregationDecodeMixin:
+    def _abort_pvd_cuda_requests(self: Scheduler, reqs, reason):
+        """Terminate opted-in requests without native in-place retraction."""
+        manager = self.disagg_decode_prealloc_queue.kv_manager
+        for req in reqs:
+            if req.finished():
+                continue
+            prepare_abort(
+                req,
+                f"PVD CUDA Decode stopped: {reason}",
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            manager.decode_refresher.release_request(req)
+            self.output_streamer.stream_output([req], req.return_logprob)
+            release_kv_cache(req, self.tree_cache, is_insert=False)
+            self.waiting_queue[:] = [
+                queued for queued in self.waiting_queue if queued is not req
+            ]
+
     def poll_pvd_cpu_releases(self: Scheduler):
         """Progress only explicitly bound CPU owners; ordinary serving is unchanged."""
         driver = getattr(self, "pvd_cpu_release_driver", None)
@@ -1643,6 +1661,7 @@ class SchedulerDisaggregationDecodeMixin:
     @torch.no_grad()
     def event_loop_normal_disagg_decode(self: Scheduler):
         """A normal scheduler loop for decode worker in disaggregation mode."""
+        from sglang.srt.disaggregation.pvd.cuda_scheduler_binding import binding_for
 
         while True:
             # Receive requests
@@ -1650,6 +1669,9 @@ class SchedulerDisaggregationDecodeMixin:
             self.process_input_requests(recv_reqs)
             self.process_decode_queue()
             cpu_release_state = self.poll_pvd_cpu_releases()
+            cuda_binding = binding_for(self)
+            if cuda_binding is not None:
+                cuda_binding.poll()
             if self._engine_paused:
                 continue
 
@@ -1659,9 +1681,14 @@ class SchedulerDisaggregationDecodeMixin:
 
             # Launch the current batch
             if batch:
-                result = self.run_batch(batch)
-                self.process_batch_result(batch, result)
-            elif cpu_release_state is None or not cpu_release_state["requests"]:
+                if cuda_binding is not None:
+                    cuda_binding.run(batch)
+                else:
+                    result = self.run_batch(batch)
+                    self.process_batch_result(batch, result)
+            elif (cpu_release_state is None or not cpu_release_state["requests"]) and (
+                cuda_binding is None or not cuda_binding.pending
+            ):
                 # When the server is idle, do self-check and re-init some states
                 # Deferred CPU owners still hold pool rows. Do not diagnose
                 # them as leaks or sleep before their next cleanup poll.
@@ -1670,6 +1697,8 @@ class SchedulerDisaggregationDecodeMixin:
             # Update last_batch
             self.last_batch = batch
             self.poll_pvd_cpu_releases()
+            if cuda_binding is not None:
+                cuda_binding.poll()
 
     @torch.no_grad()
     def event_loop_overlap_disagg_decode(self: Scheduler):
@@ -1728,6 +1757,7 @@ class SchedulerDisaggregationDecodeMixin:
         self: Scheduler,
     ) -> Optional[ScheduleBatch]:
         """Process prebuilt batch and schedule the next decode batch."""
+        from sglang.srt.disaggregation.pvd.cuda_scheduler_binding import binding_for
         # Process pending prebuilt batch: output processing + filter + merge
         new_prebuilt_batch = self.get_new_prebuilt_batch()
         if new_prebuilt_batch:
@@ -1747,7 +1777,11 @@ class SchedulerDisaggregationDecodeMixin:
                     self.running_batch.merge_batch(new_prebuilt_batch)
 
         # Schedule decode batch
-        if self.running_batch.is_empty():
+        cuda_binding = binding_for(self)
+        if self.running_batch.is_empty() or (
+            cuda_binding is not None
+            and not cuda_binding.ready_to_prepare(self.running_batch)
+        ):
             ret = None
         else:
             self.running_batch = self.update_running_batch(self.running_batch)
@@ -1760,6 +1794,7 @@ class SchedulerDisaggregationDecodeMixin:
 
     def get_new_prebuilt_batch(self: Scheduler) -> Optional[ScheduleBatch]:
         """Create a schedulebatch for fake completed prefill"""
+        from sglang.srt.disaggregation.pvd.cuda_scheduler_binding import binding_for
         if self.grammar_manager.has_waiting_grammars():
             ready_grammar_requests = self.grammar_manager.get_ready_grammar_requests()
             for req in ready_grammar_requests:
@@ -1785,12 +1820,16 @@ class SchedulerDisaggregationDecodeMixin:
         # waiting-queue bootstrap nothing is ever skipped, so this is the same
         # as the previous index comparison.
         admitted = 0
+        cuda_binding = binding_for(self)
         pvd_bootstrap = (
             self.server_args.disaggregation_topology == "pvd"
             and self.disagg_decode_prealloc_queue.kv_manager.waiting_queue_bootstrap
         )
         for i in range(len(self.waiting_queue)):
             req = self.waiting_queue[i]
+            if cuda_binding is not None and not cuda_binding.waiting_ready(req):
+                waiting_queue.append(req)
+                continue
             if pvd_bootstrap and not (
                 self.disagg_decode_prealloc_queue.kv_manager.bootstrap_runnable(req)
             ):

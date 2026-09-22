@@ -1,6 +1,6 @@
 # PVD 当前实现与验收边界 / Current implementation and acceptance scope
 
-Updated / 更新：2026-09-22。历史交接文档保留演进记录；本页集中说明当前边界。
+Updated / 更新：2026-09-23。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
 ## 结论 / Bottom line
@@ -20,6 +20,19 @@ production prediction pipeline; startup now warns explicitly instead of implying
 activation.
 
 ## 最新增量 / Latest increment
+
+[CUDA Scheduler 显式绑定](PVD_CUDA_Scheduler_Binding_CN_EN.md) 已接普通 Decode
+循环、waiting admission、分配前 wait-all 和原 Scheduler 结果包装器。未绑定时
+仍走旧路径。新增 25 个 CPU 用例；WSL 定向 59 项通过。KV 压力当前选择中止 batch
+并排空，不支持原地 retraction。生产工厂和拓扑仍未完成：实际 CUDA consumer
+仅 TP1，而当前 CLI 的 D 是 TP2/TP4、V storage 是 TP2；不得只放宽参数冒充兼容。
+
+An explicit CUDA binding now reaches the normal Decode loop, waiting admission,
+pre-allocation wait-all and original Scheduler result wrapper. Unbound serving is
+unchanged. Twenty-five new CPU cases and 59 focused WSL cases pass. Capacity
+pressure aborts/drains the batch rather than retracting in place. Factories and
+topology remain code gaps: the actual consumer is TP1, while serving config uses
+D TP2/TP4 and V TP2. Relaxing flags alone would not make these compatible.
 
 已逐步测试、提交并推送：V opt-in CUDA packing (`6992c78e2`)、D CUDA banks
 (`23f9e5337`)、CUDA rank participant (`ff8e653f2`)。本页所在提交还增加有界显式
