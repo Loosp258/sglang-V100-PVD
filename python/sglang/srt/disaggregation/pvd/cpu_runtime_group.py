@@ -21,7 +21,13 @@ from sglang.srt.disaggregation.pvd.sparse_install import (
 )
 
 
-class CPURuntimeInstallGroup(CPUInstallGroup):
+class _LocalRuntimeInstallCore:
+    """Device-independent owner-polled local command driver.
+
+    Subclasses validate bank ownership and supply a device-specific participant.
+    This is not a multi-process transport or a native completion fence.
+    """
+
     def __init__(
         self,
         banks,
@@ -34,12 +40,12 @@ class CPURuntimeInstallGroup(CPUInstallGroup):
         max_pending_bytes,
         clock=time.monotonic,
     ):
-        super().__init__(banks, interval=interval, lead_tokens=lead_tokens)
+        self._initialize_banks(banks, interval=interval, lead_tokens=lead_tokens)
         self._commands, self._stops = deque(), set()
         self._timeout = timeout_seconds
         exchange = RankInstallExchange(self.coordinator, peer_epochs=peer_epochs)
         self._peers = {
-            rank: CPURankInstallParticipant(
+            rank: self._participant_type(
                 bank,
                 rank=rank,
                 peer_epoch=exchange.peer_epochs[rank],
@@ -100,11 +106,28 @@ class CPURuntimeInstallGroup(CPUInstallGroup):
         return epoch
 
     def stage(self, epoch, rank, payloads):
+        self._check_stage(epoch, rank)
+        raw = self._peers[rank].stage(epoch, payloads)
+        return self._accept_prepared(epoch, rank, raw)
+
+    def _check_stage(self, epoch, rank):
         self.coordinator._match(epoch)
         if type(rank) is not int or rank not in self._peers or rank in self._receipts:
             raise InstallProtocolError("unknown rank or bank already staged")
-        raw = self._peers[rank].stage(epoch, payloads)
-        receipt = RankInstallMessage.decode(raw).receipt
+
+    def _accept_prepared(self, epoch, rank, raw):
+        self._check_stage(epoch, rank)
+        message = RankInstallMessage.decode(raw)
+        receipt = message.receipt
+        if (
+            message.kind != "prepared"
+            or receipt.epoch != epoch
+            or receipt.rank != rank
+            or message.peer_epoch != self.runtime.exchange.peer_epochs[rank]
+        ):
+            raise InstallProtocolError(
+                "prepared reply does not match local participant"
+            )
         self._receipts[rank] = receipt
         self._post(rank, raw)
         self.progress()
@@ -165,9 +188,11 @@ class CPURuntimeInstallGroup(CPUInstallGroup):
             yield groups
 
     def installation_complete(self, receipt):
-        return super().installation_complete(
-            receipt
-        ) and self.runtime.exchange.resume_complete(receipt.epoch)
+        return (
+            self.runtime.exchange.installation_complete(receipt)
+            and self.coordinator.snapshot()["state"] == "idle"
+            and self._receipts.get(receipt.rank) == receipt
+        )
 
     def cancel(self, reason="request cancelled"):
         self.runtime.cancel()
@@ -180,4 +205,16 @@ class CPURuntimeInstallGroup(CPUInstallGroup):
             raise InstallProtocolError(
                 "forward/result processing must drain before close"
             )
-        super().close()
+        self._close_banks()
+
+
+class CPURuntimeInstallGroup(_LocalRuntimeInstallCore, CPUInstallGroup):
+    _participant_type = CPURankInstallParticipant
+
+    def _initialize_banks(self, banks, *, interval, lead_tokens):
+        CPUInstallGroup.__init__(
+            self, banks, interval=interval, lead_tokens=lead_tokens
+        )
+
+    def _close_banks(self):
+        CPUInstallGroup.close(self)

@@ -27,12 +27,12 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2072 passed / 24 skipped**；WSL model adapter/attention/probe
-定向：**101 passed / 3 skipped**。probe 共享核心修改后，严格 v5 四场景真实 CPU 模型矩阵
+最新 Windows 全量：**2082 passed / 24 skipped**；CUDA runtime 定向 **11 passed**
+（含全量之后新增的 peer-loss 用例）。共享 runtime 核心修改后，严格 v5 四场景真实 CPU 模型矩阵
 再次全部通过。这不是 CUDA probe 的 GPU forward 证据。
-Latest full Windows regression is 2072/24; WSL model adapter/attention/probe regression
-is 101/3. All four strict real-model CPU cases passed again after the shared
-probe-core change. This does not validate a CUDA model forward.
+Latest full Windows regression is 2082/24; CUDA runtime policy tests pass 11 cases
+(including a peer-loss case added afterwards). All four strict real-model CPU
+cases passed again after the shared runtime-core change. This is not CUDA evidence.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
@@ -147,6 +147,13 @@ smoke. CPU tests cover its policies/math, not actual CUDA execution or serving.
 随后补充的元数据读取早期失败回归在 Windows/WSL 均通过（adapter 定向 38 项）。
 The subsequent early metadata-failure regression passed on Windows and WSL
 (38 adapter cases), retaining inputs when device completion is unknown.
+
+[CUDA 本地 runtime](PVD_CUDA_Runtime_CN_EN.md) 进一步绑定接收、安装状态机和
+model forward permit；输出只有在 runtime 接受后才能提交，UNKNOWN 保留 permit。
+当前明确仅 TP1、每次单请求 forward，不代表真实 TP2 或生产多请求 batch 已接通。
+The local CUDA runtime binds receive/install to a model execution permit and
+post-drain result admission. TP1/single-request scope only; not real TP2 or
+production multi-request batch assembly.
 
 设备可用后运行 [CUDA 组件严格验收](PVD_CUDA_Component_Acceptance_CN_EN.md)。入口要求
 9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。

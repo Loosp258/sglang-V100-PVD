@@ -10,13 +10,10 @@ def validate(runner):
 
     import torch
     from sglang.srt.disaggregation.pvd.cuda_model_attention import (
-        CUDADecodeBinding,
         CUDAModelPools,
         make_cuda_sparse_backend,
     )
-    from sglang.srt.disaggregation.pvd.cuda_rank_install import (
-        CUDARankInstallParticipant,
-    )
+    from sglang.srt.disaggregation.pvd.cuda_runtime_group import CUDARuntimeInstallGroup
     from sglang.srt.disaggregation.pvd.cuda_sparse_attention import (
         CUDASparseAttentionWorkspace,
     )
@@ -26,8 +23,6 @@ def validate(runner):
         PrivatePoolAllocator,
     )
     from sglang.srt.disaggregation.pvd.draft_runner_sglang import DraftForwardInputs
-    from sglang.srt.disaggregation.pvd.rank_install_wire import RankInstallExchange
-    from sglang.srt.disaggregation.pvd.sparse_install import RankInstallCoordinator
     from sglang.srt.disaggregation.pvd.sparse_payload import (
         SparseKVPayload,
         SparseKVSpec,
@@ -99,16 +94,19 @@ def validate(runner):
         head_dim=dim,
         max_union_tokens=2,
     )
-    peer = CUDARankInstallParticipant(bank, rank=0, peer_epoch="peer", interval=4)
-    exchange = RankInstallExchange(
-        RankInstallCoordinator(
-            "r", "inc", "entry", rank_layouts={0: "layout"}, interval=4, lead_tokens=1
-        ),
+    group = CUDARuntimeInstallGroup(
+        {0: bank},
+        interval=4,
+        lead_tokens=1,
         peer_epochs={0: "peer"},
+        timeout_seconds=300,
+        max_pending_events=8,
+        max_pending_bytes=65536,
     )
+    peer = group._peers[0]
 
     def install(count, tokens):
-        epoch = exchange.begin(count)
+        epoch = group.begin(count)
         parts = [value[:, list(tokens)].contiguous() for value in prompt.values()]
         packed = torch.cat([part.reshape(-1) for part in parts])
         size = parts[0].numel()
@@ -132,12 +130,10 @@ def validate(runner):
             for i, (layer, head) in enumerate(prompt)
         ]
         source = ResourceGuard(packed, lambda: None)
-        exchange.receive(peer.stage(epoch, payloads, source_guard=source), peer_rank=0)
+        group.stage(epoch, 0, payloads, source_guard=source)
         source.request_release()
-        exchange.receive(peer.park(epoch.target_tokens), peer_rank=0)
-        exchange.receive(peer.command(exchange.install_commands(epoch)[0]), peer_rank=0)
-        exchange.receive(peer.command(exchange.resume_commands(epoch)[0]), peer_rank=0)
-        assert exchange.can_decode(epoch.target_tokens)
+        assert group.try_install(epoch, {0: epoch.target_tokens})
+        assert group.can_decode(epoch.target_tokens)
 
     install(0, (0, 1, 2, 3))
     workspace = CUDASparseAttentionWorkspace(
@@ -213,8 +209,8 @@ def validate(runner):
         for count in range(5):
             if count == 4:
                 install(3, (1, 3))
-            with backend.consumer.bind(
-                [CUDADecodeBinding(slot, count, peer, exchange)], pool_owner=owner
+            with group.model_forward(
+                backend.consumer, slot=slot, decode_tokens=count, pool_owner=owner
             ):
                 logits = adapter.forward(
                     DraftForwardInputs(
@@ -229,8 +225,9 @@ def validate(runner):
                     )
                 )
                 assert torch.isfinite(logits).all()
-                token = int(logits.argmax().item())
-                output_tokens.append(token)
+                next_token = int(logits.argmax().item())
+            token = next_token  # Runtime has accepted the completed forward.
+            output_tokens.append(token)
             assert output_budget.snapshot()["used_staging_bytes"] == 0
             assert not lock.locked()
         assert len(errors) == layers * 5 and len(output_tokens) == 5
@@ -241,7 +238,7 @@ def validate(runner):
         if not backend.consumer.snapshot()["quarantine"]:
             owner.request_release()
             workspace.close()
-            peer.close()
+            group.close()
     assert release_events == [True]
     assert all(
         b.snapshot()["used_staging_bytes"] == 0
