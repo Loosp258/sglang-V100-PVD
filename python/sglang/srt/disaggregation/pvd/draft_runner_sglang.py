@@ -43,6 +43,8 @@ Nothing here samples into committed state, verifies, accepts or commits.
 
 from __future__ import annotations
 
+import threading
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, List, Optional, Protocol, Sequence, Tuple
 
@@ -429,7 +431,20 @@ class SGLangDraftRunnerFactory:
         self._capabilities = capabilities
         self._persistent_bytes = persistent_bytes
         self._max_tokens = max_tokens
-        self.opened: List[str] = []
+        self._opened = deque(maxlen=64)
+        self._opened_count = 0
+        self._diagnostics_lock = threading.Lock()
+
+    @property
+    def opened(self) -> tuple[str, ...]:
+        """Bounded diagnostic ids, never a lifetime branch ledger."""
+        with self._diagnostics_lock:
+            return tuple(self._opened)
+
+    @property
+    def opened_count(self) -> int:
+        with self._diagnostics_lock:
+            return self._opened_count
 
     def capabilities(self) -> DraftCapabilities:
         return self._capabilities
@@ -443,7 +458,9 @@ class SGLangDraftRunnerFactory:
         self._capabilities.require_shape(
             prefix_tokens=prefix_tokens, predict_tokens=max_tokens
         )
-        self.opened.append(branch_id)
+        with self._diagnostics_lock:
+            self._opened.append(branch_id)
+            self._opened_count += 1
         return SGLangDraftHandle(
             branch_id,
             self._executor,

@@ -43,7 +43,12 @@ def test_capacity_that_fits_only_kv_does_not_admit_a_branch():
     executor = FakeExecutor()
     fac = factory(executor=executor)
     kv_only = (fac.capabilities().max_prefix_tokens + 4) * executor.bytes_per_token()
-    made = provider(fac, placement=DraftPlacement(scratch_budget_bytes=kv_only))
+    made = provider(
+        fac,
+        placement=DraftPlacement(
+            scratch_budget_bytes=kv_only, persistent_budget_bytes=1024
+        ),
+    )
     with pytest.raises(TransferCapacityError), made.branch():
         pytest.fail("logits/workspace charge omitted")
     assert not executor.calls

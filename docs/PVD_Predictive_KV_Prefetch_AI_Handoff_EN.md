@@ -2,6 +2,12 @@
 
 Updated: 2026-09-22.
 
+Newest: [draft accounting audit](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) fixes shared
+persistent-budget owner collisions, missing/aliased budgets, footprint coercion
+and per-provider-bound bypass. Diagnostic branch history is bounded to 64 ids
+with a locked total. Eleven regressions reproduced before fixing; no model
+teardown, loading-time peak or GPU reclamation is claimed.
+
 Newest: release-intent errors no longer stop peer cleanup. Shutdown stops all
 lifecycles before callbacks; a failed binding check retains its exact owner and
 retries with backoff. No automatic binding repair, guessed frees or retries of

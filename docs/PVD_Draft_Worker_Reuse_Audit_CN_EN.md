@@ -1,5 +1,34 @@
 # PVD prediction-only draft reuse: audit and plan / PVD 仅预测 draft 复用：审计与方案
 
+## 2026-09-22: shared-budget accounting / 共享预算计费修复
+
+Eleven regression cases reproduced before the fix: two independent 1024-byte
+providers sharing a budget were charged only 1024 bytes because both used the
+same idempotent reservation owner; a second provider could bypass capacity.
+Missing local persistent settings skipped charging even an explicitly supplied
+budget. Size coercion, scratch/persistent aliasing and ignoring a per-provider
+bound when an external budget was supplied also bypassed the stated contract.
+Each provider now has a unique owner, requires a nonnegative integer footprint,
+requires an explicit budget for positive retained bytes, and enforces separate
+scratch/persistent accounting plus both local and aggregate bounds. This is
+post-load accounting, NOT proof that model loading stayed within that budget.
+
+Factory diagnostics previously retained every opened branch id forever. They
+now retain the latest 64 ids plus a locked total counter; returned history is an
+immutable snapshot. Persistent charges are deliberately NOT refunded at branch
+exit or object collection: externally owned model/pool storage can still be live.
+No model teardown or GPU reclamation is inferred from Python reference counts.
+
+Verification: 92 focused draft tests; full Windows **1819 passed / 14 skipped**,
+WSL **1824 passed / 9 skipped**; strict v5 real CPU four-case matrix passed.
+New tests pass Ruff and touched files pass formatting. Existing Ruff findings
+in `draft_sglang.py` / `draft_runner_sglang.py` remain (31 / 19 versus HEAD
+31 / 20); unrelated mass typing/style rewrites were excluded.
+
+修复前 11 个测试失败，覆盖 owner 冲突导致漏计、缺失预算/外部预算绕过、类型
+强转、预算混用及诊断历史无界增长。现在独立 provider 独立计费，历史最多 64 条。
+这不是加载前显存上限保证，也不在每轮预测结束时假装释放仍存活的模型和私有池。
+
 Follow-up / 后续：[target-Q CPU probe](PVD_Target_Q_CPU_Probe_CN_EN.md) 已实现
 CPU/TP1 Llama 的离线真实 Q 捕获；本页旧阶段的“真实 target-Q 未实现”不再适用于
 该参考子集。生产/GPU probe 与并发服务接线仍待完成。

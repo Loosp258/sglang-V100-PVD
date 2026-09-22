@@ -611,14 +611,36 @@ class SGLangDraftProvider(DraftProvider):
             staging_bytes=placement.scratch_budget_bytes, max_inflight=1
         )
         # Weights and pools are charged once, against their own budget.
+        persistent_bytes = factory.persistent_bytes()
+        if type(persistent_bytes) is not int or persistent_bytes < 0:
+            raise PredictionConfigError(
+                "factory persistent bytes must be a non-negative integer"
+            )
         self.persistent_budget = persistent_budget
         if placement.persistent_budget_bytes:
             self.persistent_budget = self.persistent_budget or TransferBudget(
                 staging_bytes=placement.persistent_budget_bytes, max_inflight=1
             )
-            self.persistent_budget.reserve(
-                "pvd-draft:persistent", int(factory.persistent_bytes()), 0
+        if self.persistent_budget is self.scratch_budget:
+            raise PredictionConfigError(
+                "persistent and scratch budgets must be separate"
             )
+        if persistent_bytes and self.persistent_budget is None:
+            raise PredictionConfigError(
+                "positive persistent bytes require an explicit persistent budget"
+            )
+        if (
+            placement.persistent_budget_bytes
+            and persistent_bytes > placement.persistent_budget_bytes
+        ):
+            raise TransferCapacityError(
+                "draft exceeds its per-provider persistent budget"
+            )
+        # TransferBudget.reserve is idempotent by owner. A process-global name
+        # silently undercharges independent providers sharing a global budget.
+        self._persistent_owner = f"pvd-draft:persistent:{uuid.uuid4().hex}"
+        if self.persistent_budget is not None:
+            self.persistent_budget.reserve(self._persistent_owner, persistent_bytes, 0)
         self._lock = threading.Lock()
         # Owning resources separately is not the same as being safe to run
         # concurrently: ModelRunner and its attention backend carry
