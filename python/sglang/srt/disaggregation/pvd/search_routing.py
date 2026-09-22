@@ -56,6 +56,7 @@ class RoutedShardSearchClient:
         vector_space,
         metric,
         clients,
+        layers=None,
     ):
         if not isinstance(storage_layout, KVLayoutSignature) or not isinstance(
             compute_layout, KVLayoutSignature
@@ -81,6 +82,18 @@ class RoutedShardSearchClient:
             raise ValueError(
                 "different V shards require distinct selected shard endpoints"
             )
+        if layers is None:
+            layers = tuple(range(storage_layout.num_layers))
+        if (
+            not isinstance(layers, tuple)
+            or not layers
+            or any(
+                type(layer) is not int or not 0 <= layer < storage_layout.num_layers
+                for layer in layers
+            )
+            or tuple(sorted(set(layers))) != layers
+        ):
+            raise ValueError("explicit sorted unique target layers required")
         self.entry_transfer_id, self.vector_space = entry_transfer_id, vector_space
         self.scope = SearchScope(
             prompt_tokens, storage_layout.page_size, storage_layout.head_dim, metric
@@ -96,7 +109,7 @@ class RoutedShardSearchClient:
                 + part.compute_head_offset
             )
             for head in range(start, start + part.head_count):
-                for layer in range(storage_layout.num_layers):
+                for layer in layers:
                     groups[layer, head] = part.storage_rank
         self.groups = MappingProxyType(groups)
         self.clients = MappingProxyType(dict(clients))

@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+新增 [稀疏多源聚合组件](PVD_Sparse_FanIn_CN_EN.md)：D TP1 的两个 V 源分别
+注册/写入/证明完成，然后有界合并到一份受 guard 管理的 D 暂存区，提交完整
+工作集；安装后各源独立 ACK，UNKNOWN 保留 MR 和预算。CPU 策略测试使用
+真实双 V store/HTTP 与 fake byte copy。请求控制器尚未驱动该组件，生产
+Scheduler 仍未自动启用预测检索，多 HCA/GPU/RDMA 尚未实测。
+
+The sparse fan-in component verifies both V sources independently, merges
+their exact bytes under a separate budget into one guarded D staging buffer,
+stages a complete D bank, and allows per-source ACK only after installation.
+CPU policy tests use real two-V store/HTTP control and fake byte copying.
+The request controller still needs to drive this component; production
+predictive Scheduler activation and multi-HCA/GPU/RDMA acceptance remain open.
+
+以下为前序步骤的当时边界 / Earlier steps retain their historical scope.
+
 多 V 检索路由已区分 D compute rank 与 V storage rank：同一 D 的不同全局 KV
 heads 可以查询不同 V 源，每源独立固定版本；完整 D selection 可拆为各源 wire
 manifest，分别保留 storage/compute layout 身份。新增 30 项 CPU 测试。前 22 项

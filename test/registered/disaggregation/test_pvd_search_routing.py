@@ -152,10 +152,10 @@ def test_request_scope_refused_before_http(fault):
     asyncio.run(run())
 
 
-def selection_plan():
+def selection_plan(*, layers=None):
     _, storage, _, _, _ = build_entry()
     clients = {s: PVDShardSearchClient(f"http://v{s}") for s in (0, 1)}
-    r = router(storage, layout(storage, 1), clients)
+    r = router(storage, layout(storage, 1), clients, layers=layers)
     specs = tuple(
         SparseKVSpec(
             request_id="request",
@@ -188,6 +188,16 @@ def test_source_manifests_keep_distinct_versions_and_both_layouts():
             assert wire == replace(local, layout_fingerprint=r.storage_fingerprint)
             assert wire.index_version == f"index-{plan.storage_rank}"
             assert wire.kv_head // 2 == plan.storage_rank
+
+
+def test_subset_of_probe_layers_still_requires_complete_selected_bank():
+    r, specs = selection_plan(layers=(0,))
+    assert len(specs) == 4 and {s.layer for s in specs} == {0}
+    assert len(r.partition_specs(specs)) == 2
+    with pytest.raises(ValueError, match="complete D bank"):
+        r.partition_specs(specs[:-1])
+    with pytest.raises(ValueError, match="outside"):
+        r.version_scope(ident("entry", 1, 0))
 
 
 @pytest.mark.parametrize(
