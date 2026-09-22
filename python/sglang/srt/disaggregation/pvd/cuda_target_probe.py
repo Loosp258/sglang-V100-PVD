@@ -53,6 +53,17 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
     def _drain_private(self):
         torch.cuda.synchronize(self.device)
 
+    def quarantine_query_copy(self):
+        """A consumer cannot prove completion of a read from captured Q.
+
+        Keep the capture owner, its budget and the target execution lease.
+        Only callable inside the active branch, before its cleanup can run.
+        """
+        self._require_main_thread()
+        if not self._active or not self._execution_held:
+            raise PredictionConfigError("query quarantine requires an active branch")
+        self._quarantined = True
+
     def snapshot(self):
         self._require_main_thread()
         return {

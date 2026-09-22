@@ -9,6 +9,7 @@ No live request, writable committed KV or sampler is passed to providers.
 from __future__ import annotations
 
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 
 import torch
@@ -255,6 +256,27 @@ class ProbeSearchSession:
         self.invalidate()
         self._closed = True
 
+    def _validate_pipeline(self, pipeline):
+        if torch.device(pipeline.draft_config.device).type != "cpu":
+            raise PredictionConfigError(
+                "this standalone bridge only validates CPU execution"
+            )
+
+    def _query_device(self, tensor):
+        return tensor.device.type == "cpu"
+
+    def _query_rows(self, tensor, indices, head, pipeline):
+        rows = []
+        for index in indices:
+            row = tensor[index, head].detach().to(dtype=torch.float32)
+            if not torch.isfinite(row).all():
+                raise ValueError("probe query must contain finite float32 values")
+            rows.append(tuple(row.tolist()))
+        return tuple(rows)
+
+    def _prepare_scope(self, routes, window):
+        return nullcontext()
+
     def prepare(
         self,
         window: ProbeWindow,
@@ -277,10 +299,7 @@ class ProbeSearchSession:
                 head_mapping, QueryHeadMapping
             ):
                 raise TypeError("explicit pipeline and query-head mapping required")
-            if torch.device(pipeline.draft_config.device).type != "cpu":
-                raise PredictionConfigError(
-                    "this standalone bridge only validates CPU execution"
-                )
+            self._validate_pipeline(pipeline)
             if not isinstance(routes, tuple) or not 1 <= len(routes) <= 64:
                 raise ValueError("provide 1..64 explicit single-shard routes")
             keys = set()
@@ -306,7 +325,7 @@ class ProbeSearchSession:
                 if window.query_source == "committed"
                 else pipeline.query_branch(window.prefix)
             )
-            with branch as queries:
+            with self._prepare_scope(routes, window), branch as queries:
                 by_layer = {q.layer: q for q in queries}
                 for route in routes:
                     query = by_layer.get(route.identity.layer)
@@ -321,7 +340,7 @@ class ProbeSearchSession:
                     tensor = query.vectors
                     if (
                         not isinstance(tensor, torch.Tensor)
-                        or tensor.device.type != "cpu"
+                        or not self._query_device(tensor)
                         or not tensor.is_floating_point()
                         or tuple(tensor.shape)
                         != (
@@ -341,20 +360,14 @@ class ProbeSearchSession:
                         raise ValueError(
                             "requested Q position was not produced (or is padding)"
                         )
-                    rows = []
-                    for position in window.query_positions:
-                        row = (
-                            tensor[valid.index(position), local_head]
-                            .detach()
-                            .to(dtype=torch.float32)
-                        )
-                        if not torch.isfinite(row).all():
-                            raise ValueError(
-                                "probe query must contain finite float32 values"
-                            )
-                        rows.append(tuple(row.tolist()))
+                    rows = self._query_rows(
+                        tensor,
+                        tuple(valid.index(p) for p in window.query_positions),
+                        local_head,
+                        pipeline,
+                    )
                     prepared.append(
-                        PreparedProbeQuery(route, query.version, tuple(rows))
+                        PreparedProbeQuery(route, query.version, rows)
                     )
             self._match(window)
             result = PreparedProbeSearch(window, tuple(prepared))
