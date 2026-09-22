@@ -30,6 +30,53 @@ capabilities are unchanged. Planner coverage is not a deployable topology matrix
 
 ## 下一阶段必须满足 / Required before wire activation
 
+### 接收端多 writer 生命周期已实现 / Receiver-side lifetime implemented
+
+`FullKVFanInReceiver` 现在将实际 `RegisteredMemory` 及其 guard 固定为一组
+接收资源，在发布 descriptor 前 pin。它按 **V rank** 保存完整身份集合；
+原 `WriteIdentity.shard_rank` 仍表示 D rank，子交付名包含 `:d<D>:v<V>`，
+不将多个 writer 覆盖进同一个 D-rank 字典项。计划指纹绑定 Entry、layout、
+descriptor、token count 和完整相对偏移；caller 必须显式提供 `max_slices`，
+超出上限在物化计划和 pin 前拒绝。
+
+发布失败或取消后，缺少任一 writer 的终止证明都不能关闭 MR。完成证明必须包含
+确切身份、计划指纹、writer rank、终止状态、`fenced=true` 和合法字节数；
+只有全部成功且覆盖预期字节才报告 network-ready。NOT_SUBMITTED/FAILED 可以
+证明可回收但不能变成可安装结果。重复相同证明幂等，矛盾证明拒绝。网络 pin
+完成后，本地 unpack/install 读取者仍必须自行持有 guard pin 并完成本地 fence。
+
+The receiver pins the actual registered MR before descriptor publication and keeps
+the complete authorization set by **V rank**, while `WriteIdentity.shard_rank`
+retains its D-rank meaning. Source-qualified subdelivery IDs and a plan fingerprint
+bind the destination, layouts, Entry, token count and offsets. An explicit
+`max_slices` bounds plan materialization before pinning. Failed publication or
+cancellation cannot close the MR without every writer's exact terminal fence proof.
+Only full successful byte coverage from all writers makes it network-ready.
+NOT_SUBMITTED/FAILED may permit retirement, never successful install. Identical
+proofs are idempotent; conflicting proofs are refused. Local import readers still
+need their own guard pins and local completion fences.
+
+**当前仍是显式组件，没有接入 coordinator/HTTP 或替换旧 receiver。**
+32 个新增 CPU 用例中，一个联测使用真实 `WriteAuthorization` 和两路
+`FakeTransferEngine` 写入同一个 CPU MR；其余发送端证明为受控 fixture。
+这些不是原生 RDMA、远端可信证明或恶意 peer 的硬件隔离验证。实际发送端还必须
+强制执行指纹中的范围授权，并在禁止迟到重试后才回复 fence。
+
+**This remains an explicit component, not coordinator/HTTP or legacy receiver
+activation.** Of 32 new CPU cases, one combines real `WriteAuthorization` objects
+with two fake-engine writers to one CPU MR; other sender proofs are controlled
+fixtures. This is not native RDMA evidence, authentication validation or hardware
+isolation against malicious peers. The sender must still enforce planned ranges
+and prohibit delayed retry before reporting a fence.
+
+共享 MR 生命周期步骤验证：Windows 全量 **2326 passed / 29 skipped**，WSL
+fan-in/原授权定向 **115 passed**。没有以这些 CPU 结果替代 GPU、真实多进程
+传输或生产自动装配验收。
+
+Shared-MR lifecycle step: **2326 passed / 29 skipped** on Windows full regression;
+**115 passed** in WSL fan-in/existing authorization tests. These CPU results do not
+replace GPU, real multi-process transport or automatic serving-assembly acceptance.
+
 - 一次 D 接收内存的授权必须区分每个 V writer，且将 writer 身份绑定到本次
   receiver incarnation、entry generation、source rank、destination rank 和子交付。
 - 每个 writer 只能写入其计划的目标子范围，不能用“共享同一个 MR”代替软件授权。

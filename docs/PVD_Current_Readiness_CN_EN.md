@@ -30,6 +30,17 @@ source/destination offsets. Twenty-nine CPU cases reconstruct actual packer byte
 Legacy wire APIs still refuse fan-in; multi-writer identity/completion/fencing
 integration remains implementation work.
 
+上述 fan-in 又增加了显式共享 MR 生命周期组件：按 V writer 验证身份和计划
+指纹，全部终止后方可释放，全部成功后才 network-ready。32 个 CPU 测试覆盖
+部分写入、取消、UNKNOWN 和两路 fake writer；尚未接 coordinator/HTTP 或旧
+接收器，不能解读为生产多源交付已开启。
+
+An explicit shared-MR lifetime component now validates V-writer identities and plan
+fingerprints, requires all-terminal closure and all-success network readiness.
+Thirty-two CPU cases cover partial writes, cancellation, UNKNOWN and two fake
+writers. Coordinator/HTTP and legacy receiver integration are still pending;
+production multi-source delivery is not enabled.
+
 [CUDA Scheduler 显式绑定](PVD_CUDA_Scheduler_Binding_CN_EN.md) 已接普通 Decode
 循环、waiting admission、分配前 wait-all 和原 Scheduler 结果包装器。未绑定时
 仍走旧路径。新增 25 个 CPU 用例；WSL 定向 59 项通过。KV 压力当前选择中止 batch
