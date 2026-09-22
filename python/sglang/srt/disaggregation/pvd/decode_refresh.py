@@ -86,6 +86,7 @@ class PVDDecodeSession:
         self._refresh_owner = None
         self._fenced = False
         self._initial_receipt = None
+        self._cuda_refresh_driver = None
 
     def _complete_refresh(self):
         """Called ONLY at the final successful ACK/TP-agreement site below."""
@@ -182,9 +183,13 @@ class PVDDecodeSession:
         return max(0, len(self.req.output_ids) - 1)
 
     def due(self):
+        if self._cuda_refresh_driver is not None:
+            return False
         return self.clock.due(self.decode_tokens)
 
     def prepare(self, pages):
+        if self._cuda_refresh_driver is not None:
+            raise RuntimeError("full Prompt refresh ownership transferred to CUDA driver")
         if self._closed or self.lease_error:
             raise RuntimeError(self.lease_error or "Decode session closed")
         self.pages = pages
@@ -582,7 +587,14 @@ class PVDDecodeRefresher:
         close_gate = getattr(self.manager, "close_bootstrap_gate", None)
         if close_gate is not None:
             close_gate(req)
-        session = self.manager.decode_sessions.pop(self.manager.key_for(req), None)
+        key = self.manager.key_for(req)
+        session = self.manager.decode_sessions.get(key)
+        if session is not None and getattr(session, "_cuda_refresh_driver", None) is not None:
+            # The sparse controller still needs this Entry's consumer lease.
+            # Its driver closes the full session only AFTER native sparse drain.
+            session._cuda_refresh_driver.cancel(req)
+            return
+        session = self.manager.decode_sessions.pop(key, None)
         if session is not None:
             session.schedule_close()
 
@@ -608,7 +620,11 @@ class PVDDecodeRefresher:
                 self.manager.decode_sessions[self.manager.key_for(req)] for req in reqs
             ]
             # Include lease failures even when a periodic update is not due.
-            due = [s for s in sessions if s.due() or s.lease_error]
+            due = [
+                s for s in sessions
+                if getattr(s, "_cuda_refresh_driver", None) is None
+                and (s.due() or s.lease_error)
+            ]
         except Exception as exc:
             error = str(exc)
         # The rank-0 heartbeat is asynchronous; agree on the union before any

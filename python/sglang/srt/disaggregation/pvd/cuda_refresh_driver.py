@@ -40,6 +40,8 @@ class _Request:
     quarantined: bool = False
     error: object = None
     retirement: object = None
+    full_session: object = None
+    receiver_lease: object = None
 
 
 class CUDARefreshDriver:
@@ -65,6 +67,7 @@ class CUDARefreshDriver:
         self._records = {}
         self._execution_lock = None
         self._closing = self._pumping = False
+        self._source_quarantine = None
         try:
             self._loop = asyncio.get_running_loop()
             self._owns_loop = False
@@ -97,6 +100,7 @@ class CUDARefreshDriver:
         self._owner()
         if (
             self._closing
+            or self._source_quarantine is not None
             or self._loop.is_closed()
             or len(self._records) >= self.max_requests
         ):
@@ -162,7 +166,115 @@ class CUDARefreshDriver:
         )
         controller._refresh_driver_claimed = True
 
+    def claim_received_session(self, session):
+        """One-way switch after receiver import, registration and release binding.
+
+        The original session keeps its consumer lease and staging registration
+        until sparse controller close proves no Delivery writer remains.
+        """
+        from sglang.srt.disaggregation.pvd.cuda_prompt_bootstrap import (
+            CUDAPromptBootstrap,
+        )
+        from sglang.srt.disaggregation.pvd.cuda_request_release import (
+            CUDARequestRelease,
+        )
+        from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
+
+        self._owner()
+        if not isinstance(session, PVDDecodeSession):
+            raise LifecycleError("real full Prompt receiver session required")
+        receipt = session.require_initial_prompt()
+        record = self._records.get(session.req.rid)
+        importer = getattr(session, "_cuda_prompt_importer", None)
+        if (
+            self.arbiter.busy
+            or record is None
+            or record.req is not session.req
+            or record.stopping
+            or record.full_session is not None
+            or session._cuda_refresh_driver is not None
+            or not isinstance(record.retirement, CUDARequestRelease)
+            or record.retirement.state != "attached"
+            or record.retirement.driver is not self
+            or not isinstance(importer, CUDAPromptBootstrap)
+            or importer.group is not record.controller.group
+            or not importer._used
+            or importer._quarantined
+            or importer._receive_lease is not None
+            or importer._received_session is not session
+            or importer._received_receipt is not receipt
+            or importer._received_pool_owner is not record.retirement.pool_owner
+            or importer._lock is not self._execution_lock
+            or record.prompt != receipt.prompt
+            or record.outputs != receipt.outputs
+            or record.slot != receipt.slot
+            or record.refresh is not None
+            or not record.controller.can_decode(0)
+        ):
+            raise LifecycleError(
+                "completed import, registration and release owner required"
+            )
+        record.retirement._binding()
+        # No await or fallible work between the two ownership publications.
+        record.full_session = session
+        session._cuda_refresh_driver = self
+
+    def _session_binding(self, record):
+        session = record.full_session
+        if session is not None and (
+            session.req is not record.req
+            or session._cuda_refresh_driver is not self
+            or session.manager.key_for(record.req) != session.key
+            or session.manager.decode_sessions.get(session.key) is not session
+        ):
+            raise LifecycleError("CUDA source session ownership changed")
+        return session
+
+    def _session_live(self, record):
+        session = self._session_binding(record)
+        if session is not None and (
+            session._closed
+            or session.lease_error
+            or not session._fenced
+            or session._refresh_owner is not None
+            or session.clock.pending is not None
+            or session.clock.round != 1
+            or session.clock.last_tokens != 0
+        ):
+            raise LifecycleError(
+                "CUDA source session closed, changed or lost its lease"
+            )
+
+    async def _close_controller(self, record):
+        await record.controller.aclose()
+        session = self._session_binding(record)
+        if session is not None:
+            # Keep keepalive on its original control loop. Never await its
+            # asyncio Task from the driver's separate owner loop.
+            session.schedule_close()
+            closed = await asyncio.wrap_future(session._close_future)
+            if (
+                closed is not True
+                or session.receive_guard is not None
+                or session._refresh_owner is not None
+            ):
+                raise LifecycleError("full Prompt source close remains undrained")
+            session.manager.close_bootstrap_gate(record.req)
+
+    def _quarantine_receiver(self, record, exc):
+        """A failed bound-source close is not permission to reuse shared pools."""
+        self._source_quarantine = str(exc)[:512]
+        if not self.arbiter.busy:
+            record.receiver_lease = self.arbiter.acquire()
+        cache = (
+            record.retirement.cache or record.full_session.manager.scheduler.tree_cache
+        )
+        reason = "CUDA receiver close uncertain; worker pools quarantined"
+        cache.req_to_token_pool.pvd_cuda_retirement_error = reason
+        cache.token_to_kv_pool_allocator.pvd_cuda_retirement_error = reason
+
     def _observe(self, record):
+        self._session_live(record)
         req, controller = record.req, record.controller
         outputs = self._tokens(req.output_ids)
         if (
@@ -180,7 +292,8 @@ class CUDARefreshDriver:
         if record.capture_lease is not None:
             pipeline = record.controller.pipeline
             if (
-                pipeline._quarantined
+                self._source_quarantine is not None
+                or pipeline._quarantined
                 or pipeline.probe._quarantined
                 or pipeline.provider.degraded
                 or record.controller._session._copy_unknown
@@ -195,7 +308,11 @@ class CUDARefreshDriver:
     @contextmanager
     def _capture(self, record):
         try:
-            if record.stopping or record.capture_lease is None:
+            if (
+                self._source_quarantine is not None
+                or record.stopping
+                or record.capture_lease is None
+            ):
                 raise LifecycleError("stale CUDA capture dispatch")
             expected = record.outputs
             self._observe(record)
@@ -246,12 +363,19 @@ class CUDARefreshDriver:
                 if record.close_task.done():
                     try:
                         record.close_task.result()
+                        session = self._session_binding(record)
                         if record.retirement is not None:
                             record.retirement.release_after_controller_close()
                     except (Exception, asyncio.CancelledError) as exc:
                         # No retry or capacity refund after uncertain cleanup.
                         record.error, record.quarantined = exc, True
+                        if record.full_session is not None:
+                            self._quarantine_receiver(record, exc)
+                            return
                     else:
+                        if session is not None:
+                            session.manager.decode_sessions.pop(session.key)
+                            session._cuda_refresh_driver = None
                         del self._records[key]
                 continue
             if not record.stopping:
@@ -292,7 +416,7 @@ class CUDARefreshDriver:
                     record.error = exc
                     self._stop(record, "Req observation or CUDA refresh failed")
             if record.stopping and (record.refresh is None or record.refresh.done()):
-                coroutine = record.controller.aclose()
+                coroutine = self._close_controller(record)
                 try:
                     record.close_task = self._loop.create_task(coroutine)
                 except BaseException:
@@ -324,6 +448,8 @@ class CUDARefreshDriver:
 
     def poll(self):
         self._owner()
+        if self._source_quarantine is not None:
+            raise LifecycleError("CUDA receiver close uncertain; driver quarantined")
         if self._pumping or self._loop.is_closed():
             raise LifecycleError("CUDA refresh loop is closed or reentered")
         if self.arbiter.busy and not any(
@@ -383,6 +509,7 @@ class CUDARefreshDriver:
         self._owner()
         return {
             "closing": self._closing,
+            "source_quarantine": self._source_quarantine,
             "drained": self._closing and not self._records,
             "requests": {
                 key: {
@@ -391,6 +518,7 @@ class CUDARefreshDriver:
                     "ready": r.ready,
                     "stopping": r.stopping,
                     "quarantined": r.quarantined,
+                    "owns_full_receiver": r.full_session is not None,
                     "retirement_state": None
                     if r.retirement is None
                     else r.retirement.state,

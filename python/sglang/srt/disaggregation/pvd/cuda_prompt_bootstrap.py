@@ -47,6 +47,7 @@ class CUDAPromptBootstrap:
         self._held = {}
         self._quarantined = self._active = self._used = False
         self._received_session = self._received_receipt = self._receive_lease = None
+        self._received_pool_owner = None
 
     def install_received(self, session, *, arbiter, pool_owner, cache):
         """Bind the shipped full receiver to this request's initial CUDA bank.
@@ -98,6 +99,7 @@ class CUDAPromptBootstrap:
         lease = arbiter.acquire()
         self._receive_lease = lease
         self._received_session, self._received_receipt = session, receipt
+        self._received_pool_owner = pool_owner
         session._cuda_prompt_importer = self
         try:
             return self.install(
@@ -124,6 +126,7 @@ class CUDAPromptBootstrap:
                     # Capacity/pre-copy refusal did not consume the bootstrap.
                     session._cuda_prompt_importer = None
                     self._received_session = self._received_receipt = None
+                    self._received_pool_owner = None
 
     def _synchronize(self):
         torch.cuda.synchronize(self._bank.device)
