@@ -39,6 +39,7 @@ class _Request:
     stopping: bool = False
     quarantined: bool = False
     error: object = None
+    retirement: object = None
 
 
 class CUDARefreshDriver:
@@ -245,6 +246,8 @@ class CUDARefreshDriver:
                 if record.close_task.done():
                     try:
                         record.close_task.result()
+                        if record.retirement is not None:
+                            record.retirement.release_after_controller_close()
                     except (Exception, asyncio.CancelledError) as exc:
                         # No retry or capacity refund after uncertain cleanup.
                         record.error, record.quarantined = exc, True
@@ -388,6 +391,9 @@ class CUDARefreshDriver:
                     "ready": r.ready,
                     "stopping": r.stopping,
                     "quarantined": r.quarantined,
+                    "retirement_state": None
+                    if r.retirement is None
+                    else r.retirement.state,
                     "error": None if r.error is None else str(r.error)[:512],
                 }
                 for key, r in self._records.items()

@@ -53,6 +53,8 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         return len(self.free_pages) + len(self.release_pages)
 
     def alloc(self, need_size: int):
+        if getattr(self, "pvd_cuda_retirement_error", None) is not None:
+            raise RuntimeError(self.pvd_cuda_retirement_error)
         if self.need_sort and need_size > len(self.free_pages):
             self.merge_and_sort_free()
 
@@ -64,6 +66,8 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         return select_index
 
     def free(self, free_index: torch.Tensor):
+        if getattr(self, "pvd_cuda_retirement_error", None) is not None:
+            raise RuntimeError(self.pvd_cuda_retirement_error)
         if free_index.numel() == 0:
             return
 

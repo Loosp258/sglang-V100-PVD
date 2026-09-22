@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2181 passed / 26 skipped**；CUDA Delivery 定向 **7 passed**。
+最新 Windows 全量：**2192 passed / 28 skipped**；CUDA Delivery 定向 **7 passed**。
 新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
 清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
 详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
-Latest full Windows regression is 2181/26; CUDA Delivery policy tests pass 7 cases.
+Latest full Windows regression is 2192/28; CUDA Delivery policy tests pass 7 cases.
 Draft retirement now fences work/map clearing/allocator updates, retains actual
 owners on UNKNOWN, quarantines the shared provider and cleans up malformed
 allocations. Fourteen new CPU cases pass; the first five failed before the fix.
@@ -105,6 +105,14 @@ observing authoritative writes without resampling. It refuses replay and retries
 after partial commit, and permits completed ScheduleBatch reuse without replacing
 active owners. Serving factory/queue activation, original allocator retirement
 and actual TP integration remain separate work.
+
+[CUDA 原始请求池回收](PVD_CUDA_Request_Retirement_CN_EN.md) 已接公共 cache 回调和
+driver close：allocator 读取、映射清零、host slot 归还分别排序；UNKNOWN 禁止
+两个池继续分配。工厂仍须为每个显式 CUDA 请求安装 owner，尚未自动全服务启用。
+Explicit CUDA request retirement now connects the common cache callback to driver
+close, ordering allocator reads, map clearing and host-slot reuse. UNKNOWN poisons
+both pools. The production factory must still install each owner; serving-wide
+activation is not implied.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。

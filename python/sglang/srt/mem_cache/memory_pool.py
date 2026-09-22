@@ -239,6 +239,8 @@ class ReqToTokenPool:
         return len(self.free_slots)
 
     def alloc(self, reqs: list[Req]) -> Optional[List[int]]:
+        if getattr(self, "pvd_cuda_retirement_error", None) is not None:
+            raise RuntimeError(self.pvd_cuda_retirement_error)
         # Indices of reqs that already have a req_pool_idx and will reuse
         # their existing slot (e.g. chunked prefill continuing across chunks).
         reusing = [i for i, r in enumerate(reqs) if r.req_pool_idx is not None]
@@ -266,6 +268,8 @@ class ReqToTokenPool:
         return [r.req_pool_idx for r in reqs]
 
     def free(self, req: Req):
+        if getattr(self, "pvd_cuda_retirement_error", None) is not None:
+            raise RuntimeError(self.pvd_cuda_retirement_error)
         assert req.req_pool_idx is not None, "request must have req_pool_idx"
         self.free_slots.append(req.req_pool_idx)
         req.req_pool_idx = None

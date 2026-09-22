@@ -565,6 +565,16 @@ def alloc_for_decode(batch: ScheduleBatch, token_per_req: int) -> torch.Tensor:
 
 
 def release_kv_cache(req: Req, tree_cache: BasePrefixCache, is_insert: bool = True):
+    cuda_owner = getattr(req, "pvd_cuda_kv_release", None)
+    if cuda_owner is not None:
+        from sglang.srt.disaggregation.pvd.cuda_request_release import CUDARequestRelease
+
+        if not isinstance(cuda_owner, CUDARequestRelease) or getattr(
+            req, "pvd_cpu_kv_release", None
+        ) is not None:
+            raise TypeError("invalid or competing PVD CUDA request release owner")
+        cuda_owner.defer(req, tree_cache, is_insert, _release_kv_cache_now)
+        return
     owner = getattr(req, "pvd_cpu_kv_release", None)
     if owner is not None:
         # Explicit CPU ownership only. Ordinary PD/PVD and unbound requests
