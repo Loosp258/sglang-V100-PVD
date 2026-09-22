@@ -137,7 +137,8 @@ class DraftForwardAdapter(ModelExecutor):
     establishes it, and this class documents the dependency rather than
     implying a guarantee it cannot make.
 
-    It retains no batches and no tensors between calls; see ``last_forward``.
+    Healthy calls retain no batches/tensors; UNKNOWN completion quarantines
+    the in-flight owners instead of making a bounded-memory claim by dropping them.
     """
 
     def __init__(
@@ -170,6 +171,12 @@ class DraftForwardAdapter(ModelExecutor):
         self._device = torch.device(
             device if device is not None else getattr(model_runner, "device", "cpu")
         )
+        if self._device.type not in ("cpu", "cuda") or (
+            self._device.type == "cuda" and self._device.index is None
+        ):
+            raise DraftCapabilityError(
+                "draft completion supports CPU or an explicitly indexed CUDA device"
+            )
         self._factory = forward_batch_factory
         # No default derived from KV bytes: model intermediates and backend
         # workspace are not KV. A deployment must supply a bound for its
@@ -187,6 +194,8 @@ class DraftForwardAdapter(ModelExecutor):
         #: difference between a bounded branch and a leak.
         self.last_forward: Optional[dict] = None
         self.forward_count = 0
+        self._pending_owners: list = []
+        self._completion_error: Optional[str] = None
 
     # -- what the capability check reads ------------------------------------
 
@@ -326,14 +335,31 @@ class DraftForwardAdapter(ModelExecutor):
 
     # -- execution ----------------------------------------------------------
 
+    def drain(self) -> None:
+        """Local compute completion only; never a remote RDMA WRITE fence."""
+        if self._completion_error is not None:
+            raise DraftLifecycleError(self._completion_error)
+        try:
+            if self._device.type == "cuda":
+                torch.cuda.synchronize(self._device)
+        except BaseException as exc:
+            self._completion_error = (
+                f"draft completion unknown; adapter quarantined: {exc}"
+            )
+            raise DraftLifecycleError(self._completion_error) from exc
+        self._pending_owners.clear()
+
     def forward(self, inputs: DraftForwardInputs) -> torch.Tensor:
         """Run one forward and return logits for the final position.
 
         No sampler, no logprob accounting, no hidden-state capture. The batch
-        is dropped as soon as the forward returns, so its device tensors are
-        not kept alive by this adapter.
+        and returned output remain owned until device completion. A failed
+        fence retains them and refuses all later execution, including retries.
         """
+        if self._completion_error is not None:
+            raise DraftLifecycleError(self._completion_error)
         batch = self.build_forward_batch(inputs)
+        self._pending_owners.append(batch)
         self.forward_count += 1
         self.last_forward = {
             "forward_mode": inputs.forward_mode,
@@ -341,10 +367,15 @@ class DraftForwardAdapter(ModelExecutor):
             "seq_lens": tuple(inputs.seq_lens),
             "batch_size": len(inputs.seq_lens),
         }
-        with torch.inference_mode():
-            output = self._runner.forward(batch)
-        del batch
-        return self._last_position_logits(output)
+        try:
+            with torch.inference_mode():
+                output = self._runner.forward(batch)
+            self._pending_owners.append(output)
+            return self._last_position_logits(output)
+        finally:
+            # Conservative device-wide fence: no stream-overlap claim. It also
+            # covers a runner that launched work and then raised before output.
+            self.drain()
 
     @staticmethod
     def _last_position_logits(output: Any) -> torch.Tensor:

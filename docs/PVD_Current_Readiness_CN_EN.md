@@ -27,12 +27,21 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2089 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**
-（含全量之后新增的 timeout 用例）。共享 runtime 核心修改后，严格 v5 四场景真实 CPU 模型矩阵
-再次全部通过。这不是 CUDA probe 的 GPU forward 证据。
-Latest full Windows regression is 2089/24; CUDA Delivery policy tests pass 7 cases
-(including a timeout case added afterwards). All four strict real-model CPU
-cases passed again after the shared runtime-core change. This is not CUDA evidence.
+最新 Windows 全量：**2104 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**。
+新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
+清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
+详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
+Latest full Windows regression is 2104/24; CUDA Delivery policy tests pass 7 cases.
+Draft retirement now fences work/map clearing/allocator updates, retains actual
+owners on UNKNOWN, quarantines the shared provider and cleans up malformed
+allocations. Fourteen new CPU cases pass; the first five failed before the fix.
+Device-wide fencing is a conservative baseline, not latency/overlap evidence.
+
+最终代码另通过 WSL draft 定向 **140 passed**（3 条已有 CPU 平台警告），以及
+严格 v5 四场景真实 CPU 模型矩阵。仍为 TP1 CPU、fake payload，不是 GPU/RDMA。
+Final-source WSL draft regression passes 140 cases (three existing CPU-platform
+warnings), and all four strict v5 real-model CPU cases pass again. This remains
+TP1 CPU with fake payload transport, not GPU/RDMA evidence.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。

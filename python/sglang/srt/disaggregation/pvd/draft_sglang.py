@@ -651,6 +651,8 @@ class SGLangDraftProvider(DraftProvider):
         self._execution_lock = threading.Lock()
         self._active: Dict[str, _Branch] = {}
         self._quarantined: List[QuarantinedBranch] = []
+        # Keep actual handles/pools alive, not only a textual diagnostic.
+        self._retained: Dict[str, _Branch] = {}
         self._current = threading.local()
 
     @staticmethod
@@ -739,6 +741,8 @@ class SGLangDraftProvider(DraftProvider):
         branch_id = uuid.uuid4().hex[:12]
         owner = f"pvd-draft:{branch_id}"
         with self._lock:
+            if self._quarantined:
+                raise TransferCapacityError("shared draft worker is quarantined")
             if getattr(self._current, "branch", None) is not None:
                 raise DraftLifecycleError(
                     "this thread already has an open prediction branch; "
@@ -784,6 +788,11 @@ class SGLangDraftProvider(DraftProvider):
 
     def _retire(self, branch_id: str) -> None:
         """Release the handle first; only then give the accounting back."""
+        with self._execution_lock:
+            self._retire_locked(branch_id)
+
+    def _retire_locked(self, branch_id: str) -> None:
+        """Caller owns the shared execution lock through quarantine/accounting."""
         with self._lock:
             record = self._active.get(branch_id)
         if record is None:  # pragma: no cover - defensive
@@ -791,13 +800,15 @@ class SGLangDraftProvider(DraftProvider):
         try:
             # Allocation/forward and cleanup share pool metadata and backend
             # state. Distinct request handles do not make alloc/free reentrant.
-            with self._execution_lock:
-                record.handle.release()
+            if self._quarantined:
+                raise DraftWorkerError("shared draft worker is quarantined")
+            record.handle.release()
         except BaseException as exc:
             # The resources may still be live. Keep the reservation and the
             # admission slot so nothing else is handed the same memory.
             with self._lock:
                 self._active.pop(branch_id, None)
+                self._retained[branch_id] = record
                 self._quarantined.append(
                     QuarantinedBranch(
                         branch_id=branch_id,
@@ -846,8 +857,16 @@ class SGLangDraftProvider(DraftProvider):
         )
         # Serialized: the handles are separate, the model runner is not.
         with self._execution_lock:
-            prepared = record.handle.prepare_prefix(prefix.tokens)
-            produced = record.handle.generate(prepared, budgeted)
+            try:
+                if self._quarantined:
+                    raise DraftWorkerError("shared draft worker is quarantined")
+                prepared = record.handle.prepare_prefix(prefix.tokens)
+                produced = record.handle.generate(prepared, budgeted)
+            except BaseException:
+                # Do not open a gap between a failed launch and its fence:
+                # another admitted branch uses the same model/pool/backend.
+                self._retire_locked(record.branch_id)
+                raise
         tokens = self._validate(produced, budgeted)
         return DraftPrediction(
             request_id=prefix.request_id,

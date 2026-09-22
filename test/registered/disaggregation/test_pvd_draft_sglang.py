@@ -216,6 +216,10 @@ class FakeExecutor:
     def architecture(self):
         return self.arch
 
+    def drain(self):
+        # All work in this double is synchronous CPU computation.
+        pass
+
     def attention_backend(self):
         return self.backend
 

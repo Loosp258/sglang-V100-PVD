@@ -127,6 +127,14 @@ class ModelExecutor(Protocol):
     def forward(self, inputs: DraftForwardInputs) -> torch.Tensor:
         """Return logits for the final position, shape [vocab]."""
 
+    def drain(self) -> None:
+        """Prove all work on the private pools' device complete, or raise.
+
+        Includes failed forwards, map writes and allocator bookkeeping. A
+        synchronous CPU executor may explicitly implement a no-op. Missing
+        support must never silently stand in for a CUDA completion fence.
+        """
+
 
 class SlotAllocator(Protocol):
     """Private request slots, KV rows, and the mapping between them.
@@ -194,6 +202,8 @@ class SGLangDraftHandle:
         max_tokens: int,
         capabilities: DraftCapabilities,
     ) -> None:
+        if not callable(getattr(executor, "drain", None)):
+            raise DraftCapabilityError("executor must implement completion drain")
         self._branch_id = branch_id
         self._executor = executor
         self._allocator = allocator
@@ -204,6 +214,7 @@ class SGLangDraftHandle:
         self._mapped = 0
         self._kv: List[int] = []
         self._released = False
+        self._release_error: Optional[str] = None
         #: Everything handed to the executor, for inspection in tests.
         self.forwards: List[DraftForwardInputs] = []
 
@@ -257,6 +268,8 @@ class SGLangDraftHandle:
                 "this execution handle has been released; its rows may belong "
                 "to another branch now"
             )
+        if self._release_error is not None:
+            raise DraftLifecycleError("this execution handle is quarantined")
 
     # -- prefix -------------------------------------------------------------
 
@@ -278,11 +291,11 @@ class SGLangDraftHandle:
         # Allocated here, so every row written below is one this branch owns.
         self._request_index = int(self._allocator.alloc_request())
         locations = [int(loc) for loc in self._allocator.alloc_kv(length)]
+        self._kv.extend(locations)
         if len(locations) != length:
             raise DraftLifecycleError(
                 f"allocator returned {len(locations)} KV rows for {length} tokens"
             )
-        self._kv.extend(locations)
         # The attention backend reads KV locations out of this map, so the
         # forward below would be meaningless without it. Private row, private
         # allocator: no committed request's mapping is read or written.
@@ -332,6 +345,8 @@ class SGLangDraftHandle:
             # one per step and never borrows a row from anywhere else.
             locations = [int(loc) for loc in self._allocator.alloc_kv(1)]
             self._kv.extend(locations)
+            if len(locations) != 1:
+                raise DraftLifecycleError("allocator must return exactly one KV row")
             # Appended at this step's position, so the map grows by exactly
             # one row per step and stays consistent with seq_lens.
             self._allocator.write_mapping(self._request_index, position, locations)
@@ -369,29 +384,32 @@ class SGLangDraftHandle:
         """
         if self._released:
             return
-        errors = []
-        if self._kv:
-            try:
-                self._allocator.free_kv(tuple(self._kv))
-            except BaseException as exc:
-                errors.append(f"KV rows: {exc}")
-            else:
-                self._kv.clear()
-        if self._request_index is not None:
-            try:
-                # Cleared before the slot is returned, so a later branch that
-                # is handed this index cannot read rows it does not own.
+        if self._release_error is not None:
+            raise DraftWorkerError(self._release_error)
+        try:
+            # A failed forward may have launched work without returning logits.
+            # Never clear the map or publish free rows until that work is done.
+            self._executor.drain()
+            if self._request_index is not None:
                 self._allocator.clear_mapping(self._request_index)
-                self._mapped = 0
+            self._executor.drain()
+            if self._kv:
+                self._allocator.free_kv(tuple(self._kv))
+            if self._request_index is not None:
                 self._allocator.free_request(self._request_index)
-            except BaseException as exc:
-                errors.append(f"request slot: {exc}")
-            else:
-                self._request_index = None
-        if errors:
-            raise DraftWorkerError(
-                f"branch {self._branch_id} could not be released: " + "; ".join(errors)
+            # free() may itself enqueue CUDA bookkeeping. The provider holds
+            # its shared execution lock until this fence and all accounting.
+            self._executor.drain()
+        except BaseException as exc:
+            # Even a partially successful free is not retryable: the provider
+            # must quarantine the shared allocator, not just lose one slot.
+            self._release_error = (
+                f"branch {self._branch_id} could not be released: {exc}"
             )
+            raise DraftWorkerError(self._release_error) from exc
+        self._kv.clear()
+        self._request_index = None
+        self._mapped = 0
         self._released = True
 
     @property
