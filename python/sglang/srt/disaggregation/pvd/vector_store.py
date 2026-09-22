@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import uuid
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -175,6 +176,8 @@ class DeliveryShardRecord:
     local_terminal: Optional[TransportState] = None
     progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     sparse_manifest: Optional[SparseDeliveryManifest] = None
+    # Retained on unknown CUDA completion; cancellation must not drop the lease.
+    packing_index_lease: Optional[ExitStack] = field(default=None, repr=False)
 
     def to_dict(self):
         return {
@@ -188,6 +191,7 @@ class DeliveryShardRecord:
             "sparse_fingerprint": (
                 self.sparse_manifest.fingerprint if self.sparse_manifest else None
             ),
+            "packing_index_lease_held": self.packing_index_lease is not None,
             "write_identity": (
                 self.authorization.identity.to_dict() if self.authorization else None
             ),
@@ -291,6 +295,7 @@ class VectorKVStore:
         metrics: Optional[PVDMetrics] = None,
         prompt_index: Optional[Any] = None,
         max_absent_write_fences: int = 4096,
+        allow_cuda_sparse_packing: bool = False,
     ) -> None:
         if rank < 0 or rank >= world_size:
             raise ValueError(f"rank {rank} is outside world size {world_size}")
@@ -300,6 +305,14 @@ class VectorKVStore:
             raise ValueError("page_bytes must be positive")
         if type(max_absent_write_fences) is not int or max_absent_write_fences <= 0:
             raise ValueError("max_absent_write_fences must be a positive integer")
+        if type(allow_cuda_sparse_packing) is not bool:
+            raise ValueError("allow_cuda_sparse_packing must be a boolean")
+        if allow_cuda_sparse_packing and (
+            not device.startswith("cuda")
+            or prompt_index is None
+            or budget_of(transfer_engine) is None
+        ):
+            raise ValueError("CUDA sparse packing requires CUDA, an index and a budget")
         if device == "cpu" and not allow_cpu_for_tests:
             raise RuntimeError("PVD V storage cannot silently fall back to CPU")
         if device.startswith("cuda") and not torch.cuda.is_available():
@@ -332,6 +345,7 @@ class VectorKVStore:
         # store built without one behaves exactly as before. Full-Prompt
         # delivery stays index-independent; explicit sparse delivery leases it.
         self.prompt_index = prompt_index
+        self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         self.worker_epoch = uuid.uuid4().hex
         self._closed = False
@@ -907,10 +921,12 @@ class VectorKVStore:
         return MemorySlice(registration, 0, staging.numel())
 
     def _validate_sparse_destination(self, entry, destination, manifest):
-        # CPU packing is an explicit validation stage. Do not silently move a
-        # production GPU pool to host or pretend the offline packer is a kernel.
-        if self.pool.device.type != "cpu":
-            raise EntryConflictError("sparse GPU packing is not implemented")
+        # Never silently move GPU KV to host. CUDA uses an explicit synchronous
+        # baseline, not a claim of overlap, RDMA visibility or validated kernels.
+        if self.pool.device.type != "cpu" and not (
+            self.pool.device.type == "cuda" and self.allow_cuda_sparse_packing
+        ):
+            raise EntryConflictError("sparse GPU packing requires explicit CUDA opt-in")
         metadata = destination.backend_metadata
         if (
             self.prompt_index is None
@@ -956,7 +972,9 @@ class VectorKVStore:
         owner = f"v-sparse:{delivery.owner}"
         budget.reserve(owner, manifest.nbytes, 0)
         try:
-            staging = torch.empty(manifest.nbytes, dtype=torch.uint8)
+            staging = torch.empty(
+                manifest.nbytes, dtype=torch.uint8, device=self.pool.device
+            )
         except BaseException:
             budget.release(owner)
             raise
@@ -974,7 +992,10 @@ class VectorKVStore:
         guard.request_release()  # only terminal progress may remove the owner
         offset = entry.allocation.start_page * self.page_bytes
         source = self.pool[offset : offset + entry.manifest.expected_bytes]
-        with self.prompt_index.pin_selection(manifest) as descriptor:
+        lease = ExitStack()
+        descriptor = lease.enter_context(self.prompt_index.pin_selection(manifest))
+        delivery.packing_index_lease = lease
+        try:
             copy_sparse_kv_into(
                 source,
                 staging,
@@ -984,7 +1005,22 @@ class VectorKVStore:
                 entry_transfer_id=entry.key.transfer_id,
                 index_version=descriptor.index_version,
                 id_mapping_version=descriptor.id_mapping_version,
+                allow_cuda=self.allow_cuda_sparse_packing,
             )
+        finally:
+            # Keep Entry, staging and index leases through both successful and
+            # partly failed copies. If completion is unknown, retain everything
+            # for worker isolation; a later incidental synchronize is no repair.
+            try:
+                if self.pool.is_cuda:
+                    torch.cuda.synchronize(self.pool.device)
+            except BaseException:
+                with self._lock:
+                    delivery.local_terminal = TransportState.UNKNOWN
+                    self._isolated_reason = "sparse CUDA packing completion unknown"
+                raise
+            lease.close()
+            delivery.packing_index_lease = None
         try:
             registration = self.transfer_engine.register_memory(
                 staging,
@@ -1420,6 +1456,11 @@ class VectorKVStore:
                 "world_size": self.world_size,
                 "rail": self.rail,
                 "device": self.device,
+                "sparse_packing_mode": (
+                    "cuda_synchronous_experimental"
+                    if self.allow_cuda_sparse_packing
+                    else "cpu_reference_only"
+                ),
                 "page_bytes": self.page_bytes,
                 "worker_epoch": self.worker_epoch,
                 "closed": self._closed,

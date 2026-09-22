@@ -86,6 +86,13 @@ implementation remains. Implement and validate together when the target stack
 is available; do not remove CPU-only guards or relabel fake transport as native.
 Model/checkpoint choice remains configurable.
 
+增量实现：[V CUDA 稀疏打包基线](PVD_CUDA_Sparse_Packing_CN_EN.md) 已增加默认关闭的
+显式服务开关、GPU 最终 staging 和完成后提交策略。同步失败保留全部租约/预算。
+这只补 V 端 source packing 接点，不代表 D GPU 稀疏路径或原生 RDMA 已通过。
+The opt-in [V CUDA packing baseline](PVD_CUDA_Sparse_Packing_CN_EN.md) now owns final
+GPU staging and synchronizes before submission, retaining owners on uncertainty.
+It does not activate or validate D GPU sparse execution or native RDMA.
+
 CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
 预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
 cuVS 历史版本和当前版本的架构要求不同，尚未据此宣布 V100S 实测通过。

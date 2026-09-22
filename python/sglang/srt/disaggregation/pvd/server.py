@@ -156,6 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
         "must never consume the headroom a transfer was admitted against.",
     )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
+    parser.add_argument(
+        "--experimental-cuda-sparse-packing",
+        action="store_true",
+        help="Explicit V-only CUDA sparse copy baseline: synchronize before PUT. "
+        "Requires Mooncake, retrieval index and budgets. Does not enable D sparse "
+        "attention/predictive serving or claim GPU/RDMA validation or overlap.",
+    )
     parser.add_argument("--delivery-timeout-secs", type=float, default=300.0)
     parser.add_argument("--rank1-startup-timeout-secs", type=float, default=300.0)
     parser.add_argument("--reaper-interval-secs", type=float, default=1.0)
@@ -199,6 +206,21 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         raise ValueError("fake transport requires --no-strict-rdma-preflight")
     if args.transfer_backend == "mooncake" and args.allow_cpu_for_tests:
         raise ValueError("Mooncake PVD cannot use --allow-cpu-for-tests")
+    if getattr(args, "experimental_cuda_sparse_packing", False):
+        if (
+            args.allow_cpu_for_tests
+            or args.transfer_backend != "mooncake"
+            or not args.prompt_index_vector_space
+            or not args.prompt_index_budget_bytes
+        ):
+            raise ValueError(
+                "experimental CUDA sparse packing requires Mooncake/CUDA and "
+                "--prompt-index-vector-space with --prompt-index-budget-bytes"
+            )
+        logger.warning(
+            "Experimental V CUDA sparse packing uses blocking completion before PUT; "
+            "D predictive serving is not enabled and GPU/RDMA validation is pending"
+        )
     if args.reaper_interval_secs <= 0:
         raise ValueError("--reaper-interval-secs must be positive")
     if args.rank1_startup_timeout_secs <= 0:
@@ -386,6 +408,9 @@ def _create_store(
         delivery_timeout_secs=args.delivery_timeout_secs,
         allow_cpu_for_tests=args.allow_cpu_for_tests,
         prompt_index=prompt_index,
+        allow_cuda_sparse_packing=getattr(
+            args, "experimental_cuda_sparse_packing", False
+        ),
     )
     return store, preflight
 
