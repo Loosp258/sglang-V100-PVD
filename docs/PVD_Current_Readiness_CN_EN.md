@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2122 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**。
+最新 Windows 全量：**2132 passed / 24 skipped**；CUDA Delivery 定向 **7 passed**。
 新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
 清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
 详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
-Latest full Windows regression is 2122/24; CUDA Delivery policy tests pass 7 cases.
+Latest full Windows regression is 2132/24; CUDA Delivery policy tests pass 7 cases.
 Draft retirement now fences work/map clearing/allocator updates, retains actual
 owners on UNKNOWN, quarantines the shared provider and cleans up malformed
 allocations. Fourteen new CPU cases pass; the first five failed before the fix.
@@ -59,6 +59,15 @@ union, Delivery and runtime installation. Six new CPU policy cases and all four
 strict v5 real-model CPU cases pass after the shared-controller refactor. Serving
 full-Prompt bootstrap, multi-request CUDA batch/queues, real TP and startup
 factory assembly remain separate implementation work.
+
+[CUDA 多请求 runtime batch](PVD_CUDA_Rank_Batch_CN_EN.md) 已绑定 wait-all、
+model consumer、结果处理期间的全部 permits/池 lease/target 锁。10 个新增
+CPU 用例通过，WSL batch/runtime/model 定向 59 项通过；生产队列/工厂尚未
+调用此组件，实际模型 TP 也不由多个请求的测试替代。
+The CUDA multi-request executor now binds wait-all admission and model consumption
+to permits, allocator leases and target locking through result processing. Ten
+new CPU cases and 59 focused WSL batch/runtime/model cases pass. Serving queues
+and factories do not yet invoke it; request batching is not actual model TP.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
