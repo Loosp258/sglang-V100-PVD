@@ -1,5 +1,57 @@
 # 完整 Prompt KV 多源合并 / Full-Prompt KV fan-in
 
+## D 会话与下一接入点 / D session and next integration point
+
+`FullKVFanInDelivery` 包装一个尚未发布的真实 `FullKVFanInReceiver`；构造时
+用 caller 从可信 V 预检固定的完整 `source_epochs` 生成身份，再一次性发布。
+`FanInHTTPClient` 要求显式 RPC 超时和响应字节上限，不隐藏重试或跟随重定向。
+即使第一次 reserve 已在远端处理但回复丢失，D 仍持有原身份，可 fence 所有源。
+
+The session wraps an unpublished real receiver, derives the full identity set from
+caller-pinned trusted V preflight epochs, then publishes once. HTTP has explicit
+timeout/response-size bounds and no hidden retry or redirect. A lost initial reserve
+reply cannot lose the identities needed to fence every possible writer.
+
+正常顺序：`reserve()` → `start()` → `poll()` 到 `ready` → caller 解包、完成
+本地 fence 及所有 D ranks 安装确认 → `ack_after_install()` → `close()`。
+`ready` 只表示网络成功；本地读取者自行持有同一 MR guard 的额外 pin。
+失败顺序：`cancel()`/RPC 异常 → `poll()` 或 `fence()` 持续取得原身份凭据 →
+`close()`。缺任一 writer 的确切终止凭据，close 拒绝且不释放 MR。HTTP client
+close、逻辑 timeout、协程 cancellation 均不替代 writer fence。异步操作仍在
+进行时不能 close；MR release callback 失败后由原 guard 重试本地清理，禁止
+该会话再次发布。调用方必须保存尚未排空的会话，不可丢弃引用冒充取消。
+
+Normal sequence: reserve, start, poll until network-ready; caller imports, locally
+fences and obtains all-D-rank installation agreement; then ACK and close. Local
+readers need separate guard pins. On error/cancel, poll/fence with the original
+identities until all exact terminal proofs arrive. Missing proof prevents close.
+Neither closing HTTP nor a logical timeout/coroutine cancellation proves native
+closure. An outstanding RPC prevents close. If MR cleanup fails, the original
+guard retries local cleanup; the session cannot republish. Retain undrained sessions.
+
+23 个新 CPU 用例覆盖实际 localhost HTTP、双 V 字节合并、慢 writer、丢失
+reserve/start/ACK 回复、取消协程、伪造/不完整回复、独立本地 reader pin 和
+MR 清理失败。Windows 全量 **2404 passed / 29 skipped**，WSL fan-in 定向
+**110 passed**。GPU/RDMA 未执行；严格 CPU v5 矩阵在前一协调层步骤通过，本
+步骤不另称重跑。
+
+Twenty-three new CPU cases cover actual localhost HTTP, two-source byte reconstruction,
+slow writers, lost reserve/start/ACK replies, cancelled coroutines, bad envelopes,
+separate local-reader pins and MR cleanup failure. Windows full: **2404 passed /
+29 skipped**; WSL focused fan-in: **110 passed**. No GPU/RDMA run; the strict CPU v5
+matrix passed at the preceding coordinator step, not separately rerun here.
+
+下一代码任务：将这个会话接入 `PVDDecodeSession` 的原生控制线程/调度线程边界，
+复用既有 waiting 准入、staging budget、解包/本地 fence、全部 D ranks ACK 与
+初始 receipt；不能只因 network-ready 就进 batch。当前仍是显式组件，未替换
+原始 session，未开放 TP1 服务或多 rail 接收，也没有自动开启预测检索。
+
+Next code task: integrate with the existing Decode session's control/scheduler-thread
+boundary, waiting admission, staging budget, import/local fence, all-D-rank ACK and
+initial receipt. Network-ready alone cannot admit a request. This is still explicit,
+not legacy-session replacement, TP1 serving/multi-rail activation or automatic
+predictive retrieval. Native CAGRA and serving factory work also remain.
+
 ## 全局协调接口 / Global coordinator API
 
 显式启用：同时给 V 配置 `--full-kv-fanin-max-slices`、

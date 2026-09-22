@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+D 显式 fan-in 会话也已接通 HTTP：首次 RPC 前固定完整源 epoch，验证完整响应
+及逐 writer 凭据，响应丢失/协程取消后转入 fence；关闭 HTTP 不等于排空。
+MR 网络 pin 与本地读取 pin 分离，本地回收失败后禁止重新发布。23 个新 CPU
+用例包含真实双 V store → coordinator HTTP → D MR 的字节核对。
+最新 Windows 全量 **2404 passed / 29 skipped**，WSL fan-in **110 passed**。
+`ack_after_install()` 是明确的调用方义务，不是自动证明已完成 CUDA/所有 rank
+安装；尚未接现有 `PVDDecodeSession`/waiting queue 或自动 Scheduler 工厂。
+
+The explicit D fan-in session now drives bounded HTTP, pre-pins every source epoch,
+validates the entire response and per-writer proofs, and fences after lost replies
+or coroutine cancellation. Closing HTTP is not draining. Network and local-reader
+pins remain distinct; failed local retirement cannot republish the destination.
+Twenty-three new CPU cases include real two-store/coordinator HTTP/D-MR byte checks.
+Latest Windows **2404 passed / 29 skipped**; WSL fan-in **110 passed**.
+`ack_after_install()` is a caller obligation, not CUDA/all-rank installation proof.
+Existing Decode-session/waiting-queue and automatic Scheduler assembly remain open.
+
 全局 fan-in 协调与 HTTP 已接通：`--full-kv-fanin-max-records` 与两项 shard
 限制共同显式启用。协调器在任何发布前固定全部 V epoch/写入身份，按所有 writer
 的确切凭据聚合完成；丢失响应、取消和超时保持 Entry 引用直到排空。终止记录

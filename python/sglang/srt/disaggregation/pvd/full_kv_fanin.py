@@ -159,10 +159,50 @@ class FullKVFanInReceiver:
         self._published = True
         return {**copy.deepcopy(self._manifest), "plan_fingerprint": self._fingerprint}
 
+    def publish_for_sources(self, source_epochs):
+        """Bind a preflight-pinned V set before the first possibly failing RPC.
+
+        A caller must retain this receiver even when reserve never replies.
+        This is a one-shot alternative to publish()/adopt(), not a rebind API.
+        """
+        self._check()
+        if self._published or self._cancelled:
+            raise ProtocolValidationError("fan-in publication is one-shot")
+        if (
+            not isinstance(source_epochs, Mapping)
+            or set(source_epochs) != {str(r) for r in self._plans}
+            or any(
+                not isinstance(v, str) or not v.strip() for v in source_epochs.values()
+            )
+        ):
+            raise ProtocolValidationError(
+                "complete non-empty V source epoch map required"
+            )
+        identities = {
+            rank: WriteIdentity(
+                protocol=PVD_TRANSFER_LIFECYCLE_PROTOCOL,
+                sender_epoch=source_epochs[str(rank)],
+                receiver_epoch=self._descriptor.backend_metadata[
+                    PVD_RECEIVER_EPOCH_METADATA_KEY
+                ],
+                transfer_id=f"{self._delivery}:d{self._descriptor.rank}:v{rank}",
+                region_id=self._descriptor.region_id,
+                generation=self._descriptor.backend_metadata[
+                    PVD_GENERATION_METADATA_KEY
+                ],
+                shard_rank=self._descriptor.rank,
+                key=self._key,
+            )
+            for rank in self._plans
+        }
+        manifest = self.publish()
+        self.adopt(identities)
+        return manifest, identities
+
     def adopt(self, identities: Mapping[int, WriteIdentity]):
         """Complete V-rank-keyed set; WriteIdentity.shard_rank remains D rank.
 
-        Sender epochs come from the authenticated reserve response. Each sender
+        Sender epochs come from a trusted preflight or reserve response. Each sender
         must enforce the transfer ID's source rank and this plan fingerprint.
         No dict-by-D-rank conversion is permitted: it would lose peer writers.
         """

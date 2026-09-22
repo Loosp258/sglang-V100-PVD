@@ -35,7 +35,7 @@ from test_pvd_fanin_writer import DelayedEngine
 
 
 @contextmanager
-def setup(*, engine=None, enabled=True, committed=True):
+def setup(*, engine=None, enabled=True, committed=True, publish=True):
     engine = engine or FakeTransferEngine()
     original = make_manifest()
     manifest = replace(
@@ -96,7 +96,7 @@ def setup(*, engine=None, enabled=True, committed=True):
         token_count=8,
         max_slices=64,
     )
-    wire = receiver.publish()
+    wire = receiver.publish() if publish else None
     c = NS(**locals())
     try:
         yield c
