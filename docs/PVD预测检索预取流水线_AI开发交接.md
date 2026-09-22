@@ -2,6 +2,11 @@
 
 更新日期：2026-09-22。
 
+最新：[刷新驱动异步回收](PVD_Rank_Model_Binding_CN_EN.md) 拒绝并发重复清理，
+await 后核验注册对象，失败/取消保留资源所有权供重试。关闭时先停止全部请求、
+关闭准入，再异步排空；不能重开。新增五个回归测试，不扩展生产/GPU/RDMA 能力。
+全量回归：Windows 1740 passed / 14 skipped，WSL 1745 passed / 9 skipped。
+
 最新：[请求回收/复用](PVD_Rank_Model_Binding_CN_EN.md) 修复 CPU permit 清理后、
 rank 结果作用域退出前允许解绑 slot 的缺口。实模验收要求在容量压力下由真实
 分配器复用 slot/KV rows，拒绝旧结果并保证重复清理不污染新请求；严格报告 v3。

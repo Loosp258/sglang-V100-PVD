@@ -54,9 +54,13 @@ class CPURefreshDriver:
         arbiter.owner()
         self.arbiter = arbiter
         self._records = {}
+        self._removing = set()
+        self._closing = False
 
     def register(self, life, *, clients, pack_source=None, timeout_seconds):
         self.arbiter.owner()
+        if self._closing:
+            raise LifecycleError("refresh driver is closing; new admission refused")
         if (
             not isinstance(life, CPUDecodeLifecycle)
             or life.arbiter is not self.arbiter
@@ -151,13 +155,28 @@ class CPURefreshDriver:
         return RefreshProgress(tuple(launched), tuple(installed), tuple(aborted))
 
     async def remove(self, life):
-        """Cancel/drain this request before forgetting its registration."""
+        """Cancel/drain this exact incarnation before forgetting it.
+
+        Concurrent removal is refused, not a second release attempt. Failure
+        or caller cancellation retains registration so cleanup can be retried;
+        neither is evidence that remote ownership has drained.
+        """
         self.arbiter.owner()
         record = self._records.get(life.request_id)
         if record is None or record.life is not life:
             raise LifecycleError("cannot remove an unregistered request incarnation")
-        await life.close()
-        del self._records[life.request_id]
+        if life in self._removing:
+            raise LifecycleError("request removal is already in progress")
+        self._removing.add(life)
+        try:
+            life.terminate("refresh registration removed")
+            await life.close()
+            # No old completion may remove a replacement registration.
+            if self._records.get(life.request_id) is not record:
+                raise LifecycleError("request incarnation changed during removal")
+            del self._records[life.request_id]
+        finally:
+            self._removing.remove(life)
 
     async def close(self):
         self.arbiter.owner()
@@ -165,5 +184,10 @@ class CPURefreshDriver:
             raise LifecycleError(
                 "all dispatched Decode work must drain before driver close"
             )
+        self._closing = True
+        # Stop every registered request before the first asynchronous drain;
+        # progress() during that await must not start work for a later record.
+        for record in self._records.values():
+            record.life.terminate("refresh driver closed")
         for record in tuple(self._records.values()):
             await self.remove(record.life)

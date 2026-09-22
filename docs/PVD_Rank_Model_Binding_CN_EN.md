@@ -2,6 +2,36 @@
 
 Updated / 更新：2026-09-22。
 
+## Refresh-driver retirement concurrency / 刷新驱动异步回收
+
+The next audit reproduced duplicate `remove()` calls entering the same close
+twice and then raising `KeyError`, plus shutdown leaving later requests running
+while awaiting the first drain. CPURefreshDriver now refuses overlapping
+removal of the same lifecycle; after successful drain it checks the exact
+registration object again before deleting it. Failed/cancelled removal retains
+the old registration, blocks same-id replacement, and permits an explicit retry.
+It never treats cancellation or a close exception as a remote-write fence.
+
+Shutdown closes registration and terminates all registered lifecycles before
+its first await. No later request may start a refresh while another request is
+draining. Failed shutdown stays closed to new admission and retains the records
+needed for retry. A shutdown refused by the live-forward precheck has not yet
+entered shutdown. Successful close is idempotent; completed drivers cannot be
+reopened. These are owner-thread asyncio rules, not GPU or distributed fences.
+
+复现了重复 remove 导致二次清理/KeyError，以及关闭期间后续请求仍可刷新的问题。
+现已拒绝同一生命周期的并发清理，await 后再次核验注册对象；失败/取消保留旧注册，
+只有成功排空后才能注册同名新请求。关闭时先禁止新增、停止全部请求，再异步排空；
+失败后不重新开放准入，可重试。五个新增测试覆盖并发、同名复用、异常、调用方取消
+和关闭重试；仍不代表生产 Scheduler 或真实 RDMA 的清理验证。
+
+Full regression after this follow-up: Windows **1740 passed / 14 skipped**,
+WSL **1745 passed / 9 skipped**, with the same three CPU-platform warnings.
+Ruff check/format pass. The tests reproduce the original duplicate-close and
+shutdown-window defects rather than merely checking newly added flags.
+The strict four-case real CPU dual-model matrix was rerun after this driver
+change and passed, including slot/KV reuse in all three full-length scenarios.
+
 ## Request retirement and reuse / 请求回收与复用
 
 Reproduced a result-scope hole: the CPU dispatcher can retire its lifecycle

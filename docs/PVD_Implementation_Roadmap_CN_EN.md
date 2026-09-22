@@ -6,6 +6,12 @@
 
 ### 当前权威状态 / Current authoritative status
 
+本轮后续：[刷新驱动异步回收](PVD_Rank_Model_Binding_CN_EN.md) 拒绝重复并发 remove，
+await 后核验同一注册对象；清理失败/取消保留注册供重试。close 先关闭准入并停止
+全部请求，再异步排空，避免其他请求在清理窗口继续发起刷新。五个新增回归测试；
+这是 CPU 调度接点加固，正式 Scheduler 回收与硬件 gates 仍未完成。
+全量回归：Windows 1740 passed / 14 skipped；WSL 1745 passed / 9 skipped。
+
 本轮：[请求回收与实际槽位复用](PVD_Rank_Model_Binding_CN_EN.md) 补上 CPU permit
 清理与 rank 结果作用域退出之间的解绑保护。CPU 实模验收增加容量压力下的真实
 slot/KV rows 复用、旧回调拒绝和重复清理检查；严格报告升级 v3。

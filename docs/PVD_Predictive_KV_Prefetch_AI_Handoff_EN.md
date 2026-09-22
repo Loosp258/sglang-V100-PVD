@@ -2,6 +2,13 @@
 
 Updated: 2026-09-22.
 
+Newest: [refresh-driver retirement concurrency](PVD_Rank_Model_Binding_CN_EN.md)
+refuses overlapping close attempts, rechecks exact registration after await,
+and retains failed/cancelled cleanup ownership for retry. Shutdown closes
+admission and stops all registered requests before awaiting any drain; it
+cannot be reopened. Five new tests; no production/GPU/RDMA capability expanded.
+Full regression: Windows 1740 passed / 14 skipped; WSL 1745 passed / 9 skipped.
+
 Newest: [request retirement/reuse](PVD_Rank_Model_Binding_CN_EN.md) closes the
 slot-unbinding gap between CPU permit retirement and rank result-scope exit.
 Real-model gates now require allocator-selected slot/KV reuse under capacity
