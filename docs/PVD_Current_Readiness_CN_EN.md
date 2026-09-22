@@ -21,18 +21,24 @@ activation.
 
 ## 最新增量 / Latest increment
 
-新增 [稀疏多源聚合组件](PVD_Sparse_FanIn_CN_EN.md)：D TP1 的两个 V 源分别
-注册/写入/证明完成，然后有界合并到一份受 guard 管理的 D 暂存区，提交完整
-工作集；安装后各源独立 ACK，UNKNOWN 保留 MR 和预算。CPU 策略测试使用
-真实双 V store/HTTP 与 fake byte copy。请求控制器尚未驱动该组件，生产
-Scheduler 仍未自动启用预测检索，多 HCA/GPU/RDMA 尚未实测。
+新增 [稀疏多源请求交付](PVD_Sparse_FanIn_CN_EN.md)：`CUDAPrefetchRequest`
+现在可驱动 D TP1 的双 V 源：逐源检索、注册和完成证明，有界合并到 D 暂存区，
+提交完整工作集；安装后各源独立 ACK，UNKNOWN 保留 MR 和预算。CPU 策略
+组合测试覆盖 draft、目标 Q、真实双 V store/HTTP 与 fake byte copy。生产
+Scheduler 尚未自动装配此请求，原生多 HCA/GPU/RDMA 仍未实测。
 
-The sparse fan-in component verifies both V sources independently, merges
-their exact bytes under a separate budget into one guarded D staging buffer,
-stages a complete D bank, and allows per-source ACK only after installation.
-CPU policy tests use real two-V store/HTTP control and fake byte copying.
-The request controller still needs to drive this component; production
-predictive Scheduler activation and multi-HCA/GPU/RDMA acceptance remain open.
+`CUDAPrefetchRequest` can now drive two selected V sources through search,
+registered delivery, independent completion proofs, bounded aggregation into
+one D bank, installation and per-source ACK. The composed CPU policy test runs
+draft/target-Q and two real V store/HTTP servers with fake byte copying.
+Production Scheduler assembly and native multi-HCA/GPU/RDMA acceptance remain open.
+
+本步验证 / This increment: Windows 全量 **2491 passed / 31 skipped**（新增取消
+测试前）、随后 fan-in 定向 **10 passed**；WSL 相关定向 **23 passed**。
+取消期间两源未完成 WRITE 时仍保留 MR/预算，直到完成证明与显式 close。
+The full Windows run preceded the additional cancellation test; its targeted
+run and WSL targeted regression passed. These remain CPU policy checks, not
+native transport evidence.
 
 以下为前序步骤的当时边界 / Earlier steps retain their historical scope.
 

@@ -36,17 +36,24 @@ per call. The full Prompt path and generated D-token KV remain independent.
 全部源 MR、聚合 buffer 和预算，并隔离记录。Python 取消、HTTP 已返回或
 仅有 receipt 不能触发回收。完整 Prompt 和 D 新生成 token KV 不受此组件管理。
 
-## Integration still needed / 尚待接通
+## Request integration and remaining work / 请求接通与尚待完成
 
-The present `CUDASparseDelivery` still drives one source per D rank. Its request
-controller must be extended to publish and poll every source record, invoke this
-stage, and then drive all ACK/close tasks. The production Scheduler factory and
-real multi-HCA CUDA/RDMA acceptance follow. This component alone is not a
-production predictive serving switch.
+`CUDASparseFanInDelivery` now binds the routed search client, exact selected V
+shard routes, one D runtime group, one receive registry and an explicit
+aggregate-copy budget. For each refresh it partitions the complete D selection
+by V source, prepares and retains every destination before polling, awaits all
+terminal proofs, and invokes `CUDASparseFanInStage` once. The existing
+`CUDAPrefetchRequest` accepts this sink and only releases per-source records
+through its install/ACK lifecycle. The old one-source `CUDASparseDelivery`
+remains available. Neither class automatically registers with the production
+Scheduler; factory wiring and real CUDA/RDMA/multi-HCA acceptance remain.
 
-当前 `CUDASparseDelivery` 仍按单源调用。还需让请求控制器发布、轮询全部源记录，
-调用本聚合组件，并驱动所有 ACK/close；之后再接生产 Scheduler 工厂，并做真实
-多 HCA CUDA/RDMA 验证。本组件尚不会自动开启生产预测检索。
+`CUDASparseFanInDelivery` 现在绑定路由检索客户端、精确选中的 V shard 路由、
+一个 D runtime group、接收注册表和显式聚合拷贝预算。每轮刷新按 V 源拆分
+完整 D selection，先发布并保留全部目标，再等待各源最终凭据，最后仅调用一次
+`CUDASparseFanInStage`。现有 `CUDAPrefetchRequest` 接受该 sink，只有经过安装和
+ACK 生命周期才释放逐源记录。旧的单源 `CUDASparseDelivery` 保留。两者都尚未
+自动接入生产 Scheduler；仍需工厂接线及真实 CUDA/RDMA/多 HCA 验收。
 
 ## Verification / 验证
 
@@ -54,8 +61,12 @@ CPU policy tests use two real V stores, two localhost shard HTTP servers, exact
 Prompt indexes and delayed fake byte transfers. They exercise waiting for both
 terminal proofs, exact KV bytes in the D bank, installation before either ACK,
 two-source cleanup, refusal before allocation, budget retry and UNKNOWN retention.
+The composed request test additionally drives draft prediction, target-query
+capture, per-source HTTP search, two deliveries, D installation and two ACKs.
 They substitute CPU tensors for the CUDA operations; no GPU/RDMA claim follows.
 
 CPU 策略测试使用真实双 V store、双 localhost HTTP、精确索引和延迟 fake 字节
 传输，核对双源成功、D 工作集字节、安装后 ACK、双源回收、分配前拒绝、预算重试
-和 UNKNOWN 保留。CUDA 操作以 CPU tensor 替代，尚无 GPU/RDMA 实测证据。
+和 UNKNOWN 保留。组合请求测试另覆盖 draft 预测、目标 Q、逐源 HTTP 检索、
+双源交付、D 安装及两份 ACK。CUDA 操作以 CPU tensor 替代，尚无 GPU/RDMA
+实测证据。

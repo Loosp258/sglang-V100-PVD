@@ -11,7 +11,10 @@ from sglang.srt.disaggregation.pvd.cuda_probe_search import (
     CUDAProbeSearchSession,
 )
 from sglang.srt.disaggregation.pvd.cuda_runtime_group import CUDARuntimeInstallGroup
-from sglang.srt.disaggregation.pvd.cuda_sparse_delivery import CUDASparseDelivery
+from sglang.srt.disaggregation.pvd.cuda_sparse_delivery import (
+    CUDASparseDelivery,
+    CUDASparseFanInDelivery,
+)
 from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
 
 
@@ -33,7 +36,10 @@ class CUDAPrefetchRequest(_PrefetchRequestCore):
             raise ValueError("probe and CUDA working-set devices differ")
 
     def _validate_delivery(self, delivery, group):
-        if not isinstance(delivery, CUDASparseDelivery) or delivery.group is not group:
+        if (
+            not isinstance(delivery, (CUDASparseDelivery, CUDASparseFanInDelivery))
+            or delivery.group is not group
+        ):
             raise ValueError("owned CUDA Delivery sink for this exact group required")
 
     def _create_session(self, *args, **kwargs):
