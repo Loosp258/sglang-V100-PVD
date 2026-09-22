@@ -21,6 +21,15 @@ activation.
 
 ## 最新增量 / Latest increment
 
+完整 KV fan-in 新增严格 wire plan 校验和有界 V writer：从实际源区间直接提交
+offset PUT，保留原生句柄并防止取消/重复启动提前释放或重放。21 个 CPU 用例；
+本步骤尚未接 V store/HTTP，不改变默认生产服务或 TP/rail 支持范围。
+
+Full-KV fan-in adds strict wire-plan validation and a bounded V writer using direct
+offset PUTs, retained native handles and one-shot authorization. Twenty-one CPU
+cases cover the new executor. This step does not yet activate V store/HTTP or
+change default serving, TP or rail support.
+
 [完整 KV fan-in 字节规划](PVD_Full_KV_FanIn_CN_EN.md) 已新增全局 head 交集及
 各 source/destination 相对偏移计算。29 个 CPU 用例使用真实 packer 验证跨 V
 shard 重建；旧 wire 接口仍拒绝 fan-in，多 writer 的身份/完成/fence 协议尚待接入。

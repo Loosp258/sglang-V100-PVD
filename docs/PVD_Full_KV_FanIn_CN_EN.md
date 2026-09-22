@@ -30,6 +30,39 @@ capabilities are unchanged. Planner coverage is not a deployable topology matrix
 
 ## 下一阶段必须满足 / Required before wire activation
 
+### 发送端执行器已实现 / Sender executor implemented
+
+`validate_fanin_plan` 严格解析完整协议、重算 hash 和布局派生范围，拒绝已重新计算
+hash 的越界/重叠计划以及类型强制转换。`FullKVFanInWriter` 将计划绑定到 V
+实际 Entry key/layout、rank、allocation guard 和注册源区间；使用有界在途 PUT
+逐段直接写入 D，不分配 repacking GPU buffer。授权仅开始一次，重复 start/poll
+不会重放写入；所有句柄完成后才回复 fence 并退还源 allocation pin。
+
+提交中取消不能越过未返回的句柄；部分提交抛异常、native 状态 UNKNOWN、重复
+句柄或不可信 byte count 都保留源区间并停止新提交。取消前尚未提交可证明
+NOT_SUBMITTED；取消后只看逻辑 CANCELLED 不能回收。当前仍要求 source/D descriptor
+使用兼容 rail，尚未增加跨 HCA 的接收注册方案。
+
+The parser recomputes the hash and layout-derived ranges and rejects rehashed
+invalid ranges or type coercions. The writer binds the plan to the authoritative V
+Entry/layout/rank/allocation guard and registered source slice. Bounded PUTs write
+directly to D without GPU repacking. Start is one-shot; repeated progress never
+replays writes. Cancellation cannot fence an unreturned submission. Ambiguous
+submits, UNKNOWN, repeated handles and untrusted byte counts retain the source and
+stop admission. Logical CANCELLED is not terminal evidence. Source/destination
+rail compatibility is still required; multi-HCA receiver registration is not added.
+
+21 个新增 CPU 用例包含真实 fake byte writes、两路 writer 与 D receipt 联测、
+在途上限和提交/取消线程竞态。尚未以本步骤声称已接生产 V store/HTTP。
+Twenty-one new CPU cases include actual fake byte writes, two-writer receiver
+composition, bounded in-flight work and threaded submit/cancel races. Production
+V store/HTTP activation is not implied by this executor step.
+
+发送端步骤：Windows 全量 **2347 passed / 29 skipped**；WSL fan-in/授权
+定向 **136 passed**。未执行 GPU 或原生 RDMA。
+Sender-step evidence: Windows **2347 passed / 29 skipped**; WSL focused **136
+passed**. No GPU or native RDMA execution.
+
 ### 接收端多 writer 生命周期已实现 / Receiver-side lifetime implemented
 
 `FullKVFanInReceiver` 现在将实际 `RegisteredMemory` 及其 guard 固定为一组

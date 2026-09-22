@@ -6,13 +6,15 @@ thread. These reports are protocol evidence, not locally observed RDMA fences.
 """
 
 import copy
-import hashlib
-import json
 import threading
 import uuid
 from dataclasses import asdict
 from typing import Mapping
 
+from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
+    FULL_KV_FANIN_PROTOCOL,
+    plan_fingerprint,
+)
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
     PVD_RECEIVER_EPOCH_METADATA_KEY,
@@ -30,8 +32,6 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransportState,
 )
-
-FULL_KV_FANIN_PROTOCOL = "pvd-full-kv-fanin-v1"
 
 
 class FullKVFanInReceiver:
@@ -128,9 +128,7 @@ class FullKVFanInReceiver:
                 for rank, parts in self._plans.items()
             },
         }
-        self._fingerprint = hashlib.sha256(
-            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        self._fingerprint = plan_fingerprint(manifest)
         self._manifest = copy.deepcopy(manifest)
         self._owner_thread = threading.get_ident()
         self._guard, self._pin = guard, "full-kv-fanin:" + uuid.uuid4().hex
