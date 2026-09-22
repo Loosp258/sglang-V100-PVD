@@ -220,6 +220,13 @@ class PromptIndexManager:
     def _dispose(self, indexes):
         try:
             dispose = getattr(self.backend, "dispose", None)
+            if (
+                indexes
+                and not callable(dispose)
+                and self.backend_device is not None
+                and torch.device(self.backend_device).type == "cuda"
+            ):
+                raise IndexCompletionUnknown("CUDA backend lacks disposal contract")
             for index in indexes.values():
                 if isinstance(index, BuiltIndex) and callable(dispose):
                     dispose(index)
@@ -432,6 +439,9 @@ class PromptIndexManager:
                     item.vectors, vector_space=self.vector_space, metric=self.metric
                 )
                 self._validate_built_index(built[(item.layer, item.kv_head)], item)
+                # The reservation is max(per-head scratch), not their sum.
+                # Python return alone does not make native builds sequential.
+                self._fence(packed)
             self._fence(packed)
             # The transient peak is over; give it back before the index is
             # installed, so an idle index is charged only for what it holds.
@@ -486,6 +496,11 @@ class PromptIndexManager:
             return False
 
         with self._lock:
+            if self.quarantined:
+                # Another operation may have failed after our final fence.
+                # Never publish READY after the worker's quarantine boundary.
+                self._retain_operation(record, owners, vectors, built, item, packed)
+                raise IndexCompletionUnknown(self._quarantine_reason)
             if self._entries.get(transfer_id) is not record:
                 # Closed while we were building. Drop what we made and refund.
                 try:

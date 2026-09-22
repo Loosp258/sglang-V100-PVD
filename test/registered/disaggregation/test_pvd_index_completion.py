@@ -167,3 +167,55 @@ def test_cancelled_build_still_fences_and_refunds_but_does_not_swallow_interrupt
     assert budget.snapshot()["reservations"] == 0
     assert not index.quarantined and not store._quarantined_index_sources
     store.close()
+
+
+def test_each_head_build_finishes_before_reusing_single_scratch_reservation():
+    backend, budget, index, store, manifest = setup()
+    build = backend.build
+    pending = []
+
+    def async_build(*args, **kwargs):
+        assert not pending, "two native heads overlap one scratch reservation"
+        pending.append(True)
+        return build(*args, **kwargs)
+
+    def finish():
+        pending.clear()
+
+    backend.build, backend.synchronize = async_build, finish
+    assert store.progress_prompt_indexes()["built"] == 1
+    assert not pending
+    store.close()
+    assert budget.snapshot()["reservations"] == 0
+
+
+def test_cuda_duck_backend_cannot_silently_skip_disposal():
+    backend, budget, index, store, manifest = setup()
+    assert store.progress_prompt_indexes()["built"] == 1
+    retained = budget.snapshot()["used_staging_bytes"]
+    # Policy fault injection: no CUDA allocation is performed by this test.
+    index.backend_device = torch.device("cuda:0")
+    backend.dispose = None
+    index.close(manifest.key.transfer_id)
+    assert index.quarantined
+    assert budget.snapshot()["used_staging_bytes"] == retained
+    assert index.snapshot()["retained_records"] == 1
+    store.close()
+
+
+def test_quarantine_before_publication_never_marks_a_build_ready():
+    backend, budget, index, store, manifest = setup()
+    release = index._release_owners
+
+    def peer_fails_at_publication(owners):
+        release(owners)
+        if any(owner.endswith(":build-scratch") for owner in owners):
+            index._quarantine("concurrent native operation became unknown")
+
+    index._release_owners = peer_fails_at_publication
+    assert store.progress_prompt_indexes()["failed"] == 1
+    assert not index.gate_for(manifest.key.transfer_id).searchable
+    assert index.quarantined
+    assert index.snapshot()["retained_operations"] == 1
+    assert budget.snapshot()["used_staging_bytes"] > 0
+    store.close()

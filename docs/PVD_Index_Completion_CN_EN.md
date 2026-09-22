@@ -42,3 +42,17 @@ These establish ownership policies, not actual CUDA completion or native
 destructor behavior. No production cuVS/CAGRA backend is implemented by this
 change; that backend must enforce its own allocation limits and native lifetime
 contract rather than treating a Python reference drop as proof of safe release.
+
+## 后续并发核对 / Follow-up concurrency audit
+
+另增加三个先失败、修复后通过的回归用例：每个 head 构建完成后再启动下一
+head，保证 `max(per-head scratch)` 预留不是被异步重叠绕过；CUDA duck backend
+缺少 dispose 接口时拒绝退款；最终发布前再次检查隔离状态，禁止并发 UNKNOWN
+之后发布 READY。Windows 全量 **2152 passed / 24 skipped**，Windows 和 WSL
+索引定向均 **178 passed / 6 skipped**。
+
+Three additional regressions failed before their fixes: fence each head before
+reusing the single maximum scratch reservation; refuse CUDA backends without a
+disposal contract; recheck quarantine under the publication lock before marking
+READY. Full Windows coverage is 2152 passed / 24 skipped; focused Windows and WSL
+coverage both report 178 passed / 6 skipped. These remain CPU policy tests.
