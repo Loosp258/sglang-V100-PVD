@@ -27,10 +27,10 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2071 passed / 24 skipped**；WSL model adapter/attention/probe
+最新 Windows 全量：**2072 passed / 24 skipped**；WSL model adapter/attention/probe
 定向：**101 passed / 3 skipped**。probe 共享核心修改后，严格 v5 四场景真实 CPU 模型矩阵
 再次全部通过。这不是 CUDA probe 的 GPU forward 证据。
-Latest full Windows regression is 2071/24; WSL model adapter/attention/probe regression
+Latest full Windows regression is 2072/24; WSL model adapter/attention/probe regression
 is 101/3. All four strict real-model CPU cases passed again after the shared
 probe-core change. This does not validate a CUDA model forward.
 
@@ -141,9 +141,12 @@ drain failure no longer unpins generated/output ownership. GPU cases remain unru
 
 [CUDA 模型池/backend 适配](PVD_CUDA_Model_Attention_CN_EN.md) 增加整次 forward 的
 allocator lease、目标锁、batch 映射预检查、output 预算和异常隔离。显式工厂与
-严格五步真实 CUDA 模型检查已写好；37 个 CPU 用例通过，GPU 检查仍为 blocked。
+严格五步真实 CUDA 模型检查已写好；38 个 CPU 用例通过，GPU 检查仍为 blocked。
 The explicit model adapter adds whole-forward pool ownership and a strict real-GPU
 smoke. CPU tests cover its policies/math, not actual CUDA execution or serving.
+随后补充的元数据读取早期失败回归在 Windows/WSL 均通过（adapter 定向 38 项）。
+The subsequent early metadata-failure regression passed on Windows and WSL
+(38 adapter cases), retaining inputs when device completion is unknown.
 
 设备可用后运行 [CUDA 组件严格验收](PVD_CUDA_Component_Acceptance_CN_EN.md)。入口要求
 9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。

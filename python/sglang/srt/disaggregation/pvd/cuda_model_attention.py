@@ -250,6 +250,9 @@ class CUDAModelSparseConsumer:
         self._check()
         if self._bound is None:
             raise SparsePayloadError("whole-forward model pool binding required")
+        # Metadata .tolist() can itself synchronize and surface a CUDA failure.
+        # Publish inputs before that first operation, not only before KV writes.
+        self._pending = (q, k, v, batch)
         if (
             not batch.forward_mode.is_decode()
             or batch.encoder_lens is not None

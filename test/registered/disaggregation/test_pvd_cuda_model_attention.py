@@ -465,3 +465,27 @@ def test_real_cuda_model_smoke_is_blocked_not_passed_without_device(
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "pvd-cuda-sparse-model-v1"
     assert report["status"] == "blocked" and "evidence" not in report
+
+
+def test_mapping_read_failure_retains_inputs_when_device_drain_is_unknown(monkeypatch):
+    c = fixture(monkeypatch)
+
+    def fail(*args):
+        raise RuntimeError("CUDA metadata read failed")
+
+    monkeypatch.setattr(c.consumer, "_indices", fail)
+    monkeypatch.setattr(c.consumer, "_synchronize", fail)
+    with pytest.raises(RuntimeError), c.consumer.bind([c.binding], pool_owner=c.owner):
+        run(c)
+    try:
+        assert c.consumer.snapshot()["quarantine"]
+        assert c.consumer._pending is not None
+        assert c.consumer._pending[0] is c.q
+        assert c.consumer._pending[1] is c.k
+        assert c.consumer._pending[2] is c.v
+        assert not c.released
+        assert c.budget.snapshot()["used_staging_bytes"] > 0
+    finally:
+        # Dispose only the CPU fixture, not production quarantine recovery.
+        monkeypatch.setattr(c.binding.participant._bank, "_drain_reader", lambda: None)
+        c.consumer._held[0].close()

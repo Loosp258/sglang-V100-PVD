@@ -44,12 +44,17 @@ FP16/FP32, without graphs/overlap/DP attention/native speculation.
 
 ## 验证边界 / Evidence
 
-新增 37 个 CPU interface/math/lifecycle 用例，覆盖模型池非连续行、GQA 数值对照、
+新增 38 个 CPU interface/math/lifecycle 用例，覆盖模型池非连续行、GQA 数值对照、
 整批写入前验证、全组门控、输出预算、取消、排空/回收失败与回调重入。
 CUDA placement/同步在这些测试中被替换：**不证明 GPU forward 已执行**。
 
-Thirty-seven CPU policy/math cases use real CPU tensors and explicit placement /
+Thirty-eight CPU policy/math cases use real CPU tensors and explicit placement /
 completion doubles. They are not a real CUDA model forward or native RDMA proof.
+
+补充回归先复现后修复：GPU 元数据读取也可能在写 KV 前失败；现在在第一次
+设备操作前发布 Q/K/V/batch 输入 owner，排空不确定时保留，避免只保留池租约。
+A reproduced early metadata-read failure now retains Q/K/V/batch before the
+first device operation. Unknown drain keeps these inputs, not just pool leases.
 
 未来有设备后运行严格实模检查（随机 tiny Llama，不下载或锁定用户 checkpoint）：
 Run the strict real-CUDA smoke when a compatible device/runtime is available:
