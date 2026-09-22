@@ -53,6 +53,10 @@ Decode TP1 的 `--pvd-d-receive-rails` 已在启动参数与 PVD manager 接线�
 建立并预检原生 session；同一配置还会在 Scheduler owner 线程建立
 `sparse_receive_registry`，与现有传输共享预算，请求使用前不注册目标。
 它仍不启用生产 Scheduler 稀疏检索。
+双 rail 请求工厂现为每个 V 源绑定原生 D rail session ID；无 session ID 的
+测试 adapter 需显式 `d_endpoints`，错误的原生 endpoint 在分配前拒绝。
+此 endpoint 绑定回归 Windows 全量 **2518 passed / 31 skipped**、WSL 定向
+**13 passed**。
 此 Registry 接线 Windows 全量 **2518 passed / 31 skipped**，WSL 定向 **39 passed**。
 此启动接线 Windows 全量 **2517 passed / 31 skipped**，WSL 定向 **35 passed**。
 此线程交接修复 Windows 全量 **2515 passed / 31 skipped**，WSL 定向 **4 passed**。
@@ -79,6 +83,11 @@ initialized and strictly preflighted. The same opt-in creates a CUDA receive
 registry on the Scheduler owner thread with the existing transfer budget; no
 destination is registered before request use. Sparse retrieval still is not
 activated in the serving Scheduler.
+The dual-rail request factory now binds each V source to its D rail's native
+session ID. Test adapters without session IDs need explicit `d_endpoints`, and
+a mismatched native endpoint is refused before request allocation.
+This endpoint-binding regression passed **2518/31 skipped** in the full Windows
+CPU suite and **13 passed** in focused WSL tests.
 The registry wiring passed **2518/31 skipped** in the full Windows CPU suite
 and **39 passed** in focused WSL tests.
 This startup wiring passed **2517/31 skipped** in the full Windows CPU suite

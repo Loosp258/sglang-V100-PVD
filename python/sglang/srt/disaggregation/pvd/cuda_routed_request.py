@@ -79,6 +79,7 @@ def assemble_routed_cuda_request(
     d_rail: str,
     poll_interval_seconds: float,
     d_rails: Mapping[int, str] | None = None,
+    d_endpoints: Mapping[int, str] | None = None,
 ) -> CUDARoutedRequestAssembly:
     """Fail closed on mismatched Entry/layout/selected shard metadata.
 
@@ -149,6 +150,22 @@ def assemble_routed_cuda_request(
             not registry.engine.supports_rail(rail) for rail in receive_rails.values()
         ):
             raise ValueError("D receive engine lacks a selected rail adapter")
+        native_sessions = {
+            rank: registry.engine.adapters[rail].health().get("session_id")
+            for rank, rail in receive_rails.items()
+        }
+        if d_endpoints is None and all(native_sessions.values()):
+            receive_endpoints = native_sessions
+        elif d_endpoints is not None:
+            receive_endpoints = dict(d_endpoints)
+        else:
+            raise ValueError("explicit D endpoint per V source required")
+        if any(
+            native_sessions[rank] is not None
+            and receive_endpoints.get(rank) != native_sessions[rank]
+            for rank in receive_rails
+        ):
+            raise ValueError("D endpoint differs from its native rail session")
     elif (
         set(receive_rails.values()) != {d_rail}
         or getattr(registry.engine, "rail", d_rail) != d_rail
@@ -156,6 +173,19 @@ def assemble_routed_cuda_request(
         raise ValueError(
             "single-rail D engine cannot receive from V shards on different rails"
         )
+    else:
+        receive_endpoints = (
+            {route.rank: d_endpoint for route in selected.shards}
+            if d_endpoints is None
+            else dict(d_endpoints)
+        )
+        if set(receive_endpoints.values()) != {d_endpoint}:
+            raise ValueError("single-rail D engine requires one exact D endpoint")
+    if set(receive_endpoints) != set(receive_rails) or any(
+        not isinstance(endpoint, str) or not endpoint.strip()
+        for endpoint in receive_endpoints.values()
+    ):
+        raise ValueError("one explicit D endpoint per selected V source required")
 
     search_clients = {
         route.rank: PVDShardSearchClient(route.url) for route in selected.shards
@@ -178,7 +208,7 @@ def assemble_routed_cuda_request(
         route.rank: CUDAReceiveRoute(
             control_clients[route.rank],
             route.sender_epoch,
-            d_endpoint,
+            receive_endpoints[route.rank],
             receive_rails[route.rank],
         )
         for route in selected.shards

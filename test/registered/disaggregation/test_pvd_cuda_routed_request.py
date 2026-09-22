@@ -28,6 +28,15 @@ from test_pvd_cuda_sparse_fanin import two_source
 from test_pvd_prompt_index import SPACE
 
 
+class FakeSessionEngine(FakeTransferEngine):
+    def __init__(self, rail, session_id):
+        super().__init__()
+        self.rail, self.session_id = rail, session_id
+
+    def health(self):
+        return {**super().health(), "session_id": self.session_id}
+
+
 def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
     async def run():
         async with two_source(
@@ -161,7 +170,10 @@ def test_factory_controller_runs_two_v_search_delivery_and_install(
         ) as c:
             if not single_rail:
                 c.registry.engine = RailMappedReceiveEngine(
-                    {rail: FakeTransferEngine() for rail in ("mlx5_0", "mlx5_1")}
+                    {
+                        rail: FakeSessionEngine(rail, f"D{rank}")
+                        for rank, rail in enumerate(("mlx5_0", "mlx5_1"))
+                    }
                 )
             monkeypatch.setattr(CUDASparseFanInStage, "_synchronize", lambda self: None)
             monkeypatch.setattr(
@@ -220,31 +232,45 @@ def test_factory_controller_runs_two_v_search_delivery_and_install(
                     for rank in (0, 1)
                 ),
             )
-            assembly = assemble_routed_cuda_request(
-                selected,
-                compute_layout=c.compute,
-                compute_rank=0,
-                group=c.group,
-                registry=c.registry,
-                pipeline=pipeline,
-                head_mapping=QueryHeadMapping(8, 4),
-                vector_space=SPACE,
-                metric="l2",
-                top_k=1,
-                max_union_tokens=2,
-                max_head_dim=8,
-                copy_budget=copy_budget,
-                aggregate_budget=c.aggregate_budget,
-                d_endpoint="D",
-                d_rail="mlx5_0",
-                d_rails=(
+            kwargs = {
+                "compute_layout": c.compute,
+                "compute_rank": 0,
+                "group": c.group,
+                "registry": c.registry,
+                "pipeline": pipeline,
+                "head_mapping": QueryHeadMapping(8, 4),
+                "vector_space": SPACE,
+                "metric": "l2",
+                "top_k": 1,
+                "max_union_tokens": 2,
+                "max_head_dim": 8,
+                "copy_budget": copy_budget,
+                "aggregate_budget": c.aggregate_budget,
+                "d_endpoint": "D",
+                "d_rail": "mlx5_0",
+                "d_rails": (
                     None
                     if single_rail
                     else {rank: c.stores[rank].rail for rank in (0, 1)}
                 ),
-                poll_interval_seconds=0.001,
-            )
+                "poll_interval_seconds": 0.001,
+            }
+            if not single_rail:
+                with pytest.raises(ValueError, match="native rail session"):
+                    assemble_routed_cuda_request(
+                        selected,
+                        **{
+                            **kwargs,
+                            "d_endpoints": {0: "D0", 1: "wrong-session"},
+                        },
+                    )
+            assembly = assemble_routed_cuda_request(selected, **kwargs)
             controller = assembly.controller
+            if not single_rail:
+                assert {
+                    rank: route.endpoint
+                    for rank, route in controller.delivery._routes.items()
+                } == {0: "D0", 1: "D1"}
             monkeypatch.setattr(
                 controller._session, "_query_device", lambda t: t.device.type == "cpu"
             )

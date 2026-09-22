@@ -15,7 +15,11 @@ single-rail Mooncake D adapter, both selected V shards must use the same
 rail. With `RailMappedReceiveEngine`, the caller may provide `d_rails` mapping
 each V source rank to an independently owned D receive adapter for that rail.
 The composite dispatches each destination registration and unregister to its
-exact owner. `create_native_receive_group()` can construct an additional
+exact owner. Each source also needs its own D endpoint: the factory obtains
+native session IDs from the selected rail adapters, or requires an explicit
+`d_endpoints` map for adapters without a session ID. A caller-supplied endpoint
+that differs from a native session is refused before any request resource is
+created. `create_native_receive_group()` can construct an additional
 Mooncake session per selected D HCA, reuse the already initialized D adapter,
 require Linux/CUDA/RDMA and ACTIVE ports, and run strict local GPUDirect
 preflight on every adapter. The serving worker invokes it only when the
@@ -44,7 +48,9 @@ rail 均须匹配。
 工厂现在有两种显式接收策略：现有单 rail Mooncake D adapter 要求两个 V 源
 都使用同一 rail；`RailMappedReceiveEngine` 则允许调用方通过 `d_rails` 将
 每个 V 源 rank 映射到 D 上独立拥有的同 rail 接收 adapter。组合层将注册和
-注销交还对应 owner。`create_native_receive_group()` 可复用已初始化的 D
+注销交还对应 owner。每个源还有独立的 D endpoint：原生 adapter 的 session ID
+由工厂读取；无 session ID 的 adapter 必须显式提供 `d_endpoints`。与原生 session
+不符的 endpoint 在创建请求资源前拒绝。`create_native_receive_group()` 可复用已初始化的 D
 adapter、为额外 HCA 创建独立 Mooncake session，并逐 rail 核查 Linux/CUDA/RDMA、
 ACTIVE 端口和严格的本地 GPUDirect 预检。服务 worker 仅在显式配置 D receive
 rails 时调用该工厂；
