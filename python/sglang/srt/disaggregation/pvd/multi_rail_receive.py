@@ -6,8 +6,12 @@ never crosses rails. This wrapper does not create native engines or assert that
 two HCAs can reach the same GPU; startup preflight must prove that separately.
 """
 
+import os
+import platform
 import threading
+from pathlib import Path
 
+import torch
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     RegisteredMemory,
     TransferEngine,
@@ -98,3 +102,94 @@ class RailMappedReceiveEngine(TransferEngine):
             "rails": {rail: engine.health() for rail, engine in self.adapters.items()},
             "registered_destinations": len(self._registrations),
         }
+
+
+def create_native_receive_group(
+    *,
+    hostname: str,
+    gpu_id: int,
+    rails: tuple[str, ...],
+    transfer_budget,
+    existing_adapter=None,
+) -> RailMappedReceiveEngine:
+    """Initialize one native Mooncake session per HCA for one D CUDA device.
+
+    A failed startup must terminate the process. In particular, an unknown
+    preflight write is retained by the process-level preflight quarantine.
+    """
+    from sglang.srt.disaggregation.pvd.mooncake_engine import (
+        MooncakePVDTransferEngine,
+    )
+    from sglang.srt.disaggregation.pvd.preflight import (
+        _has_active_port,
+        run_rank_preflight,
+        validate_rank_rail_names,
+    )
+    from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+        TransferBudget,
+        budget_of,
+    )
+
+    if (
+        not isinstance(hostname, str)
+        or not hostname.strip()
+        or type(gpu_id) is not int
+        or gpu_id < 0
+        or not isinstance(rails, tuple)
+        or not 1 <= len(rails) <= 8
+        or any(not isinstance(rail, str) for rail in rails)
+        or len(set(rails)) != len(rails)
+        or not isinstance(transfer_budget, TransferBudget)
+    ):
+        raise MultiRailReceiveError("explicit D GPU, distinct HCAs and budget required")
+    validate_rank_rail_names(rails)
+    if (
+        platform.system() != "Linux"
+        or not torch.cuda.is_available()
+        or gpu_id >= torch.cuda.device_count()
+        or os.environ.get("MC_FORCE_TCP") == "1"
+        or os.environ.get("MOONCAKE_PROTOCOL", "rdma").lower() != "rdma"
+    ):
+        raise MultiRailReceiveError(
+            "native multi-rail receive requires Linux CUDA RDMA"
+        )
+    for rail in rails:
+        path = Path("/sys/class/infiniband") / rail
+        if not path.is_dir() or not _has_active_port(path):
+            raise MultiRailReceiveError(f"receive HCA {rail} has no ACTIVE port")
+    if existing_adapter is not None and (
+        not isinstance(existing_adapter, MooncakePVDTransferEngine)
+        or existing_adapter.rail not in rails
+        or existing_adapter._engine.get_ib_device() != existing_adapter.rail
+        or existing_adapter._engine.gpu_id != gpu_id
+        or budget_of(existing_adapter) is not transfer_budget
+    ):
+        raise MultiRailReceiveError(
+            "existing D adapter has different GPU, rail or budget"
+        )
+
+    adapters = {}
+    for rank, rail in enumerate(rails):
+        adapter = (
+            existing_adapter
+            if existing_adapter is not None and existing_adapter.rail == rail
+            else MooncakePVDTransferEngine(
+                hostname=hostname,
+                gpu_id=gpu_id,
+                rail=rail,
+                budget=transfer_budget,
+            )
+        )
+        if adapter._engine.get_ib_device() != rail:
+            raise MultiRailReceiveError(f"Mooncake did not select required HCA {rail}")
+        # Strictly prove each native session can register this GPU and complete
+        # a local GPUDirect write before exposing any destination descriptor.
+        run_rank_preflight(
+            rank=rank,
+            rails=rails,
+            device=f"cuda:{gpu_id}",
+            engine=adapter,
+            strict=True,
+        )
+        adapters[rail] = adapter
+    return RailMappedReceiveEngine(adapters)

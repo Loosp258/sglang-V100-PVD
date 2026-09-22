@@ -44,7 +44,9 @@ This step passed **2506/31 skipped** in the full Windows CPU suite and
 不能凭此认为预测检索已自动启用。
 新增 D 接收端显式多 rail 组合层：每个 V 源 rank 可以映射到 D 上独立的
 同 rail adapter；注册和注销由同一 adapter 拥有。单 rail engine 仍拒绝
-混用 V rails。原生双 HCA engine 启动构造和 GPU/RDMA 验收尚未完成。
+混用 V rails。原生 engine 构造函数现可逐 HCA 建立 session 并严格预检；
+生产 Scheduler 尚未调用，GPU/RDMA 验收尚未完成。
+此工厂增量 Windows 全量 **2514 passed / 31 skipped**、WSL 定向 **11 passed**。
 本步 Windows 全量 **2501 passed / 31 skipped**，WSL 多 rail/工厂/双源定向
 **16 passed**（最终单 rail 绕过回归测试随后补充）。真实 GPU/Mooncake/RDMA
 仍未执行。
@@ -55,8 +57,11 @@ until request drain. Production startup/admission still has to provide the
 real components; this is not automatic predictive serving activation.
 An explicit D multi-rail receive composite maps each V source rank to an
 independently owned, matching D rail adapter. The single-rail engine still
-refuses mixed-rail V sources. Native two-HCA engine startup construction and
-GPU/RDMA acceptance remain open.
+refuses mixed-rail V sources. A native factory can now initialize one session
+and strict local preflight per HCA, but the production Scheduler does not yet
+call it, and GPU/RDMA acceptance remains open.
+The factory increment passed **2514/31 skipped** in the full Windows CPU
+suite and **11 passed** in focused WSL tests.
 This increment passed **2501/31 skipped** in the full Windows CPU suite and
 **16 passed** in focused WSL tests (followed by a single-rail bypass regression
 test). Native GPU/Mooncake/RDMA remains unrun.

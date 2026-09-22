@@ -15,10 +15,13 @@ single-rail Mooncake D adapter, both selected V shards must use the same
 rail. With `RailMappedReceiveEngine`, the caller may provide `d_rails` mapping
 each V source rank to an independently owned D receive adapter for that rail.
 The composite dispatches each destination registration and unregister to its
-exact owner; it does not create native Mooncake engines. A mixed-rail request
-with only a single-rail D engine is refused before registration. True native
-dual-rail V TP2 → D TP1 still needs startup construction and GPU/RDMA validation;
-changing only a descriptor label is unsafe.
+exact owner. `create_native_receive_group()` can construct an additional
+Mooncake session per selected D HCA, reuse the already initialized D adapter,
+require Linux/CUDA/RDMA and ACTIVE ports, and run strict local GPUDirect
+preflight on every adapter. The serving Scheduler does not yet invoke that
+factory; a mixed-rail request with only a single-rail D engine is refused.
+True native V TP2 → D TP1 still needs serving startup wiring and GPU/RDMA
+validation; changing only a descriptor label is unsafe.
 
 `assemble_routed_cuda_request()` 使用 Gateway 已选 V coordinator 返回的类型化
 shard 路由。调用方仍须提供已安装的 D TP1 工作集、接收注册表、真实 draft/目标 Q
@@ -31,9 +34,11 @@ rail 均须匹配。
 工厂现在有两种显式接收策略：现有单 rail Mooncake D adapter 要求两个 V 源
 都使用同一 rail；`RailMappedReceiveEngine` 则允许调用方通过 `d_rails` 将
 每个 V 源 rank 映射到 D 上独立拥有的同 rail 接收 adapter。组合层将注册和
-注销交还对应 owner，本身不创建原生 Mooncake engine。仅有单 rail D engine
-时，混用 V rails 仍会在注册前拒绝。真正双 rail 的 V TP2 → D TP1 还需启动
-构造和 GPU/RDMA 验收，不能只修改 descriptor 标签。
+注销交还对应 owner。`create_native_receive_group()` 可复用已初始化的 D
+adapter、为额外 HCA 创建独立 Mooncake session，并逐 rail 核查 Linux/CUDA/RDMA、
+ACTIVE 端口和严格的本地 GPUDirect 预检。生产 Scheduler 尚未调用此工厂；
+仅有单 rail D engine 时，混用 V rails 仍会在注册前拒绝。真正双 rail 的
+V TP2 → D TP1 还需服务启动接线和 GPU/RDMA 验收，不能只修改 descriptor 标签。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;
