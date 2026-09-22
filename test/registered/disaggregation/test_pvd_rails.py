@@ -158,6 +158,40 @@ def test_decode_manager_assembles_optional_receive_engine(monkeypatch):
     ]
 
 
+def test_decode_manager_assembles_optional_cuda_receive_registry(monkeypatch):
+    from sglang.srt.disaggregation.pvd import conn, cuda_sparse_receiver
+
+    engine, budget, registry = object(), object(), object()
+    assert (
+        conn._build_sparse_receive_registry(
+            SimpleNamespace(), engine, budget, epoch="worker", device="cuda:1"
+        )
+        is None
+    )
+    calls = []
+
+    def make_registry(*args, **kwargs):
+        calls.append((args, kwargs))
+        return registry
+
+    monkeypatch.setattr(
+        cuda_sparse_receiver, "CUDASparseReceiveRegistry", make_registry
+    )
+    assert (
+        conn._build_sparse_receive_registry(
+            SimpleNamespace(pvd_d_receive_rails="mlx5_2,mlx5_3"),
+            engine,
+            budget,
+            epoch="worker",
+            device="cuda:1",
+        )
+        is registry
+    )
+    assert calls == [
+        ((engine, budget), {"receiver_epoch": "worker", "device": "cuda:1"})
+    ]
+
+
 @pytest.mark.parametrize(
     "devices", ["", "mlx5_2,", ",mlx5_3", "mlx5_2,mlx5_3,mlx5_4", "../mlx5_2", "mlx5 2"]
 )

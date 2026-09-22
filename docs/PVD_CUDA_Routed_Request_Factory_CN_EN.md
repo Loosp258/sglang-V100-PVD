@@ -18,17 +18,20 @@ The composite dispatches each destination registration and unregister to its
 exact owner. `create_native_receive_group()` can construct an additional
 Mooncake session per selected D HCA, reuse the already initialized D adapter,
 require Linux/CUDA/RDMA and ACTIVE ports, and run strict local GPUDirect
-preflight on every adapter. The serving Scheduler does not yet invoke that
-factory; a mixed-rail request with only a single-rail D engine is refused.
-True native V TP2 → D TP1 still needs serving startup wiring and GPU/RDMA
-validation; changing only a descriptor label is unsafe.
+preflight on every adapter. The serving worker invokes it only when the
+explicit D receive-rails option is set; a mixed-rail request with only a
+single-rail D engine is refused. True native V TP2 → D TP1 still needs
+predictive request admission and GPU/RDMA validation; changing only a
+descriptor label is unsafe.
 
 For Decode TP1 full-KV fan-in, `--pvd-d-receive-rails mlx5_2,mlx5_3`
 now initializes that receive group at worker startup, reusing the D compute
 rail adapter. The option requires the compute rail in its distinct HCA list.
-The group is exposed on `PVDKVManager.sparse_receive_engine`; it does not yet
-construct the predictive CUDA receive registry or switch the serving Scheduler
-from full-Prompt refresh to sparse retrieval.
+The group is exposed on `PVDKVManager.sparse_receive_engine`. The same opt-in
+creates `sparse_receive_registry` on the Scheduler owner thread, sharing the
+worker's explicit transfer budget. No destination is registered until a
+request uses it. This does not switch the serving Scheduler from full-Prompt
+refresh to sparse retrieval.
 
 `assemble_routed_cuda_request()` 使用 Gateway 已选 V coordinator 返回的类型化
 shard 路由。调用方仍须提供已安装的 D TP1 工作集、接收注册表、真实 draft/目标 Q
@@ -43,15 +46,17 @@ rail 均须匹配。
 每个 V 源 rank 映射到 D 上独立拥有的同 rail 接收 adapter。组合层将注册和
 注销交还对应 owner。`create_native_receive_group()` 可复用已初始化的 D
 adapter、为额外 HCA 创建独立 Mooncake session，并逐 rail 核查 Linux/CUDA/RDMA、
-ACTIVE 端口和严格的本地 GPUDirect 预检。生产 Scheduler 尚未调用此工厂；
+ACTIVE 端口和严格的本地 GPUDirect 预检。服务 worker 仅在显式配置 D receive
+rails 时调用该工厂；
 仅有单 rail D engine 时，混用 V rails 仍会在注册前拒绝。真正双 rail 的
-V TP2 → D TP1 还需服务启动接线和 GPU/RDMA 验收，不能只修改 descriptor 标签。
+V TP2 → D TP1 还需预测请求准入接线和 GPU/RDMA 验收，不能只修改 descriptor 标签。
 
 Decode TP1 全量 KV fan-in 现在可用 `--pvd-d-receive-rails mlx5_2,mlx5_3`
 在 worker 启动时建立该接收组，复用 D compute rail 的 adapter；HCA 列表必须
 不重复且包含 compute rail。组合层挂在 `PVDKVManager.sparse_receive_engine`；
-它尚未建立预测 CUDA 接收 registry，也不会把生产 Scheduler 从完整 Prompt KV
-刷新切换到稀疏检索。
+同一显式配置还会在 Scheduler owner 线程建立 `sparse_receive_registry`，与现有
+传输共用显式预算；请求使用前不会注册目标。它仍不会把生产 Scheduler 从完整
+Prompt KV 刷新切换到稀疏检索。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;

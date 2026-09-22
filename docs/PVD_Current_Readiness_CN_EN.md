@@ -45,13 +45,15 @@ This step passed **2506/31 skipped** in the full Windows CPU suite and
 新增 D 接收端显式多 rail 组合层：每个 V 源 rank 可以映射到 D 上独立的
 同 rail adapter；注册和注销由同一 adapter 拥有。单 rail engine 仍拒绝
 混用 V rails。原生 engine 构造函数现可逐 HCA 建立 session 并严格预检；
-生产 Scheduler 尚未调用，GPU/RDMA 验收尚未完成。
+worker 可在显式配置时调用，GPU/RDMA 验收尚未完成。
 组合层的注册表现在可从 Scheduler 构造线程交接至接收控制线程使用，并锁定
 注册/注销操作；这不放松接收 Registry 本身的单线程 owner 约束。
 Decode TP1 的 `--pvd-d-receive-rails` 已在启动参数与 PVD manager 接线：
 仅完整 KV fan-in 场景可用，要求不重复且包含 D compute rail，启动时逐 HCA
-建立并预检原生 session。该步骤尚不自动创建预测 CUDA Registry，也不启用
-生产 Scheduler 稀疏检索。
+建立并预检原生 session；同一配置还会在 Scheduler owner 线程建立
+`sparse_receive_registry`，与现有传输共享预算，请求使用前不注册目标。
+它仍不启用生产 Scheduler 稀疏检索。
+此 Registry 接线 Windows 全量 **2518 passed / 31 skipped**，WSL 定向 **39 passed**。
 此启动接线 Windows 全量 **2517 passed / 31 skipped**，WSL 定向 **35 passed**。
 此线程交接修复 Windows 全量 **2515 passed / 31 skipped**，WSL 定向 **4 passed**。
 此工厂增量 Windows 全量 **2514 passed / 31 skipped**、WSL 定向 **11 passed**。
@@ -66,15 +68,19 @@ real components; this is not automatic predictive serving activation.
 An explicit D multi-rail receive composite maps each V source rank to an
 independently owned, matching D rail adapter. The single-rail engine still
 refuses mixed-rail V sources. A native factory can now initialize one session
-and strict local preflight per HCA, but the production Scheduler does not yet
-call it, and GPU/RDMA acceptance remains open.
+and strict local preflight per HCA. The worker calls it only with explicit
+configuration; GPU/RDMA acceptance remains open.
 Its adapter registry now supports handoff from Scheduler construction to the
 receive control thread with locked registration/unregistration. The receive
 Registry itself remains single-owner-thread only.
 Decode TP1 now has `--pvd-d-receive-rails` wired into worker startup for the
 full-KV fan-in configuration: distinct HCAs including the D compute rail are
-initialized and strictly preflighted. This does not yet create the predictive
-CUDA registry or activate sparse retrieval in the serving Scheduler.
+initialized and strictly preflighted. The same opt-in creates a CUDA receive
+registry on the Scheduler owner thread with the existing transfer budget; no
+destination is registered before request use. Sparse retrieval still is not
+activated in the serving Scheduler.
+The registry wiring passed **2518/31 skipped** in the full Windows CPU suite
+and **39 passed** in focused WSL tests.
 This startup wiring passed **2517/31 skipped** in the full Windows CPU suite
 and **35 passed** in focused WSL tests.
 The handoff fix passed **2515/31 skipped** in the full Windows CPU suite and

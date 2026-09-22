@@ -74,6 +74,22 @@ def _build_sparse_receive_engine(server_args, shared_engine, existing_adapter, b
     )
 
 
+def _build_sparse_receive_registry(server_args, engine, budget, *, epoch, device):
+    """Create the owner-thread CUDA destination registry only when opted in."""
+    if not getattr(server_args, "pvd_d_receive_rails", None):
+        return None
+    from sglang.srt.disaggregation.pvd.cuda_sparse_receiver import (
+        CUDASparseReceiveRegistry,
+    )
+
+    return CUDASparseReceiveRegistry(
+        engine,
+        budget,
+        receiver_epoch=epoch,
+        device=device,
+    )
+
+
 class _AsyncControlLoop:
     """One daemon asyncio loop per scheduler process for aiohttp operations."""
 
@@ -203,6 +219,13 @@ class PVDKVManager:
         # A P compute rank with TP1 uploads to both V storage shards under this
         # epoch; the two writes stay distinct through their write identities.
         self.worker_epoch = worker_epoch()
+        self.sparse_receive_registry = _build_sparse_receive_registry(
+            scheduler.server_args,
+            self.sparse_receive_engine,
+            self.transfer_budget,
+            epoch=self.worker_epoch,
+            device=f"cuda:{shared_engine.gpu_id}",
+        )
         self.capabilities = [PVD_TRANSFER_CAPABILITY]
         # Upload records outlive their senders, so the manager is owned here.
         self.upload_manager = PVDUploadManager()
@@ -424,6 +447,10 @@ class PVDKVManager:
         snapshot["transport"] = self.transfer_engine.health()
         if self.sparse_receive_engine is not self.transfer_engine:
             snapshot["sparse_receive_transport"] = self.sparse_receive_engine.health()
+        if self.sparse_receive_registry is not None:
+            snapshot["sparse_receive_destinations"] = len(
+                self.sparse_receive_registry.snapshot()
+            )
         return snapshot
 
     def progress_uploads(self) -> Optional[concurrent.futures.Future]:
