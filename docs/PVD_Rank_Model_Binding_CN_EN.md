@@ -2,6 +2,43 @@
 
 Updated / 更新：2026-09-22。
 
+## Request retirement and reuse / 请求回收与复用
+
+Reproduced a result-scope hole: the CPU dispatcher can retire its lifecycle
+permit while the rank result scope still owns its forward ticket and target
+lease. `unregister_storage()` now refuses while that shared lease is held.
+This is deliberately conservative for the CPU execution context; it is not
+a replacement for a GPU event or a native transfer fence.
+
+The real-model fixture now retires a cancelled request before creating its
+successor. It reserves otherwise-free capacity through the real allocators,
+drains refresh/Delivery ownership, removes the refresh registration, unbinds
+storage, clears the mapping, and frees the owned rows/slot. The next request
+must receive the same slot and a subset of those freed KV rows. Replaying the
+old result and old successful cleanup must leave the successor's output,
+mapping, KV tensors, binding and available capacity unchanged. The final
+capacity check also ensures no double free. An ambiguous allocator-release
+failure is not retried by the fixture. Fixture-owned V stores are closed here;
+this is NOT a policy to delete a shared production Entry on every request end.
+
+Report schema v3 requires all four reuse observations in the normal,
+lost-RESUMED and cleanup scenarios. The partial-install scenario ends earlier
+and does not claim to exercise reuse. The original result processor's streaming
+and finish services remain fixture substitutes; production cleanup integration
+is still outstanding.
+
+已复现并修复 CPU permit 已清理、rank 结果作用域仍占用时允许解绑 slot 的漏洞。
+实模测试通过真实分配器制造容量压力，要求后继请求实际复用旧 slot/KV rows；
+检查旧结果回调和重复清理不会更改后继请求。不会手工修改空闲队列来伪造复用。
+这一步完善 CPU 资源回收边界，不表示生产 Scheduler 回收或原生 RDMA 已接通。
+
+Validation: the regression failed before the guard and passes after it. Thirteen
+new tests, full Windows **1735 passed / 14 skipped**, WSL **1740 passed / 9
+skipped** (three existing CPU-platform warnings). The four real-model scenarios
+passed in WSL; the three full-length scenarios exercised actual resource reuse,
+while partial installation retains its explicitly shorter evidence. Ruff and
+diff whitespace checks pass. Skipped hardware tests remain unverified.
+
 ## Connected path / 已连接路径
 
 The opt-in **CPU** validation path now connects rank control to the banks actually

@@ -2,6 +2,15 @@
 
 Updated: 2026-09-22.
 
+Newest: [request retirement/reuse](PVD_Rank_Model_Binding_CN_EN.md) closes the
+slot-unbinding gap between CPU permit retirement and rank result-scope exit.
+Real-model gates now require allocator-selected slot/KV reuse under capacity
+pressure, safe stale-result refusal and idempotent completed cleanup (schema
+v3; the early-ending partial-install case makes no reuse claim). This remains
+CPU fixture cleanup, not production cache-release or native RDMA integration.
+13 new tests; Windows 1735 passed / 14 skipped, WSL 1740 passed / 9 skipped.
+All four real-model cases passed; the three full-length cases exercised reuse.
+
 Newest: [model-path fault gates](PVD_Rank_Model_Binding_CN_EN.md) cover lost
 RESUMED, failure after real CPU bank swap and close/retry across result drain.
 Both lifecycle and automatic refresh driver now finalize against the ready

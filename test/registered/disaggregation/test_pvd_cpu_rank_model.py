@@ -7,6 +7,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 from pvd_controlled_prefetch import ControlledFixture
+from sglang.srt.disaggregation.pvd.cpu_batch_dispatch import CPUBatchDispatcher
 from sglang.srt.disaggregation.pvd.cpu_batch_forward import CPUBatchForwardExecutor
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
     CPUDecodeLifecycle,
@@ -107,6 +108,25 @@ def test_successful_req_writer_is_observed_once_and_holds_runtime_through_commit
             bridge.processing(processor, batch, result),
         ):
             pass
+
+
+def test_slot_unbinding_waits_for_rank_result_scope_not_only_cpu_ticket():
+    with setup() as (d, lives, fixtures):
+        ticket = d.begin(lives)
+        executor, _, _, _, _ = bridge_for(d, lives, ticket)
+        lives[0].terminate("client cancelled")
+        with d.result_scope(ticket):
+            CPUBatchDispatcher.complete(d, ticket, results(ticket))
+            assert lives[0]._permit is None
+            assert fixtures[0].group.runtime._forward is not None
+            assert d.arbiter.busy
+            with pytest.raises(LifecycleError, match="result scope"):
+                executor.unregister_storage(lives[0])
+            assert executor._storage[lives[0]] == 1
+        executor.unregister_storage(lives[0])
+        executor.unregister_storage(lives[0])  # successful retirement is idempotent
+        assert lives[0] not in executor._storage
+        assert executor._storage[lives[1]] == 2
 
 
 @pytest.mark.parametrize(

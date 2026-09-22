@@ -6,6 +6,14 @@
 
 ### 当前权威状态 / Current authoritative status
 
+本轮：[请求回收与实际槽位复用](PVD_Rank_Model_Binding_CN_EN.md) 补上 CPU permit
+清理与 rank 结果作用域退出之间的解绑保护。CPU 实模验收增加容量压力下的真实
+slot/KV rows 复用、旧回调拒绝和重复清理检查；严格报告升级 v3。
+资源回收测试不等于正式 Scheduler finish/cache-release 服务已接入。
+新增 13 个测试；Windows 1735 passed / 14 skipped，WSL 1740 passed / 9 skipped。
+四场景 CPU 实模矩阵通过；三个完整场景实际执行了槽位复用，部分安装失败场景
+提前结束，不声称完成复用验证。
+
 最新：[模型故障验收及迟到 RESUMED 修复](PVD_Rank_Model_Binding_CN_EN.md) 增加
 丢回执、真实 CPU bank 切换后异常、结果提交前清理/排空后重试三个场景。
 复现并修复生命周期和自动刷新驱动混用“本轮 ready 边界/下一边界”的卡住问题；

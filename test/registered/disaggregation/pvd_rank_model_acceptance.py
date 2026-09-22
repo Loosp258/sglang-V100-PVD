@@ -5,7 +5,13 @@ import json
 import math
 
 FRAME = "PVD_CPU_SMOKE_RESULT="
-SCHEMA = "pvd-rank-model-cpu-v2"
+SCHEMA = "pvd-rank-model-cpu-v3"
+REUSE_CHECKS = (
+    "retired_before_next_admission",
+    "allocator_reused_slot",
+    "allocator_reused_kv_rows",
+    "stale_result_refused_without_mutation",
+)
 FAULT_CHECKS = {
     "none": (),
     "lost-resume": (
@@ -133,6 +139,9 @@ def validate_report(report, run_id, *, fault="none"):
         ),
     )
     if fault != "install":
+        _true(
+            _object(loop.get("resource_reuse_evidence"), "resource reuse"), REUSE_CHECKS
+        )
         _true(
             loop,
             (

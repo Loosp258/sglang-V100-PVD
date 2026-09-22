@@ -2,6 +2,14 @@
 
 更新日期：2026-09-22。
 
+最新：[请求回收/复用](PVD_Rank_Model_Binding_CN_EN.md) 修复 CPU permit 清理后、
+rank 结果作用域退出前允许解绑 slot 的缺口。实模验收要求在容量压力下由真实
+分配器复用 slot/KV rows，拒绝旧结果并保证重复清理不污染新请求；严格报告 v3。
+提前结束的部分安装故障场景不声称执行复用。仍是 CPU fixture 资源回收，不是
+生产 cache-release 服务或原生 RDMA 接入。
+新增 13 个测试；Windows 1735 passed / 14 skipped，WSL 1740 passed / 9 skipped。
+四场景实模验收通过，三个完整场景实际执行了复用。
+
 最新：[实模故障验收](PVD_Rank_Model_Binding_CN_EN.md) 覆盖丢 RESUMED、真实 CPU
 换 bank 后失败和结果排空前清理/之后重试。已复现并修复生命周期和自动驱动把
 “下一边界”误作“本轮待完成边界”导致迟到回执后卡住的问题；使用 ready epoch

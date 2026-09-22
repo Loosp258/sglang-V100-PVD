@@ -118,6 +118,13 @@ class CPUBatchForwardExecutor:
 
     def unregister_storage(self, lifecycle):
         self.dispatcher.arbiter.owner()
+        # CPU metadata can retire inside a still-owned rank result scope. A
+        # missing lifecycle permit is not sufficient permission to reuse rows.
+        # This CPU seam conservatively waits for the shared target lease too.
+        if self.dispatcher.arbiter.busy:
+            raise LifecycleError(
+                "target execution and result scope must drain before slot unbinding"
+            )
         if lifecycle._permit is not None or lifecycle.state not in (
             "finished",
             "aborted",

@@ -91,6 +91,11 @@ def validate_batch_decode(
     budgets, tasks, hooks = [], [], []
     inject_failure = False
     fault_evidence = {"mode": rank_fault}
+    reuse_evidence = {}
+    held_slots, held_rows = [], []
+    pressure_allocator = PrivatePoolAllocator(
+        reqpool, runner.token_to_kv_pool_allocator
+    )
     processor = None
     driver = None
     if automatic_refresh:
@@ -118,6 +123,10 @@ def validate_batch_decode(
             life=None,
             prompt=tokens,
             allocator=allocator,
+            retired=False,
+            releasing=False,
+            refresh_registered=False,
+            stale_result=None,
         )
         records[name] = r
         lease = arbiter.acquire()
@@ -188,6 +197,41 @@ def validate_batch_decode(
         finally:
             arbiter.release(lease)
         return r
+
+    async def retire(r):
+        """Fixture-owned resources only, after actual execution/Delivery drain.
+
+        A failed allocator release has unknown side effects: never replay it.
+        This is not a production cache-release hook or a native RDMA fence.
+        """
+        if r.retired:
+            return
+        if r.releasing:
+            raise AssertionError("ambiguous pool release is quarantined, not retried")
+        if r.life is not None:
+            if r.refresh_registered:
+                await driver.remove(r.life)
+                r.refresh_registered = False
+            else:
+                await r.life.close()
+            executor.unregister_storage(r.life)
+        if r.fixture is not None:
+            r.fixture.close()
+        r.releasing = True
+        r.allocator.clear_mapping(r.slot)
+        r.allocator.free_kv(r.rows)
+        r.allocator.free_request(r.slot)
+        if scheduled_results and hasattr(r, "req"):
+            r.req.req_pool_idx = None
+        r.retired = True
+
+    def release_pressure():
+        nonlocal held_rows
+        for allocator, slot in held_slots:
+            allocator.free_request(slot)
+        held_slots.clear()
+        pressure_allocator.free_kv(held_rows)
+        held_rows = []
 
     def oracle(module, args, output):
         if not active:
@@ -315,6 +359,11 @@ def validate_batch_decode(
                 assert arbiter.busy
             if scheduled_results:
                 deliver(processor, bridge, scheduled_batch, logits)
+                if cancel_after_forward is not None:
+                    # Keep this one old callback only until the reuse check.
+                    records[cancel_after_forward].stale_result = lambda: deliver(
+                        processor, bridge, scheduled_batch, logits
+                    )
                 committed = tuple(
                     r for r in results if r.request_id != cancel_after_forward
                 )
@@ -388,6 +437,7 @@ def validate_batch_decode(
                         pack_source=None if wire_delivery else old.fixture.pack_source,
                         timeout_seconds=30,
                     )
+                    old.refresh_registered = True
                     launch = driver.progress().launched[0]
                     assert launch.query_source == "predicted"
                     task = launch.task
@@ -409,6 +459,7 @@ def validate_batch_decode(
                         pack_source=None if wire_delivery else new.fixture.pack_source,
                         timeout_seconds=30,
                     )
+                    new.refresh_registered = True
                 assert old.fixture.group.coordinator.snapshot() == state
                 step(("new", "old"))
                 counts = old.life.committed_tokens, new.life.committed_tokens
@@ -585,7 +636,67 @@ def validate_batch_decode(
                     "receive_budget_restored": True,
                     "transport": "fake in-process byte copy; real localhost HTTP control",
                 }
+            # Force allocator-selected reuse, not a hand-edited free list.
+            # Held capacity has no model users and is returned immediately.
+            while reqpool.free_slots:
+                holder = PrivatePoolAllocator(
+                    reqpool, runner.token_to_kv_pool_allocator
+                )
+                held_slots.append((holder, holder.alloc_request()))
+            held_rows.extend(
+                pressure_allocator.alloc_kv(
+                    runner.token_to_kv_pool_allocator.available_size()
+                )
+            )
+            await retire(new)
+            assert new.life not in executor._storage
+            assert torch.count_nonzero(reqpool.req_to_token[new.slot]).item() == 0
+            assert runner.token_to_kv_pool_allocator.available_size() == len(new.rows)
             third = create("third", (1, 12, 25, 8))
+            assert third.slot == new.slot
+            assert set(third.rows).issubset(new.rows)
+            assert third.life.incarnation != new.life.incarnation
+            reuse_evidence.update(
+                retired_before_next_admission=True,
+                allocator_reused_slot=True,
+                allocator_reused_kv_rows=True,
+            )
+            if scheduled_results:
+                mapping = reqpool.req_to_token[third.slot].clone()
+                kv = [
+                    (
+                        pool.get_key_buffer(l)[third.rows].clone(),
+                        pool.get_value_buffer(l)[third.rows].clone(),
+                    )
+                    for l in range(layers)
+                ]
+                outputs = tuple(third.req.output_ids), tuple(old.req.output_ids)
+                available = runner.token_to_kv_pool_allocator.available_size()
+                await retire(new)  # replayed cleanup must not clear the reused row
+                try:
+                    new.stale_result()
+                except LifecycleError:
+                    pass
+                else:
+                    raise AssertionError("old result accepted after slot reuse")
+                finally:
+                    new.stale_result = None
+                assert outputs == (
+                    tuple(third.req.output_ids),
+                    tuple(old.req.output_ids),
+                )
+                torch.testing.assert_close(reqpool.req_to_token[third.slot], mapping)
+                for l, (k, v) in enumerate(kv):
+                    torch.testing.assert_close(
+                        pool.get_key_buffer(l)[third.rows], k, equal_nan=True
+                    )
+                    torch.testing.assert_close(
+                        pool.get_value_buffer(l)[third.rows], v, equal_nan=True
+                    )
+                assert runner.token_to_kv_pool_allocator.available_size() == available
+                assert executor._storage[third.life] == third.slot
+                reuse_evidence["stale_result_refused_without_mutation"] = True
+            release_pressure()
             third.life.admit(third.fixture.request)
             outputs_before = old.life.outputs, third.life.outputs
             inject_failure = True
@@ -612,6 +723,7 @@ def validate_batch_decode(
             return {
                 "status": "passed",
                 "fault_evidence": fault_evidence,
+                "resource_reuse_evidence": reuse_evidence,
                 "batch_sizes": sizes,
                 "committed_d_tokens": {
                     name: r.life.committed_tokens for name, r in records.items()
@@ -637,20 +749,14 @@ def validate_batch_decode(
                     task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            if driver is not None:
-                await driver.close()
             for hook in hooks:
                 hook.remove()
             runner.attn_backend = native
             for r in records.values():
-                if r.life is not None:
-                    await r.life.close()
-                    executor.unregister_storage(r.life)
-                if r.fixture is not None:
-                    r.fixture.close()
-                r.allocator.clear_mapping(r.slot)
-                r.allocator.free_kv(r.rows)
-                r.allocator.free_request(r.slot)
+                await retire(r)
+            release_pressure()
+            if driver is not None:
+                await driver.close()
             assert not arbiter.busy and not executor._storage
             assert all(b.snapshot()["used_staging_bytes"] == 0 for b in budgets)
             assert (

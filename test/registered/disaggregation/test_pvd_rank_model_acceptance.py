@@ -10,6 +10,7 @@ import pytest
 from pvd_rank_model_acceptance import (
     FAULT_CHECKS,
     FRAME,
+    REUSE_CHECKS,
     SCHEMA,
     AcceptanceError,
     parse_report,
@@ -46,6 +47,7 @@ def evidence(run_id="test-run", fault="none"):
             **dict.fromkeys(FAULT_CHECKS[fault], True),
         },
         status="passed",
+        resource_reuse_evidence=dict.fromkeys(REUSE_CHECKS, True),
         production_scheduler_gpu_rdma_validated=False,
         model_quality_gpu_latency_validated=False,
         attention_checks=21,
@@ -95,6 +97,15 @@ def frame(report):
 def test_complete_report_has_one_matching_run_and_explicit_cpu_scope():
     report = evidence()
     assert parse_report(frame(report), returncode=0, run_id="test-run") == report
+
+
+@pytest.mark.parametrize("field", REUSE_CHECKS)
+@pytest.mark.parametrize("value", [None, False, 1])
+def test_reuse_must_be_exercised_not_inferred_from_final_cleanup(field, value):
+    report = evidence()
+    report["rank_runtime_loop_evidence"]["resource_reuse_evidence"][field] = value
+    with pytest.raises(AcceptanceError, match=field):
+        validate_report(report, "test-run")
 
 
 @pytest.mark.parametrize(
