@@ -2,6 +2,15 @@
 
 Updated: 2026-09-22.
 
+Newest: [bounded release driver](PVD_Rank_Model_Binding_CN_EN.md) adds exact-owner
+registration, nonblocking owner-loop polling, bounded drain concurrency/backoff
+and explicit shutdown. The normal Decode loop polls an explicitly attached CPU
+driver even while paused/idle; unbound requests remain unchanged. Outstanding
+owners suppress idle leak checks/sleep until drain. 14 focused
+cases exercise ownership and actual loop-body ordering with Scheduler doubles.
+Production sparse activation is still absent; adopting the driver in the real
+CPU dual-model gate is next. No GPU/RDMA capability is enabled.
+
 Newest: [actual cache-release boundary](PVD_Rank_Model_Binding_CN_EN.md) connects
 an explicit CPU request owner to `release_kv_cache`; unbound requests retain
 the original body. Real finish and waiting-abort callbacks defer allocation

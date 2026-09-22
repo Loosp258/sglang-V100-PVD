@@ -1,5 +1,11 @@
 # PVD 最终目标推进步骤 / Implementation roadmap
 
+最新子步：[CPU owner 回收驱动](PVD_Rank_Model_Binding_CN_EN.md) 已增加有界注册、
+排空轮询、退避和关闭协议，普通 Decode 循环在暂停/空闲/结果处理后都轮询
+显式绑定的 driver；待回收资源阻止 idle 泄漏检查/休眠。
+14 个定向测试通过；下一步替换实模 fixture 手动清理。
+这不是完整生产 sparse Scheduler 装配，不放开 GPU/RDMA 能力门禁。
+
 更新 / Updated: 2026-09-22. 按以下顺序推进；每一步记录实现和证据，
 不把接口、CPU 通过或硬件预检当成生产端到端验收。当前用户要求每阶段验证后 commit，
 继续推进。当前用户已明确要求每步 commit 后推送 GitHub `pvd-disaggregation`。

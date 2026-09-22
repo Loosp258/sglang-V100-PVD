@@ -178,6 +178,11 @@ class CPURefreshDriver:
         finally:
             self._removing.remove(life)
 
+    def contains(self, life):
+        self.arbiter.owner()
+        record = self._records.get(life.request_id)
+        return record is not None and record.life is life
+
     async def close(self):
         self.arbiter.owner()
         if any(r.life._permit is not None for r in self._records.values()):

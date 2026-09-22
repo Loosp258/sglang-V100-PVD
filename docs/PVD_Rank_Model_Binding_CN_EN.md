@@ -2,6 +2,36 @@
 
 Updated / 更新：2026-09-22。
 
+## Bounded owner-thread release driver / 有界回收轮询驱动
+
+`CPUReleaseDriver` registers exact CPU Req/lifecycle owners with explicit request,
+in-flight drain and retry bounds. `poll()` never waits for remote completion: it
+uses the caller's asyncio loop or pumps one nonblocking turn of a private loop
+on the same owner thread. Terminal/retracted requests retire automatically;
+refresh registrations are removed before final pool release. Failed/cancelled
+drains retain admission capacity and retry after backoff; partial allocator
+failure remains quarantined. Shutdown closes admission, requests retirement,
+and refuses loop close until all owned resources drain. No timeout is a fence.
+
+The normal disaggregated Scheduler loop now calls an opt-in polling hook before
+the pause check and after result/idle handling. Without an explicitly attached
+CPU driver the hook is a no-op. With outstanding owners it skips idle pool-leak
+checks and idle sleep, so retained rows are not misdiagnosed and polling resumes.
+This does not construct a production sparse
+Scheduler, enable overlap/GPU paths or automatically register ordinary requests.
+14 focused tests cover bounded concurrency, slow I/O, failure/cancellation,
+target leases, loop ownership and the actual loop body's hook ordering (using
+explicit Scheduler doubles). Real-model fixture adoption is the next step.
+
+Verification: Windows **1777 passed / 14 skipped**; WSL **1782 passed / 9 skipped**.
+New PVD code/tests pass Ruff. `decode.py` retains the same 85 pre-existing Ruff
+findings as HEAD; unrelated broad style rewrites were not included.
+
+新增有界 owner 回收驱动：结束请求自动进入排空，失败保留容量并退避重试，
+部分释放失败隔离；关闭只停止准入，不能越过未完成的资源所有权。普通 Decode
+循环已加入显式 CPU 轮询点，暂停/空闲时也执行。未绑定请求不受影响；尚不等于
+正式 sparse Scheduler 自动装配，下一步将实模验收的手动清理替换为该驱动。
+
 ## Actual cache-release boundary / 实际释放入口接入
 
 `release_kv_cache()` now recognizes an explicitly attached `CPURequestRelease`.

@@ -2,6 +2,13 @@
 
 更新日期：2026-09-22。
 
+最新：[有界回收驱动](PVD_Rank_Model_Binding_CN_EN.md) 增加精确 owner 注册、
+非阻塞轮询、清理并发/退避限制和显式关闭。普通 Decode 循环在暂停/空闲时也
+轮询显式绑定的 CPU driver；持有待回收资源时不执行 idle 泄漏检查/休眠。
+普通请求保持原行为。14 个定向测试验证所有权和
+实际循环源码的调用顺序（Scheduler double）。下一步让真实 CPU 双模型验收
+使用该驱动；仍未启用正式 sparse 服务、GPU 或 RDMA 能力。
+
 最新：[实际缓存释放边界](PVD_Rank_Model_Binding_CN_EN.md) 将显式 CPU request
 owner 接到 `release_kv_cache`，未绑定请求保持原逻辑。真实结束/等待队列取消
 回调先挂起释放，owner 线程排空后再调用真实 ChunkCache/分配器；部分释放失败

@@ -1613,6 +1613,17 @@ class DecodeTransferQueue:
 
 
 class SchedulerDisaggregationDecodeMixin:
+    def poll_pvd_cpu_releases(self: Scheduler):
+        """Progress only explicitly bound CPU owners; ordinary serving is unchanged."""
+        driver = getattr(self, "pvd_cpu_release_driver", None)
+        if driver is None:
+            return None
+        from sglang.srt.disaggregation.pvd.cpu_release_driver import CPUReleaseDriver
+
+        if not isinstance(driver, CPUReleaseDriver):
+            raise TypeError("explicit PVD CPU release driver required")
+        return driver.poll()
+
     def refresh_pvd_running_batch(self: Scheduler, batch: ScheduleBatch):
         manager = self.disagg_decode_prealloc_queue.kv_manager
         failures = manager.decode_refresher.refresh(batch.reqs)
@@ -1638,6 +1649,7 @@ class SchedulerDisaggregationDecodeMixin:
             recv_reqs = self.request_receiver.recv_requests()
             self.process_input_requests(recv_reqs)
             self.process_decode_queue()
+            cpu_release_state = self.poll_pvd_cpu_releases()
             if self._engine_paused:
                 continue
 
@@ -1649,12 +1661,15 @@ class SchedulerDisaggregationDecodeMixin:
             if batch:
                 result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
-            else:
+            elif cpu_release_state is None or not cpu_release_state["requests"]:
                 # When the server is idle, do self-check and re-init some states
+                # Deferred CPU owners still hold pool rows. Do not diagnose
+                # them as leaks or sleep before their next cleanup poll.
                 self.on_idle()
 
             # Update last_batch
             self.last_batch = batch
+            self.poll_pvd_cpu_releases()
 
     @torch.no_grad()
     def event_loop_overlap_disagg_decode(self: Scheduler):
