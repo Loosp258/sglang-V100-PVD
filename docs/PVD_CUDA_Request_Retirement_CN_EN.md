@@ -34,6 +34,32 @@ TokenToKVPoolAllocator. Retirement inside free_group is refused because that
 group may still hold unconsumed mapping views. This does not add support for
 paged/SWA/Mamba allocators or native speculative generation.
 
+## 原生回退保护 / Native retraction guard
+
+原 ScheduleBatch.release_req 会先 offload/release，再调用 Req.reset_for_retract，
+而 reset 会清零 kv_allocated_len/kv_committed_len。对 CUDA 延迟回收 owner，这些
+值仍是将来释放原池的依据，不能提前清零。现对带 CUDA owner 的请求在 release_req
+开始（offload 前）和 reset 开始直接拒绝；普通无 owner 的 PD 请求行为不变。
+已经 released 的 tombstone 也不允许原位复用为新的请求 incarnation。
+
+Native release_req offloads/releases and then calls reset_for_retract, which
+zeros the allocated/committed KV extents. Deferred CUDA retirement still needs
+that ledger. Owned requests are now refused at release_req entry, before offload,
+and at reset entry, before bookkeeping changes. Unbound PD requests are unchanged.
+A released tombstone cannot be reused in place as a new request incarnation.
+
+这项保护不等于实现了异步 OOM retraction/resume：生产工厂还必须提供明确的
+内存压力准入/退出策略，或者实现排空后的新 incarnation 恢复；不能继续调用原
+“立即释放并复用同一 Req”的路径。测试首先复现了两条路径未拒绝 reset/offload；
+新增测试验证拒绝后原 KV 仍可按正确范围回收，WSL 另验证实际 Req.reset 方法。
+
+This does not implement asynchronous OOM retraction/resume. Serving assembly must
+provide an explicit memory-pressure admission/exit policy or a drained new-
+incarnation resume path; it cannot reuse the old immediate-free/in-place-reset
+path. Tests first reproduced missing refusal on both paths, then verified that
+refusal preserves the ledger for correct retirement; WSL also runs the real Req
+reset method.
+
 ## UNKNOWN / Failure policy
 
 设备完成或 allocator/slot 更新失败时，保留真实 plan、tensor view、pool pin、

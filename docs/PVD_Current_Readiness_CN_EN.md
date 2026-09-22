@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2236 passed / 28 skipped**；CUDA Delivery 定向 **7 passed**。
+最新 Windows 全量：**2240 passed / 29 skipped**；CUDA Delivery 定向 **7 passed**。
 新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
 清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
 详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
-Latest full Windows regression is 2236/28; CUDA Delivery policy tests pass 7 cases.
+Latest full Windows regression is 2240/29; CUDA Delivery policy tests pass 7 cases.
 Draft retirement now fences work/map clearing/allocator updates, retains actual
 owners on UNKNOWN, quarantines the shared provider and cleans up malformed
 allocations. Fourteen new CPU cases pass; the first five failed before the fix.
@@ -145,6 +145,16 @@ load/metrics/health callbacks and rechecking output/membership afterwards. Seven
 new CPU cases and 21 focused WSL result cases pass. Actual serving queue/factory
 activation remains implementation work.
 
+原生 retraction 现明确拒绝带 CUDA release owner 的 Req：防止 offload 后在延迟
+释放前清零 KV 长度，或复用旧 tombstone。新增 5 个用例，Windows 4 passed /
+1 skipped，WSL 真实 Req/回收/结果定向 47 项通过。异步 OOM 恢复/新 incarnation
+准入仍未实现，不能将防护性拒绝当作该功能完成。
+Native retraction now refuses CUDA-owned Req objects before offload/reset can
+destroy the deferred-release ledger or reuse a tombstone. Five new cases yield
+4 passes/1 skip on Windows; 47 focused WSL real-Req/retirement/result cases pass.
+Async OOM recovery/new-incarnation admission remains unimplemented; protective
+refusal is not implementation of that feature.
+
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
 CUDA implementations have CPU policy/math coverage, not CUDA execution evidence.
@@ -203,6 +213,7 @@ PYTHONPATH=python python test/registered/disaggregation/run_pvd_rank_model_accep
 | Area / 部分 | Remaining / 尚缺 |
 |---|---|
 | Production Scheduler | 预测/检索/稀疏安装的完整服务装配、真实队列与多进程协同；CPU hook 不等于此项完成 / full serving activation and queue/process integration |
+| Memory-pressure retraction | CUDA 延迟回收不允许原位 reset；尚需压力准入/退出或排空后的新 incarnation 恢复 / no in-place reset; pressure policy or drained new-incarnation resume still required |
 | GPU sparse attention | 已有显式 TP1 模型池/backend 工厂；尚未装配生产 Scheduler，仍缺 stream/event 优化与真实 GPU forward 验证 / explicit TP1 model-pool/backend factory exists; serving assembly and GPU acceptance remain |
 | Native sparse Delivery | 接到 Mooncake 原生 submit/poll/fence/ACK，并验证取消/错误时仍有 WRITE 的内存保护 / native transport integration and in-flight WRITE safety |
 | Real model TP | 实际 TP ranks 的安装、恢复与失败协同；本地逻辑 rank 镜像不能代替 / actual distributed model-rank integration |

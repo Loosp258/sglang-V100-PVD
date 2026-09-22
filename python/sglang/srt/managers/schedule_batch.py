@@ -1305,6 +1305,13 @@ class Req(ReqDllmMixin):
             return
 
     def reset_for_retract(self):
+        if getattr(self, "pvd_cuda_kv_release", None) is not None:
+            # Resetting lengths before deferred release destroys the allocator
+            # ledger. Reusing a released owner's Req also reuses its tombstone.
+            raise RuntimeError(
+                "PVD CUDA native retraction requires a new, explicitly admitted "
+                "request incarnation after retirement; in-place reset is unsupported"
+            )
         # Increment retraction count before resetting other state. We should not reset this
         # since we are tracking the total number of retractions for each request.
         self.retraction_count += 1
@@ -2340,6 +2347,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     def release_req(self, idx: int, remaing_req_count: int, server_args: ServerArgs):
         req = self.reqs[idx]
+
+        if getattr(req, "pvd_cuda_kv_release", None) is not None:
+            # Do not start unbudgeted offload or mutate cache state before the
+            # later reset guard discovers an unsupported async-owned request.
+            raise RuntimeError(
+                "PVD CUDA native retraction is unsupported for an owned request; "
+                "stop admission and drain its controller before retiring it"
+            )
 
         if self.hisparse_coordinator is not None and not req.finished():
             self.hisparse_coordinator.retract_req(req)
