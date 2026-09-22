@@ -157,6 +157,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument(
+        "--prompt-index-backend", choices=("exact", "cagra"), default="exact"
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-native-bytes",
+        type=_positive_int,
+        default=None,
+        help="Per layer/head native allocation cap, reserved for its entire index lifetime, including native workspace.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-graph-degree", type=_positive_int, default=64
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-intermediate-degree", type=_positive_int, default=128
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-itopk-size", type=_positive_int, default=512
+    )
+    parser.add_argument(
         "--full-kv-fanin-max-slices",
         type=_positive_int,
         default=None,
@@ -200,6 +218,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_args(args: argparse.Namespace) -> List[str]:
+    if getattr(args, "prompt_index_backend", "exact") == "cagra":
+        if (
+            not args.prompt_index_vector_space
+            or not args.prompt_index_budget_bytes
+            or not args.prompt_index_cagra_native_bytes
+        ):
+            raise ValueError(
+                "CAGRA requires vector space, index budget and native allocation cap"
+            )
+        if args.allow_cpu_for_tests:
+            raise ValueError("native CAGRA cannot use the CPU test override")
     bounds = (
         getattr(args, "full_kv_fanin_max_slices", None),
         getattr(args, "full_kv_fanin_max_inflight", None),
@@ -277,7 +306,7 @@ def _parse_device_ids(value: str, world_size: int) -> List[int]:
     return devices
 
 
-def _build_prompt_index(args: argparse.Namespace):
+def _build_prompt_index(args: argparse.Namespace, *, device=None):
     """Return a PromptIndexManager, or None when retrieval is not configured.
 
     None is the default. Without a vector space there is nothing to compare a
@@ -308,10 +337,24 @@ def _build_prompt_index(args: argparse.Namespace):
     # The exact CPU backend by default: a V rank can build and search with no
     # cuVS present, and its copies stay off the device holding the KV pool.
     # A CAGRA backend replaces it without other changes.
+    backend = None
+    if getattr(args, "prompt_index_backend", "exact") == "cagra":
+        from sglang.srt.disaggregation.pvd.cagra_backend import CagraIndexBackend
+
+        if device is None:
+            raise ValueError("CAGRA factory requires the V rank's actual device")
+        backend = CagraIndexBackend(
+            device=device,
+            native_bytes_per_index=args.prompt_index_cagra_native_bytes,
+            graph_degree=args.prompt_index_cagra_graph_degree,
+            intermediate_degree=args.prompt_index_cagra_intermediate_degree,
+            itopk_size=args.prompt_index_cagra_itopk_size,
+        )
     return PromptIndexManager(
         vector_space=args.prompt_index_vector_space,
         metric=getattr(args, "prompt_index_metric", "ip"),
         budget=budget,
+        backend=backend,
     )
 
 
@@ -435,7 +478,11 @@ def _create_store(
             "skipped": True,
             "reason": "fake transport",
         }
-    prompt_index = _build_prompt_index(args)
+    prompt_index = (
+        _build_prompt_index(args, device=device)
+        if getattr(args, "prompt_index_backend", "exact") == "cagra"
+        else _build_prompt_index(args)
+    )
     store = VectorKVStore(
         rank=rank,
         world_size=args.world_size,

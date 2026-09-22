@@ -21,6 +21,35 @@ activation.
 
 ## 最新增量 / Latest increment
 
+V 已新增可显式选择的原生 CAGRA 后端：`--prompt-index-backend cagra`，需独立
+索引总预算与每 layer/KV-head native cap。工厂传入实际 V device；原生 build/
+search workspace 计入整个索引生命周期的 cap，显式输出 buffer 和失败 fence，
+UNKNOWN 保留 owner/预算。通过加载的 cuVS C 库检查 RMM registry 共享与超限拒绝。
+默认仍为 CPU exact；参数、限制与设备命令见
+[CAGRA 后端说明](PVD_CAGRA_Backend_CN_EN.md)。
+
+Native CAGRA is now an explicit V backend choice with separate total-index budget
+and per-layer/head native cap. The factory uses the actual V device; native
+workspace stays within the lifetime cap, output buffers are explicit, and failed
+completion proof retains owners/budgets. The loaded cuVS C library must prove
+RMM-registry sharing and over-cap rejection. Default remains CPU exact.
+
+新增 **34 项 CPU 测试**，含真实 store/manager 预算生命周期和库调用边界 doubles；
+**2 项原生 cuVS/CUDA 用例未执行**。Windows 全量 **2451 passed / 31 skipped**，
+WSL 索引相关 **213 passed / 10 skipped**。这不是原生执行、召回或 GPU/RDMA 证据。
+生产预测 Scheduler 自动装配、多 rail/通用拓扑仍需实现；当前 CAGRA 配置对短于
+intermediate degree 的 prompt 明确拒绝建索引，完整 Prompt 交付不受影响。
+
+Thirty-four new CPU cases cover actual store/manager budget lifetimes and native
+call boundaries with doubles; two native cuVS/CUDA cases are unexecuted. Windows
+full: **2451 passed / 31 skipped**; WSL index-related: **213 passed / 10 skipped**.
+No native execution, recall, GPU or RDMA evidence is claimed. Production predictive
+Scheduler assembly and multi-rail/general topology remain code work. The current
+CAGRA configuration explicitly refuses index builds with rows no greater than the
+intermediate degree; independent full-Prompt delivery remains available.
+
+以下保留前序步骤的当时边界 / Earlier steps below retain their historical scope.
+
 完整 Prompt fan-in 已接入现有 `PVDKVReceiver`、Decode session 和异步 waiting
 queue 驱动。D 配置 `--pvd-full-kv-fanin-max-slices`、
 `--pvd-full-kv-fanin-response-bytes`，并开启 waiting bootstrap 后启用。
