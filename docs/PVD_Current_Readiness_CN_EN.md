@@ -27,11 +27,11 @@ scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为�
 Tested incremental components include opt-in V CUDA packing, D banks, rank
 agreement and standalone tiled attention. Serving remains on its original path.
 
-最新 Windows 全量：**2192 passed / 28 skipped**；CUDA Delivery 定向 **7 passed**。
+最新 Windows 全量：**2217 passed / 28 skipped**；CUDA Delivery 定向 **7 passed**。
 新增 draft 完成屏障、UNKNOWN 实际 owner 保留、整个共享 provider 隔离及错误分配
 清理；14 个新增 CPU 故障用例通过，其中首批 5 个在修复前失败。
 详见 [Draft 完成与隔离 / Draft completion](PVD_Draft_Completion_CN_EN.md)。
-Latest full Windows regression is 2192/28; CUDA Delivery policy tests pass 7 cases.
+Latest full Windows regression is 2217/28; CUDA Delivery policy tests pass 7 cases.
 Draft retirement now fences work/map clearing/allocator updates, retains actual
 owners on UNKNOWN, quarantines the shared provider and cleans up malformed
 allocations. Fourteen new CPU cases pass; the first five failed before the fix.
@@ -113,6 +113,18 @@ Explicit CUDA request retirement now connects the common cache callback to drive
 close, ordering allocator reads, map clearing and host-slot reuse. UNKNOWN poisons
 both pools. The production factory must still install each owner; serving-wide
 activation is not implied.
+
+完整 Prompt 接收器现只在最终 ACK/rank agreement 成功后生成 session 绑定凭据，
+`install_received` 验证真实 Req/池/映射后导入 CUDA bank。padding 行不得导入；
+UNKNOWN 保留 arbiter 并 poison 两个原池。新增 24 个接收交接 CPU 用例通过，
+WSL 接收/引导/真实池回收/旧 PVD 定向 **103 passed**。控制器装配及刷新所有权
+切换仍须由后续接点完成，默认服务未启用预测检索。
+The full receiver now mints session-bound evidence only after final ACK/rank
+agreement; install_received checks the live Req/pools/map before importing the
+CUDA bank. Padding is refused and UNKNOWN retains the arbiter and poisons both
+pools. Twenty-four new CPU handoff cases pass, with 103 focused WSL receiver,
+bootstrap, real-pool retirement and legacy PVD cases passing. Controller assembly
+and refresh-ownership transfer still remain; default serving is unchanged.
 
 这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
 接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。

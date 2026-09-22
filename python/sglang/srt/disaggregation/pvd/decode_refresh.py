@@ -11,6 +11,7 @@ import asyncio
 import dataclasses
 import logging
 import math
+import threading
 import uuid
 
 import torch
@@ -31,6 +32,27 @@ logger = logging.getLogger(__name__)
 # them RETAINS the receive buffer and hands the session to the manager's
 # pending-close list; it never releases an unfenced destination.
 _INLINE_CLOSE_ATTEMPTS = 3
+
+
+@dataclasses.dataclass(frozen=True)
+class InitialPromptReceipt:
+    """Local evidence minted only after delivery/unpack/ACK rank agreement.
+
+    Not a wire authorization or a substitute for a native completion fence.
+    Its object identity remains bound to the receiving session.
+    """
+
+    req: object
+    request_id: str
+    key: object
+    receiver_epoch: str
+    slot: object
+    prompt: tuple
+    outputs: tuple
+    pages: tuple
+    generation: str
+    layout: str
+    owner_thread: int
 
 
 class PVDDecodeSession:
@@ -63,6 +85,74 @@ class PVDDecodeSession:
         self.identities = {}
         self._refresh_owner = None
         self._fenced = False
+        self._initial_receipt = None
+
+    def _complete_refresh(self):
+        """Called ONLY at the final successful ACK/TP-agreement site below."""
+        initial = self.clock.round == 0 and self.clock.pending[1] == 0
+        self.release_refresh()
+        self.clock.complete(self.clock.pending[0])
+        if initial:
+            self._initial_receipt = InitialPromptReceipt(
+                self.req,
+                getattr(self.req, "rid", None),
+                self.key,
+                self.receiver_epoch,
+                self.req.req_pool_idx,
+                tuple(self.req.origin_input_ids),
+                tuple(self.req.output_ids),
+                tuple(self.pages.tolist()),
+                self.generation,
+                self.manager.layout().fingerprint,
+                threading.get_ident(),
+            )
+
+    def require_initial_prompt(self):
+        """Return this session's receipt only while the exact newcomer is live."""
+        receipt, req, manager = self._initial_receipt, self.req, self.manager
+        if (
+            receipt is None
+            or receipt.owner_thread != threading.get_ident()
+            or receipt.req is not req
+            or not receipt.request_id
+            or receipt.request_id != req.rid
+            or receipt.key != self.key
+            or manager.key_for(req) != self.key
+            or manager.decode_sessions.get(self.key) is not self
+            or self._closed
+            or self.lease_error
+            or not self._fenced
+            or self._refresh_owner is not None
+            or self.clock.pending is not None
+            or self.clock.round != 1
+            or self.clock.last_tokens != 0
+            or receipt.receiver_epoch != self.receiver_epoch
+            or receipt.generation != self.generation
+            or receipt.slot != req.req_pool_idx
+            or type(req.req_pool_idx) is not int
+            or type(receipt.slot) is not int
+            or receipt.slot <= 0
+            or receipt.prompt != tuple(req.origin_input_ids)
+            or receipt.outputs != tuple(req.output_ids)
+            or len(receipt.outputs) != 1
+            or receipt.pages != tuple(self.pages.tolist())
+            or receipt.layout != manager.layout().fingerprint
+            or req.finished()
+            or req.is_retracted
+        ):
+            raise RuntimeError("exact live initial Prompt completion required")
+        gate = manager.bootstrap_gate_for(req)
+        if (
+            gate is None
+            or not gate.is_runnable
+            or not gate.handed_off
+            or gate.receiver_epoch != receipt.receiver_epoch
+            or gate.delivery_id != f"{self.key.transfer_id}:bootstrap"
+            or gate.prompt_tokens != len(receipt.prompt)
+            or not any(req is queued for queued in manager.scheduler.waiting_queue)
+        ):
+            raise RuntimeError("installed final-waiting-queue bootstrap required")
+        return receipt
 
     async def initialize(self, runtime):
         record = await self.manager.wait_for_stored_entry(self.key, runtime)
@@ -669,8 +759,7 @@ class PVDDecodeRefresher:
             # Every shard reported DELIVERED, which V sets only after seeing a
             # native TERMINAL_SUCCESS. That is the transport-terminal proof
             # this refresh's destination pin was waiting for.
-            session.release_refresh()
-            session.clock.complete(session.clock.pending[0])
+            session._complete_refresh()
             logger.debug(
                 "PVD refresh complete: sequence=%s round=%s decode_tokens=%s",
                 session.key.req_id,

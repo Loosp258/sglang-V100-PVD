@@ -271,6 +271,13 @@ def test_existing_refresher_only_fetches_due_and_new_requests():
         )
         session.due = lambda s=session: s.clock.due(s.decode_tokens)
 
+        def complete_refresh(s=session):
+            # This fixture tests due-set selection, not receive evidence.
+            s.release_refresh()
+            s.clock.complete(s.clock.pending[0])
+
+        session._complete_refresh = complete_refresh
+
         def prepare(pages, s=session):
             return {
                 "sequence_id": s.key.req_id,

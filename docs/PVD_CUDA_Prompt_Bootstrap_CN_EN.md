@@ -36,6 +36,44 @@ completion, unpack and device ordering must finish first. Supply exact
 request/incarnation/Entry/layout/count and an allocator-backed model-pool guard.
 The source declaration is **not an RDMA fence** and cannot replace those steps.
 
+## 生产接收器的显式交接入口 / Explicit receiver-backed entrypoint
+
+`PVDDecodeRefresher` 现在仅在 DELIVERED 身份、unpack、ACK 和 rank 一致性全部
+成功的出口调用 `_complete_refresh()`，生成 session 专属的 `InitialPromptReceipt`。
+`release_refresh()`、手动完成 clock 或仅把 gate 标为 INSTALLED 都不会生成凭据。
+凭据记录当时的 Req、Entry、worker epoch、slot、Prompt/首 token、物理页、generation
+和 layout；调用线程、当前 final waiting queue、租约、当前映射还须再次核验。
+
+The real refresher mints a session-bound InitialPromptReceipt only at the final
+successful identity/unpack/ACK/rank-agreement site. Releasing a refresh pin,
+advancing its clock or marking a gate installed does not mint evidence. The
+receipt snapshots Req, Entry, worker epoch, slot, Prompt/first token, physical
+pages, generation and layout. Import rechecks the owner thread, final waiting
+queue, lease health and current mapping rather than trusting the snapshot alone.
+
+`CUDAPromptBootstrap.install_received(session, arbiter=..., pool_owner=...,
+cache=...)` 已将上述接收器接到真实池导入逻辑。第一版严格 TP1/page1；要求 exact
+ChunkCache/分配器以及同一个模型池 owner。它持有共享 arbiter 防止同线程 RLock
+重入，UNKNOWN 则同时保留 session/importer、pool pin、预算和许可，并 poison
+两个真实池。预算不足且尚未 pin 源时可重试；已经消费的导入不重放。
+
+install_received connects that receiver to the pool importer. It accepts only
+TP1/page1, exact supported ChunkCache/allocator classes and the same model-pool
+owner. The shared arbiter prevents same-thread RLock reentry. UNKNOWN retains
+the session/importer, pool pin, budget and lease, poisoning both real pools.
+Capacity refusal before source pinning is retryable; consumed imports are not.
+
+这仍是显式入口：尚不负责创建 controller、安装 release owner 或切换旧全量刷新。
+启动工厂/队列的调用和刷新所有权交接仍需接通，不能仅凭此 API 宣称服务已启用。
+接收完成测试使用真实 refresher 和受控 CPU transport；CUDA 导入测试用 CPU 张量
+替代设备执行，不提供 RDMA/GPU 证据。
+
+This remains an explicit entrypoint: it does not construct controllers, attach
+release owners or disable legacy refresh. Serving factory/queue invocation and
+refresh-ownership transfer still need assembly. Receiver tests run the real
+refresher with controlled CPU transport; importer tests substitute CPU tensors
+for CUDA execution and do not establish native RDMA/GPU behavior.
+
 预留 staging budget 后 pin 源池，逐行复制完整 KV，排空后 staging/install/resume。
 同一共享 target 锁覆盖整个过程。staging 与 bank 的预算分别计算（引导有真实
 峰值显存代价）；成功排空并移除所有视图/guard 后才能退还 staging 预算。

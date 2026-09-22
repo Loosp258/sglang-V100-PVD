@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 
 import torch
+from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import TargetExecutionArbiter
 from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
 from sglang.srt.disaggregation.pvd.cuda_runtime_group import CUDARuntimeInstallGroup
 from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
@@ -27,6 +28,7 @@ class CUDAPromptPoolSource:
     slot: int
     prompt_tokens: int
     pool_owner: ResourceGuard
+    expected_rows: tuple | None = None
 
 
 class CUDAPromptBootstrap:
@@ -44,6 +46,84 @@ class CUDAPromptBootstrap:
         self._owner = f"cuda-prompt-bootstrap:{uuid.uuid4().hex}"
         self._held = {}
         self._quarantined = self._active = self._used = False
+        self._received_session = self._received_receipt = self._receive_lease = None
+
+    def install_received(self, session, *, arbiter, pool_owner, cache):
+        """Bind the shipped full receiver to this request's initial CUDA bank.
+
+        This explicit entrypoint does not enable serving or construct a
+        controller. UNKNOWN keeps the session/importer, arbiter and real pools
+        alive, and poisons allocation rather than permitting default cleanup.
+        """
+        from sglang.srt.disaggregation.pvd.cuda_request_release import (
+            _require_supported_pools,
+        )
+        from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
+
+        if not isinstance(session, PVDDecodeSession) or not isinstance(
+            arbiter, TargetExecutionArbiter
+        ):
+            raise InstallProtocolError("real receiver and shared arbiter required")
+        arbiter.owner()
+        receipt = session.require_initial_prompt()
+        _require_supported_pools(cache)
+        manager = session.manager
+        pools = pool_owner.value if isinstance(pool_owner, ResourceGuard) else None
+        allocator = cache.token_to_kv_pool_allocator
+        if (
+            self._received_session is not None
+            or getattr(session, "_cuda_prompt_importer", None) is not None
+            or manager.tp_size != 1
+            or manager.tp_rank != 0
+            or manager.page_size != 1
+            or not isinstance(pools, CUDAModelPools)
+            or pools.req_pool is not manager.scheduler.req_to_token_pool
+            or pools.kv_pool is not manager.kv_pool
+            or cache is not manager.scheduler.tree_cache
+            or cache.req_to_token_pool is not pools.req_pool
+            or allocator.get_kvcache() is not pools.kv_pool
+            or getattr(allocator, "pvd_cuda_retirement_error", None) is not None
+            or getattr(pools.req_pool, "pvd_cuda_retirement_error", None) is not None
+            or self._bank.identity
+            != (
+                session.req.rid,
+                receipt.receiver_epoch,
+                receipt.key.transfer_id,
+                receipt.layout,
+            )
+        ):
+            raise InstallProtocolError(
+                "exact unclaimed TP1 receiver/model pools required"
+            )
+        lease = arbiter.acquire()
+        self._receive_lease = lease
+        self._received_session, self._received_receipt = session, receipt
+        session._cuda_prompt_importer = self
+        try:
+            return self.install(
+                CUDAPromptPoolSource(
+                    self._bank.identity,
+                    receipt.slot,
+                    len(receipt.prompt),
+                    pool_owner,
+                    receipt.pages,
+                )
+            )
+        finally:
+            if self._quarantined:
+                reason = (
+                    "CUDA initial Prompt completion unknown; worker pools quarantined"
+                )
+                pools.req_pool.pvd_cuda_retirement_error = reason
+                allocator.pvd_cuda_retirement_error = reason
+                # Keep even a reentrant target lock from admitting another forward.
+            else:
+                arbiter.release(lease)
+                self._receive_lease = None
+                if not self._used:
+                    # Capacity/pre-copy refusal did not consume the bootstrap.
+                    session._cuda_prompt_importer = None
+                    self._received_session = self._received_receipt = None
 
     def _synchronize(self):
         torch.cuda.synchronize(self._bank.device)
@@ -148,7 +228,15 @@ class CUDAPromptBootstrap:
             or source.prompt_tokens > table.shape[1]
         ):
             raise InstallProtocolError("invalid Prompt request map")
-        rows = table[source.slot, : source.prompt_tokens].tolist()
+        try:
+            rows = table[source.slot, : source.prompt_tokens].tolist()
+        except BaseException:
+            # Device readback failed; do not retry a fence to justify releasing
+            # the source pool while its completion is unknown.
+            self._quarantined = True
+            raise
+        if source.expected_rows is not None and tuple(rows) != source.expected_rows:
+            raise InstallProtocolError("installed Prompt mapping changed since receive")
         # TokenToKVPoolAllocator reserves row zero for padding, not Prompt KV.
         if any(row <= 0 for row in rows) or len(set(rows)) != len(rows):
             raise InstallProtocolError("Prompt rows must be unique allocated positions")

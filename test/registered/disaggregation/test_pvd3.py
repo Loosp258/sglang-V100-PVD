@@ -928,6 +928,7 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
                 assert bootstrap_step("poll_bootstrap") == [([], [])] * tp_size
                 assert not coordinator.deliveries
                 assert all(s.clock.round == 0 for s in sessions)
+                assert all(s._initial_receipt is None for s in sessions)
                 if bootstrap_case == "cancel-retrieve":
                     sessions[-1]._closed = True  # rank-local cancellation
                 retrieve_permission.set_result(None)
@@ -942,6 +943,7 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
                 # Even after installation, an unfinished ACK is not runnable.
                 assert bootstrap_step("poll_bootstrap") == [([], [])] * tp_size
                 assert all(s.clock.round == 0 for s in sessions)
+                assert all(s._initial_receipt is None for s in sessions)
                 if bootstrap_case == "cancel-ack":
                     sessions[-1]._closed = True
                 ack_permission.set_result(None)
@@ -950,6 +952,7 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
                 if bootstrap_case == "cancel-ack":
                     assert all(len(errors) == 1 for _, errors in result)
                     assert all(s.clock.round == 0 for s in sessions)
+                    assert all(s._initial_receipt is None for s in sessions)
                     return
                 assert all(
                     completed == [s.req] and not errors
@@ -960,6 +963,7 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
                     s.clock.round == 1 and s.clock.last_tokens == 0 for s in sessions
                 )
             assert len(coordinator.deliveries) == 1
+            assert all(s._initial_receipt.req is s.req for s in sessions)
             pointers = [s.staging.data_ptr() for s in sessions]
             for manager in managers:
                 manager.kv_pool.k_buffer[0][5:] = 42
