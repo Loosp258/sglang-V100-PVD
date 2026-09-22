@@ -6,6 +6,7 @@ routes from the Gateway-selected V coordinator. Client sessions outlive every
 remote destination and are closed only after the controller drains.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -22,6 +23,7 @@ from sglang.srt.disaggregation.pvd.cuda_sparse_delivery import (
     CUDASparseFanInDelivery,
 )
 from sglang.srt.disaggregation.pvd.cuda_sparse_receiver import CUDASparseReceiveRegistry
+from sglang.srt.disaggregation.pvd.multi_rail_receive import RailMappedReceiveEngine
 from sglang.srt.disaggregation.pvd.probe_search import ProbeSearchRoute
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED, QueryHeadMapping
@@ -76,6 +78,7 @@ def assemble_routed_cuda_request(
     d_endpoint: str,
     d_rail: str,
     poll_interval_seconds: float,
+    d_rails: Mapping[int, str] | None = None,
 ) -> CUDARoutedRequestAssembly:
     """Fail closed on mismatched Entry/layout/selected shard metadata.
 
@@ -121,12 +124,37 @@ def assemble_routed_cuda_request(
             route.rail != selected.manifest.shard(route.rank).rail
             for route in selected.shards
         )
-        or {route.rail for route in selected.shards} != {d_rail}
+    ):
+        raise ValueError("exact selected Entry, model and D routing required")
+    receive_rails = (
+        {route.rank: d_rail for route in selected.shards}
+        if d_rails is None
+        else dict(d_rails)
+    )
+    if d_rails is None and any(route.rail != d_rail for route in selected.shards):
+        raise ValueError(
+            "single-rail D engine cannot receive from V shards on different rails"
+        )
+    if (
+        set(receive_rails) != {route.rank for route in selected.shards}
+        or any(
+            type(rank) is not int or not isinstance(rail, str) or not rail.strip()
+            for rank, rail in receive_rails.items()
+        )
+        or any(route.rail != receive_rails[route.rank] for route in selected.shards)
+    ):
+        raise ValueError("each V source needs its matching explicit D rail")
+    if isinstance(registry.engine, RailMappedReceiveEngine):
+        if any(
+            not registry.engine.supports_rail(rail) for rail in receive_rails.values()
+        ):
+            raise ValueError("D receive engine lacks a selected rail adapter")
+    elif (
+        set(receive_rails.values()) != {d_rail}
         or getattr(registry.engine, "rail", d_rail) != d_rail
     ):
         raise ValueError(
-            "exact selected Entry, model and D routing required; a single-rail "
-            "D engine cannot receive from V shards on different rails"
+            "single-rail D engine cannot receive from V shards on different rails"
         )
 
     search_clients = {
@@ -148,7 +176,10 @@ def assemble_routed_cuda_request(
     )
     routes = {
         route.rank: CUDAReceiveRoute(
-            control_clients[route.rank], route.sender_epoch, d_endpoint, d_rail
+            control_clients[route.rank],
+            route.sender_epoch,
+            d_endpoint,
+            receive_rails[route.rank],
         )
         for route in selected.shards
         if route.rank in routing.clients

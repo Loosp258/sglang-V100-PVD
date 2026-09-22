@@ -14,6 +14,7 @@ from sglang.srt.disaggregation.pvd.cuda_routed_request import (
     assemble_routed_cuda_request,
 )
 from sglang.srt.disaggregation.pvd.cuda_sparse_fanin import CUDASparseFanInStage
+from sglang.srt.disaggregation.pvd.multi_rail_receive import RailMappedReceiveEngine
 from sglang.srt.disaggregation.pvd.prediction import (
     ProbeConfig,
     QueryVectors,
@@ -21,6 +22,7 @@ from sglang.srt.disaggregation.pvd.prediction import (
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
+from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
 from test_pvd_cuda_probe_search import bridge
 from test_pvd_cuda_sparse_fanin import two_source
 from test_pvd_prompt_index import SPACE
@@ -60,24 +62,24 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
                     for rank, meta in original_describe().items()
                 },
             )
-            kwargs = dict(
-                compute_layout=c.compute,
-                compute_rank=0,
-                group=c.group,
-                registry=c.registry,
-                pipeline=pipeline,
-                head_mapping=QueryHeadMapping(8, 4),
-                vector_space=SPACE,
-                metric="l2",
-                top_k=1,
-                max_union_tokens=2,
-                max_head_dim=8,
-                copy_budget=copy_budget,
-                aggregate_budget=c.aggregate_budget,
-                d_endpoint="D",
-                d_rail="mlx5_0",
-                poll_interval_seconds=0.001,
-            )
+            kwargs = {
+                "compute_layout": c.compute,
+                "compute_rank": 0,
+                "group": c.group,
+                "registry": c.registry,
+                "pipeline": pipeline,
+                "head_mapping": QueryHeadMapping(8, 4),
+                "vector_space": SPACE,
+                "metric": "l2",
+                "top_k": 1,
+                "max_union_tokens": 2,
+                "max_head_dim": 8,
+                "copy_budget": copy_budget,
+                "aggregate_budget": c.aggregate_budget,
+                "d_endpoint": "D",
+                "d_rail": "mlx5_0",
+                "poll_interval_seconds": 0.001,
+            }
             with pytest.raises(ValueError, match="exact selected Entry"):
                 assemble_routed_cuda_request(
                     PVDSelectedShardRoutes(
@@ -105,6 +107,23 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
             )
             with pytest.raises(ValueError, match="single-rail"):
                 assemble_routed_cuda_request(mixed, **kwargs)
+            with pytest.raises(ValueError, match="single-rail"):
+                assemble_routed_cuda_request(
+                    mixed,
+                    **{
+                        **kwargs,
+                        "d_rails": {0: "mlx5_0", 1: "mlx5_1"},
+                    },
+                )
+            with pytest.raises(ValueError, match="single-rail"):
+                assemble_routed_cuda_request(
+                    selected,
+                    **{
+                        **kwargs,
+                        "d_rail": "mlx5_1",
+                        "d_rails": {0: "mlx5_0", 1: "mlx5_0"},
+                    },
+                )
             assert not c.registry.snapshot()
             assembly = assemble_routed_cuda_request(selected, **kwargs)
             controller = assembly.controller
@@ -129,14 +148,21 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
     asyncio.run(run())
 
 
-def test_factory_controller_runs_two_v_search_delivery_and_install(monkeypatch):
+@pytest.mark.parametrize("single_rail", (True, False))
+def test_factory_controller_runs_two_v_search_delivery_and_install(
+    monkeypatch, single_rail
+):
     async def run():
         async with two_source(
             monkeypatch,
             prepare_records=False,
             begin_refresh=False,
-            single_rail=True,
+            single_rail=single_rail,
         ) as c:
+            if not single_rail:
+                c.registry.engine = RailMappedReceiveEngine(
+                    {rail: FakeTransferEngine() for rail in ("mlx5_0", "mlx5_1")}
+                )
             monkeypatch.setattr(CUDASparseFanInStage, "_synchronize", lambda self: None)
             monkeypatch.setattr(
                 CUDASparseFanInStage,
@@ -211,6 +237,11 @@ def test_factory_controller_runs_two_v_search_delivery_and_install(monkeypatch):
                 aggregate_budget=c.aggregate_budget,
                 d_endpoint="D",
                 d_rail="mlx5_0",
+                d_rails=(
+                    None
+                    if single_rail
+                    else {rank: c.stores[rank].rail for rank in (0, 1)}
+                ),
                 poll_interval_seconds=0.001,
             )
             controller = assembly.controller

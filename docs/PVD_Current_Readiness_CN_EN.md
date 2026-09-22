@@ -25,21 +25,24 @@ activation.
 的双 shard 路由、真实 D 组件和显式预算组装成一个请求级检索/多源 Delivery；
 请求排空后才关闭它拥有的 HTTP 客户端。它仍需生产启动/准入逻辑提供真实组件，
 不能凭此认为预测检索已自动启用。
-当前 D TP1 Mooncake 每 rank 只绑定一个 rail。工厂对混用 V rails 的请求在注册前
-拒绝；只有显式同 rail 的 V0/V1 → D0 可以装配。双 rail 的 V TP2 → D TP1
-仍有 D 多 HCA 代码和原生验收缺口。
-本步 Windows 全量 **2497 passed / 31 skipped**，WSL 工厂/双源定向
-**12 passed**。真实 GPU/Mooncake/RDMA 仍未执行。
+新增 D 接收端显式多 rail 组合层：每个 V 源 rank 可以映射到 D 上独立的
+同 rail adapter；注册和注销由同一 adapter 拥有。单 rail engine 仍拒绝
+混用 V rails。原生双 HCA engine 启动构造和 GPU/RDMA 验收尚未完成。
+本步 Windows 全量 **2501 passed / 31 skipped**，WSL 多 rail/工厂/双源定向
+**16 passed**（最终单 rail 绕过回归测试随后补充）。真实 GPU/Mooncake/RDMA
+仍未执行。
 
 The CUDA routed-request factory assembles selected two-shard V routes with
 explicit D resources into one search/fan-in controller and owns HTTP clients
 until request drain. Production startup/admission still has to provide the
 real components; this is not automatic predictive serving activation.
-Current D TP1 Mooncake uses one rail per rank. The factory fails closed for
-mixed-rail V sources; only explicit same-rail V0/V1 → D0 is assembled. Native
-dual-rail V TP2 → D TP1 remains a code and hardware acceptance gap.
-This increment passed **2497/31 skipped** in the full Windows CPU suite and
-**12 passed** in focused WSL tests; native GPU/Mooncake/RDMA remains unrun.
+An explicit D multi-rail receive composite maps each V source rank to an
+independently owned, matching D rail adapter. The single-rail engine still
+refuses mixed-rail V sources. Native two-HCA engine startup construction and
+GPU/RDMA acceptance remain open.
+This increment passed **2501/31 skipped** in the full Windows CPU suite and
+**16 passed** in focused WSL tests (followed by a single-rail bypass regression
+test). Native GPU/Mooncake/RDMA remains unrun.
 
 已选 V group 的 coordinator 新增 [Entry 级 shard 路由发现](PVD_Selected_Shard_Routes_CN_EN.md)：
 只对 STORED Entry 返回双 shard 的显式 URL、当前 sender epoch、rail 和 manifest，

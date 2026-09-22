@@ -10,13 +10,14 @@ all Q-head routes from the supplied GQA mapping rather than accepting a
 partial or duplicate caller list. Selected Entry, model space, layout, layer
 coverage, KV-head count, sender epochs and rails are checked before use.
 
-The current Mooncake D adapter is bound to one rail per D rank. For D TP1
-receiving two V shards, this factory accepts only a selected V group whose
-source rails both equal the D rail (explicit single-rail mode). A mixed
-`mlx5_0`/`mlx5_1` V group is refused before destination registration. Fake
-transport can copy those bytes, but real V1 rejects a destination on the
-wrong rail and D's single-rail adapter cannot register on the other rail.
-True dual-rail V TP2 → D TP1 needs a multi-HCA D adapter and native validation;
+The factory supports two explicit receive policies. With the existing
+single-rail Mooncake D adapter, both selected V shards must use the same
+rail. With `RailMappedReceiveEngine`, the caller may provide `d_rails` mapping
+each V source rank to an independently owned D receive adapter for that rail.
+The composite dispatches each destination registration and unregister to its
+exact owner; it does not create native Mooncake engines. A mixed-rail request
+with only a single-rail D engine is refused before registration. True native
+dual-rail V TP2 → D TP1 still needs startup construction and GPU/RDMA validation;
 changing only a descriptor label is unsafe.
 
 `assemble_routed_cuda_request()` 使用 Gateway 已选 V coordinator 返回的类型化
@@ -27,12 +28,12 @@ pipeline、compute layout 以及显式预算、端点和 HCA。工厂为各 V sh
 的外来列表。Entry、模型向量空间、layout、层覆盖、KV-head 数、sender epoch 和
 rail 均须匹配。
 
-当前 Mooncake D adapter 每个 D rank 只绑定一个 rail。因此 D TP1 同时接收双 V
-shard 时，本工厂只接受两个 V 源与 D rail 一致的显式单 rail 配置。混用
-`mlx5_0`/`mlx5_1` 会在注册前拒绝。fake transport 可以拷贝字节，但真实 V1
-会拒绝错误 rail 的目标，D 的单 rail adapter 也无法在另一个 rail 注册。
-真正双 rail 的 V TP2 → D TP1 需要 D 多 HCA adapter 和原生验证，不能只改
-descriptor 标签。
+工厂现在有两种显式接收策略：现有单 rail Mooncake D adapter 要求两个 V 源
+都使用同一 rail；`RailMappedReceiveEngine` 则允许调用方通过 `d_rails` 将
+每个 V 源 rank 映射到 D 上独立拥有的同 rail 接收 adapter。组合层将注册和
+注销交还对应 owner，本身不创建原生 Mooncake engine。仅有单 rail D engine
+时，混用 V rails 仍会在注册前拒绝。真正双 rail 的 V TP2 → D TP1 还需启动
+构造和 GPU/RDMA 验收，不能只修改 descriptor 标签。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;
