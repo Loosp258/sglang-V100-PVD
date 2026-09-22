@@ -42,6 +42,7 @@ with no cuVS present. A CAGRA backend replaces it without touching this file.
 from __future__ import annotations
 
 import threading
+import traceback
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -233,9 +234,9 @@ class PromptIndexManager:
             or self._entries.get(record.gate.entry_transfer_id) is record
         ):
             return
-        self._release_budget_locked(record)
         record.vectors.clear()
         record.indexes.clear()
+        self._release_budget_locked(record)
 
     def note_kv_readable(self, transfer_id: str) -> None:
         """The complete Prompt KV is stored and safely visible on this rank."""
@@ -290,6 +291,9 @@ class PromptIndexManager:
             mapping_version = record.id_mapping_version
 
         owners = (vectors_owner, index_owner, scratch_owner)
+        vectors = []
+        built = {}
+        item = None
         # Extraction and the backend build run outside the lock: they copy and
         # index the whole shard, and close() must not block behind them.
         try:
@@ -334,7 +338,6 @@ class PromptIndexManager:
                         for rows, dim in shapes
                     ),
                 )
-            built = {}
             for item in vectors:
                 built[(item.layer, item.kv_head)] = self.backend.build(
                     item.vectors, vector_space=self.vector_space, metric=self.metric
@@ -343,6 +346,13 @@ class PromptIndexManager:
             # installed, so an idle index is charged only for what it holds.
             self._release_owners((scratch_owner,))
         except TransferCapacityError as exc:
+            # Completed Python frames can keep allocations alive via traceback
+            # locals. Drop our references AND those frames before advertising
+            # capacity. This is not a CUDA/native completion fence.
+            traceback.clear_frames(exc.__traceback__)
+            item = None
+            vectors.clear()
+            built.clear()
             # Backpressure, not a failed build. Nothing was retained, so the
             # attempt is given back and this Entry is tried again next round.
             with self._lock:
@@ -351,6 +361,10 @@ class PromptIndexManager:
                     record.gate.abandon_build(str(exc))
             return False
         except Exception as exc:
+            traceback.clear_frames(exc.__traceback__)
+            item = None
+            vectors.clear()
+            built.clear()
             with self._lock:
                 # Refund whatever this attempt reserved before the failure: a
                 # permanently failing Entry must not hold the worker's budget
@@ -363,6 +377,9 @@ class PromptIndexManager:
         with self._lock:
             if self._entries.get(transfer_id) is not record:
                 # Closed while we were building. Drop what we made and refund.
+                item = None
+                vectors.clear()
+                built.clear()
                 self._release_owners(owners)
                 return False
             record.budget_owners = (vectors_owner, index_owner)
@@ -465,7 +482,13 @@ class PromptIndexManager:
                 mapping=item.mapping,
                 top_k=top_k,
             )
+        except BaseException as exc:
+            # Preserve the exception and traceback locations, but not finished
+            # backend/select frames' tensor locals while refunding scratch.
+            traceback.clear_frames(exc.__traceback__)
+            raise
         finally:
+            item = index = None
             self._release_owners((scratch_owner,))
             with self._lock:
                 record.users -= 1
@@ -520,6 +543,7 @@ class PromptIndexManager:
         try:
             yield descriptor
         finally:
+            item = None
             with self._lock:
                 record.users -= 1
                 self._retire_locked(record)

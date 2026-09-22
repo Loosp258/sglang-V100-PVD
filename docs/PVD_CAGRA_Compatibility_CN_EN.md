@@ -17,11 +17,13 @@
 - [该版本 Python 源码](https://github.com/rapidsai/cuvs/blob/v25.02.00/python/cuvs/cuvs/neighbors/cagra/cagra.pyx)
   提供 `IndexParams`, `SearchParams`, `build`, `search`；search 返回
   `(distances, neighbors)`，不是 PVD 的 `(rows, scores)`。原生 L2 是平方距离、
-  越小越好；PVD score 统一越大越好，因此 L2 适配必须取负。IP 不应擅自改成
+  越小越好；当前 exact backend 的 PVD `l2` 是负欧氏距离，因此 L2 适配须
+  先转换为欧氏距离再取负，而非仅对平方距离取负。IP 不应擅自改成
   cosine 或做归一化。仍须以实际结果的独立数值 oracle 验证。
   The tagged Python implementation returns distances before neighbor IDs.
-  An adapter must reorder outputs and negate squared-L2 for PVD's higher-is-better
-  convention; inner product must not silently become cosine. Verify numerically.
+  An adapter must reorder outputs and convert squared-L2 to negative Euclidean
+  distance to match the current exact backend's `l2` scores, not merely negate
+  squared-L2. Inner product must not silently become cosine. Verify numerically.
 
 ## 无设备可做什么 / Hardware-independent checks
 

@@ -93,6 +93,24 @@ See the [CAGRA compatibility note](PVD_CAGRA_Compatibility_CN_EN.md): probe v3
 records imported identity and optional version assertions without imposing a pin.
 Release-specific architecture requirements are not V100S execution evidence.
 
+### 索引退预算顺序 / Index refund ordering
+
+新增 CPU storage 弱引用回归，复现并修复关闭、迟到构建、部分构建失败及关闭中
+检索退出时先退预算后释放 tensor 的窗口。现在先清掉 manager 的引用，再退预算；
+失败后已结束的 Python traceback frame 也清理 tensor locals，保留异常和调用位置。
+这不构成 CUDA stream/native handle 已完成的证明，未来 CAGRA 仍需原生生命周期。
+
+Real CPU storage weak-reference regressions exposed refunds preceding tensor release
+on close, late/partial builds and searches leaving a closed record. Manager references
+and finished exception-frame tensor locals are now dropped before refund; exception
+types and traceback locations remain. This is not a CUDA/native completion fence.
+Native CAGRA lifecycle integration is still required.
+
+本次增量验证 / Incremental validation: Windows 全量 **1849 passed / 15 skipped**；
+WSL 索引、回收与 CAGRA 预检定向 **121 passed / 1 skipped**。6 个新回收测试检查
+实际 storage；CAGRA 实际 build/search 未执行。
+Six new retirement cases observe actual CPU storage; native CAGRA was not executed.
+
 ## 固定设计约束 / Invariants to preserve
 
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。
