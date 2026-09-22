@@ -6,6 +6,7 @@ import json
 import math
 import platform
 import re
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -39,6 +40,14 @@ class PVDPreflightReport:
 
 
 DEFAULT_RANK_RAILS = ("mlx5_0", "mlx5_1")
+_unknown_preflight_owners = []
+_unknown_preflight_lock = threading.Lock()
+
+
+def unknown_preflight_owner_count() -> int:
+    """Number of native preflight owners retained until process restart."""
+    with _unknown_preflight_lock:
+        return len(_unknown_preflight_owners)
 
 
 def validate_rank_rail_names(rails: Iterable[str]) -> str:
@@ -170,6 +179,7 @@ def run_rank_preflight(
     local_transfer = False
     source_registration = None
     destination_registration = None
+    handle = None
     transfer_unknown = False
     try:
         source = torch.arange(256, dtype=torch.uint8, device=device)
@@ -225,11 +235,18 @@ def run_rank_preflight(
     finally:
         # A timed-out/poll-unknown PUT may still target the destination. Native
         # abort is not a terminal completion proof, so neither MR can be
-        # unregistered safely in this process.
-        if source_registration is not None and not transfer_unknown:
-            engine.release_memory(source_registration)
-        if destination_registration is not None and not transfer_unknown:
-            engine.release_memory(destination_registration)
+        # unregistered safely in this process. Keep the engine itself alive as
+        # well: startup unwinding would otherwise lose the native MR owner.
+        if transfer_unknown:
+            with _unknown_preflight_lock:
+                _unknown_preflight_owners.append(
+                    (engine, source_registration, destination_registration, handle)
+                )
+        else:
+            if source_registration is not None:
+                engine.release_memory(source_registration)
+            if destination_registration is not None:
+                engine.release_memory(destination_registration)
 
     if strict and not (registered and local_transfer):
         raise PVDPreflightError(

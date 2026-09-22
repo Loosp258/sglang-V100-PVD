@@ -1,5 +1,7 @@
 """Async GPUDirect preflight must wait for completion and retain unknown MRs."""
 
+import weakref
+
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd import preflight
@@ -48,6 +50,7 @@ def test_preflight_waits_for_async_terminal_success(monkeypatch):
 
 
 def test_preflight_timeout_retains_both_unknown_regions(monkeypatch):
+    before = preflight.unknown_preflight_owner_count()
     engine = DelayedEngine(1000)
     with pytest.raises(preflight.PVDPreflightError, match="restart the process"):
         preflight.run_rank_preflight(
@@ -60,10 +63,28 @@ def test_preflight_timeout_retains_both_unknown_regions(monkeypatch):
         )
     assert len(engine.registrations) == 2
     assert engine.releases == []
+    assert preflight.unknown_preflight_owner_count() == before + 1
+    assert preflight._unknown_preflight_owners[-1][0] is engine
     # This fake engine has no in-flight native transfer; clean its global test
     # registry only after asserting the production path retained both MRs.
     for registration in engine.registrations:
         engine.release_memory(registration)
+
+
+def test_unknown_owner_survives_caller_dropping_engine():
+    engine = DelayedEngine(1000)
+    retained = weakref.ref(engine)
+    with pytest.raises(preflight.PVDPreflightError, match="restart the process"):
+        preflight.run_rank_preflight(
+            rank=0,
+            rails=("mlx5_0",),
+            device="cpu",
+            engine=engine,
+            strict=False,
+            transfer_timeout_seconds=0.001,
+        )
+    del engine
+    assert retained() is preflight._unknown_preflight_owners[-1][0]
 
 
 @pytest.mark.parametrize("poll_failure", ("exception", "cancelled"))
