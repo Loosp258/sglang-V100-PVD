@@ -194,9 +194,13 @@ class HttpShardClient(ShardClient):
             {"key": key.to_dict(), "delivery_id": delivery_id},
         )
 
-    async def reserve_fanin_delivery(self, manifest) -> Mapping:
+    async def reserve_fanin_delivery(
+        self, manifest, *, expected_sender_epoch=None
+    ) -> Mapping:
         return await self._request(
-            "POST", "/internal/v1/fanin/reserve", {"manifest": manifest}
+            "POST",
+            "/internal/v1/fanin/reserve",
+            {"manifest": manifest, "expected_sender_epoch": expected_sender_epoch},
         )
 
     async def fence_fanin_delivery(self, manifest, identity: WriteIdentity) -> Mapping:
@@ -345,7 +349,11 @@ def create_shard_app(
 
     async def reserve_fanin(request):
         data = await _payload(request)
-        result = await asyncio.to_thread(store.reserve_fanin_delivery, data["manifest"])
+        result = await asyncio.to_thread(
+            store.reserve_fanin_delivery,
+            data["manifest"],
+            expected_sender_epoch=data.get("expected_sender_epoch"),
+        )
         return web.json_response(result.to_dict())
 
     async def fence_fanin(request):
@@ -559,6 +567,23 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
         middlewares=[pvd_error_middleware], client_max_size=64 * 1024 * 1024
     )
 
+    async def fanin(request):
+        if coordinator.fanin is None:
+            raise CoordinatorError("full-KV fan-in coordinator is disabled")
+        data = await _payload(request)
+        operation = request.match_info["operation"]
+        if operation in {"reserve", "fence"}:
+            result = await getattr(coordinator.fanin, operation)(
+                data["manifest"], data["source_epochs"]
+            )
+        elif operation in {"start", "poll", "ack"}:
+            result = await getattr(coordinator.fanin, operation)(
+                data["delivery_id"], data["destination_rank"]
+            )
+        else:
+            raise ValueError("unknown fan-in operation")
+        return web.json_response(result)
+
     async def admit_request(request):
         return web.json_response(
             await coordinator.admit_request(await _payload(request))
@@ -682,6 +707,7 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
     app.add_routes(
         [
             web.post("/v1/requests", admit_request),
+            web.post("/v1/fanin/{operation}", fanin),
             web.post("/v1/retrieve", retrieve),
             web.post("/v1/retrievals/fence", fence_retrieval),
             web.post("/v1/consumers/renew", renew_consumer),

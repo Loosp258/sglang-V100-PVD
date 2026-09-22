@@ -71,7 +71,9 @@ class ShardClient(abc.ABC):
         destination: RemoteRegionDescriptor,
     ) -> Mapping: ...
 
-    async def reserve_fanin_delivery(self, manifest) -> Mapping:
+    async def reserve_fanin_delivery(
+        self, manifest, *, expected_sender_epoch=None
+    ) -> Mapping:
         raise NotImplementedError("shard does not support full-KV fan-in")
 
     async def fence_fanin_delivery(self, manifest, identity: WriteIdentity) -> Mapping:
@@ -146,8 +148,14 @@ class LocalShardClient(ShardClient):
     ) -> Mapping:
         return self.store.reserve_delivery(key, delivery_id, destination).to_dict()
 
-    async def reserve_fanin_delivery(self, manifest) -> Mapping:
-        result = await asyncio.to_thread(self.store.reserve_fanin_delivery, manifest)
+    async def reserve_fanin_delivery(
+        self, manifest, *, expected_sender_epoch=None
+    ) -> Mapping:
+        result = await asyncio.to_thread(
+            self.store.reserve_fanin_delivery,
+            manifest,
+            expected_sender_epoch=expected_sender_epoch,
+        )
         return result.to_dict()
 
     async def fence_fanin_delivery(self, manifest, identity: WriteIdentity) -> Mapping:
@@ -288,6 +296,8 @@ class VectorCoordinator:
         entry_ttl_secs: float = 300.0,
         delivery_timeout_secs: float = 300.0,
         metrics: Optional[PVDMetrics] = None,
+        full_kv_fanin_max_slices: Optional[int] = None,
+        full_kv_fanin_max_records: Optional[int] = None,
     ) -> None:
         ranks = sorted(client.rank for client in shard_clients)
         if ranks != [0, 1]:
@@ -306,6 +316,17 @@ class VectorCoordinator:
         self.admissions = {}
         self._retrieval_locks = {}
         self._fenced_retrievals = set()
+        self.fanin = None
+        if (full_kv_fanin_max_slices, full_kv_fanin_max_records) != (None, None):
+            from sglang.srt.disaggregation.pvd.full_kv_fanin_coordinator import (
+                FullKVFanInCoordinator,
+            )
+
+            self.fanin = FullKVFanInCoordinator(
+                self,
+                max_slices=full_kv_fanin_max_slices,
+                max_records=full_kv_fanin_max_records,
+            )
 
     async def fence_retrieval(
         self, delivery_id: str, identities: List[Mapping]
@@ -1086,6 +1107,8 @@ class VectorCoordinator:
         return f"{delivery_id}:d{destination_rank}"
 
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> EntryRecord:
+        if self.fanin is not None:
+            await self.fanin.cancel_entry(key)
         async with self._lock:
             entry = self.entries[key]
             delivery_ids = [
@@ -1149,6 +1172,11 @@ class VectorCoordinator:
                 "retrieval_fencing",
             ],
             "world_size": 2,
+            "full_kv_fanin": {
+                "enabled": self.fanin is not None,
+                "max_records": self.fanin.max_records if self.fanin else None,
+                "retained_records": len(self.fanin.records) if self.fanin else 0,
+            },
             "shards": [
                 {"error": str(item)} if isinstance(item, Exception) else item
                 for item in shard_health
@@ -1159,6 +1187,8 @@ class VectorCoordinator:
     async def reap_expired(self, now: Optional[float] = None) -> Dict[str, int]:
         """Expire coordinator records first, then release both V shards atomically."""
         now = time.monotonic() if now is None else now
+        if self.fanin is not None:
+            await self.fanin.reap(now)
         async with self._lock:
             self.admissions = {
                 key: value for key, value in self.admissions.items() if value[1] > now

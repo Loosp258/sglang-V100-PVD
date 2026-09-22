@@ -21,6 +21,27 @@ activation.
 
 ## 最新增量 / Latest increment
 
+全局 fan-in 协调与 HTTP 已接通：`--full-kv-fanin-max-records` 与两项 shard
+限制共同显式启用。协调器在任何发布前固定全部 V epoch/写入身份，按所有 writer
+的确切凭据聚合完成；丢失响应、取消和超时保持 Entry 引用直到排空。终止记录
+保留且受容量限制，不做可能放过迟到请求的隐式淘汰。P 尚未完成时发出的 start
+会记住，源就绪后继续执行。新 20 项 CPU 测试；Windows 全量 **2381 passed /
+29 skipped**，WSL fan-in 定向 **87 passed**。D 自动准入、生产工厂、原生
+CAGRA、多 rail/真实 TP 拓扑和 GPU/RDMA 验收仍未完成。
+
+Global fan-in orchestration/HTTP is now opt-in through `--full-kv-fanin-max-records`
+plus both shard bounds. All V epochs/identities are pinned before publication;
+exact all-writer proofs govern completion. Lost replies, cancellation and deadlines
+retain Entry ownership until drain. Terminal records remain bounded tombstones,
+without unsafe implicit eviction. Start requests survive waiting for P completion.
+Twenty new CPU cases; Windows **2381 passed / 29 skipped**, WSL focused **87 passed**.
+Automatic D admission, the serving factory, native CAGRA, multi-rail/real-TP topology
+and GPU/RDMA acceptance remain unfinished.
+
+以下条目保留各步骤当时的验证边界；其中“尚未接通”描述的是该步骤当时的状态。
+The following entries preserve evidence at each earlier step; their "not yet wired"
+statements describe that historical step, not the global coordinator increment above.
+
 V store 和 shard HTTP 现可 opt-in 完整 KV fan-in：真实 Entry 授权、双参数
 容量限制、统一 start/poll/ACK/cancel、超时/关停排空和 absent-writer tombstone
 已接通。14 个 CPU 用例覆盖实际 store/allocator 与 localhost HTTP。尚待全局

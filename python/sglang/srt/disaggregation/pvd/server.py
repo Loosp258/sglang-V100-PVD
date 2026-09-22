@@ -170,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum outstanding PUTs per fan-in writer. Both fan-in bounds are required.",
     )
     parser.add_argument(
+        "--full-kv-fanin-max-records",
+        type=_positive_int,
+        default=None,
+        help="Opt in to global fan-in aggregation; bound retained delivery records "
+        "including terminal tombstones. Requires both shard fan-in bounds.",
+    )
+    parser.add_argument(
         "--experimental-cuda-sparse-packing",
         action="store_true",
         help="Explicit V-only CUDA sparse copy baseline: synchronize before PUT. "
@@ -199,6 +206,11 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
     )
     if bounds != (None, None) and any(type(v) is not int or v <= 0 for v in bounds):
         raise ValueError("both full-KV fan-in bounds must be positive integers")
+    records = getattr(args, "full_kv_fanin_max_records", None)
+    if records is not None and (
+        type(records) is not int or records <= 0 or bounds == (None, None)
+    ):
+        raise ValueError("global fan-in requires positive record and shard bounds")
     if args.world_size != 2:
         raise ValueError("PVD requires exactly 2 V storage ranks")
     if args.rank is not None and args.rank not in (0, 1):
@@ -372,6 +384,16 @@ async def _wait_for_rank1(
     )
 
 
+def _fanin_coordinator_args(args):
+    records = getattr(args, "full_kv_fanin_max_records", None)
+    return {
+        "full_kv_fanin_max_records": records,
+        "full_kv_fanin_max_slices": (
+            getattr(args, "full_kv_fanin_max_slices", None) if records is not None else None
+        ),
+    }
+
+
 def _create_store(
     args: argparse.Namespace,
     *,
@@ -477,6 +499,7 @@ async def _serve_rank(args: argparse.Namespace) -> None:
             [LocalShardClient(store, preflight=preflight), remote_client],
             entry_ttl_secs=args.entry_ttl_secs,
             delivery_timeout_secs=args.delivery_timeout_secs,
+            **_fanin_coordinator_args(args),
         )
         coordinator_runner = web.AppRunner(create_coordinator_app(coordinator))
         await coordinator_runner.setup()
@@ -535,6 +558,7 @@ async def _serve_group(args: argparse.Namespace) -> None:
             ],
             entry_ttl_secs=args.entry_ttl_secs,
             delivery_timeout_secs=args.delivery_timeout_secs,
+            **_fanin_coordinator_args(args),
         )
         coordinator_runner = web.AppRunner(create_coordinator_app(coordinator))
         await coordinator_runner.setup()

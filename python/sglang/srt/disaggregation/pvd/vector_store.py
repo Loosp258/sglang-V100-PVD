@@ -707,12 +707,19 @@ class VectorKVStore:
             )
         return validate_fanin_plan(manifest, max_slices=self._fanin_max_slices)
 
-    def reserve_fanin_delivery(self, manifest) -> DeliveryShardRecord:
+    def reserve_fanin_delivery(
+        self, manifest, *, expected_sender_epoch=None
+    ) -> DeliveryShardRecord:
         """Reserve against the actual Entry allocation under its business lock."""
         manifest = copy.deepcopy(manifest)
         plan = self._fanin_plan(manifest)
         delivery_id = f"{plan.delivery_id}:d{plan.destination.rank}:v{self.rank}"
         with self._lock:
+            if (
+                expected_sender_epoch is not None
+                and expected_sender_epoch != self.worker_epoch
+            ):
+                raise EntryConflictError("fan-in reserve sender epoch mismatch")
             if self._closed or self._isolated_reason:
                 raise EntryConflictError("V store is closed or isolated")
             if (plan.key, delivery_id) in self._fenced_deliveries:
@@ -1664,6 +1671,11 @@ class VectorKVStore:
                 ),
                 "page_bytes": self.page_bytes,
                 "worker_epoch": self.worker_epoch,
+                "full_kv_fanin": {
+                    "enabled": self._fanin_max_slices is not None,
+                    "max_slices": self._fanin_max_slices,
+                    "max_inflight": self._fanin_max_inflight,
+                },
                 "closed": self._closed,
                 "isolated_reason": self._isolated_reason,
                 "absent_write_fences": len(self._absent_write_fences),

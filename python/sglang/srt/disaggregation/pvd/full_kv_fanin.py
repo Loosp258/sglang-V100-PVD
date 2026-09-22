@@ -15,6 +15,7 @@ from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
     FULL_KV_FANIN_PROTOCOL,
     plan_fingerprint,
 )
+from sglang.srt.disaggregation.pvd.full_kv_fanin_proof import validate_fanin_proof
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
     PVD_RECEIVER_EPOCH_METADATA_KEY,
@@ -190,45 +191,14 @@ class FullKVFanInReceiver:
     def observe(self, reply):
         """Accept only exact sender closure proof; timeout/cancel is not one."""
         self._check()
-        fields = {
-            "protocol",
-            "plan_fingerprint",
-            "source_rank",
-            "identity",
-            "fenced",
-            "transport_state",
-            "transferred_bytes",
-        }
-        if not isinstance(reply, Mapping) or set(reply) != fields:
-            raise ProtocolValidationError("complete fan-in closure reply required")
-        rank = reply["source_rank"]
-        if type(rank) is not int or rank not in self._identities:
-            raise ProtocolValidationError("unknown or unadopted V writer")
-        identity = WriteIdentity.from_dict(reply["identity"])
-        if (
-            reply["protocol"] != FULL_KV_FANIN_PROTOCOL
-            or reply["plan_fingerprint"] != self._fingerprint
-            or identity != self._identities[rank]
-            or type(reply["fenced"]) is not bool
-        ):
-            raise ProtocolValidationError("fan-in closure identity/plan mismatch")
-        try:
-            state = TransportState(reply["transport_state"])
-        except (ValueError, TypeError) as exc:
-            raise ProtocolValidationError("unknown transport state") from exc
-        transferred = reply["transferred_bytes"]
-        if type(transferred) is not int or not 0 <= transferred <= self._bytes[rank]:
-            raise ProtocolValidationError("invalid writer transferred byte count")
-        if not reply["fenced"]:
+        rank, proof = validate_fanin_proof(
+            reply,
+            fingerprint=self._fingerprint,
+            identities=self._identities,
+            byte_counts=self._bytes,
+        )
+        if proof is None:
             return False
-        if not state.is_locally_safe_to_release:
-            raise ProtocolValidationError("fenced reply lacks terminal transport proof")
-        if (state == TransportState.NOT_SUBMITTED and transferred != 0) or (
-            state == TransportState.TERMINAL_SUCCESS
-            and transferred != self._bytes[rank]
-        ):
-            raise ProtocolValidationError("terminal state contradicts byte coverage")
-        proof = (state, transferred)
         if rank in self._proofs and self._proofs[rank] != proof:
             raise ProtocolValidationError("writer terminal proof changed")
         self._proofs[rank] = proof

@@ -1,5 +1,54 @@
 # 完整 Prompt KV 多源合并 / Full-Prompt KV fan-in
 
+## 全局协调接口 / Global coordinator API
+
+显式启用：同时给 V 配置 `--full-kv-fanin-max-slices`、
+`--full-kv-fanin-max-inflight` 和 `--full-kv-fanin-max-records`。最后一项限制
+包括终止 tombstone 的保留记录总数，达到上限拒绝新交付，不默默丢弃迟到请求屏障。
+缺省关闭；两种 V launcher 均传递该配置。现有 delivery/retrieve 不变。
+
+Opt in with all three bounds above. `max-records` caps retained records including
+terminal tombstones; exhaustion refuses new deliveries without unsafe eviction.
+Both launchers forward the option; legacy delivery/retrieve behavior is unchanged.
+
+- `POST /v1/fanin/reserve`：`manifest` 和完整 `source_epochs: {"0": "...", ...}`。
+- `POST /v1/fanin/start|poll|ack`：`delivery_id` 和精确整数 `destination_rank`。
+- `POST /v1/fanin/fence`：同 reserve，包括最初固定的所有 V epoch。
+
+One group names **one D destination**, not an all-D-rank installation decision.
+Reserve/fence require the full original V epoch map; start/poll/ack require the
+delivery ID and exact integer D rank. The response contains the plan fingerprint,
+complete `write_identities` and available exact terminal `writer_proofs`, both keyed
+by V rank, plus state and `entry_count_held`. `fenced` means network closure, not
+successful delivery. D must independently validate every proof before MR retirement
+and perform unpack/local fence/all-D-rank install agreement before serving output.
+
+coordinator 在向任一 V 发布前记录身份集合，V 在 reserve 锁内检查期望 epoch。
+预留响应丢失后对所有源 fence；源缺失先建立 tombstone。V 重启或身份不匹配
+不能换一个 epoch 冒充旧 writer 已完成。只有所有源 ACK，或各源确认 fence，才
+退父 Entry 的 delivery 计数。取消中的未知写入保持引用；后台继续排空。
+
+Identities are persisted before any V sees the destination. V atomically checks
+the expected epoch at reservation. Lost reserve responses fence every potential
+writer, including absent-writer tombstones. Restart/epoch mismatch cannot be healed
+by substituting a new identity. The parent Entry count survives until all ACKs or
+confirmed fences; unknown/cancelling work remains owned and progresses in the reaper.
+
+验证：20 个新增 CPU 用例覆盖实际 coordinator、store、LocalShardClient 和
+localhost HTTP；Windows 全量 **2381/29 skipped**，WSL fan-in **87 passed**。
+这不是 GPU/RDMA 证据。D 自动接入、多 HCA 目标注册、拓扑放开和 CAGRA 仍未完成。
+
+Validation: 20 new CPU cases use actual coordinator/stores/local clients and
+localhost HTTP; full Windows **2381 passed / 29 skipped**, WSL fan-in **87 passed**.
+No GPU/RDMA evidence. Automatic D integration, multi-HCA destination registration,
+topology activation and native CAGRA remain unfinished. Sections below record earlier
+steps and their then-current integration boundaries.
+
+公共协调层修改后，严格 v5 CPU 实模四场景矩阵再次全部通过；fake payload，
+完整场景 21 次 attention 对照，最大误差约 3.58e-7，非 GPU/RDMA 验收。
+After the shared coordinator changes, all four strict v5 CPU model scenarios passed
+again (fake payload, 21 attention checks in full cases, max error about 3.58e-7).
+
 ## 字节映射已实现 / Byte planning implemented
 
 `sharding.source_shard_intersections` 根据全局 KV head 区间计算一个 D rank 与
