@@ -23,6 +23,13 @@ factory; a mixed-rail request with only a single-rail D engine is refused.
 True native V TP2 → D TP1 still needs serving startup wiring and GPU/RDMA
 validation; changing only a descriptor label is unsafe.
 
+For Decode TP1 full-KV fan-in, `--pvd-d-receive-rails mlx5_2,mlx5_3`
+now initializes that receive group at worker startup, reusing the D compute
+rail adapter. The option requires the compute rail in its distinct HCA list.
+The group is exposed on `PVDKVManager.sparse_receive_engine`; it does not yet
+construct the predictive CUDA receive registry or switch the serving Scheduler
+from full-Prompt refresh to sparse retrieval.
+
 `assemble_routed_cuda_request()` 使用 Gateway 已选 V coordinator 返回的类型化
 shard 路由。调用方仍须提供已安装的 D TP1 工作集、接收注册表、真实 draft/目标 Q
 pipeline、compute layout 以及显式预算、端点和 HCA。工厂为各 V shard 建立独立
@@ -39,6 +46,12 @@ adapter、为额外 HCA 创建独立 Mooncake session，并逐 rail 核查 Linux
 ACTIVE 端口和严格的本地 GPUDirect 预检。生产 Scheduler 尚未调用此工厂；
 仅有单 rail D engine 时，混用 V rails 仍会在注册前拒绝。真正双 rail 的
 V TP2 → D TP1 还需服务启动接线和 GPU/RDMA 验收，不能只修改 descriptor 标签。
+
+Decode TP1 全量 KV fan-in 现在可用 `--pvd-d-receive-rails mlx5_2,mlx5_3`
+在 worker 启动时建立该接收组，复用 D compute rail 的 adapter；HCA 列表必须
+不重复且包含 compute rail。组合层挂在 `PVDKVManager.sparse_receive_engine`；
+它尚未建立预测 CUDA 接收 registry，也不会把生产 Scheduler 从完整 Prompt KV
+刷新切换到稀疏检索。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;

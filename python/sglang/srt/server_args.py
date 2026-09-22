@@ -823,6 +823,7 @@ class ServerArgs:
     pvd_vector_coordinator_map: Optional[Dict[str, str]] = None
     pvd_model_instance_id: Optional[str] = None
     pvd_rank_rails: Optional[str] = None
+    pvd_d_receive_rails: Optional[str] = None
     pvd_strict_rdma_preflight: bool = True
     pvd_kv_refresh_interval: int = 16
     pvd_waiting_queue_bootstrap: bool = False
@@ -6970,6 +6971,16 @@ class ServerArgs:
                 "One HCA per TP rank, e.g. mlx5_2,mlx5_3. Must agree with "
                 "--disaggregation-ib-device if both are supplied. Defaults to "
                 "mlx5_0,mlx5_1 only when neither flag is supplied."
+            ),
+        )
+        parser.add_argument(
+            "--pvd-d-receive-rails",
+            default=ServerArgs.pvd_d_receive_rails,
+            help=(
+                "Decode TP1 only: comma-separated distinct HCAs for a D sparse "
+                "receive adapter group, e.g. mlx5_2,mlx5_3. Must include the "
+                "D compute HCA. Initializes and preflights native sessions; "
+                "does not enable predictive retrieval in the serving Scheduler."
             ),
         )
         parser.add_argument(

@@ -91,6 +91,73 @@ def test_model_rejects_conflicting_flags_but_accepts_equivalent_mapping():
     assert json.loads(args.disaggregation_ib_device) == {"0": "mlx5_2", "1": "mlx5_2"}
 
 
+def test_decode_tp1_native_receive_rails_are_explicit_and_distinct():
+    args = model_args(
+        tp_size=1,
+        pvd_rank_rails="mlx5_2",
+        pvd_d_receive_rails=" mlx5_2 , mlx5_3 ",
+        pvd_waiting_queue_bootstrap=True,
+        pvd_full_kv_fanin_max_slices=4,
+        pvd_full_kv_fanin_response_bytes=4096,
+    )
+    handle_pvd_disaggregation(args)
+    assert args.pvd_d_receive_rails == "mlx5_2,mlx5_3"
+
+    for invalid in ("mlx5_3,mlx5_4", "mlx5_2,mlx5_2"):
+        other = model_args(
+            tp_size=1,
+            pvd_rank_rails="mlx5_2",
+            pvd_d_receive_rails=invalid,
+            pvd_waiting_queue_bootstrap=True,
+            pvd_full_kv_fanin_max_slices=4,
+            pvd_full_kv_fanin_response_bytes=4096,
+        )
+        with pytest.raises(ValueError, match="distinct HCAs including"):
+            handle_pvd_disaggregation(other)
+
+    with pytest.raises(ValueError, match="Decode TP1"):
+        handle_pvd_disaggregation(model_args(pvd_d_receive_rails="mlx5_2,mlx5_3"))
+
+
+def test_decode_manager_assembles_optional_receive_engine(monkeypatch):
+    from sglang.srt.disaggregation.pvd import conn, multi_rail_receive
+
+    existing, budget, shared = (
+        object(),
+        object(),
+        SimpleNamespace(hostname="D", gpu_id=0),
+    )
+    assert (
+        conn._build_sparse_receive_engine(SimpleNamespace(), shared, existing, budget)
+        is existing
+    )
+    calls = []
+    group = object()
+    monkeypatch.setattr(
+        multi_rail_receive,
+        "create_native_receive_group",
+        lambda **kwargs: calls.append(kwargs) or group,
+    )
+    assert (
+        conn._build_sparse_receive_engine(
+            SimpleNamespace(pvd_d_receive_rails="mlx5_2,mlx5_3"),
+            shared,
+            existing,
+            budget,
+        )
+        is group
+    )
+    assert calls == [
+        {
+            "hostname": "D",
+            "gpu_id": 0,
+            "rails": ("mlx5_2", "mlx5_3"),
+            "transfer_budget": budget,
+            "existing_adapter": existing,
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     "devices", ["", "mlx5_2,", ",mlx5_3", "mlx5_2,mlx5_3,mlx5_4", "../mlx5_2", "mlx5 2"]
 )

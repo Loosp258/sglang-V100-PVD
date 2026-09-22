@@ -81,7 +81,9 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         _require_positive_int("--pvd-full-kv-fanin-max-slices", fanin)
         _require_positive_int("--pvd-full-kv-fanin-response-bytes", fanin_bytes)
         if server_args.disaggregation_mode != "decode" or not waiting_queue_bootstrap:
-            raise ValueError("full-KV fan-in requires Decode with waiting-queue bootstrap")
+            raise ValueError(
+                "full-KV fan-in requires Decode with waiting-queue bootstrap"
+            )
     if server_args.disaggregation_mode == "decode":
         server_args.disable_overlap_schedule = True
         logger.info(
@@ -141,6 +143,30 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     )
     rail_mode = validate_rank_rail_names(rails)
     server_args.pvd_rank_rails = ",".join(rails)
+    receive_rails = getattr(server_args, "pvd_d_receive_rails", None)
+    if receive_rails is not None:
+        if (
+            server_args.disaggregation_mode != "decode"
+            or server_args.tp_size != 1
+            or fanin is None
+            or not isinstance(receive_rails, str)
+        ):
+            raise ValueError("--pvd-d-receive-rails requires Decode TP1 full-KV fan-in")
+        selected = tuple(item.strip() for item in receive_rails.split(","))
+        validate_rank_rail_names(selected)
+        if (
+            not 1 <= len(selected) <= 8
+            or len(set(selected)) != len(selected)
+            or rails[0] not in selected
+        ):
+            raise ValueError(
+                "--pvd-d-receive-rails needs distinct HCAs including the D rank rail"
+            )
+        server_args.pvd_d_receive_rails = ",".join(selected)
+        logger.warning(
+            "PVD D multi-HCA receive sessions will be preflighted; this does "
+            "not enable predictive retrieval in the serving Scheduler"
+        )
     if rail_mode == "single-rail-debug":
         logger.warning(
             "PVD single-rail debug mode is active: all TP ranks use %s; "

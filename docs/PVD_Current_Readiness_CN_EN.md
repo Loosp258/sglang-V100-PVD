@@ -48,6 +48,11 @@ This step passed **2506/31 skipped** in the full Windows CPU suite and
 生产 Scheduler 尚未调用，GPU/RDMA 验收尚未完成。
 组合层的注册表现在可从 Scheduler 构造线程交接至接收控制线程使用，并锁定
 注册/注销操作；这不放松接收 Registry 本身的单线程 owner 约束。
+Decode TP1 的 `--pvd-d-receive-rails` 已在启动参数与 PVD manager 接线：
+仅完整 KV fan-in 场景可用，要求不重复且包含 D compute rail，启动时逐 HCA
+建立并预检原生 session。该步骤尚不自动创建预测 CUDA Registry，也不启用
+生产 Scheduler 稀疏检索。
+此启动接线 Windows 全量 **2517 passed / 31 skipped**，WSL 定向 **35 passed**。
 此线程交接修复 Windows 全量 **2515 passed / 31 skipped**，WSL 定向 **4 passed**。
 此工厂增量 Windows 全量 **2514 passed / 31 skipped**、WSL 定向 **11 passed**。
 本步 Windows 全量 **2501 passed / 31 skipped**，WSL 多 rail/工厂/双源定向
@@ -66,6 +71,12 @@ call it, and GPU/RDMA acceptance remains open.
 Its adapter registry now supports handoff from Scheduler construction to the
 receive control thread with locked registration/unregistration. The receive
 Registry itself remains single-owner-thread only.
+Decode TP1 now has `--pvd-d-receive-rails` wired into worker startup for the
+full-KV fan-in configuration: distinct HCAs including the D compute rail are
+initialized and strictly preflighted. This does not yet create the predictive
+CUDA registry or activate sparse retrieval in the serving Scheduler.
+This startup wiring passed **2517/31 skipped** in the full Windows CPU suite
+and **35 passed** in focused WSL tests.
 The handoff fix passed **2515/31 skipped** in the full Windows CPU suite and
 **4 passed** in focused WSL tests.
 The factory increment passed **2514/31 skipped** in the full Windows CPU

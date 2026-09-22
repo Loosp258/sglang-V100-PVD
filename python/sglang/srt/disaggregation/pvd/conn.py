@@ -56,6 +56,24 @@ class PVDConnectionError(RuntimeError):
     pass
 
 
+def _build_sparse_receive_engine(server_args, shared_engine, existing_adapter, budget):
+    """Opt-in D TP1 HCA sessions; existing full-Prompt runtime is unchanged."""
+    rails = getattr(server_args, "pvd_d_receive_rails", None)
+    if not rails:
+        return existing_adapter
+    from sglang.srt.disaggregation.pvd.multi_rail_receive import (
+        create_native_receive_group,
+    )
+
+    return create_native_receive_group(
+        hostname=shared_engine.hostname,
+        gpu_id=shared_engine.gpu_id,
+        rails=tuple(rails.split(",")),
+        transfer_budget=budget,
+        existing_adapter=existing_adapter,
+    )
+
+
 class _AsyncControlLoop:
     """One daemon asyncio loop per scheduler process for aiohttp operations."""
 
@@ -175,6 +193,12 @@ class PVDKVManager:
                 f"engine={limits['staging_bytes']}/{limits['max_inflight']}, "
                 f"configured={budget_bytes}/{max_inflight}"
             )
+        self.sparse_receive_engine = _build_sparse_receive_engine(
+            scheduler.server_args,
+            shared_engine,
+            self.transfer_engine,
+            self.transfer_budget,
+        )
         # One incarnation per worker process, shared by every group's runtime.
         # A P compute rank with TP1 uploads to both V storage shards under this
         # epoch; the two writes stay distinct through their write identities.
@@ -362,8 +386,7 @@ class PVDKVManager:
                 continue
             needs = [rank["candidates"][key] for rank in ranks]
             if any(
-                free is not None and need > free
-                for need, free in zip(needs, remaining)
+                free is not None and need > free for need, free in zip(needs, remaining)
             ):
                 continue
             for i, need in enumerate(needs):
@@ -399,6 +422,8 @@ class PVDKVManager:
         snapshot["capabilities"] = list(self.capabilities)
         snapshot["budget"] = self.transfer_budget.snapshot()
         snapshot["transport"] = self.transfer_engine.health()
+        if self.sparse_receive_engine is not self.transfer_engine:
+            snapshot["sparse_receive_transport"] = self.sparse_receive_engine.health()
         return snapshot
 
     def progress_uploads(self) -> Optional[concurrent.futures.Future]:
