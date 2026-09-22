@@ -1,5 +1,8 @@
 # PVD 最终目标推进步骤 / Implementation roadmap
 
+最新修复：回收入口绑定校验失败按 owner 隔离，其他请求继续排空，关闭先停止
+全部生命周期。失败所有权保留并退避，不猜测释放；46 个定向回归通过。
+
 最新子步：[实模自动回收](PVD_Rank_Model_Binding_CN_EN.md) 已替换正常手动 owner
 清理，接入实际 Scheduler polling 方法，验证取消后自动回收、真实 allocator
 槽位复用及关闭排空。严格证据升级 v5；仍不等于完整生产 Scheduler/GPU/RDMA。

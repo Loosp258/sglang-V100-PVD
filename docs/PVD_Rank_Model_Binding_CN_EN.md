@@ -2,6 +2,25 @@
 
 Updated / 更新：2026-09-22。
 
+## Release-intent failure isolation / 回收入口错误隔离
+
+Two tests reproduced that a changed Req slot caused the first cache-binding
+refusal to escape `poll()` / `begin_shutdown()`, stopping peer retirement. The
+driver now stops every lifecycle before shutdown callbacks and records each
+failed release intent independently. The bad owner retains its registration,
+storage and capacity; retry uses the same backoff as drain failures. The driver
+never repairs the slot or frees guessed rows. Peer owners continue to drain.
+Tests explicitly restore the original binding before retry and prove no retry
+occurs before backoff. This is not permission to retry partially executed cache
+release: that state remains quarantined.
+
+Verification: 46 focused tests passed, as did the strict v5 normal real CPU
+dual-model scenario. No GPU/RDMA fence was inferred or capability enabled.
+
+回收入口校验失败此前会中断整轮清理，已用两个回归用例复现。现在关闭时先停止
+全部生命周期，单个失败仅保留自身所有权并退避；其他请求继续排空。测试中的
+原绑定修复是显式操作，driver 不猜测地址或释放行。已执行部分释放的失败仍隔离。
+
 ## Real-model automatic retirement / 实模自动回收接入
 
 The CPU dual-model fixture now registers every actual Req with `CPUReleaseDriver`

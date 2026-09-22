@@ -2,6 +2,12 @@
 
 Updated: 2026-09-22.
 
+Newest: release-intent errors no longer stop peer cleanup. Shutdown stops all
+lifecycles before callbacks; a failed binding check retains its exact owner and
+retries with backoff. No automatic binding repair, guessed frees or retries of
+partially executed allocator release. Two failures reproduced before fixing;
+46 focused lifecycle/release/refresh cases pass.
+
 Newest: [automatic real-model retirement](PVD_Rank_Model_Binding_CN_EN.md) moves
 normal Req cleanup onto the bounded driver and actual Scheduler polling hook.
 Cancelled requests retire without fixture calls to individual owners; refresh

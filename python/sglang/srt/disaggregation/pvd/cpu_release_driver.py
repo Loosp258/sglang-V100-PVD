@@ -109,6 +109,20 @@ class CPUReleaseDriver:
             await self.refresh_driver.remove(record.life)
         return await record.owner.progress()
 
+    def _defer(self, record, now):
+        # A failed cache-binding check must stop this request, not its peers.
+        # Never repair a changed binding or free an unknown owner's rows here.
+        record.life.terminate(
+            "CPU retirement requested", finished=record.req.finished()
+        )
+        try:
+            self._request_release(record)
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+            record.error = (type(exc).__name__ + ": " + str(exc))[:512]
+            record.retry_at = now + self.retry_seconds
+        else:
+            record.error = None
+
     def poll(self):
         self.arbiter.owner()
         if self._pumping:
@@ -145,13 +159,17 @@ class CPUReleaseDriver:
                         continue
                     record.retry_at = now + self.retry_seconds
                 record.task = None
-            if record.owner.state == "attached" and (
-                self._closing
-                or record.life.state in ("finished", "aborted")
-                or record.req.finished()
-                or getattr(record.req, "is_retracted", False)
+            if (
+                record.owner.state == "attached"
+                and now >= record.retry_at
+                and (
+                    self._closing
+                    or record.life.state in ("finished", "aborted")
+                    or record.req.finished()
+                    or getattr(record.req, "is_retracted", False)
+                )
             ):
-                self._request_release(record)
+                self._defer(record, now)
         available = self.max_inflight - sum(
             record.task is not None for record in self._records.values()
         )
@@ -185,9 +203,15 @@ class CPUReleaseDriver:
     def begin_shutdown(self):
         self.arbiter.owner()
         self._closing = True
+        # Stop every lifecycle before the first cache callback can fail.
         for record in self._records.values():
-            if record.owner.state == "attached":
-                self._request_release(record)
+            record.life.terminate(
+                "CPU release driver shutting down", finished=record.req.finished()
+            )
+        now = self._clock()
+        for record in self._records.values():
+            if record.owner.state == "attached" and now >= record.retry_at:
+                self._defer(record, now)
 
     def close_loop(self):
         """Only after every owned request and async task really drained."""

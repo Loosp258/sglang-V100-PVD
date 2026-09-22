@@ -266,6 +266,53 @@ def test_multiple_requests_respect_drain_concurrency_and_keep_admission(monkeypa
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_bad_release_binding_does_not_block_other_owners_and_retries_with_backoff(
+    shutdown,
+):
+    async def run():
+        with env("a") as (a, af, _), env("b", a.arbiter) as (b, bf, _):
+            a.admit(af.request)
+            b.admit(bf.request)
+            now = [0]
+            driver, areq, aowner, calls = setup(a, clock=lambda: now[0])
+            driver.executor._storage[b] = 2
+            breq = NS(
+                rid="b", req_pool_idx=2, finished=lambda: False, is_retracted=True
+            )
+            bowner = driver.register(breq, b)
+
+            def release(req, cache, *, is_insert):
+                calls.append(req.rid)
+                req.req_pool_idx = None
+
+            driver._request_release = lambda r: r.owner.defer(
+                r.req, driver.tree_cache, False, release
+            )
+            areq.req_pool_idx = 99  # real binding refusal, not a callback double error
+            areq.is_retracted = True
+            if shutdown:
+                driver.begin_shutdown()
+                assert a.state == b.state == "aborted"
+            await turns(driver)
+            assert calls == ["b"] and bowner.state == "released"
+            assert aowner.state == "attached" and a.state == "aborted"
+            held = driver.snapshot()["requests"]["a"]
+            assert "changed" in held["error"] and not held["inflight"]
+            assert driver.executor._storage[a] == 1
+            areq.req_pool_idx = 1  # explicit fixture repair, never guessed by driver
+            await turns(driver)
+            assert calls == ["b"]  # no tight-loop retry
+            now[0] = 1
+            await turns(driver)
+            assert calls == ["b", "a"] and aowner.state == "released"
+            driver.begin_shutdown()
+            assert driver.snapshot()["drained"]
+            driver.close_loop()
+
+    asyncio.run(run())
+
+
 def scheduler_methods():
     # Execute the checkout's exact loop body with explicit Scheduler doubles.
     # This tests hook ordering, not a real serving Scheduler/model forward.
