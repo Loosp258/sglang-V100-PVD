@@ -543,7 +543,14 @@ async def _serve_rank(args: argparse.Namespace) -> None:
             expected_rail=rails[1],
         )
         coordinator = VectorCoordinator(
-            [LocalShardClient(store, preflight=preflight), remote_client],
+            [
+                LocalShardClient(
+                    store,
+                    preflight=preflight,
+                    shard_url=f"http://{args.advertise_host}:{shard_port}",
+                ),
+                remote_client,
+            ],
             entry_ttl_secs=args.entry_ttl_secs,
             delivery_timeout_secs=args.delivery_timeout_secs,
             **_fanin_coordinator_args(args),
@@ -600,7 +607,13 @@ async def _serve_group(args: argparse.Namespace) -> None:
 
         coordinator = VectorCoordinator(
             [
-                LocalShardClient(store, preflight=preflights[rank])
+                LocalShardClient(
+                    store,
+                    preflight=preflights[rank],
+                    shard_url=(
+                        f"http://{args.advertise_host}:{args.shard_port_base + rank}"
+                    ),
+                )
                 for rank, store in enumerate(stores)
             ],
             entry_ttl_secs=args.entry_ttl_secs,

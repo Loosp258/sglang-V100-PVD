@@ -108,11 +108,21 @@ class ShardClient(abc.ABC):
 
 class LocalShardClient(ShardClient):
     def __init__(
-        self, store: VectorKVStore, *, preflight: Optional[Mapping] = None
+        self,
+        store: VectorKVStore,
+        *,
+        preflight: Optional[Mapping] = None,
+        shard_url: Optional[str] = None,
     ) -> None:
         self.store = store
         self.rank = store.rank
         self.preflight = dict(preflight or {})
+        if shard_url is not None and (
+            not isinstance(shard_url, str)
+            or not shard_url.startswith(("http://", "https://"))
+        ):
+            raise ValueError("explicit HTTP(S) shard advertisement required")
+        self.base_url = shard_url.rstrip("/") if shard_url is not None else None
 
     async def create_entry(
         self, manifest: KVEntryManifest, *, uploader_epoch: Optional[str] = None
@@ -1155,6 +1165,60 @@ class VectorCoordinator:
             entry.state = transition(entry.state, EntryState.RELEASED)
             self.metrics.increment("coordinator_entries_released")
             return entry
+
+    async def selected_shard_routes(self, key: KVEntryKey) -> Mapping:
+        """Advertise only the selected Entry's live V shards, not a new V choice.
+
+        The selected coordinator is already fixed by the Gateway. Shard URLs
+        must be explicit launch advertisements, not inferred from an RDMA
+        endpoint or a client-supplied host header. A later restart invalidates
+        the sender epochs and the D request must be rebuilt.
+        """
+        if not isinstance(key, KVEntryKey):
+            raise CoordinatorError("explicit selected Entry key required")
+        async with self._lock:
+            entry = self.entries.get(key)
+            if entry is None or entry.state != EntryState.STORED:
+                raise CoordinatorError("selected Entry is not stored")
+            manifest = entry.manifest
+        urls = {rank: getattr(self.shards[rank], "base_url", None) for rank in (0, 1)}
+        if (
+            any(
+                not isinstance(url, str) or not url.startswith(("http://", "https://"))
+                for url in urls.values()
+            )
+            or len(set(urls.values())) != 2
+        ):
+            raise CoordinatorError("V shards lack distinct advertised HTTP endpoints")
+        health = await asyncio.gather(*(self.shards[rank].health() for rank in (0, 1)))
+        routes = []
+        for rank, snapshot in enumerate(health):
+            shard = manifest.shard(rank)
+            epoch = (
+                snapshot.get("worker_epoch") if isinstance(snapshot, Mapping) else None
+            )
+            if (
+                not isinstance(snapshot, Mapping)
+                or snapshot.get("rank") != rank
+                or snapshot.get("world_size") != manifest.layout.tp_size
+                or snapshot.get("ready") is not True
+                or snapshot.get("rail") != shard.rail
+                or not isinstance(epoch, str)
+                or not epoch.strip()
+            ):
+                raise CoordinatorError("selected V shard is stale or not ready")
+            routes.append(
+                {
+                    "rank": rank,
+                    "url": urls[rank],
+                    "sender_epoch": epoch,
+                    "rail": shard.rail,
+                }
+            )
+        async with self._lock:
+            if self.entries.get(key) is not entry or entry.state != EntryState.STORED:
+                raise CoordinatorError("selected Entry changed during route discovery")
+        return {"manifest": manifest.to_dict(), "shards": routes}
 
     async def health(self):
         shard_health = await asyncio.gather(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import aiohttp
@@ -18,6 +19,20 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 
 class PVDControlPlaneError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PVDSelectedShardRoute:
+    rank: int
+    url: str
+    sender_epoch: str
+    rail: str
+
+
+@dataclass(frozen=True)
+class PVDSelectedShardRoutes:
+    manifest: KVEntryManifest
+    shards: tuple[PVDSelectedShardRoute, ...]
 
 
 class PVDCoordinatorClient:
@@ -72,6 +87,46 @@ class PVDCoordinatorClient:
                 str(rank): epoch for rank, epoch in epochs.items()
             }
         return await self._request("/v1/entries", payload)
+
+    async def selected_shard_routes(self, key: KVEntryKey) -> PVDSelectedShardRoutes:
+        """Discover the selected V group's shard URLs and current epochs."""
+        if not isinstance(key, KVEntryKey):
+            raise ValueError("explicit selected Entry key required")
+        reply = await self._request("/v1/entries/routes", {"key": key.to_dict()})
+        try:
+            manifest = KVEntryManifest.from_dict(reply["manifest"])
+            sources = reply["shards"]
+            if (
+                manifest.key != key
+                or manifest.layout.tp_size != 2
+                or not isinstance(sources, list)
+                or len(sources) != 2
+            ):
+                raise ValueError("selected Entry or source count changed")
+            routes = []
+            for source in sources:
+                rank = source["rank"]
+                url = source["url"]
+                epoch = source["sender_epoch"]
+                rail = source["rail"]
+                if (
+                    type(rank) is not int
+                    or rank not in (0, 1)
+                    or not isinstance(url, str)
+                    or not url.startswith(("http://", "https://"))
+                    or not isinstance(epoch, str)
+                    or not epoch.strip()
+                    or rail != manifest.shard(rank).rail
+                ):
+                    raise ValueError("invalid selected shard route")
+                routes.append(PVDSelectedShardRoute(rank, url.rstrip("/"), epoch, rail))
+            if [route.rank for route in routes] != [0, 1] or (
+                routes[0].url == routes[1].url
+            ):
+                raise ValueError("shard ranks or URLs are not distinct and ordered")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PVDControlPlaneError(f"invalid selected shard routes: {exc}") from exc
+        return PVDSelectedShardRoutes(manifest, tuple(routes))
 
     async def sync_upload(
         self,

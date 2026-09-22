@@ -21,6 +21,20 @@ activation.
 
 ## 最新增量 / Latest increment
 
+已选 V group 的 coordinator 新增 [Entry 级 shard 路由发现](PVD_Selected_Shard_Routes_CN_EN.md)：
+只对 STORED Entry 返回双 shard 的显式 URL、当前 sender epoch、rail 和 manifest，
+并核对活跃 shard 状态。HTTP 客户端按请求 key 验证。生产请求工厂仍未接入此接口，
+不因此宣称预测检索自动启用。
+本步 Windows 全量 **2495 passed / 31 skipped**，WSL 路由与 PVD3 定向
+**58 passed**；均无原生 GPU/RDMA 证据。
+
+The selected V coordinator now exposes Entry-scoped shard route discovery:
+explicit shard URLs, live sender epochs/rails and the stored manifest, with
+fail-closed live-shard and client-side key checks. This feeds a future D
+request factory; production predictive serving is still not auto-enabled.
+This increment passed **2495/31 skipped** in the full Windows CPU suite and
+**58 passed** in the focused WSL run; neither is native GPU/RDMA evidence.
+
 双源请求现将检索与 Delivery 的所选 V 路由绑定：构造时要求每个 D layer/KV head
 对应的全部 Q heads 不重不漏、Entry/向量空间/post-RoPE/范围一致；刷新前要求
 传入同一对象。错误路由在开启刷新 epoch、注册目标和网络请求之前即拒绝。

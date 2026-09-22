@@ -649,6 +649,10 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
         )
         return web.json_response(result.to_dict())
 
+    async def selected_shard_routes(request):
+        data = await _payload(request)
+        return web.json_response(await coordinator.selected_shard_routes(_key(data)))
+
     async def sync_upload(request):
         data = await _payload(request)
         return web.json_response(
@@ -733,6 +737,7 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             web.post("/v1/consumers/renew", renew_consumer),
             web.post("/v1/consumers/release", release_consumer),
             web.post("/v1/entries", create_entry),
+            web.post("/v1/entries/routes", selected_shard_routes),
             web.post("/v1/entries/commit", commit_entry),
             web.post("/v1/uploads/sync", sync_upload),
             web.post("/v1/select", select),
