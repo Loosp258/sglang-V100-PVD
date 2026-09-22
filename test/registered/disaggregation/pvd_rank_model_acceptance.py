@@ -5,12 +5,15 @@ import json
 import math
 
 FRAME = "PVD_CPU_SMOKE_RESULT="
-SCHEMA = "pvd-rank-model-cpu-v3"
+SCHEMA = "pvd-rank-model-cpu-v4"
 REUSE_CHECKS = (
     "retired_before_next_admission",
     "allocator_reused_slot",
     "allocator_reused_kv_rows",
     "stale_result_refused_without_mutation",
+    "real_finish_callback_deferred",
+    "real_waiting_abort_callback_deferred",
+    "real_chunk_cache_released_rows",
 )
 FAULT_CHECKS = {
     "none": (),
@@ -166,7 +169,7 @@ def validate_report(report, run_id, *, fault="none"):
     expected = (
         {"old": 4, "new": 2}
         if fault == "install"
-        else {"old": 9, "new": 2, "third": 0, "length-limit": 1}
+        else {"old": 9, "new": 2, "third": 0, "length-limit": 1, "queued-abort": 0}
     )
     _require(
         counts == expected and all(type(v) is int for v in counts.values()),

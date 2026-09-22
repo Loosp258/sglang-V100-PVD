@@ -6,6 +6,14 @@
 
 ### 当前权威状态 / Current authoritative status
 
+本轮：[实际缓存释放边界](PVD_Rank_Model_Binding_CN_EN.md) 接入显式 CPU request
+owner：真实结束/取消回调先挂起释放，排空后调用原 ChunkCache/分配器逻辑。
+未绑定请求保持原样；清理失败保留、部分释放失败隔离。严格报告 v4 要求真实
+finish、waiting abort、cache release 证据。**Scheduler 主循环的 owner 自动
+注册/轮询/关闭仍未接入**，GPU/RDMA 能力不变，不能宣布 Step 4 完成。
+新增 23 个用例；Windows 1763 passed / 14 skipped，WSL 1768 passed / 9 skipped。
+四场景真实 CPU 模型矩阵通过；三个完整场景运行真实结束/等待队列取消与缓存释放。
+
 本轮后续：[刷新驱动异步回收](PVD_Rank_Model_Binding_CN_EN.md) 拒绝重复并发 remove，
 await 后核验同一注册对象；清理失败/取消保留注册供重试。close 先关闭准入并停止
 全部请求，再异步排空，避免其他请求在清理窗口继续发起刷新。五个新增回归测试；

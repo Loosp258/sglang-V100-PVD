@@ -56,7 +56,13 @@ def evidence(run_id="test-run", fault="none"):
         draft_retained_tensor_bytes=39712,
         draft_predictions=[["old", [13, 13]]],
         batch_sizes=[1, 1, 1, 2, 2, 2, 1, 1, 1, 2, 1],
-        committed_d_tokens={"old": 9, "new": 2, "third": 0, "length-limit": 1},
+        committed_d_tokens={
+            "old": 9,
+            "new": 2,
+            "third": 0,
+            "length-limit": 1,
+            "queued-abort": 0,
+        },
         sparse_delivery_evidence={
             "http_shard_deliveries": 4,
             "selected_kv_bytes": 1600,

@@ -2,6 +2,17 @@
 
 Updated: 2026-09-22.
 
+Newest: [actual cache-release boundary](PVD_Rank_Model_Binding_CN_EN.md) connects
+an explicit CPU request owner to `release_kv_cache`; unbound requests retain
+the original body. Real finish and waiting-abort callbacks defer allocation
+release until owner-thread lifecycle drain; partial allocator failure is
+quarantined, not retried. The real-model gate uses actual ChunkCache/pools and
+schema v4 requires this evidence. The serving Scheduler does NOT yet instantiate
+or poll these owners: queue/poll/shutdown integration is the next substep.
+Streaming/auxiliary services remain spies; GPU/RDMA gates are unchanged.
+23 new cases; Windows 1763 passed / 14 skipped, WSL 1768 passed / 9 skipped.
+All four real CPU model scenarios passed; full-length cases exercise real release.
+
 Newest: [refresh-driver retirement concurrency](PVD_Rank_Model_Binding_CN_EN.md)
 refuses overlapping close attempts, rechecks exact registration after await,
 and retains failed/cancelled cleanup ownership for retry. Shutdown closes

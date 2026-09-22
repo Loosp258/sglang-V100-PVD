@@ -1,7 +1,7 @@
 """Real Req/ScheduleBatch/result processor; external service callbacks are spies.
 
-Not a Scheduler event loop or production cache-release test. The surrounding
-CPU driver owns and eventually releases all pool allocations.
+Not a Scheduler event loop. Optional real finish/cache-release plumbing uses
+CPU-owned deferred releases; streaming and metrics remain service spies.
 """
 
 from types import MethodType, SimpleNamespace
@@ -97,3 +97,58 @@ def deliver(processor, bridge, batch, logits):
     for record in bridge.records:
         assert tuple(record.req.output_ids) == record.lifecycle.outputs
     assert not bridge.dispatcher.arbiter.busy
+
+
+def bind_real_cache_release(processor, runner):
+    """Use the real finish method, ChunkCache and model pool allocators."""
+    from sglang.srt.mem_cache.chunk_cache import ChunkCache
+
+    processor.tree_cache = ChunkCache(
+        SimpleNamespace(
+            req_to_token_pool=runner.req_to_token_pool,
+            token_to_kv_pool_allocator=runner.token_to_kv_pool_allocator,
+            page_size=1,
+        )
+    )
+    processor.token_to_kv_pool_allocator = runner.token_to_kv_pool_allocator
+    processor.server_args.disaggregation_decode_enable_offload_kvcache = False
+    processor.server_args.enable_hisparse = False
+    processor.model_worker = SimpleNamespace()
+    for name in (
+        "_maybe_collect_routed_experts",
+        "_maybe_collect_indexer_topk",
+        "_maybe_collect_customized_info",
+    ):
+        setattr(processor, name, lambda *args, **kwargs: None)
+    processor._handle_finished_req = MethodType(
+        SchedulerBatchResultProcessor._handle_finished_req, processor
+    )
+
+
+def abort_real_waiting_request(req, processor):
+    """Execute Scheduler.abort_request; I/O/other queues are fixture services."""
+    from sglang.srt.disaggregation.utils import DisaggregationMode
+    from sglang.srt.managers.io_struct import AbortReq
+    from sglang.srt.managers.scheduler import Scheduler
+
+    messages = []
+    scheduler = SimpleNamespace(
+        waiting_queue=[req],
+        enable_hicache_storage=False,
+        disaggregation_mode=DisaggregationMode.DECODE,
+        server_args=SimpleNamespace(disaggregation_topology="pd"),
+        tree_cache=processor.tree_cache,
+        ipc_channels=SimpleNamespace(
+            send_to_tokenizer=SimpleNamespace(
+                send_output=lambda message, owner: messages.append((message, owner))
+            )
+        ),
+        grammar_manager=SimpleNamespace(abort_requests=lambda _: None),
+        disagg_decode_prealloc_queue=SimpleNamespace(queue=[], retracted_queue=[]),
+        disagg_decode_transfer_queue=SimpleNamespace(queue=[]),
+        cur_batch=None,
+        running_batch=SimpleNamespace(reqs=[]),
+    )
+    Scheduler.abort_request(scheduler, AbortReq(rid=req.rid))
+    assert not scheduler.waiting_queue
+    assert len(messages) == 1 and messages[0][1] is req

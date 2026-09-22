@@ -2,6 +2,14 @@
 
 更新日期：2026-09-22。
 
+最新：[实际缓存释放边界](PVD_Rank_Model_Binding_CN_EN.md) 将显式 CPU request
+owner 接到 `release_kv_cache`，未绑定请求保持原逻辑。真实结束/等待队列取消
+回调先挂起释放，owner 线程排空后再调用真实 ChunkCache/分配器；部分释放失败
+隔离、不自动重试。严格报告 v4 验证该路径。正式 Scheduler 主循环尚未自动
+注册/轮询这些 owner，下一子项是队列、轮询与关闭集成；GPU/RDMA 验收边界不变。
+新增 23 个用例；Windows 1763 passed / 14 skipped，WSL 1768 passed / 9 skipped。
+四场景真实 CPU 模型矩阵通过，完整场景执行真实结束/取消和缓存释放。
+
 最新：[刷新驱动异步回收](PVD_Rank_Model_Binding_CN_EN.md) 拒绝并发重复清理，
 await 后核验注册对象，失败/取消保留资源所有权供重试。关闭时先停止全部请求、
 关闭准入，再异步排空；不能重开。新增五个回归测试，不扩展生产/GPU/RDMA 能力。

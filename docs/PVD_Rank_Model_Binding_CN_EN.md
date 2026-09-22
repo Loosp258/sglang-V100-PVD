@@ -2,6 +2,75 @@
 
 Updated / 更新：2026-09-22。
 
+## Actual cache-release boundary / 实际释放入口接入
+
+`release_kv_cache()` now recognizes an explicitly attached `CPURequestRelease`.
+Unbound requests execute the unchanged original release body immediately. The
+CPU-only owner binds the exact Req object, lifecycle incarnation, slot, executor
+and ChunkCache pools. A synchronous finish/abort callback stops admission and
+records release intent; it does not wait on HTTP or free rows. The async owner
+calls `progress()` on the same thread after result processing. It waits for the
+target lease and lifecycle/Delivery drain, rechecks binding across the await,
+then unbinds storage and invokes the original cache release once.
+
+Failed/cancelled drain retains final pool ownership and permits retry. Failure
+after allocator release starts is quarantined: retry cannot safely infer how
+many rows were already returned. Successful duplicate callbacks are no-ops,
+including after slot reuse. The released guard drops references to executor,
+lifecycle and cache; it keeps a Req-bound tombstone, not model/bank ownership.
+There is no support here for GPU execution, radix insertion, offload, Mamba or
+reusing the same Req object for a new lifecycle.
+
+The strict real-model gate now uses the actual `_handle_finished_req()` method,
+`ChunkCache`, `ReqToTokenPool` and KV allocator. A length-limit completion must
+leave its slot allocated until progress runs. A separate `queued-abort` request
+executes actual `Scheduler.abort_request()` and must commit zero D tokens, retain
+its slot during the callback and release through the same owner afterwards.
+The abort fixture uses the ordinary DECODE waiting-queue branch (topology `pd`)
+to test the shared release boundary; it does NOT exercise the legacy full-prompt
+PVD session-manager branch. Streaming, metrics, auxiliary feature collection and
+unrelated queues remain fixture services. No full Scheduler process is launched.
+
+The model fixture restores its intentionally poisoned Prompt mapping from its
+owned-row ledger only after readers drain, so real ChunkCache can free exactly
+those rows. Allocation originally used a draft-style fixture request handle;
+after real Req release its old slot alias is invalidated, never freed twice.
+Schema v4 requires the three new finish/abort/cache-release observations and the
+extra zero-token request in each full-length scenario. Partial-install failure
+still ends earlier and does not claim to execute those observations.
+
+已接到真实 `release_kv_cache()` 入口、真实完成回调和 waiting queue 取消方法，
+并由真实 ChunkCache/分配器释放 CPU 资源；不再只依赖测试里的手工 free。
+回调只记录释放意图，异步 owner 在结果作用域退出、清理成功后才释放；失败保留、
+部分释放失败隔离，重复回调不得污染复用后的槽位。现有未绑定请求行为保持不变。
+
+**Remaining:** the serving Scheduler still does not instantiate/poll these CPU
+owners automatically. Queue ownership, owner-thread async polling and shutdown
+integration are the next substep. GPU sparse attention, real distributed model
+TP, native sparse Mooncake and V100S CAGRA/latency remain separate gates. Calling
+real Scheduler methods in a controlled fixture is not a production-loop claim.
+The owning driver must also remove its refresh registration; the fixture calls
+`CPURefreshDriver.remove()` before release progress. The guard alone does not
+erase another component's registry or delete a reusable V Entry.
+
+当前完成的是释放边界适配，**正式 Scheduler 主循环的自动注册/轮询/关闭尚未接入**。
+不能将这一步记为生产在线调度或 GPU/RDMA 验收完成。
+
+Environment: the first gate failed because importing the real Scheduler needed
+the already-declared `setproctitle` dependency. Installed `setproctitle==1.3.7`
+only in `/home/loosp/torch311-env`; no torch/model-stack upgrade. The gate fails,
+not skips, on missing dependencies. `common.py` retains two pre-existing Ruff
+findings (I001 and SIM102), verified against HEAD; its release body is unchanged.
+
+Validation: 23 added cases (14 release-owner contracts and 9 strict-report
+refusal cases). Full Windows **1763 passed / 14 skipped**, WSL **1768 passed /
+9 skipped**, with three existing platform warnings. New/modified PVD tools
+pass Ruff check/format; the existing common.py findings above were left alone.
+The real four-scenario CPU model matrix passed with the v4 evidence. Normal,
+lost-RESUMED and cleanup scenarios execute the real finish and waiting-abort
+paths; partial installation exits earlier without claiming them. No GPU/RDMA
+or application-quality/performance evidence was produced.
+
 ## Refresh-driver retirement concurrency / 刷新驱动异步回收
 
 The next audit reproduced duplicate `remove()` calls entering the same close

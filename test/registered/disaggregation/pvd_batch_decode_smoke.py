@@ -104,14 +104,19 @@ def validate_batch_decode(
         driver = CPURefreshDriver(arbiter)
     if scheduled_results:
         from pvd_scheduled_result_smoke import (
+            abort_real_waiting_request,
+            bind_real_cache_release,
             deliver,
             make_batch,
             make_processor,
             make_req,
         )
+        from sglang.srt.disaggregation.pvd.cpu_request_release import CPURequestRelease
         from sglang.srt.disaggregation.pvd.cpu_schedule_bridge import CPUScheduleBridge
+        from sglang.srt.mem_cache.common import release_kv_cache
 
         processor = make_processor()
+        bind_real_cache_release(processor, runner)
 
     def create(name, tokens):
         allocator = PrivatePoolAllocator(reqpool, runner.token_to_kv_pool_allocator)
@@ -127,6 +132,7 @@ def validate_batch_decode(
             releasing=False,
             refresh_registered=False,
             stale_result=None,
+            release_guard=None,
         )
         records[name] = r
         lease = arbiter.acquire()
@@ -190,6 +196,8 @@ def validate_batch_decode(
             executor.register_storage(r.life, r.slot)
             if scheduled_results:
                 r.req = make_req(r.life, r.slot, config.vocab_size)
+                r.req.kv_committed_len = r.req.kv_allocated_len = len(r.rows)
+                r.release_guard = CPURequestRelease(r.req, r.life, executor)
             for l in range(layers):
                 pool.get_key_buffer(l)[r.rows] = float("nan")
                 pool.get_value_buffer(l)[r.rows] = float("nan")
@@ -214,15 +222,26 @@ def validate_batch_decode(
                 r.refresh_registered = False
             else:
                 await r.life.close()
-            executor.unregister_storage(r.life)
+            if r.release_guard is None:
+                executor.unregister_storage(r.life)
         if r.fixture is not None:
             r.fixture.close()
         r.releasing = True
-        r.allocator.clear_mapping(r.slot)
-        r.allocator.free_kv(r.rows)
-        r.allocator.free_request(r.slot)
-        if scheduled_results and hasattr(r, "req"):
-            r.req.req_pool_idx = None
+        if r.release_guard is not None:
+            # Restore this fixture's poisoned Prompt mapping only after the
+            # readers drained. The real ChunkCache frees those owned rows.
+            r.allocator.write_mapping(r.slot, 0, r.rows)
+            release_kv_cache(r.req, processor.tree_cache, is_insert=False)
+            assert await r.release_guard.progress()
+            assert r.req.req_pool_idx is None
+            # Allocation initially used a draft-style handle; actual Req now
+            # retired that same slot. Invalidate the fixture's old alias too.
+            r.allocator._request.req_pool_idx = None
+            r.allocator.clear_mapping(r.slot)
+        else:
+            r.allocator.clear_mapping(r.slot)
+            r.allocator.free_kv(r.rows)
+            r.allocator.free_request(r.slot)
         r.retired = True
 
     def release_pressure():
@@ -291,6 +310,8 @@ def validate_batch_decode(
                 )
                 new = r.allocator.alloc_kv(1)
                 r.rows.extend(new)
+                if scheduled_results:
+                    r.req.kv_committed_len = r.req.kv_allocated_len = len(r.rows)
                 r.allocator.write_mapping(r.slot, p.query_position, new)
                 destinations.append(CPUForwardDestination(r.life, r.slot, new[0]))
                 view = CPUInstalledPromptView(r.fixture.group, p.committed_tokens)
@@ -673,6 +694,8 @@ def validate_batch_decode(
                 outputs = tuple(third.req.output_ids), tuple(old.req.output_ids)
                 available = runner.token_to_kv_pool_allocator.available_size()
                 await retire(new)  # replayed cleanup must not clear the reused row
+                release_kv_cache(new.req, processor.tree_cache, is_insert=False)
+                assert await new.release_guard.progress()
                 try:
                     new.stale_result()
                 except LifecycleError:
@@ -720,6 +743,23 @@ def validate_batch_decode(
                 step(("length-limit",))
                 assert ended.life.state == "finished" and ended.req.finished()
                 assert ended.life.committed_tokens == 1
+                assert ended.release_guard.state == "pending"
+                assert ended.req.req_pool_idx == ended.slot
+                await retire(ended)
+                assert ended.release_guard.state == "released"
+                queued = create("queued-abort", (1, 15, 21))
+                queued.life.admit(queued.fixture.request)
+                abort_real_waiting_request(queued.req, processor)
+                assert queued.release_guard.state == "pending"
+                assert queued.req.req_pool_idx == queued.slot
+                assert queued.life.state == "aborted"
+                await retire(queued)
+                assert queued.release_guard.state == "released"
+                reuse_evidence.update(
+                    real_finish_callback_deferred=True,
+                    real_waiting_abort_callback_deferred=True,
+                    real_chunk_cache_released_rows=True,
+                )
             return {
                 "status": "passed",
                 "fault_evidence": fault_evidence,

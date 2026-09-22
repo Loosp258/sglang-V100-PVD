@@ -565,6 +565,22 @@ def alloc_for_decode(batch: ScheduleBatch, token_per_req: int) -> torch.Tensor:
 
 
 def release_kv_cache(req: Req, tree_cache: BasePrefixCache, is_insert: bool = True):
+    owner = getattr(req, "pvd_cpu_kv_release", None)
+    if owner is not None:
+        # Explicit CPU ownership only. Ordinary PD/PVD and unbound requests
+        # retain the original release path; no synchronous network wait here.
+        from sglang.srt.disaggregation.pvd.cpu_request_release import CPURequestRelease
+
+        if not isinstance(owner, CPURequestRelease):
+            raise TypeError("invalid PVD CPU request release owner")
+        owner.defer(req, tree_cache, is_insert, _release_kv_cache_now)
+        return
+    _release_kv_cache_now(req, tree_cache, is_insert=is_insert)
+
+
+def _release_kv_cache_now(
+    req: Req, tree_cache: BasePrefixCache, is_insert: bool = True
+):
     # MambaRadixCache may alloc mamba state before alloc KV cache
     if req.req_pool_idx is None:
         assert (
