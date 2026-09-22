@@ -1,0 +1,270 @@
+"""Bounded explicit-tensor CUDA attention baseline, NOT a serving backend.
+
+One Decode token, TP1 full causal MHA/GQA, post-RoPE Q/K, no dropout/logit cap.
+Prompt is read through a rank participant; generated KV stays caller-owned.
+Only explicit scratch tensors are budgeted here, not CUDA/cuBLAS context or
+allocator caches. This is a synchronous correctness baseline, not a latency or
+total GPU-memory bound. Model pool/forward integration is deliberately separate.
+"""
+
+import math
+import threading
+import uuid
+from dataclasses import dataclass
+
+import torch
+from sglang.srt.disaggregation.pvd.cuda_rank_install import CUDARankInstallParticipant
+from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
+from sglang.srt.disaggregation.pvd.sparse_payload import SparsePayloadError
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    ResourceGuard,
+    TransferBudget,
+)
+
+
+@dataclass(frozen=True)
+class AttentionBuffers:
+    """Guarded inputs/output. Owner must forbid pool-row reuse until unpinned."""
+
+    q: torch.Tensor
+    generated_k: torch.Tensor
+    generated_v: torch.Tensor
+    output: torch.Tensor
+
+
+def scratch_elements(chunk_tokens, head_dim):
+    if any(type(n) is not int or n <= 0 for n in (chunk_tokens, head_dim)):
+        raise SparsePayloadError("positive chunk size and head dimension required")
+    return 2 * chunk_tokens * head_dim + chunk_tokens + 3 * head_dim + 6
+
+
+def _stream_attention(groups, buffers, mapping, layer, scale, scratch, chunk, dim):
+    """Device-neutral math core; callers validate and fence resource ownership.
+
+    Reuse a fixed FP32 tile for online softmax; never concatenate Prompt with
+    generated KV or allocate a score vector proportional to total context.
+    No positions are recomputed or RoPE applied. Inputs contain only past/current
+    positions, as checked by the public one-token Decode wrapper.
+    """
+    offset = 0
+
+    def take(n):
+        nonlocal offset
+        result = scratch[offset : offset + n]
+        offset += n
+        return result
+
+    keys, values = (
+        take(chunk * dim).view(chunk, dim),
+        take(chunk * dim).view(chunk, dim),
+    )
+    scores, query, accum, contribution = take(chunk), take(dim), take(dim), take(dim)
+    maximum, next_max, tile_max, alpha, denominator, tile_sum = (
+        take(1).view(()) for _ in range(6)
+    )
+    with torch.inference_mode():
+        for head in range(mapping.num_query_heads):
+            kv_head = mapping.kv_head_for(head)
+            prompt = groups[(layer, kv_head)][1]
+            query.copy_(buffers.q[head])
+            maximum.fill_(-float("inf"))
+            denominator.zero_()
+            accum.zero_()
+            for source_k, source_v in (
+                (prompt[0], prompt[1]),
+                (buffers.generated_k[:, kv_head], buffers.generated_v[:, kv_head]),
+            ):
+                for start in range(0, source_k.shape[0], chunk):
+                    count = min(chunk, source_k.shape[0] - start)
+                    keys[:count].copy_(source_k[start : start + count])
+                    values[:count].copy_(source_v[start : start + count])
+                    torch.mv(keys[:count], query, out=scores[:count])
+                    scores[:count].mul_(scale)
+                    torch.max(scores[:count], out=tile_max)
+                    torch.maximum(maximum, tile_max, out=next_max)
+                    torch.sub(maximum, next_max, out=alpha)
+                    alpha.exp_()
+                    scores[:count].sub_(next_max).exp_()
+                    torch.sum(scores[:count], dim=0, out=tile_sum)
+                    torch.mv(values[:count].t(), scores[:count], out=contribution)
+                    accum.mul_(alpha).add_(contribution)
+                    denominator.mul_(alpha).add_(tile_sum)
+                    maximum.copy_(next_max)
+            accum.div_(denominator)
+            buffers.output[head].copy_(accum)
+
+
+class CUDASparseAttentionWorkspace:
+    def __init__(self, *, device, dtype, head_dim, chunk_tokens, budget):
+        count = scratch_elements(chunk_tokens, head_dim)
+        self.device = torch.device(device)
+        if self.device.type != "cuda" or self.device.index is None:
+            raise SparsePayloadError("explicit indexed CUDA attention device required")
+        if dtype not in (torch.float16, torch.float32):
+            raise SparsePayloadError("attention baseline supports FP16/FP32 storage")
+        if not isinstance(budget, TransferBudget) or not torch.cuda.is_available():
+            raise SparsePayloadError("CUDA and explicit attention budget required")
+        self.dtype, self.head_dim, self.chunk_tokens = dtype, head_dim, chunk_tokens
+        self._budget, self._owner = budget, f"cuda-attention:{uuid.uuid4().hex}"
+        self._thread = threading.get_ident()
+        self._closed, self._active, self._quarantine, self._held = (
+            False,
+            False,
+            None,
+            None,
+        )
+        budget.reserve(self._owner, count * 4, 1)
+        try:
+            self._scratch = torch.empty(count, dtype=torch.float32, device=self.device)
+        except BaseException:
+            budget.release(self._owner)
+            raise
+
+    def _check(self):
+        if threading.get_ident() != self._thread:
+            raise SparsePayloadError("attention workspace requires its owner thread")
+        if self._closed or self._quarantine is not None:
+            raise SparsePayloadError("attention workspace closed or quarantined")
+
+    def _synchronize(self):
+        torch.cuda.synchronize(self.device)
+
+    def execute(self, participant, *, decode_tokens, layer, mapping, resources, scale):
+        self._check()
+        if self._active:
+            raise SparsePayloadError("attention workspace cannot run concurrently")
+        if (
+            not isinstance(participant, CUDARankInstallParticipant)
+            or not isinstance(mapping, QueryHeadMapping)
+            or not isinstance(resources, ResourceGuard)
+            or type(layer) is not int
+            or layer < 0
+            or type(decode_tokens) is not int
+            or decode_tokens < 0
+            or type(scale) not in (float, int)
+            or not math.isfinite(scale)
+            or scale <= 0
+        ):
+            raise SparsePayloadError(
+                "explicit participant, mapping, buffers and scale required"
+            )
+        pin = f"{self._owner}:execution"
+        resources.pin(pin)
+        self._active = True
+        try:
+            buffers = resources.value
+            bank = participant._bank
+            if not isinstance(buffers, AttentionBuffers):
+                raise SparsePayloadError("guard must own AttentionBuffers")
+            if (
+                bank.device != self.device
+                or bank.dtype != self.dtype
+                or bank.head_dim != self.head_dim
+            ):
+                raise SparsePayloadError(
+                    "bank and attention device/dtype/dimension mismatch"
+                )
+            shape = (decode_tokens + 1, mapping.total_kv_heads, self.head_dim)
+            tensors = (
+                buffers.q,
+                buffers.generated_k,
+                buffers.generated_v,
+                buffers.output,
+            )
+            expected = (
+                (mapping.num_query_heads, self.head_dim),
+                shape,
+                shape,
+                (mapping.num_query_heads, self.head_dim),
+            )
+            for tensor, wanted in zip(tensors, expected, strict=True):
+                if (
+                    not isinstance(tensor, torch.Tensor)
+                    or tensor.device != self.device
+                    or tensor.dtype != self.dtype
+                    or tuple(tensor.shape) != wanted
+                    or not tensor.is_contiguous()
+                ):
+                    raise SparsePayloadError(
+                        "attention tensor shape/device/dtype/contiguity mismatch"
+                    )
+            output_storage = buffers.output.untyped_storage().data_ptr()
+            if any(
+                output_storage == t.untyped_storage().data_ptr()
+                for t in (*tensors[:3], self._scratch)
+            ):
+                raise SparsePayloadError("attention output must own distinct storage")
+            with participant.read(decode_tokens) as groups:
+                for head in range(mapping.total_kv_heads):
+                    if (layer, head) not in groups:
+                        raise SparsePayloadError(
+                            "all TP1 layer/KV heads must be installed"
+                        )
+                    spec, prompt = groups[(layer, head)]
+                    if any(p >= bank.prompt_tokens for p in spec.token_ids):
+                        raise SparsePayloadError(
+                            "Prompt positions cannot include generated KV"
+                        )
+                    if output_storage == prompt.untyped_storage().data_ptr():
+                        raise SparsePayloadError(
+                            "attention output aliases Prompt storage"
+                        )
+                # The lease covers all operations and failure draining, not only
+                # Python's return from an asynchronous CUDA tensor operation.
+                try:
+                    _stream_attention(
+                        groups,
+                        buffers,
+                        mapping,
+                        layer,
+                        scale,
+                        self._scratch,
+                        self.chunk_tokens,
+                        self.head_dim,
+                    )
+                finally:
+                    try:
+                        self._synchronize()
+                    except BaseException:
+                        self._quarantine = "attention completion unknown"
+                        self._held = (resources, pin, participant)
+                        raise
+        finally:
+            try:
+                if self._quarantine is None:
+                    try:
+                        resources.unpin(pin)
+                    except BaseException:
+                        self._quarantine = "attention resource release unknown"
+                        self._held = (resources, pin, participant)
+                        raise
+            finally:
+                self._active = False
+
+    def snapshot(self):
+        if threading.get_ident() != self._thread:
+            raise SparsePayloadError("attention workspace requires its owner thread")
+        return {
+            "device": str(self.device),
+            "dtype": str(self.dtype),
+            "closed": self._closed,
+            "active": self._active,
+            "quarantine": self._quarantine,
+            "resources_held": self._held is not None,
+            "explicit_scratch_bytes": 0
+            if self._scratch is None
+            else self._scratch.numel() * 4,
+            "completion_policy": "device_synchronize",
+        }
+
+    def close(self):
+        if self._closed:
+            return
+        self._check()
+        if self._active:
+            raise SparsePayloadError("attention execution still owns workspace")
+        # Every execution drains before returning. Unknown completion has
+        # already quarantined this object; close cannot override that state.
+        self._scratch = None
+        self._budget.release(self._owner)
+        self._closed = True

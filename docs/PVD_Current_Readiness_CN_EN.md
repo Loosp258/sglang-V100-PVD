@@ -19,7 +19,28 @@ still uses full-Prompt refresh. Draft configuration does not instantiate the
 production prediction pipeline; startup now warns explicitly instead of implying
 activation.
 
-## 本轮完成 / Completed in this run
+## 最新增量 / Latest increment
+
+已逐步测试、提交并推送：V opt-in CUDA packing (`6992c78e2`)、D CUDA banks
+(`23f9e5337`)、CUDA rank participant (`ff8e653f2`)。本页所在提交还增加有界显式
+scratch 的独立 CUDA attention 消费基线。默认生产服务未切换为预测稀疏模式。
+Tested incremental components include opt-in V CUDA packing, D banks, rank
+agreement and standalone tiled attention. Serving remains on its original path.
+
+最新 Windows 全量：**1957 passed / 23 skipped**；WSL 最后 attention/bank/rank
+定向：**73 passed / 6 skipped**。此前 bank 核心修改后，严格 v5 四场景真实 CPU
+模型矩阵通过；后续 participant/独立 attention 增量未重复声称已跑模型矩阵。
+Latest full Windows regression is 1957/23; final WSL focused regression is 73/6.
+The strict real-model CPU matrix passed after the bank-core change. Later
+standalone participant/attention additions do not claim another matrix run.
+
+这些 CUDA 路径已有代码和 CPU 策略/数学验证，**尚无 CUDA 执行证据**。生产模型池、
+接收可见性、真实 rank transport 和原生 CAGRA 仍有接入任务，不能写成“仅缺硬件测试”。
+CUDA implementations have CPU policy/math coverage, not CUDA execution evidence.
+Model-pool integration, receive visibility, real rank transport and native CAGRA
+still require implementation as well as hardware validation.
+
+## 较早完成记录 / Earlier completion record
 
 | Step | Commit | Result / 结果 |
 |---|---|---|
@@ -71,7 +92,7 @@ PYTHONPATH=python python test/registered/disaggregation/run_pvd_rank_model_accep
 | Area / 部分 | Remaining / 尚缺 |
 |---|---|
 | Production Scheduler | 预测/检索/稀疏安装的完整服务装配、真实队列与多进程协同；CPU hook 不等于此项完成 / full serving activation and queue/process integration |
-| GPU sparse attention | GPU dtype/layout、current/next banks、stream/event 生命周期接入与逐层数值验证 / GPU backend and stream-safe bank integration plus numerical checks |
+| GPU sparse attention | 已有独立 CUDA bank/attention 基线；仍缺实际模型池/backend 绑定、stream/event 优化与逐层 GPU 验证 / standalone components exist; model/backend assembly and GPU numerical acceptance remain |
 | Native sparse Delivery | 接到 Mooncake 原生 submit/poll/fence/ACK，并验证取消/错误时仍有 WRITE 的内存保护 / native transport integration and in-flight WRITE safety |
 | Real model TP | 实际 TP ranks 的安装、恢复与失败协同；本地逻辑 rank 镜像不能代替 / actual distributed model-rank integration |
 | V CAGRA | 真实 cuVS/CAGRA backend、目标软件栈验证、真实目标 Q 的 recall 与模型质量对照 / real backend integration and target-query recall/quality |
@@ -106,6 +127,13 @@ receive visibility and distributed installation are not activated by this change
 The [CUDA rank participant](PVD_CUDA_Rank_Install_CN_EN.md) connects bank completion
 to the existing rank agreement. Actual model-rank transport and serving assembly
 remain distinct implementation/acceptance work.
+
+独立 [CUDA 稀疏 attention 基线](PVD_CUDA_Sparse_Attention_CN_EN.md) 已实现按块在线
+softmax、固定大小显式 scratch、participant reader 和输入/output guard。
+没有注册为生产 backend；native library workspace、模型池绑定和性能仍未完成。
+The standalone [CUDA attention baseline](PVD_CUDA_Sparse_Attention_CN_EN.md)
+adds fixed explicit scratch and guarded tiled consumption without concatenating
+full context. It is not a production backend or a total device-memory bound.
 
 CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
 预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
