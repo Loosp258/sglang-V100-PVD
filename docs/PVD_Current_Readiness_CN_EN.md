@@ -93,6 +93,13 @@ The opt-in [V CUDA packing baseline](PVD_CUDA_Sparse_Packing_CN_EN.md) now owns 
 GPU staging and synchronizes before submission, retaining owners on uncertainty.
 It does not activate or validate D GPU sparse execution or native RDMA.
 
+D 端增加独立的 [CUDA current/next 工作集](PVD_CUDA_Working_Set_CN_EN.md)：
+显式设备/预算、源范围 guard、复制与 reader 完成后释放，以及 UNKNOWN 隔离。
+这不是生产 GPU attention/接收器接入；CPU 安装器仍拒绝 CUDA bank。
+D now has a separate [CUDA bank implementation](PVD_CUDA_Working_Set_CN_EN.md)
+with bounded copies and fail-closed completion ownership. Production attention,
+receive visibility and distributed installation are not activated by this change.
+
 CAGRA 版本核对及预检方法见 [兼容性说明](PVD_CAGRA_Compatibility_CN_EN.md)。
 预检 v3 记录实际导入的版本和模块路径，可选版本断言不等于强制锁版本。
 cuVS 历史版本和当前版本的架构要求不同，尚未据此宣布 V100S 实测通过。

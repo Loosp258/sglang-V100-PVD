@@ -1,4 +1,4 @@
-"""CPU-only current/next Prompt-KV reference. Not a Scheduler/GPU integration.
+"""Shared Prompt-bank ownership core and CPU numerical reference.
 
 Single-owner synchronous use. Read scopes model a forward's ownership: install
 and close refuse while a reader exists. They are not CUDA events or RDMA fences.
@@ -36,7 +36,9 @@ class CPUInstallCandidate:
     staging_id: str
 
 
-class CPUSparseWorkingSet:
+class _SparseWorkingSetCore:
+    _budget_namespace = "pvd-cpu-working-set"
+
     def __init__(
         self,
         *,
@@ -76,8 +78,24 @@ class CPUSparseWorkingSet:
         self._closed = False
 
     def _open(self):
+        self._check_policy()
         if self._closed:
             raise SparsePayloadError("working set closed")
+
+    def _check_policy(self):
+        """Device-specific ownership/quarantine gate; CPU is synchronous."""
+
+    def _check_tensor(self, tensor):
+        if tensor.device.type != "cpu" or tensor.dtype != torch.float32:
+            raise SparsePayloadError(
+                "working-set reference requires CPU FP32 paired K/V"
+            )
+
+    def _drain_stage(self, source, copies, owner):
+        """Complete device work before release/publication; CPU has none pending."""
+
+    def _drain_reader(self):
+        """Complete device reads before a read lease can end."""
 
     def stage(self, payloads):
         self._open()
@@ -102,13 +120,10 @@ class CPUSparseWorkingSet:
                 raise SparsePayloadError(
                     "Prompt bank cannot contain generated positions"
                 )
-            if (
-                tensor.device.type != "cpu"
-                or tensor.dtype != torch.float32
-                or tuple(tensor.shape) != (2, len(spec.token_ids), self.head_dim)
-            ):
+            self._check_tensor(tensor)
+            if tuple(tensor.shape) != (2, len(spec.token_ids), self.head_dim):
                 raise SparsePayloadError(
-                    "working-set reference requires CPU FP32 paired K/V"
+                    "working-set payload must have paired K/V shape [2, tokens, head_dim]"
                 )
             if self._current is None:
                 if spec.target_tokens != 0 or set(spec.token_ids) != set(
@@ -127,17 +142,19 @@ class CPUSparseWorkingSet:
             size += payload.nbytes
         if set(source) != self.expected_groups or len(contexts) != 1:
             raise SparsePayloadError("incomplete bank or mixed refresh operations")
-        owner = f"pvd-cpu-working-set:{uuid.uuid4().hex}"
+        owner = f"{self._budget_namespace}:{uuid.uuid4().hex}"
         self.budget.reserve(owner, size, 1)
         copies = {}
         try:
             for key, (spec, tensor) in source.items():
                 copies[key] = (spec, tensor.detach().clone())
-            self._next = _Bank(owner, next(iter(contexts))[1], copies)
         except BaseException:
+            self._drain_stage(source, copies, owner)
             copies.clear()
             self.budget.release(owner)
             raise
+        self._drain_stage(source, copies, owner)
+        self._next = _Bank(owner, next(iter(contexts))[1], copies)
 
     def install_candidate(self):
         self._open()
@@ -149,7 +166,7 @@ class CPUSparseWorkingSet:
         )
 
     def can_install(self, candidate, committed_tokens):
-        """CPU preflight only. Caller must prevent new readers until install."""
+        """Local preflight only. Caller must prevent new readers until install."""
         self._open()
         if (
             not isinstance(candidate, CPUInstallCandidate)
@@ -189,15 +206,18 @@ class CPUSparseWorkingSet:
         try:
             yield self._current.groups
         finally:
+            self._drain_reader()
             self._readers -= 1
 
     def discard_next(self):
+        self._check_policy()
         if self._next is not None:
             self._next.groups.clear()
             self.budget.release(self._next.owner)
             self._next = None
 
     def close(self):
+        self._check_policy()
         if self._readers:
             raise SparsePayloadError("cannot close a bank still owned by a forward")
         self.discard_next()
@@ -206,6 +226,10 @@ class CPUSparseWorkingSet:
             self.budget.release(self._current.owner)
             self._current = None
         self._closed = True
+
+
+class CPUSparseWorkingSet(_SparseWorkingSetCore):
+    """Synchronous CPU FP32 reference. CUDA banks are deliberately NOT this type."""
 
 
 def reference_attention(
