@@ -16,7 +16,7 @@ descriptors and terminal/verification acknowledgements, never the payload.
 - 两段 WRITE 均需 Mooncake 的本地安全释放证明；单独的 `FAILED` 状态不够。
   未知完成状态时保留源/目标 GPU MR 至进程退出，不猜测完成、不复用地址。
 - V 必须在首段终态及 GPU 字节校验之后，才可提交第二段 WRITE；第二段完成前
-  不注销中间区。D 校验 P 原始 pattern，三端正常退出要求零遗留 MR/句柄。
+  不注销中间区。D 校验 P 原始 payload，三端正常退出要求零遗留 MR/句柄。
 - 每个 role 使用独立进程和私网地址。建议先在 `mlx5_0` 单 rail 下分别验收
   GPU 0、GPU 1；两次独立小样本不等于真实 TP 同步。
 
@@ -24,7 +24,7 @@ descriptors and terminal/verification acknowledgements, never the payload.
   is insufficient. An unknown completion retains the GPU MR until process exit.
 - V does not submit the second WRITE before the first has terminal proof and
   a GPU-byte check. It unregisters its intermediate region only after the
-  second WRITE is safe. D checks the original P pattern; healthy exit requires
+  second WRITE is safe. D checks the original P payload; healthy exit requires
   no live MR or transfer handle on any node.
 - Separate processes use private addresses. Independent GPU-0 and GPU-1
   samples do not establish synchronized model TP.
@@ -56,6 +56,18 @@ Replace `D` with `V` on node-1 and `P` on node-0. Repeat separately with
 `--gpu-id 1` on all three nodes. Defaults are ports 28175/28176 and 4096
 bytes. Concurrent rank runs need distinct ports. A wrong address, rail,
 length, port or peer is a failure, not a skip.
+
+添加 `--payload-kind packed-kv` 可使用本项目 `kv_packer` 生成/解包合成的
+2-layer、2-KV-head、FP16 Prompt KV。默认 4096 bytes 对应 32 个槽位，
+其中 30 个有效 token、最后一页 2 个 padding token；D 同时核对四个 K/V
+分量及 padding 未被覆盖。此模式要求长度至少 1024 bytes 且为 512 的倍数。
+
+Add `--payload-kind packed-kv` on **all three roles** to use the project's
+actual `kv_packer` on synthetic two-layer, two-KV-head FP16 Prompt KV. The
+default 4096 bytes represent 32 slots, 30 valid tokens and two padded
+positions in the final page. D verifies all four unpacked K/V components and
+that padding is untouched. This mode requires at least 1024 bytes in
+512-byte multiples.
 
 ## 证据范围 / Evidence boundary
 
@@ -103,3 +115,18 @@ the same three worktrees, with distinct control-port pairs `28175/28176` and
 relay process remained on any node. This establishes coexistence of two
 independent GPU relay sessions on one rail, **not** TP2 model collective
 execution, request-level stress or real KV tensors.
+
+随后用 `--payload-kind packed-kv` 分别在 GPU 0、GPU 1 运行三节点接力：
+两轮的 P/V/D 报告均为 `passed`，D 两次均报告
+`d_prompt_kv_unpacked=true`。Linux 的 9 个 CPU 契约用例通过，包含故意
+篡改打包字节后必须检出不一致；Windows 为 8 passed / 1 skipped（SGLang
+serving 依赖 POSIX `resource`）。这证明合成 Prompt-KV 的打包字节可以
+经原生两跳传输并正确解包；**不是**真实模型生成的 KV、TP collective、
+CAGRA/稀疏刷新或生产服务。
+
+Subsequent separate GPU-0 and GPU-1 `--payload-kind packed-kv` runs passed
+on all P/V/D roles; D reported `d_prompt_kv_unpacked=true` in both. Nine
+Linux CPU contract cases passed, including a corrupted-byte detection case.
+Windows ran eight and skipped the POSIX-only real-packer case. This validates
+native two-hop transport and unpack of **synthetic** Prompt-KV bytes, not
+model-generated KV, TP collective, CAGRA/sparse refresh or production serving.

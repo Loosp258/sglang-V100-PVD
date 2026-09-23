@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 合成 Prompt-KV 的三节点原生接力 / Synthetic Prompt-KV native relay
+
+原生接力工具新增可选 `--payload-kind packed-kv`：用项目 packer 打包合成
+2-layer/2-head FP16 Prompt KV，P→V→D 复用已注册 GPU 区，D 用项目 unpacker
+验证四个 K/V 分量及最终页的 padding 保护。CloudLab V100S 上 GPU 0、GPU 1
+各自的 P/V/D 均报告 `passed`，D 两次都报告解包成功；Linux 契约 9/9 通过。
+这不等于真实模型产生的 KV、TP2 collective、检索或生产 Scheduler 验收。
+
+The relay tool now optionally packs synthetic two-layer/two-head FP16 Prompt
+KV through the project's packer, relays it through V's registered GPU buffer,
+and checks the D unpacker and final-page padding. Separate V100S GPU-0 and
+GPU-1 P/V/D runs all passed; D verified unpack in both. Linux contract tests
+passed 9/9. Model-generated KV, TP2 collective, retrieval and production
+Scheduler serving are still unproven by this sample.
+
 ### Draft 分支准入失败清理 / Draft branch admission-failure cleanup
 
 `SGLangDraftProvider.branch()` 创建 handle 后，如果 scratch 大小计算、类型校验或

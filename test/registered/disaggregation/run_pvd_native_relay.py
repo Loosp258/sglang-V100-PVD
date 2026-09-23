@@ -19,6 +19,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _send(stream, value):
@@ -83,6 +84,52 @@ def _pattern(torch, device, length):
     )
 
 
+def _synthetic_kv_pool(torch, device, tokens):
+    shape = (tokens, 2, 8)
+    base = torch.arange(tokens * 16, dtype=torch.float32, device=device).reshape(shape)
+    keys = [(base / 32 + 11 + layer).to(torch.float16) for layer in range(2)]
+    values = [(base / 32 + 101 + layer).to(torch.float16) for layer in range(2)]
+    return SimpleNamespace(k_buffer=keys, v_buffer=values)
+
+
+def _payload(args, torch, device):
+    if args.payload_kind == "pattern":
+        return _pattern(torch, device, args.length)
+    from sglang.srt.disaggregation.pvd.kv_packer import pack_full_prompt_kv
+
+    tokens = args.length // 128  # 2 layers * K/V * 2 heads * 8 dims * FP16.
+    pool = _synthetic_kv_pool(torch, device, tokens)
+    packed = pack_full_prompt_kv(pool, range(tokens // 4), page_size=4).tensor
+    if packed.numel() != args.length:
+        raise RuntimeError("synthetic Prompt-KV packing has unexpected length")
+    return packed
+
+
+def _verify_unpacked_kv(args, torch, device, packed):
+    from sglang.srt.disaggregation.pvd.kv_packer import unpack_full_prompt_kv
+
+    tokens = args.length // 128
+    valid = tokens - 2  # Final page contains two padding positions.
+    source = _synthetic_kv_pool(torch, device, tokens)
+    destination = SimpleNamespace(
+        k_buffer=[torch.full_like(item, -999) for item in source.k_buffer],
+        v_buffer=[torch.full_like(item, -999) for item in source.v_buffer],
+    )
+    unpack_full_prompt_kv(
+        packed, destination, range(tokens // 4), page_size=4,
+        prompt_token_count=valid,
+    )
+    for source_component, destination_component in zip(
+        source.k_buffer + source.v_buffer,
+        destination.k_buffer + destination.v_buffer,
+        strict=True,
+    ):
+        if not bool(torch.equal(destination_component[:valid], source_component[:valid])):
+            raise RuntimeError("D unpacked Prompt KV differs from P components")
+        if not bool(torch.all(destination_component[valid:] == -999)):
+            raise RuntimeError("D Prompt-KV unpack overwrote padding slots")
+
+
 def _listener(host, port, timeout):
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -103,6 +150,8 @@ def _arguments(argv):
     parser.add_argument("--rail", required=True)
     parser.add_argument("--gpu-id", type=int, default=0)
     parser.add_argument("--length", type=int, default=4096)
+    parser.add_argument("--payload-kind", choices=("pattern", "packed-kv"),
+                        default="pattern")
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
     args = parser.parse_args(argv)
     addresses = (args.p_ip, args.v_ip, args.d_ip)
@@ -122,6 +171,10 @@ def _arguments(argv):
         parser.error("control ports must be distinct and within 1..65535")
     if not 1 <= args.length <= (1 << 20):
         parser.error("length must be within 1..1048576 bytes")
+    if args.payload_kind == "packed-kv" and (
+        args.length < 1024 or args.length % 512 != 0
+    ):
+        parser.error("packed-kv length must be a multiple of 512 and at least 1024")
     if not 0 < args.timeout_seconds <= 120:
         parser.error("timeout must be within (0, 120] seconds")
     if args.gpu_id < 0:
@@ -131,7 +184,7 @@ def _arguments(argv):
 
 def _run_p(args, torch, engine, descriptor_type, memory_slice, statuses):
     device = f"cuda:{args.gpu_id}"
-    source = _pattern(torch, device, args.length)
+    source = _payload(args, torch, device)
     registration = engine.register_memory(
         source, endpoint="relay-p-source", rank=args.gpu_id, rail=args.rail
     )
@@ -191,11 +244,14 @@ def _run_d(args, torch, engine):
                         )
                     torch.cuda.synchronize(device)
                     equal = bool(torch.equal(
-                        destination, _pattern(torch, device, args.length)
+                        destination, _payload(args, torch, device)
                     ))
-                    _send(stream, {"bytes_equal": equal})
                     if not equal:
+                        _send(stream, {"bytes_equal": False})
                         raise RuntimeError("D GPU bytes differ from P source")
+                    if args.payload_kind == "packed-kv":
+                        _verify_unpacked_kv(args, torch, device, destination)
+                    _send(stream, {"bytes_equal": True})
     finally:
         if terminal:
             engine.release_memory(registration)
@@ -240,7 +296,7 @@ def _run_v(args, torch, engine, descriptor_type, memory_slice, statuses):
                                 )
                             torch.cuda.synchronize(device)
                             equal = bool(torch.equal(
-                                intermediate, _pattern(torch, device, args.length)
+                                intermediate, _payload(args, torch, device)
                             ))
                             _send(p_stream, {"bytes_equal": equal})
                             if not equal:
@@ -280,6 +336,7 @@ def main(argv=None):
         "rail": args.rail,
         "gpu_id": args.gpu_id,
         "length": args.length,
+        "payload_kind": args.payload_kind,
         "control_transport": "tcp_json",
         "data_transport": "mooncake_native_write",
         "same_request_gpu_buffer_relay": False,
@@ -317,6 +374,9 @@ def main(argv=None):
         health = _require_health(engine)
         report.update(
             status="passed", same_request_gpu_buffer_relay=True,
+            d_prompt_kv_unpacked=(
+                args.mode == "D" and args.payload_kind == "packed-kv"
+            ),
             gpu=torch.cuda.get_device_name(args.gpu_id),
             mooncake_version=health["mooncake_version"],
             metadata_policy=health["metadata_policy"],

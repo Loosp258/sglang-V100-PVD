@@ -3,11 +3,16 @@
 import importlib.util
 import io
 import json
+import sys
 import types
 import unittest
 from collections import deque
 from pathlib import Path
 from unittest.mock import patch
+
+_PYTHON = str(Path(__file__).resolve().parents[3] / "python")
+if _PYTHON not in sys.path:
+    sys.path.insert(0, _PYTHON)
 
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -133,6 +138,8 @@ class NativeRelayTests(unittest.TestCase):
             ["--p-to-v-port", "0"],
             ["--v-to-d-port", "28175"],
             ["--length", "1048577"],
+            ["--payload-kind", "packed-kv", "--length", "4095"],
+            ["--payload-kind", "packed-kv", "--length", "512"],
             ["--timeout-seconds", "0"],
             ["--gpu-id", "-1"],
         ):
@@ -254,6 +261,27 @@ class NativeRelayTests(unittest.TestCase):
             self._run_v(p_outcome={"terminal": False, "success": False})
         self.assertEqual(self.last_engine.submitted, [])
         self.assertEqual(self.last_engine.released, [])
+
+    def test_packed_prompt_kv_round_trip_and_corruption_detection(self):
+        if sys.platform == "win32":
+            self.skipTest("SGLang's serving package requires POSIX resource")
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("CPU Torch is unavailable")
+        args = relay._arguments([
+            "D", "--p-ip", "10.0.1.1", "--v-ip", "10.0.1.2",
+            "--d-ip", "10.0.1.3", "--rail", "mlx5_0",
+            "--payload-kind", "packed-kv", "--length", "4096",
+        ])
+        packed = relay._payload(args, torch, "cpu")
+        self.assertEqual(packed.dtype, torch.uint8)
+        self.assertEqual(packed.numel(), 4096)
+        relay._verify_unpacked_kv(args, torch, "cpu", packed)
+        corrupted = packed.clone()
+        corrupted[0] ^= 1
+        with self.assertRaisesRegex(RuntimeError, "differs"):
+            relay._verify_unpacked_kv(args, torch, "cpu", corrupted)
 
 
 if __name__ == "__main__":
