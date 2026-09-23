@@ -25,6 +25,7 @@ def main(argv=None):
     parser.add_argument("--queries", type=int, default=16)
     parser.add_argument("--dim", type=int, default=128)
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--index-count", type=int, default=1)
     parser.add_argument("--native-cap-bytes", type=int, default=536870912)
     args = parser.parse_args(argv)
     if not (
@@ -32,6 +33,7 @@ def main(argv=None):
         and 1 <= args.queries <= 32
         and 32 <= args.dim <= 256
         and 1 <= args.top_k <= 32
+        and 1 <= args.index_count <= 4
         and 67108864 <= args.native_cap_bytes <= 1073741824
         and args.device >= 0
         and args.expected_gpu.strip()
@@ -56,8 +58,6 @@ def main(argv=None):
         raise RuntimeError(f"expected {args.expected_gpu!r}, found {name!r}")
     device = torch.device(f"cuda:{args.device}")
     torch.manual_seed(240923)
-    vectors = torch.randn(args.rows, args.dim, device=device, dtype=torch.float32)
-    queries = vectors[: args.queries].clone()
     backend = CagraIndexBackend(
         device=device,
         native_bytes_per_index=args.native_cap_bytes,
@@ -65,7 +65,7 @@ def main(argv=None):
         intermediate_degree=64,
         itopk_size=64,
     )
-    index = None
+    built = []
     result = {
         "status": "failed",
         "gpu": name,
@@ -74,43 +74,60 @@ def main(argv=None):
         "queries": args.queries,
         "dim": args.dim,
         "top_k": args.top_k,
+        "index_count": args.index_count,
         "native_cap_bytes": args.native_cap_bytes,
     }
     try:
+        build_started = time.monotonic()
+        for n in range(args.index_count):
+            vectors = torch.randn(
+                args.rows, args.dim, device=device, dtype=torch.float32
+            )
+            queries = vectors[: args.queries].clone()
+            index = backend.build(
+                vectors, vector_space=f"pvd-cagra-gpu-probe-{n}", metric="ip"
+            )
+            built.append((index, vectors, queries))
+        result["build_ms"] = round((time.monotonic() - build_started) * 1000, 3)
         started = time.monotonic()
-        index = backend.build(vectors, vector_space="pvd-cagra-gpu-probe", metric="ip")
-        result["build_ms"] = round((time.monotonic() - started) * 1000, 3)
-        started = time.monotonic()
-        rows, scores = backend.search(index, queries, top_k=args.top_k)
+        max_abs_error = 0.0
+        self_hits = 0
+        for index, vectors, queries in built:
+            rows, scores = backend.search(index, queries, top_k=args.top_k)
+            exact_scores = queries @ vectors.T
+            selected_scores = exact_scores.gather(1, rows.long())
+            max_abs_error = max(
+                max_abs_error, float((selected_scores - scores).abs().max().item())
+            )
+            self_hits += sum(int(i in rows[i].tolist()) for i in range(args.queries))
         result["search_ms"] = round((time.monotonic() - started) * 1000, 3)
-        exact_scores = queries @ vectors.T
-        selected_scores = exact_scores.gather(1, rows.long())
-        max_abs_error = float((selected_scores - scores).abs().max().item())
-        self_hits = sum(
-            int(i in rows[i].tolist()) for i in range(args.queries)
-        )
         result.update(
             score_max_abs_error=max_abs_error,
             self_hits=self_hits,
-            expected_self_hits=args.queries,
+            expected_self_hits=args.queries * args.index_count,
         )
-        if max_abs_error > 1e-3 or self_hits != args.queries:
+        if max_abs_error > 1e-3 or self_hits != args.queries * args.index_count:
             raise AssertionError("CAGRA adapter score or self-neighbor check failed")
     except Exception as exc:
         # Native cuVS exceptions can include a many-frame C++ backtrace.
         # Keep the machine-readable probe bounded while retaining its cause.
         result["error"] = _error_summary(exc)
     finally:
-        if index is not None:
+        disposed = 0
+        for index, _, _ in reversed(built):
             try:
                 backend.dispose(index)
-                result["disposed"] = True
+                disposed += 1
             except Exception as exc:
-                result["disposed"] = False
                 result["dispose_error"] = _error_summary(exc)
-        else:
-            result["disposed"] = None
-    if "error" not in result and result["disposed"] is True:
+                break
+        result["disposed_count"] = disposed
+        result["built_count"] = len(built)
+    if (
+        "error" not in result
+        and "dispose_error" not in result
+        and result["disposed_count"] == args.index_count
+    ):
         result["status"] = "passed"
     print(json.dumps(result, indent=2))
     return 0 if result["status"] == "passed" else 1

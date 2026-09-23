@@ -14,6 +14,8 @@ V worker 未修改。仓库 `check_cagra.py` 在 V100S/SM70、CUDA runtime 12.6
 search、分数核对和 dispose 全部成功。512 MiB 每索引原生上限的本次合成
 配置通过，64/128/256 MiB 上限均在真实 RMM 限额处拒绝构建；这些数值不是
 对不同数据规模的通用上限。仅加载模块或官方平台兼容表均不能替代这些实测。
+同一 backend 上再运行 `--index-count 2`，两个索引同时存活，各自检索 16 个
+query，32/32 个自向量命中，逆序释放 2/2 个索引；这仍不是完整 56 图服务验收。
 
 The isolated cuVS 25.02 candidate on node-1 V100S completed a real 4096×128
 CAGRA build and 32-query Top-10 search (synthetic recall@10 0.953125). PVD's
@@ -22,6 +24,8 @@ build, 16-query search, score check and dispose with a 512 MiB per-index cap.
 The same synthetic build was refused at 64, 128 and 256 MiB by the native
 limiter. This is an artifact-specific execution result, not a general memory
 bound, model-query recall, production serving or performance acceptance.
+With `--index-count 2`, both native indexes coexisted, searched independently
+and disposed in reverse order (32/32 self-neighbor hits, 2/2 disposals).
 
 当前实现为每个 `(layer, KV head)` 索引在**整个生命周期**保留完整 native cap。
 Qwen2.5-7B TP2 的每个 V rank 有 28×2=56 个此类索引；若都用 512 MiB，
