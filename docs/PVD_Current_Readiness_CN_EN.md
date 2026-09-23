@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 已加载 draft 的保留张量计量 / Loaded-draft retained-tensor accounting
+
+新增 `measure_draft_retained_tensors()`：对已加载模型权重/缓冲区、私有
+request-to-token 映射、K/V 池及 allocator 索引张量按底层 storage 去重计量，
+未知布局拒绝计量；CPU 实际 draft smoke 改为复用它。这个数值是**已知张量的
+占用下界**，不包括加载峰值、CUDA allocator 缓存和 backend 工作空间；仍未
+自动装配生产 draft，也不构成显存硬上限。配置预算必须另留余量，并在 V100S
+上测量峰值。
+
+`measure_draft_retained_tensors()` now deduplicates underlying storage for
+loaded model weights/buffers, private request mapping, K/V pools and allocator
+index tensors; unknown layouts are refused. The real CPU draft smoke uses the
+same counter. This is a **known-tensor accounting floor**, excluding loading
+peak, CUDA allocator cache and backend workspace. It does not activate a
+production draft or enforce a hard VRAM limit; device measurements and margin
+are still required.
+
 ### Draft 常驻显存预算参数 / Draft persistent-memory budget flag
 
 新增可选 `--pvd-draft-persistent-budget-bytes`，与每分支 scratch 预算分离，

@@ -22,6 +22,9 @@ def validate_real_draft_loop(
         PrivatePoolAllocator,
     )
     from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
+    from sglang.srt.disaggregation.pvd.draft_memory import (
+        measure_draft_retained_tensors,
+    )
     from sglang.srt.disaggregation.pvd.draft_runner_sglang import (
         SGLangDraftRunnerFactory,
     )
@@ -136,14 +139,7 @@ def validate_real_draft_loop(
         )
         # Explicit retained tensor footprint, not a claim to account the entire
         # runtime's allocator or peak model-loading workspace.
-        storage = {}
-        for tensor in tensors(draft) + [
-            draft.token_to_kv_pool_allocator.free_pages,
-            draft.token_to_kv_pool_allocator.release_pages,
-        ]:
-            s = tensor.untyped_storage()
-            storage[s.data_ptr()] = s.nbytes()
-        retained = sum(storage.values())
+        retained = measure_draft_retained_tensors(draft).total_bytes
         factory = SGLangDraftRunnerFactory(
             adapter,
             allocator,
