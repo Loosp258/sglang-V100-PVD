@@ -464,14 +464,17 @@ full serving, real-model KV, concurrency stress, and performance remain open.
 
 新增独立的[同请求 P→V→D GPU 缓冲区接力验收工具](PVD_Native_Relay_CN_EN.md)：
 V 对同一 GPU 注册区先接收、后作为源发送；未知 WRITE 完成时保留 MR。
-8 个 CPU 契约用例已通过；**三节点连续接力尚未运行**，不能把历史上两段各自通过
-当作同请求接力已经通过。
+8 个 CPU 契约用例已通过。CloudLab 三节点在提交 `db13c5b9c` 上分别对 GPU 0、
+GPU 1 跑通 4 KiB 同请求连续接力，六份 P/V/D 报告均为 `passed`。这不是同时
+TP2、真实 Prompt KV、并发压力、稀疏交付或生产服务验收。
 
 The standalone [same-request GPU-buffer relay gate](PVD_Native_Relay_CN_EN.md)
 reuses one V registration as the receive target and then the send source,
 retaining the MR on unknown completion. Eight CPU contract tests pass.
-**The continuous three-node relay has not yet run**; the previous independent
-P→V and V→D samples do not establish it.
+At commit `db13c5b9c`, both separate GPU-0 and GPU-1 three-node 4 KiB relay
+runs passed on CloudLab, with P/V/D reporting success. This does not establish
+simultaneous TP2, real Prompt KV, concurrent pressure, sparse Delivery or
+production serving.
 
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，

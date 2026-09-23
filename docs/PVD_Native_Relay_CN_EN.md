@@ -67,3 +67,26 @@ A pass validates only a small same-buffer two-hop native Mooncake sample and
 its terminal/MR lifetime. It does not validate full Prompt KV layout,
 production Scheduler, retrieval/CAGRA, concurrency, multi-rail, model output
 or GPUDirect zero-copy performance.
+
+## 2026-09-23 CloudLab 验收 / CloudLab acceptance
+
+在提交 `db13c5b9c` 的三个独立 worktree 中，node-0/P `10.0.1.1`、node-1/V
+`10.0.1.2`、node-2/D `10.0.1.3` 分别运行同一脚本。三端均使用
+`mooncake-transfer-engine==0.3.13.post1`、V100S-PCIE-32GB、`mlx5_0`，
+先后对 GPU 0 和 GPU 1 各做一轮 4096-byte 接力。**两轮的 P/V/D 报告均为
+`status=passed`**；V 把首段接收注册区作为第二段源，D 的 GPU 字节与 P pattern
+一致，三端 health 检查均无遗留 MR/传输句柄。结束后三台节点无接力 GPU 进程
+或端口 28175/28176 监听。Linux 同提交的 8 个 CPU 契约用例也通过。
+
+At commit `db13c5b9c`, independent worktrees on node-0/P (`10.0.1.1`),
+node-1/V (`10.0.1.2`) and node-2/D (`10.0.1.3`) ran the same tool with
+`mooncake-transfer-engine==0.3.13.post1`, V100S-PCIE-32GB and `mlx5_0`.
+Both separate 4096-byte runs (GPU 0 and GPU 1) returned `status=passed` on
+all three roles. V reused its receiving registration for the second WRITE;
+D's GPU bytes matched the P pattern; each role's health check found no live
+MR or transfer handle. No relay GPU process or control listener remained.
+Eight CPU contract tests also passed on Linux at the same revision.
+
+These two successful rank samples do **not** establish simultaneous TP2 model
+execution, Prompt-KV tensor layout, throughput, loss/retry behaviour, native
+sparse Delivery, or production request scheduling.
