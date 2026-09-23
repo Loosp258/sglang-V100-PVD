@@ -97,14 +97,20 @@ def test_pvd_rejects_invalid_refresh_interval(interval):
 def test_pd_config_is_unchanged_and_pvd_decode_disables_overlap():
     from sglang.srt.arg_groups.pvd_disaggregation_hook import handle_pvd_disaggregation
 
-    pd = SimpleNamespace(disaggregation_topology="pd", disable_overlap_schedule=False)
+    pd = SimpleNamespace(
+        disaggregation_topology="pd",
+        disable_overlap_schedule=False,
+        skip_server_warmup=False,
+    )
     handle_pvd_disaggregation(pd)
     assert not pd.disable_overlap_schedule
+    assert not pd.skip_server_warmup
     args = SimpleNamespace(
         disaggregation_topology="pvd",
         disaggregation_mode="decode",
         pvd_kv_refresh_interval=4,
         disable_overlap_schedule=False,
+        skip_server_warmup=False,
         pvd_vector_coordinator_url="http://v:9100",
         pvd_vector_groups=None,
         tp_size=2,
@@ -126,6 +132,7 @@ def test_pd_config_is_unchanged_and_pvd_decode_disables_overlap():
     handle_pvd_disaggregation(args)
     assert args.disable_overlap_schedule
     assert args.disable_radix_cache
+    assert args.skip_server_warmup
 
 
 async def make_ready_entry(coordinator, engine, req_id):

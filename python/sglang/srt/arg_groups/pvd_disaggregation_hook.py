@@ -66,6 +66,17 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         raise ValueError(f"invalid disaggregation topology: {topology!r}")
     if topology == "pd":
         return
+    # The generic PD HTTP warmup posts a synthetic /generate without the
+    # Gateway-selected PVD transfer/delivery/vector IDs. PVD must reject that
+    # request, so the generic warmup would mark an otherwise ready worker
+    # UnHealthy. ModelRunner's own kernel/graph warmup still runs at startup;
+    # the first *end-to-end* warmup must be issued through the PVD Gateway.
+    if not getattr(server_args, "skip_server_warmup", False):
+        logger.warning(
+            "PVD skips the generic PD HTTP warmup because it has no Gateway "
+            "identities; validate generation through the PVD Gateway"
+        )
+    server_args.skip_server_warmup = True
     if (
         isinstance(server_args.pvd_kv_refresh_interval, bool)
         or not isinstance(server_args.pvd_kv_refresh_interval, int)
