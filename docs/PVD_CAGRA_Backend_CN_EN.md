@@ -4,13 +4,16 @@
 
 `cagra_backend.py` implements the existing `IndexBackend` interface and is now
 selectable by both V launch modes. The default remains the exact CPU backend.
-This is **native-call implementation plus CPU contract evidence**, not a claim
-that CAGRA has run on V100S, that retrieval quality is acceptable, or that D's
-production predictive Scheduler has been assembled.
+This is native-call implementation plus CPU contract evidence. A later isolated
+V100S candidate completed a bounded synthetic GPU adapter probe (see
+[acceptance](PVD_CAGRA_Acceptance_CN_EN.md)); this is not a claim that
+real-target-query retrieval quality is acceptable or that D's production
+predictive Scheduler has been assembled.
 
 `cagra_backend.py` 实现现有索引接口，两个 V 启动模式均可显式选择；默认仍为
-CPU 精确检索。本步骤完成原生调用代码与 CPU 契约验证，不代表 V100S 实测通过、
-召回率合格或生产 D 预测检索 Scheduler 已启用。
+CPU 精确检索。后续隔离候选环境已完成有界 V100S 合成探针，见
+[验收记录](PVD_CAGRA_Acceptance_CN_EN.md)；这不代表真实目标 Q 召回率合格
+或生产 D 预测检索 Scheduler 已启用。
 
 ## Explicit activation / 显式启用
 

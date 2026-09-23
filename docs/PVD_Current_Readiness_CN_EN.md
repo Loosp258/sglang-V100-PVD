@@ -21,6 +21,20 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 隔离 cuVS 25.02 CAGRA 探针 / Isolated cuVS 25.02 CAGRA probe
+
+node-1 V100S 的独立候选环境现已用 cuVS 25.02 跑通真实 CAGRA build/search，
+并跑通本项目 `CagraIndexBackend` 的 RMM 限额、build/search/dispose。
+4096×128 合成向量、512 MiB 每图上限通过；64/128/256 MiB 上限失败。
+完整证据与 56 图 × 512 MiB 的显存预算风险见
+[CAGRA 验收记录](PVD_CAGRA_Acceptance_CN_EN.md)。生产 V 仍没有启用 CAGRA；
+真实目标 Q recall、多个 Entry 和服务端生命周期尚未验收。
+
+The isolated cuVS 25.02 environment on node-1 V100S now passes both the
+native CAGRA smoke and PVD adapter's bounded build/search/dispose probe.
+The candidate is **not** enabled in the running V service, and real target-Q
+recall and multi-Entry memory pressure remain open.
+
 ### 三节点原生 PVD 全 Prompt 通路 / Three-node native full-Prompt PVD path
 
 2026-09-23 在三台 CloudLab V100S 上使用**独立验证 worktree** 和固定
@@ -692,7 +706,7 @@ PYTHONPATH=python python test/registered/disaggregation/run_pvd_rank_model_accep
 | GPU sparse attention | 已有显式 TP1 模型池/backend 工厂；尚未装配生产 Scheduler，仍缺 stream/event 优化与真实 GPU forward 验证 / explicit TP1 model-pool/backend factory exists; serving assembly and GPU acceptance remain |
 | Native sparse Delivery | 接到 Mooncake 原生 submit/poll/fence/ACK，并验证取消/错误时仍有 WRITE 的内存保护 / native transport integration and in-flight WRITE safety |
 | Real model TP | 实际 TP ranks 的安装、恢复与失败协同；本地逻辑 rank 镜像不能代替 / actual distributed model-rank integration |
-| V CAGRA | 真实 cuVS/CAGRA backend、目标软件栈验证、真实目标 Q 的 recall 与模型质量对照 / real backend integration and target-query recall/quality |
+| V CAGRA | 原生 backend 与单图 V100S 合成探针已通过；仍缺服务端多图/多 Entry 预算、真实目标 Q recall 与模型质量对照 / native adapter and one synthetic V100S graph pass; serving multi-graph budgets and real-query recall/quality remain |
 | Performance | 有代表性的目标/draft 模型、数据、V100S/RDMA 实验；测预取窗口、等待、TPOT、尾延迟、吞吐和显存 / representative model/hardware benchmarks |
 
 以上不应缩写为“代码已全部完成，只需上机器测试”：仍有生产实现任务。
