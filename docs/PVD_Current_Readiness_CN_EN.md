@@ -21,6 +21,22 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 跨图 CAGRA 原生限额能力 / Shared CAGRA native-limit capability
+
+node-1 V100S/cuVS 25.02 隔离探针验证：两个原生图的子 RMM limiter 可共用
+640 MiB 父级上限；两笔各 360 MiB 的 C API 分配中第一笔通过，第二笔被
+父级拒绝，图销毁后计数归零。CPU 契约与原 CAGRA 模式 **41 passed / 2 skipped**。
+**这只是 allocator 能力：生产工厂和 `PromptIndexManager` 尚未对父级上限
+一次性计费，不能据此降低当前每图终生预留。** 见
+[CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+An isolated node-1 V100S/cuVS 25.02 probe proved two native graphs can share
+a 640 MiB parent RMM limiter: the first 360 MiB cuVS C-API request succeeded,
+the second was rejected at the parent, and root allocation returned to zero
+after disposal. CPU/CAGRA regressions passed **41 / 2 skipped**. This is an
+allocator capability only; serving has not yet reserved the parent cap once,
+so the current lifetime per-index budget remains in force.
+
 ### 短 Prompt 的显式 CAGRA 自动模式 / Explicit CAGRA-auto short fallback
 
 V 可选 `--prompt-index-backend cagra-auto`：短 Prompt 用同设备精确检索，长

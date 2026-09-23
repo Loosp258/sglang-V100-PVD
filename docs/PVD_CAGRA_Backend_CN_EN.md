@@ -92,8 +92,20 @@ resource only inside that scope, and restores the previous resource even on
 exceptions. Other components in the V process must not independently swap RMM's
 per-device resource concurrently with these operations.
 
+An isolated hardware candidate also verified an **optional runtime-only**
+parent limiter under all per-index limiters: it counts native allocations
+across two graphs and rejects an aggregate over-cap cuVS C-API allocation.
+The serving factory does not create this parent and `PromptIndexManager` does
+not reserve its cap once yet. Until that accounting is integrated, production
+still charges the full native cap per graph for its entire lifetime.
+
 每个索引独占 RMM 限额资源；同设备 PVD CAGRA 操作串行，在受锁范围设置并恢复
 当前 RMM 资源。V 进程的其他组件不能绕开该锁并发更换同设备的 RMM 资源。
+
+隔离硬件探针还验证了可选的**仅运行时**父级 limiter：两个子索引的原生分配
+计入同一个总上限，第二笔使总量超限的 cuVS C API 分配会被拒绝。生产工厂尚未
+创建此父级 limiter，也未在 `PromptIndexManager` 中对总上限一次性计费。
+完成预算接入前，生产仍按每图完整 native cap 终生预留。
 
 A 256-byte allocation/free through the **loaded cuVS C library** must change the
 Python limiter's count, and an allocation above the cap must fail. This checks the

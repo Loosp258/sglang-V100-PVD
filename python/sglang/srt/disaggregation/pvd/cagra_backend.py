@@ -38,10 +38,14 @@ class _NativeIndex:
 class CagraNativeRuntime:
     """Actual cuVS calls; import only when a CUDA backend is explicitly chosen."""
 
-    def __init__(self, device):
+    def __init__(self, device, *, global_native_cap_bytes=None):
         self.device = torch.device(device)
         if self.device.type != "cuda" or self.device.index is None:
             raise ValueError("CAGRA requires an explicit CUDA device index")
+        if global_native_cap_bytes is not None and (
+            type(global_native_cap_bytes) is not int or global_native_cap_bytes <= 0
+        ):
+            raise ValueError("global CAGRA native cap must be a positive integer")
         self.cuvs = importlib.import_module("cuvs")
         self.cagra = importlib.import_module("cuvs.neighbors.cagra")
         self.cp = importlib.import_module("cupy")
@@ -73,6 +77,18 @@ class CagraNativeRuntime:
         self.free.restype = ctypes.c_int
         with _LOCKS_LOCK:
             self.lock = _LOCKS.setdefault(self.device.index, threading.RLock())
+        # An optional parent limiter covers the sum of all child indexes,
+        # including transient build/search allocations. Child limits still
+        # enforce the per-index cap. The serving budget must reserve this
+        # parent cap once before enabling it; runtime nesting alone is only a
+        # native allocator capability, not a complete admission policy.
+        self.global_native_cap_bytes = global_native_cap_bytes
+        self.global_limit = None
+        if global_native_cap_bytes is not None:
+            with self.lock, torch.cuda.device(self.device):
+                self.global_limit = self.mr.LimitingResourceAdaptor(
+                    self.mr.CudaMemoryResource(), global_native_cap_bytes
+                )
 
     def synchronize(self):
         torch.cuda.synchronize(self.device)
@@ -91,10 +107,21 @@ class CagraNativeRuntime:
 
     def create(self, byte_cap):
         with self.lock, torch.cuda.device(self.device):
+            if self.global_limit is not None and byte_cap > self.global_native_cap_bytes:
+                raise ValueError("per-index CAGRA cap exceeds shared native cap")
             limit = self.mr.LimitingResourceAdaptor(
-                self.mr.CudaMemoryResource(), byte_cap
+                self.global_limit
+                if self.global_limit is not None
+                else self.mr.CudaMemoryResource(),
+                byte_cap,
             )
         return _NativeIndex(limit)
+
+    def global_allocated_bytes(self):
+        if self.global_limit is None:
+            return None
+        with self.lock, torch.cuda.device(self.device):
+            return int(self.global_limit.get_allocated_bytes())
 
     def _verify_allocator_bridge(self, owner):
         """A small allocation proves cuVS uses this exact Python RMM limiter."""
