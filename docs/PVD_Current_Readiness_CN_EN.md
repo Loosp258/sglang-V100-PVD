@@ -21,6 +21,26 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### Qwen2 CUDA 稀疏 attention 基线 / Qwen2 CUDA sparse-attention baseline
+
+显式 `make_cuda_sparse_backend` 工厂现接纳精确的非量化
+`Qwen2ForCausalLM`（仍限 TP1/PP1、`torch_native`、page 1、无图/overlap/
+原生 speculative）；离线稀疏模型 smoke 可选择 `--architecture qwen2`。
+CloudLab node-0 V100S 上随机 tiny Qwen2 真实执行 5 次 Decode forward、
+10 次逐层独立 dense SDPA 对照，FP16 最大绝对误差约 **0.00188**；
+初始完整 Prompt 与一次稀疏刷新、请求 allocator 退还均通过。tiny Llama
+原路径复跑通过（最大误差约 0.00194）。这不证明 7B 稀疏 forward、生产
+Scheduler、Mooncake 稀疏 RDMA 或性能。
+
+The explicit sparse-backend factory now admits exact unquantized
+`Qwen2ForCausalLM` under the same TP1/PP1, `torch_native`, page-1,
+no-graph/overlap/native-speculation policy. On node-0 V100S, random tiny
+Qwen2 completed five real Decode forwards and ten layer-wise comparisons with
+an independent dense-SDPA oracle (FP16 max absolute error about **0.00188**),
+including an initial full Prompt, one sparse refresh and allocator retirement.
+Tiny Llama passed again (max error about 0.00194). This does not prove a 7B
+sparse forward, production Scheduler, sparse Mooncake RDMA or performance.
+
 ### 真实 Qwen2.5-7B checkpoint 的 TP1 Q probe / TP1 Q probe on real Qwen2.5-7B weights
 
 独立 CUDA smoke 新增严格本地 `--model-path` 模式：不下载、不重写权重，

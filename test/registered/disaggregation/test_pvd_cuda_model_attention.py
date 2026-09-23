@@ -375,7 +375,8 @@ def test_second_request_cannot_alias_first_requests_generated_rows(monkeypatch):
 @pytest.mark.parametrize(
     "fault", [None, "tp", "graph", "weights", "head_dim", "device", "page"]
 )
-def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault):
+@pytest.mark.parametrize("architecture", ["llama", "qwen2"])
+def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault, architecture):
     c = fixture(monkeypatch)
 
     class Model:
@@ -392,6 +393,9 @@ def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault):
                 )
             ]
 
+    class QwenModel(Model):
+        pass
+
     class Backend:
         def __init__(self, runner):
             self.req_to_token_pool = runner.req_to_token_pool
@@ -399,6 +403,7 @@ def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault):
 
     for name, attribute, cls in (
         ("sglang.srt.models.llama", "LlamaForCausalLM", Model),
+        ("sglang.srt.models.qwen2", "Qwen2ForCausalLM", QwenModel),
         (
             "sglang.srt.layers.attention.torch_native_backend",
             "TorchNativeAttnBackend",
@@ -409,7 +414,7 @@ def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault):
         setattr(module, attribute, cls)
         monkeypatch.setitem(sys.modules, name, module)
     runner = SimpleNamespace(
-        model=Model(),
+        model=Model() if architecture == "llama" else QwenModel(),
         device="cuda",
         gpu_id=None,
         tp_size=2 if fault == "tp" else 1,

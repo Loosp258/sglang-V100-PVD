@@ -1,4 +1,4 @@
-"""Strict real CUDA sparse model forward; shares offline tiny-Llama setup.
+"""Strict real CUDA sparse model forward; shares offline tiny-model setup.
 
 No RDMA/CAGRA/serving/performance claim. Runs initial full Prompt plus a sparse
 refresh and compares every real model layer with independent dense SDPA math.
@@ -51,7 +51,7 @@ def validate(runner):
     allocator.write_mapping(slot, 0, rows)
     adapter = DraftForwardAdapter(
         runner,
-        architecture="LlamaForCausalLM",
+        architecture=type(runner.model).__name__,
         attention_backend="torch_native",
         bytes_per_token=layers * heads * dim * 2 * 4,
         device=device,

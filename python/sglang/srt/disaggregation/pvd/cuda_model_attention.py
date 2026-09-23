@@ -400,9 +400,10 @@ def make_cuda_sparse_backend(
     """Explicit factory; callers install it only inside a complete owned forward."""
     from sglang.srt.layers.attention.torch_native_backend import TorchNativeAttnBackend
     from sglang.srt.models.llama import LlamaForCausalLM
+    from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 
     if (
-        type(runner.model) is not LlamaForCausalLM
+        type(runner.model) not in (LlamaForCausalLM, Qwen2ForCausalLM)
         or torch.device(runner.device).type != "cuda"
         or runner.tp_size != 1
         or runner.pp_size != 1
@@ -416,7 +417,7 @@ def make_cuda_sparse_backend(
         or not runner.server_args.disable_cuda_graph
     ):
         raise SparsePayloadError(
-            "CUDA sparse backend requires TP1/PP1 unquantized Llama, native attention, page 1, no graphs/overlap/speculation"
+            "CUDA sparse backend requires TP1/PP1 unquantized Llama/Qwen2, native attention, page 1, no graphs/overlap/speculation"
         )
     if not isinstance(workspace, CUDASparseAttentionWorkspace):
         raise SparsePayloadError("explicit CUDA workspace required")

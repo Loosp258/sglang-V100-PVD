@@ -319,7 +319,11 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                             parameter.fill_(1)
                         else:
                             parameter.normal_(mean=0, std=0.12)
-            report["evidence"] = validator(runner, checkpoint=bool(args.model_path))
+            report["evidence"] = (
+                validator(runner, checkpoint=True)
+                if args.model_path
+                else validator(runner)
+            )
             report.update(
                 status="passed",
                 device=torch.cuda.get_device_name(0),
