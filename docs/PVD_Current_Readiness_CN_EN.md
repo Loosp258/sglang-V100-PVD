@@ -114,6 +114,23 @@ an MR; a `FAILED` status alone is insufficient. This establishes only a small
 single-rail P→V sample, not zero-copy GPUDirect performance, V→D, the complete
 KV lifecycle, production Scheduler, or CAGRA.
 
+### V→D 原生跨节点小样本 / Native V-to-D sample
+
+node-2 (`10.0.1.3`) 也只在隔离依赖目录安装了精确 Mooncake 版本并通过
+GPU 0 的本机预检。随后对 node-1 V→node-2 D 的 GPU 0、GPU 1 各运行
+4 KiB 原生 WRITE：两次均在发送端达到安全终态，D 端 GPU 字节一致，
+双端 MR/传输句柄清零。这样 P→V 和 V→D 两段的两个 rank 均有独立的
+单 rail 原生小样本证据；**没有**把同一请求的 KV 经 V 连续转发至 D，
+也没有运行完整服务、真实模型 KV、并发压力或性能基准。
+
+Node-2 (`10.0.1.3`) received the exact Mooncake version only in its isolated
+dependency target and passed GPU 0 local preflight. Native 4 KiB WRITEs from
+node-1 V to node-2 D then passed independently for GPU 0 and GPU 1: safe
+terminal status, destination-GPU byte equality, and no live MRs/transfers on
+either side. Both P→V and V→D legs now have independent single-rail samples
+for both ranks. **No** same-request KV was relayed continuously through V to D;
+full serving, real-model KV, concurrency stress, and performance remain open.
+
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
 连同原生 engine 一起由进程级隔离表保有，避免启动栈回退时丢失 owner 或让
