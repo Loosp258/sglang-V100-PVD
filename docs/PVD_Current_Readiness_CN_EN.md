@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### D 节点真实 checkpoint 的离线稀疏 attention / Real-checkpoint offline D attention
+
+在 node-2 的 V100S GPU0 上，用已有本地 FP16
+`Qwen2.5-7B-Instruct` checkpoint 运行
+`run_pvd_cuda_model_smoke.py --architecture qwen2 --dtype float16`，结果
+`passed`、5 次真实模型 forward、140 次逐层独立 dense-SDPA 数值对照，
+最大绝对误差 0.0038767；完整 Prompt 初始化和一次稀疏刷新、allocator 释放
+均通过。这项验收在 D 节点独立运行，**不是**把上一项跨节点 RDMA 收到的 KV
+送进该模型，也不证明目标 Q 检索、生产服务或性能。
+
+The existing FP16 Qwen2.5-7B-Instruct checkpoint passed the offline sparse
+model smoke on node-2 D GPU0: five real forwards, 140 layer-wise independent
+dense-SDPA checks (maximum absolute error 0.0038767), full-Prompt bootstrap,
+one sparse refresh and allocator retirement. This is a separate D-node test;
+the model did **not** consume the KV delivered by the preceding cross-node
+RDMA gate. Target-Q retrieval, production serving and performance remain open.
+
 ### 三节点 TP1 D GPU 工作集安装 / Three-node TP1 D GPU bank install
 
 沿用 P→V 合成上传及 V 双 rank 原生 CAGRA 建图，node-2 D GPU0 已通过
