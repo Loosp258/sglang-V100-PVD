@@ -17,6 +17,21 @@ CPU 精确检索。后续隔离候选环境已完成有界 V100S 合成探针，
 
 ## Explicit activation / 显式启用
 
+在已验证的 V100S/cuVS 25.02 隔离环境，原生 CAGRA 必须通过仓库顶层的
+`python -m pvd_cagra_server` 启动 V，而不是
+`python -m sglang.srt.disaggregation.pvd.server`。前者在导入 SGLang/torch
+之前加载 cuVS；后者在该候选环境可因 CUDA 动态库加载顺序报
+`libcuvs_c.so` 缺失。只使用精确索引或不开索引时，继续用原 V 启动命令，
+不需要安装 cuVS。此启动入口不改变 CLI 参数或传输协议。
+
+In the validated V100S/cuVS 25.02 candidate, launch native CAGRA with
+`PYTHONPATH=python python -m pvd_cagra_server` instead of
+`python -m sglang.srt.disaggregation.pvd.server`. The standalone entry point
+loads cuVS before SGLang/torch; the ordinary module entry point can fail to
+resolve `libcuvs_c.so` in this environment because of CUDA library load
+order. Exact/index-off V service keeps its original launcher and does not
+require cuVS. The flags and transfer protocol are otherwise unchanged.
+
 Add these to the existing V command; choose budgets from the deployment's real
 capacity, not from this document:
 
@@ -27,6 +42,7 @@ capacity, not from this document:
 --prompt-index-vector-space <target-model-and-encoding-identity>
 --prompt-index-budget-bytes <total-index-budget-per-V-rank>
 --prompt-index-cagra-native-bytes <native-cap-per-layer-and-KV-head-index>
+--prompt-index-cagra-global-native-bytes <optional-shared-native-cap-per-V-rank>
 --prompt-index-cagra-graph-degree 64
 --prompt-index-cagra-intermediate-degree 128
 --prompt-index-cagra-itopk-size 512

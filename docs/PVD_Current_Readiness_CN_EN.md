@@ -21,6 +21,26 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 原生 CAGRA 服务启动入口 / Native CAGRA service entry point
+
+CloudLab V 节点的 cuVS 25.02 候选环境中，普通 `python -m sglang...pvd.server`
+先经 SGLang 包初始化加载 torch，再导入 cuVS，复现 `libcuvs_c.so` 动态库
+错误。仅交换服务内部 Mooncake/索引构造顺序无效，因此没有保留该改动。
+新增顶层 `python -m pvd_cagra_server`，保证先导入 cuVS。限时真实服务测试中，
+V0/V1 与 coordinator 全部健康，Mooncake 0.3.13.post1 在单 rail `mlx5_0`
+完成 GPU 注册和本地传输预检；两张 V100S 的 CAGRA-auto 索引快照各显示
+671088640 bytes 根预算预留。未产生 Entry、未跑真实目标 Q 检索或 D 端服务。
+
+In the isolated cuVS 25.02 candidate, normal `python -m sglang...pvd.server`
+loads torch through SGLang's package initializer before cuVS and reproduces
+the `libcuvs_c.so` loader failure. Reordering Mooncake and index construction
+inside the server was insufficient and was reverted. The new top-level
+`python -m pvd_cagra_server` imports cuVS first. In a bounded service run,
+V0/V1 and the coordinator were healthy; Mooncake 0.3.13.post1 registered GPU
+memory and passed local transfer preflight on single-rail `mlx5_0`. Both
+V100S index snapshots showed one 671088640-byte root reservation. No Entry,
+real target-Q search or D-side service was exercised.
+
 ### V 索引预算接入共享 CAGRA 上限 / Shared CAGRA cap in V admission
 
 V 可显式传 `--prompt-index-cagra-global-native-bytes N`（仅 `cagra` / `cagra-auto`）。
