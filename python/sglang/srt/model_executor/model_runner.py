@@ -2447,7 +2447,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             self.is_draft_worker and self.spec_algorithm.is_dflash_family()
         ):
             major, _ = torch.cuda.get_device_capability()
-            if major == 7:
+            # This warmup targets FlashInfer/TileLang prefill kernels. The
+            # torch-native backend has no CUDA-graph metadata API and no such
+            # kernels to compile; calling it there fails during model startup.
+            if major == 7 and self.prefill_attention_backend_str != "torch_native":
                 # TileLang's paged-prefill cache key contains the request batch
                 # size.  Warm both the overwhelmingly common first-chat batch
                 # of one and the existing two-request shape before readiness.

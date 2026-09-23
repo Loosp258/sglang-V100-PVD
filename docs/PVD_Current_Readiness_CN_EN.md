@@ -45,6 +45,29 @@ forward, performance and production Scheduler remain unvalidated. The existing
 checkout's local install-script edits were preserved by using a separate
 validation worktree.
 
+后续 node-1、node-2 的原检出 `scripts/smoke_v100.sh` 均通过，确认这两台的
+SM70 内核、FlashInfer、Marlin/TurboMind 与 NCCL 2.27.5。node-0 最新验证
+worktree 的离线 tiny-Llama 首次被 SM70 预热阻断：`torch_native` backend
+没有 `get_cuda_graph_seq_len_fill_value()`，而 `ModelRunner` 仍运行了
+FlashInfer/TileLang 专用预热。只对 `torch_native` 跳过该预热后，真实 CUDA
+目标 Q probe 通过（post-RoPE oracle 最大误差 0），稀疏模型 forward 通过
+（5 次 forward、10 次逐层 oracle 检查，FP16 最大绝对误差约 0.00194）。
+这些离线 tiny-Llama 测试没有运行 draft 小模型或原生网络传输；独立 worktree
+未包含旧检出位置的 Marlin MoE 扩展，因此不能凭该 worktree 的 Llama 结果
+宣称其 MoE 扩展也已验证。
+
+The original checkouts on node-1 and node-2 passed `scripts/smoke_v100.sh`,
+including SM70 kernels, FlashInfer, Marlin/TurboMind and NCCL 2.27.5. The
+latest node-0 validation worktree initially failed its offline tiny-Llama
+probe because the SM70 FlashInfer/TileLang warmup invoked an unsupported
+CUDA-graph metadata method on `torch_native`. After skipping only that
+irrelevant warmup, the real-CUDA target Q probe passed (zero maximum
+post-RoPE oracle error), and sparse model forward passed (five forwards,
+ten per-layer oracle checks, about 0.00194 maximum FP16 absolute error).
+Neither offline test ran the draft model or native network transport. The
+independent worktree does not carry the old checkout's Marlin MoE extension,
+so its tiny-Llama result does not validate MoE there.
+
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
 连同原生 engine 一起由进程级隔离表保有，避免启动栈回退时丢失 owner 或让

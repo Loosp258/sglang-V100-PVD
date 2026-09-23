@@ -11,6 +11,7 @@ import socket
 import sys
 import tempfile
 import threading
+import traceback
 
 
 def validate(runner):
@@ -263,7 +264,11 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                 cuda=torch.version.cuda,
             )
     except Exception as exc:  # noqa: BLE001 -- strict standalone smoke reports failures, not skips
-        report.update(status="failed", reason=f"{type(exc).__name__}: {exc}")
+        report.update(
+            status="failed",
+            reason=f"{type(exc).__name__}: {exc}",
+            traceback=traceback.format_exc(limit=12),
+        )
         print(json.dumps(report, indent=2))
         return 1
     print(json.dumps(report, indent=2, allow_nan=False))
