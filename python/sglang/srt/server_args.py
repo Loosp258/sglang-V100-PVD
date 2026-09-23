@@ -838,6 +838,7 @@ class ServerArgs:
     pvd_draft_predict_tokens: int = 8
     pvd_draft_scratch_budget_bytes: Optional[int] = None
     pvd_draft_persistent_budget_bytes: Optional[int] = None
+    pvd_draft_mem_fraction_static: Optional[float] = None
     # No default is guessed: a staging budget that fits one GPU can be fatal on
     # another, so PVD startup requires both values explicitly.
     pvd_transfer_staging_budget_bytes: Optional[int] = None
@@ -7058,6 +7059,15 @@ class ServerArgs:
             help="Explicit separate byte ceiling for draft weights and private "
             "pools resident on D. Configuration only until production "
             "predictive retrieval is activated; no capacity default is guessed.",
+        )
+        parser.add_argument(
+            "--pvd-draft-mem-fraction-static",
+            type=float,
+            default=ServerArgs.pvd_draft_mem_fraction_static,
+            help="Separate static-memory fraction for the private draft worker. "
+            "Required before loading a draft; the target model's fraction is "
+            "never reused. Configuration only; predictive retrieval is not "
+            "automatically activated.",
         )
         parser.add_argument(
             "--pvd-strict-rdma-preflight",

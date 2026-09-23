@@ -464,6 +464,9 @@ def draft_args(**overrides):
         pvd_draft_model_path="configurable/draft",
         pvd_draft_revision="draft-rev",
         pvd_draft_device="cuda:1",
+        mem_fraction_static=0.78,
+        max_running_requests=256,
+        pvd_draft_mem_fraction_static=0.08,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -476,6 +479,8 @@ def test_the_draft_settings_are_translated_into_the_fields_the_loader_reads():
     assert private.tokenizer_path == "configurable/draft"
     assert private.revision == "draft-rev"
     assert private.device == "cuda:1"
+    assert private.mem_fraction_static == 0.08
+    assert private.max_running_requests == 1
     # Speculative and disaggregation settings are off inside the copy.
     assert private.speculative_algorithm is None
     assert private.speculative_num_steps is None
@@ -490,6 +495,15 @@ def test_translating_leaves_the_target_configuration_untouched():
     assert vars(args) == before, "the target's configuration was modified"
     assert args.model_path == "target/model-8b"
     assert args.device == "cuda:0"
+
+
+@pytest.mark.parametrize("fraction", [None, False, 0, 1, -0.1, 1.5, "0.1"])
+def test_private_draft_never_inherits_target_kv_pool_fraction(fraction):
+    with pytest.raises(DraftWorkerError, match="pvd-draft-mem-fraction-static"):
+        build_draft_server_args(
+            draft_args(pvd_draft_mem_fraction_static=fraction),
+            DraftPlacement(scratch_budget_bytes=4096),
+        )
 
 
 def test_stale_native_draft_loader_fields_cannot_override_pvd_model():
@@ -1152,6 +1166,7 @@ def pvd_args(**overrides):
         pvd_draft_predict_tokens=8,
         pvd_draft_scratch_budget_bytes=None,
         pvd_draft_persistent_budget_bytes=None,
+        pvd_draft_mem_fraction_static=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -1231,6 +1246,7 @@ def test_the_flags_exist_and_default_to_no_draft_model():
         "--pvd-draft-predict-tokens",
         "--pvd-draft-scratch-budget-bytes",
         "--pvd-draft-persistent-budget-bytes",
+        "--pvd-draft-mem-fraction-static",
     ):
         assert flag in source, f"{flag} is missing"
     defaults = {}
@@ -1243,6 +1259,7 @@ def test_the_flags_exist_and_default_to_no_draft_model():
     assert defaults["pvd_draft_revision"] is None
     assert defaults["pvd_draft_scratch_budget_bytes"] is None
     assert defaults["pvd_draft_persistent_budget_bytes"] is None
+    assert defaults["pvd_draft_mem_fraction_static"] is None
     assert defaults["pvd_draft_predict_tokens"] > 0
     # None of these flags reads or writes the speculative configuration; the
     # word appears in the help text only, to say they do not enable it.

@@ -58,6 +58,23 @@ def test_persistent_budget_is_separate_optional_configuration():
     assert args.pvd_draft_scratch_budget_bytes == 4096
 
 
+@pytest.mark.parametrize("fraction", [False, -0.2, 0, 1, 1.2, "0.1"])
+def test_draft_fraction_refuses_invalid_values(fraction):
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        handle_pvd_disaggregation(
+            pvd_args(
+                pvd_draft_model_path="user/chosen-model",
+                pvd_draft_scratch_budget_bytes=4096,
+                pvd_draft_mem_fraction_static=fraction,
+            )
+        )
+
+
+def test_draft_fraction_has_no_meaning_without_model():
+    with pytest.raises(ValueError, match="no meaning without"):
+        handle_pvd_disaggregation(pvd_args(pvd_draft_mem_fraction_static=0.1))
+
+
 def test_actual_cli_help_distinguishes_configuration_from_activation():
     source = Path("python/sglang/srt/server_args.py").read_text(encoding="utf-8")
     call = next(

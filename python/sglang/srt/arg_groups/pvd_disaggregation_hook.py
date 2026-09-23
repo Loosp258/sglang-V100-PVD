@@ -214,6 +214,13 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         server_args.pvd_draft_predict_tokens = _require_positive_int(
             "--pvd-draft-predict-tokens", server_args.pvd_draft_predict_tokens
         )
+        fraction = getattr(server_args, "pvd_draft_mem_fraction_static", None)
+        if fraction is not None and (
+            isinstance(fraction, bool)
+            or not isinstance(fraction, (int, float))
+            or not 0 < fraction < 1
+        ):
+            raise ValueError("--pvd-draft-mem-fraction-static must be between 0 and 1")
         logger.warning(
             "PVD draft configuration recorded (%s), but production predictive "
             "retrieval is not active: --pvd-draft-* does not instantiate the "
@@ -229,6 +236,11 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     elif getattr(server_args, "pvd_draft_persistent_budget_bytes", None) is not None:
         raise ValueError(
             "--pvd-draft-persistent-budget-bytes has no meaning without "
+            "--pvd-draft-model-path"
+        )
+    elif getattr(server_args, "pvd_draft_mem_fraction_static", None) is not None:
+        raise ValueError(
+            "--pvd-draft-mem-fraction-static has no meaning without "
             "--pvd-draft-model-path"
         )
     if server_args.enable_hierarchical_cache:

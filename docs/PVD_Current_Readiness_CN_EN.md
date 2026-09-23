@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### draft 私有 KV 池比例 / Private draft KV-pool fraction
+
+独立 draft 加载配置现在要求显式 `--pvd-draft-mem-fraction-static`（0 到 1
+之间），并将私有 request 槽数设为允许的并发分支数；不再继承目标模型的
+`mem_fraction_static` 和 `max_running_requests`。CLI 可以先记录模型路径而
+暂不提供该比例，但实际构造 worker 时会拒绝启动。此比例仍不是加载峰值显存
+保证，须与独立的常驻字节预算及设备峰值实测配合使用；生产预测尚未自动启用。
+
+Loading a private draft now requires an explicit
+`--pvd-draft-mem-fraction-static` in (0, 1), and its private request-slot
+limit follows admitted concurrent branches. It cannot inherit the target's
+static-memory fraction or request count. CLI configuration may record a draft
+path without the fraction, but worker construction then fails closed. This is
+not a peak-memory guarantee and does not activate production prediction.
+
 ### 已加载 draft 的保留张量计量 / Loaded-draft retained-tensor accounting
 
 新增 `measure_draft_retained_tensors()`：对已加载模型权重/缓冲区、私有

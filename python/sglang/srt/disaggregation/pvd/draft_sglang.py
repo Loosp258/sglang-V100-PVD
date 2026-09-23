@@ -526,6 +526,19 @@ def build_draft_server_args(server_args: Any, placement: DraftPlacement) -> Any:
         )
     private = copy.deepcopy(server_args)
     private.model_path = model_path
+    fraction = getattr(server_args, "pvd_draft_mem_fraction_static", None)
+    if (
+        isinstance(fraction, bool)
+        or not isinstance(fraction, (int, float))
+        or not 0 < fraction < 1
+    ):
+        raise DraftWorkerError(
+            "a private draft worker requires --pvd-draft-mem-fraction-static "
+            "between 0 and 1; reusing the target's KV-pool fraction can "
+            "exhaust its device"
+        )
+    private.mem_fraction_static = float(fraction)
+    private.max_running_requests = placement.max_concurrent_branches
     # A tokenizer path that still pointed at the target would silently pair
     # the draft weights with the wrong vocabulary.
     if hasattr(private, "tokenizer_path"):
