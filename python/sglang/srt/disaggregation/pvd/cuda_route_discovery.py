@@ -20,6 +20,7 @@ class _Record:
     future: object
     binding: PVDSelectedRouteBinding | None = None
     abandoned: bool = False
+    claimed: bool = False
 
 
 class CUDARouteDiscoveryQueue:
@@ -138,13 +139,24 @@ class CUDARouteDiscoveryQueue:
         return failures
 
     def ready_for(self, req):
+        """Consume one selected route reply for one admission attempt."""
         self._owner()
         record = self._records.get(id(req))
-        if record is None or record.req is not req or record.abandoned:
+        if (
+            record is None
+            or record.req is not req
+            or record.abandoned
+            or record.claimed
+        ):
             return None
         if self._identity(req) != record.identity:
             raise LifecycleError("selected V request identity changed")
-        return record.binding
+        if record.binding is None:
+            return None
+        binding = record.binding
+        record.binding = None
+        record.claimed = True
+        return binding
 
     def close(self):
         """Stop admission; caller polls until every HTTP lookup settles."""

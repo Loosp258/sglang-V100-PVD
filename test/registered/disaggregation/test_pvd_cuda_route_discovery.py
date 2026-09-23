@@ -68,6 +68,9 @@ def test_waiting_queue_starts_only_after_initial_prompt_and_is_bounded():
     manager.started[0][1].set_result(binding(manager, second))
     assert queue.poll([first, second]) == []
     assert queue.ready_for(second).req is second
+    assert queue.ready_for(second) is None
+    assert queue.poll([first, second]) == []
+    assert len(manager.started) == 1
     assert queue.poll([first]) == []
     assert not queue.pending
     manager.runnable["first"] = True
@@ -105,6 +108,22 @@ def test_abandoned_lookup_blocks_same_rid_successor_until_terminal():
     future.set_result(binding(manager, old))
     assert queue.poll([successor]) == []
     assert [req for req, _ in manager.started] == [old, successor]
+
+
+def test_claimed_route_keeps_its_waiting_tombstone_until_request_leaves():
+    manager = Manager()
+    queue = CUDARouteDiscoveryQueue(manager, max_inflight=2)
+    req = request("one")
+    queue.poll([req])
+    manager.started[0][1].set_result(binding(manager, req))
+    queue.poll([req])
+    assert queue.ready_for(req) is not None
+    for _ in range(3):
+        assert queue.ready_for(req) is None
+        assert queue.poll([req]) == []
+    assert len(manager.started) == 1
+    assert queue.poll([]) == []
+    assert not queue.pending
 
 
 def test_bad_result_and_http_failure_are_reported_once_without_same_poll_retry():

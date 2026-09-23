@@ -192,7 +192,7 @@ class CUDADecodeSchedulerBinding:
         return self.driver.snapshot()
 
     def selected_routes_for(self, req):
-        """Return an already-validated binding, never block the Scheduler."""
+        """Consume one validated binding without blocking the Scheduler."""
         self._check()
         if self.route_queue is None:
             return None

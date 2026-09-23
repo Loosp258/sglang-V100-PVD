@@ -21,6 +21,19 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 已选 V 路由一次性领取 / One-shot selected-V route claim
+
+CUDA waiting queue 的 `ready_for()` 现在只交付一次路由绑定；已领取但仍在 waiting
+的请求保留 tombstone，不会在下一轮轮询重复查询 V 或生成第二个控制器。只有该
+Req 离开 waiting 后，队列才清除记录。准入工厂仍须在领取后成功注册并绑定接收
+会话；失败时应终止请求，不能尝试用同一绑定重放。
+
+The CUDA waiting queue now delivers a selected route binding only once. A
+claimed request remains represented while waiting, so the next poll cannot
+issue a second V lookup or construct a duplicate controller. The record is
+removed when that Req leaves waiting. The serving admission factory still
+needs to register and claim the receiver; a failed claim is not replayable.
+
 ### 已选 V 查询完成语义 / Selected-V lookup completion semantics
 
 D 的路由发现现在向 CUDA waiting queue 暴露不可取消的完成 Future。它只在控制

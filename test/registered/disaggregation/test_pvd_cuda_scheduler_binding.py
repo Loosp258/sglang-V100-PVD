@@ -217,6 +217,7 @@ def test_explicit_binding_polls_selected_v_without_admitting_unclaimed_req(monke
         future.set_result(selected)
         t.binding.poll()
         assert t.binding.selected_routes_for(req) is selected
+        assert t.binding.selected_routes_for(req) is None
         assert not t.binding.waiting_ready(req)
         t.s.waiting_queue.clear()
         t.binding.poll()
