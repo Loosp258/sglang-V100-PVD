@@ -155,3 +155,62 @@ def test_creation_requires_real_cuda_but_does_not_install(monkeypatch):
     assert built[2][2]["execution_lock"] is kwargs["execution_lock"]
     assert all(b.snapshot()["reservations"] == 0 for b in budgets)
     c.group.close()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="real CUDA device required")
+def test_real_cuda_bank_and_group_construction_without_prompt_install(monkeypatch):
+    c, _ = receiver(monkeypatch)
+    c.c.pool.k = c.c.pool.k.to("cuda:0")
+    c.c.pool.v = c.c.pool.v.to("cuda:0")
+    c.manager.sparse_receive_registry.device = torch.device("cuda:0")
+    budgets = (TransferBudget(4096, 2), TransferBudget(4096, 2))
+    created = module.create_received_prompt_group(
+        c.session,
+        bank_budget=budgets[0],
+        staging_budget=budgets[1],
+        execution_lock=threading.RLock(),
+        max_union_tokens=2,
+        lead_tokens=1,
+        timeout_seconds=10,
+        max_pending_events=8,
+        max_pending_bytes=65536,
+    )
+    assert created.bank.device == torch.device("cuda:0")
+    assert created.group.coordinator.identity == created.plan.identity[:3]
+    assert not created.group.can_decode(0)
+    assert all(b.snapshot()["reservations"] == 0 for b in budgets)
+    created.group.close()
+    c.group.close()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="real CUDA device required")
+def test_real_cuda_imports_receipted_prompt_without_mutating_model_kv(monkeypatch):
+    c, _ = receiver(monkeypatch)
+    c.c.pool.k = c.c.pool.k.to("cuda:0")
+    c.c.pool.v = c.c.pool.v.to("cuda:0")
+    c.c.req.req_to_token = c.c.req.req_to_token.to("cuda:0")
+    c.manager.sparse_receive_registry.device = torch.device("cuda:0")
+    old_k, old_v = c.c.pool.k.clone(), c.c.pool.v.clone()
+    budgets = (TransferBudget(4096, 2), TransferBudget(4096, 2))
+    created = module.create_received_prompt_group(
+        c.session,
+        bank_budget=budgets[0],
+        staging_budget=budgets[1],
+        execution_lock=threading.RLock(),
+        max_union_tokens=2,
+        lead_tokens=1,
+        timeout_seconds=10,
+        max_pending_events=8,
+        max_pending_bytes=65536,
+    )
+    epoch = created.importer.install_received(
+        c.session, arbiter=c.arbiter, pool_owner=c.c.owner, cache=c.cache
+    )
+    assert epoch.target_tokens == 0 and created.group.can_decode(0)
+    assert created.bank.snapshot()["current_boundary"] == 0
+    torch.testing.assert_close(c.c.pool.k, old_k, atol=0, rtol=0)
+    torch.testing.assert_close(c.c.pool.v, old_v, atol=0, rtol=0)
+    assert budgets[1].snapshot()["reservations"] == 0
+    created.group.close()
+    assert budgets[0].snapshot()["reservations"] == 0
+    c.group.close()

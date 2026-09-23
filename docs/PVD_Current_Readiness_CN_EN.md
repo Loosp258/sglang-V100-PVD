@@ -27,16 +27,22 @@ activation.
 `PVDDecodeSession.require_initial_prompt()` 凭据和 D 模型池逐层 K/V 元数据推导
 完整 Prompt 工作集身份、所有 layer/KV-head、dtype、device、请求 epoch 和预算上限；
 错误 TP、空页、混合 dtype、错误设备或过大的并集都在构造前拒绝。后者仅在 CUDA
-placement 下构造局部 bank/group/importer，**不**自动安装、注册接收 MR 或让请求
-进入 Decode batch。CPU 元数据与工厂参数测试通过；真实 CUDA 构造/安装和
-Scheduler 自动请求装配尚未验收。
+placement 下构造局部 bank/group/importer，**不**自动注册接收 MR 或让请求
+进入 Decode batch。CPU 元数据与工厂参数测试通过。随后在 node-0 V100S
+`torch 2.9.1+cu128` 的独立临时克隆中，用真实 CUDA tensor 完成 group 构造与
+`install_received()` Prompt 导入：模型池 K/V 导入前后逐值一致，staging 与 bank
+预算按预期释放。三文件相关回归 **26 passed**。接收完成凭据来自测试夹具，
+不等于原生 Mooncake WRITE/ACK 或生产 Scheduler 自动请求装配已验收。
 
 The new Prompt-group factory derives TP1 bank metadata from the receiver's
 actual completion receipt and model KV pool rather than caller JSON. It rejects
 wrong TP/layout/pages/dtype/device and oversized unions before construction.
-Its creation phase builds a local CUDA bank/group/importer but does not install
-Prompt KV, register an MR or admit Decode. CPU policy tests pass; actual CUDA
-creation/import and automatic serving assembly are still open.
+Its creation phase builds a local CUDA bank/group/importer but does not
+register an MR or admit Decode. Node-0 V100S then passed actual CUDA group
+construction and `install_received()` on real device tensors: source model KV
+was unchanged and staging/bank reservations were released. The completion
+receipt was minted by a fixture, not by native Mooncake transport. Automatic
+serving assembly and a native receive-to-import proof remain open.
 
 ### CUDA waiting queue 的非阻塞已选 V 路由发现 / Nonblocking selected-V lookup
 
@@ -62,8 +68,10 @@ D 的异步路由发现现在返回仅供本地使用的 `PVDSelectedRouteBindin
 请求工厂拒绝裸 `PVDSelectedShardRoutes`，也拒绝发现后换请求、换 V group 或换
 delivery ID；检查发生在分配稀疏接收目标之前。这是生产准入的安全前置步骤，
 **尚未**自动构造 draft/target pipeline 或启用预测检索。WSL 相关路由/工厂
-回归通过；CloudLab SSH 可连接，但当前节点未保留先前的项目检出和 torch 环境，
-本步未在 GPU 上运行。
+回归通过。先前以登录目录为基准误判 CloudLab 环境缺失：实际旧检出和隔离
+Python 位于 `/mnt/sglang-data/yiliu124-node-0-sglang-pvd/`；旧检出落后当前分支
+且有本地修改，所以本轮使用 `/tmp` 的独立临时克隆验证，没有覆盖旧检出。
+这一非阻塞路由步骤本身仍没有 RDMA 验证。
 
 Route discovery now returns a local `PVDSelectedRouteBinding` tied to the same
 manager, Req object, rid, Entry key, Gateway-selected V group and delivery ID.
