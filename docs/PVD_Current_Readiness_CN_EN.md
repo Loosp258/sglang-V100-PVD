@@ -90,6 +90,30 @@ no live registrations or transfer handles at exit. This is a **single-rail
 debug loopback** result, not proof of cross-node RoCE/GPUDirect, the P→V→D
 path, or production PVD serving.
 
+### 原生跨节点小样本 / Native cross-node sample
+
+`run_pvd_native_cross_node.py` 在 node-1 V100S GPU 0/1 上分别注册 4 KiB 目标区，
+node-0 对应 GPU 0/1 经 `mlx5_0` 原生 Mooncake WRITE 写入，两个 rank 均得到
+终态成功、远端 GPU 字节一致和双端 MR/传输句柄清零。私网地址为
+node-0 `10.0.1.1`、node-1 `10.0.1.2`；TCP 仅用于传递 descriptor 与完成确认，
+payload 没有走 TCP。隔离依赖目录在 node-1 也安装了精确 Mooncake 版本，
+原 Conda 环境保持不变。脚本拒绝将 `FAILED` 状态直接当作安全释放证明：
+还要核对 native transport state 为终态或未提交。此结果验证了 P→V 方向的
+单 rail 小样本，不证明零拷贝 GPUDirect 性能、V→D、完整 KV 生命周期、
+生产 Scheduler 或 CAGRA。
+
+The one-shot `run_pvd_native_cross_node.py` passed for both matching GPU pairs
+from node-0 (`10.0.1.1`) to node-1 (`10.0.1.2`) over `mlx5_0`: each native
+Mooncake WRITE reached terminal success, the destination V100S GPU matched
+all 4 KiB, and both sides ended with zero registered MRs/transfers. TCP carried
+only the descriptor and completion acknowledgement, not payload bytes. The
+exact Mooncake version was installed into node-1's isolated dependency target;
+its original Conda environment was unchanged. The validation runner additionally
+requires a proven terminal or not-submitted transport state before releasing
+an MR; a `FAILED` status alone is insufficient. This establishes only a small
+single-rail P→V sample, not zero-copy GPUDirect performance, V→D, the complete
+KV lifecycle, production Scheduler, or CAGRA.
+
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
 连同原生 engine 一起由进程级隔离表保有，避免启动栈回退时丢失 owner 或让
