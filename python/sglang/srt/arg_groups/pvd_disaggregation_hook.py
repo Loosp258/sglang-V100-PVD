@@ -206,6 +206,11 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
             "--pvd-draft-scratch-budget-bytes",
             server_args.pvd_draft_scratch_budget_bytes,
         )
+        if getattr(server_args, "pvd_draft_persistent_budget_bytes", None) is not None:
+            server_args.pvd_draft_persistent_budget_bytes = _require_positive_int(
+                "--pvd-draft-persistent-budget-bytes",
+                server_args.pvd_draft_persistent_budget_bytes,
+            )
         server_args.pvd_draft_predict_tokens = _require_positive_int(
             "--pvd-draft-predict-tokens", server_args.pvd_draft_predict_tokens
         )
@@ -219,6 +224,11 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     elif getattr(server_args, "pvd_draft_scratch_budget_bytes", None) is not None:
         raise ValueError(
             "--pvd-draft-scratch-budget-bytes has no meaning without "
+            "--pvd-draft-model-path"
+        )
+    elif getattr(server_args, "pvd_draft_persistent_budget_bytes", None) is not None:
+        raise ValueError(
+            "--pvd-draft-persistent-budget-bytes has no meaning without "
             "--pvd-draft-model-path"
         )
     if server_args.enable_hierarchical_cache:

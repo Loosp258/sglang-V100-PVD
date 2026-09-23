@@ -837,6 +837,7 @@ class ServerArgs:
     pvd_draft_device: Optional[str] = None
     pvd_draft_predict_tokens: int = 8
     pvd_draft_scratch_budget_bytes: Optional[int] = None
+    pvd_draft_persistent_budget_bytes: Optional[int] = None
     # No default is guessed: a staging budget that fits one GPU can be fatal on
     # another, so PVD startup requires both values explicitly.
     pvd_transfer_staging_budget_bytes: Optional[int] = None
@@ -7049,6 +7050,14 @@ class ServerArgs:
             "Required with --pvd-draft-model-path; no default is guessed, "
             "and it is separate from the transfer and index budgets so a "
             "prediction cannot consume headroom they were admitted against.",
+        )
+        parser.add_argument(
+            "--pvd-draft-persistent-budget-bytes",
+            type=int,
+            default=ServerArgs.pvd_draft_persistent_budget_bytes,
+            help="Explicit separate byte ceiling for draft weights and private "
+            "pools resident on D. Configuration only until production "
+            "predictive retrieval is activated; no capacity default is guessed.",
         )
         parser.add_argument(
             "--pvd-strict-rdma-preflight",

@@ -1151,6 +1151,7 @@ def pvd_args(**overrides):
         pvd_draft_device=None,
         pvd_draft_predict_tokens=8,
         pvd_draft_scratch_budget_bytes=None,
+        pvd_draft_persistent_budget_bytes=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -1229,6 +1230,7 @@ def test_the_flags_exist_and_default_to_no_draft_model():
         "--pvd-draft-device",
         "--pvd-draft-predict-tokens",
         "--pvd-draft-scratch-budget-bytes",
+        "--pvd-draft-persistent-budget-bytes",
     ):
         assert flag in source, f"{flag} is missing"
     defaults = {}
@@ -1240,6 +1242,7 @@ def test_the_flags_exist_and_default_to_no_draft_model():
     assert defaults["pvd_draft_model_path"] is None
     assert defaults["pvd_draft_revision"] is None
     assert defaults["pvd_draft_scratch_budget_bytes"] is None
+    assert defaults["pvd_draft_persistent_budget_bytes"] is None
     assert defaults["pvd_draft_predict_tokens"] > 0
     # None of these flags reads or writes the speculative configuration; the
     # word appears in the help text only, to say they do not enable it.

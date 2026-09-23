@@ -21,7 +21,12 @@ def test_configured_draft_warns_that_production_prediction_is_not_active(caplog)
 
 
 @pytest.mark.parametrize(
-    "field", ["pvd_draft_scratch_budget_bytes", "pvd_draft_predict_tokens"]
+    "field",
+    [
+        "pvd_draft_scratch_budget_bytes",
+        "pvd_draft_persistent_budget_bytes",
+        "pvd_draft_predict_tokens",
+    ],
 )
 @pytest.mark.parametrize("bad", [True, 1.5, "8"])
 def test_draft_bounds_refuse_bool_float_and_string_values(field, bad):
@@ -33,10 +38,24 @@ def test_draft_bounds_refuse_bool_float_and_string_values(field, bad):
         handle_pvd_disaggregation(args)
 
 
+@pytest.mark.parametrize("field", ["scratch", "persistent"])
 @pytest.mark.parametrize("orphan", [0, False])
-def test_zero_or_false_budget_without_model_is_not_silently_ignored(orphan):
+def test_zero_or_false_budget_without_model_is_not_silently_ignored(field, orphan):
     with pytest.raises(ValueError, match="no meaning without"):
-        handle_pvd_disaggregation(pvd_args(pvd_draft_scratch_budget_bytes=orphan))
+        handle_pvd_disaggregation(
+            pvd_args(**{f"pvd_draft_{field}_budget_bytes": orphan})
+        )
+
+
+def test_persistent_budget_is_separate_optional_configuration():
+    args = pvd_args(
+        pvd_draft_model_path="user/chosen-model",
+        pvd_draft_scratch_budget_bytes=4096,
+        pvd_draft_persistent_budget_bytes=8192,
+    )
+    handle_pvd_disaggregation(args)
+    assert args.pvd_draft_persistent_budget_bytes == 8192
+    assert args.pvd_draft_scratch_budget_bytes == 4096
 
 
 def test_actual_cli_help_distinguishes_configuration_from_activation():

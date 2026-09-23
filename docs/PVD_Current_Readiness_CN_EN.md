@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### Draft 常驻显存预算参数 / Draft persistent-memory budget flag
+
+新增可选 `--pvd-draft-persistent-budget-bytes`，与每分支 scratch 预算分离，
+只接受正整数，不能在未配置 draft 模型时孤立出现；默认仍不猜测预算。
+启动校验/原 speculative 禁令相关定向回归 **85 passed**。该参数当前只被
+记录和校验，**尚未**把 draft worker 装配进生产 Scheduler，也不会因此开始
+分配或限制常驻显存；实际装配前仍必须测量模型权重/私有池并与此上限核对。
+
+The optional `--pvd-draft-persistent-budget-bytes` is distinct from per-branch
+scratch, accepts only positive integers and cannot appear without a draft
+model. No capacity default is guessed. Focused startup/speculation regressions
+passed **85 tests**. This is configuration validation only: it does **not**
+instantiate a production draft worker or yet charge its retained weights and
+private pools. A serving factory must measure those bytes before admission.
+
 ### 真实 7B 权重的稀疏 Decode 数值验证 / Real-7B sparse Decode numerical check
 
 node-0 V100S 在独立临时 worktree 中加载现有 FP16
