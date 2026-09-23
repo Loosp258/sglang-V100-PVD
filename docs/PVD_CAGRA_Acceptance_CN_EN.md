@@ -1,5 +1,41 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 真实 Qwen Prompt KV 的 P→V 上传 / Real Qwen P-to-V upload
+
+CloudLab node-0 的 V100S GPU0 加载现有 FP16 Qwen2.5-7B-Instruct 权重，
+以确定性 1024-token 输入实际执行 Prefill，提取全部 28 层、4 个 KV heads
+的 Prompt K/V。按 V 的 TP2 存储布局拆成两个 shard，单 rail `mlx5_0`
+通过 Mooncake/RDMA 送往 node-1 的 V GPU0/GPU1。V 每 rank commit 完整
+28-layer/2-head 分片，建成 **56 个**可搜索索引；每页 114688 字节。
+`run_pvd_qwen_native_upload_gpu.py` 输出 `passed`，Entry 暂留供 D 的下一步
+验收。测试用的 first-token 元数据只是协议占位值，不声称 P 已按该输入
+正式采样出那个 token。
+
+Node-0 V100S GPU0 loaded the existing FP16 Qwen2.5-7B-Instruct checkpoint
+and actually prefetched deterministic 1024-token input. All 28 layers and
+four KV heads were split across two V storage ranks and uploaded over native
+Mooncake/RDMA `mlx5_0` to node-1 GPUs 0/1. Each rank committed its full
+28-layer/two-head shard and built **56** searchable indexes (114688 bytes per
+page). The gate passed and retained the Entry for D-side validation. The
+first-token metadata in this gate is a protocol placeholder, not a sampled
+output claim.
+
+This proves real-checkpoint KV upload/index creation, not real Q retrieval,
+D installation, generated-token attention, or production scheduling.
+
+```bash
+# Start V cagra-auto with --page-bytes 114688, --total-pages 512,
+# --prompt-index-vector-space qwen2.5-7b-real-target and a shared native cap.
+# On P/node-0, with pinned Mooncake and PYTHONPATH=python:
+python test/registered/disaggregation/run_pvd_qwen_native_upload_gpu.py \
+  --prefill-host 10.0.1.1 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --rail mlx5_0 --page-bytes 114688 --expected-gpu V100S \
+  --architecture qwen2 \
+  --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
+  --dtype float16 --context-length 1056 --max-total-tokens 4096
+```
+
 ## 2026-09-24 真实 Qwen2.5-7B K/Q 原生 CAGRA / Real Qwen2.5-7B K/Q CAGRA
 
 CloudLab node-1 的 V100S GPU0 在隔离的 cuVS 25.02 环境加载现有 FP16

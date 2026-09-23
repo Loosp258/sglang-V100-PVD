@@ -21,6 +21,20 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 真实 Qwen Prompt KV 跨节点 P→V / Real Qwen cross-node P-to-V
+
+node-0 已用真实 Qwen2.5-7B FP16 权重 Prefill 1024 tokens，按 V TP2
+存储布局拆成两个完整 K/V shard，经 Mooncake/RDMA `mlx5_0` 上传 node-1。
+V0/V1 各建成 56 个可搜索 CAGRA 索引。Entry 留存待 D 实验；尚未证明
+真实目标 Q 经过该跨节点服务检索并交付给 D。详见
+[CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+Node-0 used the real FP16 Qwen2.5-7B checkpoint to prefill 1024 tokens,
+split complete Prompt K/V into two V TP2 storage shards, and uploaded both
+over Mooncake/RDMA `mlx5_0` to node-1. Each V rank built 56 searchable
+CAGRA indexes. The Entry remains for the D gate; real target Q has not yet
+searched this cross-node Entry or delivered its selected KV to D.
+
 ### 真实 Qwen K/Q 检索对照 / Real Qwen K/Q retrieval check
 
 node-1 V100S GPU0 已运行真实 Qwen2.5-7B FP16 checkpoint：1024-token
