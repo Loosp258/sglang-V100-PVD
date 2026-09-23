@@ -30,6 +30,8 @@ CloudLab V 节点的 cuVS 25.02 候选环境中，普通 `python -m sglang...pvd
 V0/V1 与 coordinator 全部健康，Mooncake 0.3.13.post1 在单 rail `mlx5_0`
 完成 GPU 注册和本地传输预检；两张 V100S 的 CAGRA-auto 索引快照各显示
 671088640 bytes 根预算预留。未产生 Entry、未跑真实目标 Q 检索或 D 端服务。
+此启动/健康/预算检查现已写成自清理 `run_pvd_cagra_v_service_gpu.py`；node-1
+运行 `passed`，服务退出码 0，隔离端口已释放。
 
 In the isolated cuVS 25.02 candidate, normal `python -m sglang...pvd.server`
 loads torch through SGLang's package initializer before cuVS and reproduces
@@ -40,6 +42,8 @@ V0/V1 and the coordinator were healthy; Mooncake 0.3.13.post1 registered GPU
 memory and passed local transfer preflight on single-rail `mlx5_0`. Both
 V100S index snapshots showed one 671088640-byte root reservation. No Entry,
 real target-Q search or D-side service was exercised.
+The check is now repeatable through `run_pvd_cagra_v_service_gpu.py`; its
+node-1 run passed, exited with code 0, and released the isolated ports.
 
 ### V 索引预算接入共享 CAGRA 上限 / Shared CAGRA cap in V admission
 

@@ -1,5 +1,29 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 原生 V 双 rank 服务门控 / Native dual-rank V service gate
+
+新增 `run_pvd_cagra_v_service_gpu.py`：在指定的空闲隔离端口上使用
+`pvd_cagra_server` 启动单进程双 V rank，等待 coordinator 健康，检查 V0/V1
+Mooncake 0.3.13.post1/RDMA、单 rail `mlx5_0`、GPU MR 注册与本地传输预检、
+两份 `cagra_auto` 索引状态和各一次 640 MiB 根预算预留，然后向子进程发送
+TERM 并等待正常退出。CloudLab node-1 两张 V100S 上输出 `passed`，服务退出码
+0，测试端口释放。没有创建 Entry，也没有检索真实模型 Q 或运行 D。
+
+The self-cleaning `run_pvd_cagra_v_service_gpu.py` gate launches the
+one-process/two-rank V group on explicit unused ports, checks healthy
+coordinator/V0/V1, Mooncake 0.3.13.post1 over active single-rail `mlx5_0`,
+GPU registration/local transfer preflight, and one 640 MiB native-root
+reservation per `cagra_auto` rank. It then terminates its own process and
+waits for clean exit. The node-1 dual-V100S run passed with exit code 0 and
+released its test ports. No Entry, real-model Q search, or D was involved.
+
+```bash
+PYTHONPATH=<pinned-mooncake-target>:python python \
+  test/registered/disaggregation/run_pvd_cagra_v_service_gpu.py \
+  --advertise-host 10.0.1.2 --rail mlx5_0 \
+  --coordinator-port 19100 --shard-port-base 19200
+```
+
 ## 2026-09-24 管理器与真实原生图联合门控 / Manager/native integration gate
 
 node-1 的 GPU 0 和 GPU 1 都在 V100S/cuVS 25.02 隔离候选环境运行
