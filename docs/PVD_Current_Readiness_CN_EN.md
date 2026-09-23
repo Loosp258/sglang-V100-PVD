@@ -29,9 +29,11 @@ V 可显式传 `--prompt-index-cagra-global-native-bytes N`（仅 `cagra` / `cag
 存续期间保持预留。图内 native 分配仍受每图子 limiter 和共享根 limiter 双重
 约束；向量副本、短 Prompt 精确索引及其他 scratch 另行计费。Entry 释放不会
 错误退还全局预留。未设置此参数时仍沿用每图终生预留。CloudLab node-2
-定向索引回归 **219 passed / 3 skipped**；原生双图根 limiter 行为曾在 node-1
-V100S/cuVS 25.02 单独实测，但新管理器接线尚未在真实 V 进程验收。此设计
-不保证给定预算能容纳 56 图或多个 Entry，也未测真实目标 Q 的召回。
+定向索引回归 **219 passed / 3 skipped**。node-1 两张 V100S/cuVS 25.02 的新增
+组件门控把真实 Prompt pack/extract、管理器和四个原生图组合运行：两个合成 Entry
+各两图，共享 640 MiB 根限额，预算仅预留一次；释放 Entry 后图内分配归零，
+根预留仍保持。它尚不是生产 V 服务验收；也不保证给定预算能容纳 56 图或
+多个真实 Entry，未测真实目标 Q 的召回。
 
 V can opt into `--prompt-index-cagra-global-native-bytes N` for `cagra` or
 `cagra-auto`. The root must cover one graph cap and fit the rank's total index
@@ -40,10 +42,12 @@ once before any Entry build and holds it for its lifetime. Child and root
 limiters bound native allocations; vector copies, short-prompt exact indexes
 and other scratch are charged separately. Closing an Entry does not refund the
 root. Without the flag, the per-graph lifetime reservation remains. Focused
-node-2 regressions: **219 passed / 3 skipped**. The native dual-graph root was
-separately measured on node-1 V100S/cuVS 25.02; the new manager wiring has
-not yet been validated inside a real V service. No 56-graph/multi-Entry
-capacity or real-target-Q recall claim follows.
+node-2 regressions: **219 passed / 3 skipped**. A new node-1 dual-V100S/cuVS 25.02
+component gate combined real Prompt packing/extraction, the manager and four
+native graphs from two synthetic Entries. It charged the 640 MiB root once;
+native graph allocations returned to zero after Entry close while the root
+reservation remained. This is not a production V-service run or evidence of
+56-graph/real multi-Entry capacity or real-target-Q recall.
 
 ### 跨图 CAGRA 原生限额能力 / Shared CAGRA native-limit capability
 

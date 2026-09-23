@@ -1,5 +1,35 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 管理器与真实原生图联合门控 / Manager/native integration gate
+
+node-1 的 GPU 0 和 GPU 1 都在 V100S/cuVS 25.02 隔离候选环境运行
+`run_pvd_cagra_shared_manager_gpu.py`：真实 Prompt KV packer 将合成
+1024-token、2-layer、rank-local 1-KV-head 数据打包；`PromptIndexManager`
+提取向量，为两个 Entry 共构建四个原生 CAGRA 图，并通过管理器完成一次检索。
+共享 RMM 根上限 671088640 bytes、每图子上限 536870912 bytes。管理器启动时
+已计费 671088640；四图存活时原生根占用 524288，预算占用 671612928
+（根上限加 524288 向量副本）；关闭两个 Entry 后原生根占用归零，预算仍保留
+671088640 的根预留。状态 `passed`。这证明了合成数据组件接线，不代表真实 V
+worker、真实目标 Q、56 图容量、并发服务、召回或吞吐验收。
+
+The isolated node-1 V100S/cuVS 25.02 component gate passed separately on
+GPU 0 and GPU 1. It packed synthetic
+1024-token Prompt KV, extracted rank-local K through `PromptIndexManager`,
+built four native CAGRA graphs across two Entries, and searched through the
+manager. The root cap was 671088640 bytes and each child cap 536870912.
+Initial charge was exactly the root cap; four live graphs used 524288 native
+root bytes, and budget charge was root plus 524288 vector-copy bytes. Closing
+both Entries returned native root usage to zero while retaining the root
+budget charge. Status: `passed`. No real V service, real-model Q, 56-graph
+capacity, concurrent serving, recall or throughput claim follows.
+
+```bash
+PYTHONPATH=python python test/registered/disaggregation/run_pvd_cagra_shared_manager_gpu.py \
+  --device 0 --expected-gpu V100S --expect-cuvs-version 25.02.00
+PYTHONPATH=python python test/registered/disaggregation/run_pvd_cagra_shared_manager_gpu.py \
+  --device 1 --expected-gpu V100S --expect-cuvs-version 25.02.00
+```
+
 ## 2026-09-24 共享原生上限能力探针 / Shared native-cap capability gate
 
 `CagraNativeRuntime` 新增可选父级 RMM limiter：每个图仍有
