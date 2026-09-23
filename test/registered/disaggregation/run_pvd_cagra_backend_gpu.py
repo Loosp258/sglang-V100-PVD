@@ -89,6 +89,10 @@ def main(argv=None):
             )
             built.append((index, vectors, queries))
         result["build_ms"] = round((time.monotonic() - build_started) * 1000, 3)
+        result["native_retained_bytes"] = [
+            int(index.handle.limit.get_allocated_bytes())
+            for index, _, _ in built
+        ]
         started = time.monotonic()
         max_abs_error = 0.0
         self_hits = 0
