@@ -943,6 +943,26 @@ def build_prediction_only_worker(
         )
     draft_args = build_draft_server_args(server_args, placement)
 
+    # TpModelWorker places ModelRunner through gpu_id, not through the copied
+    # configuration's `device` string. Refuse a misleading configuration
+    # before it can load weights on a different GPU from the declared one.
+    import torch
+
+    requested_device = getattr(server_args, "pvd_draft_device", None)
+    if requested_device is None:
+        draft_args.device = f"cuda:{placement.gpu_id}"
+    else:
+        try:
+            parsed_device = torch.device(requested_device)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            raise DraftWorkerError("invalid --pvd-draft-device") from exc
+        if parsed_device.type != "cuda" or parsed_device.index != placement.gpu_id:
+            raise DraftWorkerError(
+                "--pvd-draft-device must be an indexed CUDA device matching "
+                f"the draft worker gpu_id ({placement.gpu_id})"
+            )
+        draft_args.device = str(parsed_device)
+
     if worker_factory is None:  # pragma: no cover - loads weights
 
         def worker_factory(**kwargs):

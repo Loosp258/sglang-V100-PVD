@@ -21,6 +21,19 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### draft 设备绑定 / Draft device binding
+
+`build_prediction_only_worker()` 在加载权重前核对 `--pvd-draft-device`
+与 worker 的 `gpu_id`：显式值必须是相同编号的 CUDA 设备；未提供时以
+`gpu_id` 生成 `cuda:N`。CPU draft 仍通过独立 CPU smoke 路径测试，
+不伪装成 GPU `TpModelWorker`。此校验只避免错误设备加载，未启动生产预测。
+
+Before loading weights, `build_prediction_only_worker()` now requires an
+explicit draft device to be an indexed CUDA device matching the worker's
+`gpu_id`; when omitted it derives `cuda:N` from that id. The separate CPU
+draft smoke remains CPU-only. This prevents misleading placement, but does
+not activate production prediction.
+
 ### draft 私有 KV 池比例 / Private draft KV-pool fraction
 
 独立 draft 加载配置现在要求显式 `--pvd-draft-mem-fraction-static`（0 到 1

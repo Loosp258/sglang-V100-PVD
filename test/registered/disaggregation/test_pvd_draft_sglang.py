@@ -559,8 +559,48 @@ def test_the_worker_is_constructed_with_private_pools_and_the_draft_config():
     assert captured["server_args"].model_path == "configurable/draft"
     assert captured["server_args"] is not draft_args()
     assert captured["gpu_id"] == 1 and captured["nccl_port"] == 1234
+    assert captured["server_args"].device == "cuda:1"
     assert isinstance(worker, DraftWorkerInterface)
     assert ownership.distinct_objects
+
+
+@pytest.mark.parametrize("device", ["cuda:0", "cuda", "cpu", "not-a-device"])
+def test_worker_refuses_a_device_that_would_disagree_with_gpu_id(device):
+    from sglang.srt.disaggregation.pvd.draft_sglang import (
+        build_prediction_only_worker,
+    )
+
+    called = []
+    with pytest.raises(DraftWorkerError, match="pvd-draft-device"):
+        build_prediction_only_worker(
+            draft_args(pvd_draft_device=device),
+            placement=DraftPlacement(scratch_budget_bytes=4096, gpu_id=1),
+            nccl_port=1234,
+            target_worker=object(),
+            worker_factory=lambda **kwargs: called.append(kwargs),
+        )
+    assert not called, "weights would have been loaded before placement validation"
+
+
+def test_worker_defaults_to_its_actual_cuda_gpu_id():
+    from sglang.srt.disaggregation.pvd.draft_sglang import (
+        build_prediction_only_worker,
+    )
+
+    captured = {}
+
+    def fake_factory(**kwargs):
+        captured.update(kwargs)
+        return FakeWorker(FakePool("draft-req"), FakePool("draft-kv"))
+
+    build_prediction_only_worker(
+        draft_args(pvd_draft_device=None),
+        placement=DraftPlacement(scratch_budget_bytes=4096, gpu_id=2),
+        nccl_port=1234,
+        target_worker=FakeWorker(FakePool("target-req"), FakePool("target-kv")),
+        worker_factory=fake_factory,
+    )
+    assert captured["server_args"].device == "cuda:2"
 
 
 # --------------------------------------------------------------------------
