@@ -21,6 +21,22 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 真实 Qwen K/Q 检索对照 / Real Qwen K/Q retrieval check
+
+node-1 V100S GPU0 已运行真实 Qwen2.5-7B FP16 checkpoint：1024-token
+Prompt 的第 0 层/KV head 0 的 K 与目标 probe 在位置 1024 的 post-RoPE Q
+进入原生 CAGRA，单次 Top-10 与精确 GPU 点积完全重合，分数误差最大
+0.000244140625；见 [CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。这是
+**单 query、单层、单 head** 的实测，不是整体 recall 证明；真实模型 K/Q
+尚未进入跨节点 V→D 安装或生产 Scheduler。
+
+Node-1 V100S GPU0 ran the real FP16 Qwen2.5-7B checkpoint. Native CAGRA
+searched 1024 actual layer-0/KV-head-0 Prompt K rows using a matching
+post-RoPE target Q at position 1024; one Top-10 query had 10/10 overlap with
+exact GPU dot products and 0.000244140625 maximum score error. This is one
+query, layer and head, not a general recall guarantee. These real model K/Q
+have not yet passed through cross-node D installation or production scheduling.
+
 ### D 节点真实 checkpoint 的离线稀疏 attention / Real-checkpoint offline D attention
 
 在 node-2 的 V100S GPU0 上，用已有本地 FP16

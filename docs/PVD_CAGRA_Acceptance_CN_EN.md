@@ -1,5 +1,36 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 真实 Qwen2.5-7B K/Q 原生 CAGRA / Real Qwen2.5-7B K/Q CAGRA
+
+CloudLab node-1 的 V100S GPU0 在隔离的 cuVS 25.02 环境加载现有 FP16
+`Qwen2.5-7B-Instruct` checkpoint。目标模型实际 forward 生成 1024 个 Prompt
+token 的第 0 层、第 0 KV head 的 post-RoPE K；同一目标模型的独立 probe 在
+位置 1024 捕获第 0 Q head 的 post-RoPE Q。原生 CAGRA 对这些 K 建图并搜索，
+与精确 GPU 点积 Top-10 对照：本次 **10/10 命中、recall@10=1.0**，返回分数
+最大绝对误差 **0.000244140625**，probe 预算已退还。脚本状态 `passed`。
+
+On node-1 V100S GPU0, an isolated cuVS 25.02 environment loaded the existing
+FP16 Qwen2.5-7B-Instruct checkpoint. A real target forward produced 1024
+post-RoPE Prompt K rows for layer 0/KV head 0. A separate target probe captured
+the matching post-RoPE Q at position 1024, query head 0. Native CAGRA's
+Top-10 overlapped the exact GPU dot-product Top-10 by **10/10** in this one
+query; maximum returned-score error was **0.000244140625**. Probe budget was
+refunded and the gate passed.
+
+This is one query and one layer/head, not a quality distribution or a recall
+guarantee. The Prompt tokens are deterministic synthetic IDs processed by real
+weights. The gate runs on one node: it does not send this model KV over RDMA,
+install it on D, run generated-token attention, or measure pipeline latency.
+
+```bash
+# On the isolated V cuVS-25.02 candidate, with PYTHONPATH=python and the
+# existing local model checkpoint available; this script imports cuVS first.
+python test/registered/disaggregation/run_pvd_qwen_cagra_recall_gpu.py \
+  --architecture qwen2 \
+  --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
+  --dtype float16 --context-length 1056 --max-total-tokens 4096
+```
+
 ## 2026-09-24 三节点 D 工作集安装与 ACK / Three-node D bank install and ACK
 
 在上一项跨节点稀疏交付基础上，新增

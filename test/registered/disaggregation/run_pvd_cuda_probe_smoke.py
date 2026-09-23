@@ -194,6 +194,8 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
     parser.add_argument("--dtype", choices=("float16", "float32"), default="float16")
     parser.add_argument("--architecture", choices=("llama", "qwen2"), default="llama")
     parser.add_argument("--model-path", default=None)
+    parser.add_argument("--context-length", type=int, default=64)
+    parser.add_argument("--max-total-tokens", type=int, default=128)
     args = parser.parse_args(argv)
     if not __debug__:
         parser.error("assertions must be enabled")
@@ -202,6 +204,11 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
         or not os.path.isfile(os.path.join(args.model_path, "config.json"))
     ):
         parser.error("--model-path must be an absolute local checkpoint directory")
+    if not (
+        16 <= args.context_length <= 4096
+        and args.context_length <= args.max_total_tokens <= 8192
+    ):
+        parser.error("bounded context/total-token capacity required")
     report = {
         "schema": schema,
         "status": "blocked",
@@ -247,7 +254,7 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                     num_hidden_layers=2,
                     num_attention_heads=4,
                     num_key_value_heads=2,
-                    max_position_embeddings=64,
+                max_position_embeddings=args.context_length,
                     architectures=[
                         "LlamaForCausalLM"
                         if args.architecture == "llama"
@@ -266,10 +273,10 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                 load_format="auto" if args.model_path else "dummy",
                 attention_backend="torch_native",
                 page_size=1,
-                max_total_tokens=128,
+                max_total_tokens=args.max_total_tokens,
                 max_running_requests=4,
-                context_length=64,
-                max_prefill_tokens=64,
+                context_length=args.context_length,
+                max_prefill_tokens=args.context_length,
                 chunked_prefill_size=-1,
                 mem_fraction_static=0.5,
                 disable_cuda_graph=True,
