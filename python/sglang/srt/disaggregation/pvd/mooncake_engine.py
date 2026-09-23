@@ -28,6 +28,7 @@ from sglang.srt.distributed.device_communicators.mooncake_transfer_engine import
 
 logger = logging.getLogger(__name__)
 _manager_lock = threading.Lock()
+_uncertain_lock = threading.Lock()
 # Native registration may have taken effect even when its Python call fails.
 # Keep both the engine and CUDA storage alive until process exit in that case.
 _uncertain_native_registrations: list[tuple[Any, torch.Tensor, int, str]] = []
@@ -86,9 +87,33 @@ class MooncakePVDTransferEngine(TransferEngine):
         self, buffer: torch.Tensor, ptr: int, reason: str
     ) -> None:
         # Called with self._lock held. Never recycle possibly registered storage.
-        _uncertain_native_registrations.append((self._engine, buffer, ptr, reason))
-        self._registration_unknown_reason = reason
-        self._engine._pvd_registration_unknown_reason = reason
+        with _uncertain_lock:
+            _uncertain_native_registrations.append((self._engine, buffer, ptr, reason))
+            self._registration_unknown_reason = reason
+            self._engine._pvd_registration_unknown_reason = reason
+
+    def _clear_quarantined_registration(self, buffer: torch.Tensor, ptr: int) -> None:
+        # A later successful native unregister is the only recovery proof.
+        with _uncertain_lock:
+            _uncertain_native_registrations[:] = [
+                record
+                for record in _uncertain_native_registrations
+                if not (
+                    record[0] is self._engine
+                    and record[1] is buffer
+                    and record[2] == ptr
+                )
+            ]
+            remaining = next(
+                (
+                    record[3]
+                    for record in _uncertain_native_registrations
+                    if record[0] is self._engine
+                ),
+                None,
+            )
+            self._registration_unknown_reason = remaining
+            self._engine._pvd_registration_unknown_reason = remaining
 
     def register_memory(
         self,
@@ -220,13 +245,23 @@ class MooncakePVDTransferEngine(TransferEngine):
         # Keep the registration and tensor until native deregistration succeeds.
         # ResourceGuard serializes callbacks and rejects all new transfer pins.
         if existing is not None:
-            ret = self._engine.engine.unregister_memory(
-                existing.descriptor.address
-                - int(existing.descriptor.backend_metadata.get("base_offset", 0))
+            ptr = existing.descriptor.address - int(
+                existing.descriptor.backend_metadata.get("base_offset", 0)
             )
-            if ret != 0:
-                raise RuntimeError(f"Mooncake memory deregistration failed: {ret}")
+            try:
+                ret = self._engine.engine.unregister_memory(ptr)
+                if ret != 0:
+                    raise RuntimeError(f"native unregister returned {ret}")
+            except Exception as exc:
+                with self._lock:
+                    self._quarantine_registration(
+                        existing.buffer,
+                        ptr,
+                        f"native unregister outcome is unknown: {exc}",
+                    )
+                raise RuntimeError("Mooncake memory deregistration failed") from exc
             with self._lock:
+                self._clear_quarantined_registration(existing.buffer, ptr)
                 self._registrations.pop(existing.descriptor.region_id, None)
                 self._guards.pop(existing.descriptor.region_id, None)
             logger.debug(

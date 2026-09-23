@@ -7,6 +7,7 @@ process-global configuration once, and resolves writes by address, not region_id
 
 import ast
 import builtins
+import gc
 import importlib.metadata
 import importlib.util
 import logging
@@ -314,6 +315,68 @@ def test_native_transfer_quarantine_is_unhealthy_and_blocks_new_mrs(
     with pytest.raises(RuntimeError, match="native transport is quarantined"):
         adapter.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
     assert health["registered_regions"] == 1
+
+
+def test_failed_native_unregister_retains_buffer_after_adapter_is_dropped(
+    transport, monkeypatch
+):
+    adapter = transport.adapter.MooncakePVDTransferEngine(
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
+    )
+    monkeypatch.setattr(
+        adapter._engine.engine, "unregister_memory", lambda address: -1
+    )
+    buffer = CudaBuffer()
+    retained = weakref.ref(buffer)
+    registration = adapter.register_memory(
+        buffer, endpoint="v:1", rank=0, rail="mlx5_2"
+    )
+    with pytest.raises(RuntimeError, match="deregistration failed"):
+        adapter.release_memory(registration)
+    assert adapter.health()["healthy"] is False
+    assert "native unregister" in adapter.health()["registration_unknown_reason"]
+    del registration, buffer, adapter
+    gc.collect()
+    assert retained() is not None
+    assert transport.adapter._uncertain_native_registrations[-1][1] is retained()
+
+
+def test_successful_unregister_retry_clears_only_its_quarantine(
+    transport, monkeypatch
+):
+    adapter = transport.adapter.MooncakePVDTransferEngine(
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
+    )
+    native = adapter._engine.engine
+    monkeypatch.setattr(native, "unregister_memory", lambda address: -1)
+
+    class OffsetBuffer(CudaBuffer):
+        def __init__(self, ptr):
+            self.ptr = ptr
+
+        def data_ptr(self):
+            return self.ptr
+
+    registrations = [
+        adapter.register_memory(OffsetBuffer(ptr), endpoint="v:1", rank=0, rail="mlx5_2")
+        for ptr in (4096, 8192)
+    ]
+    for registration in registrations:
+        with pytest.raises(RuntimeError, match="deregistration failed"):
+            adapter.release_memory(registration)
+    assert not adapter.health()["healthy"]
+
+    monkeypatch.setattr(native, "unregister_memory", lambda address: 0)
+    adapter.release_memory(registrations[0])
+    assert not adapter.health()["healthy"]
+    assert adapter.health()["registered_regions"] == 1
+    adapter.release_memory(registrations[1])
+    assert adapter.health()["healthy"]
+    assert adapter.health()["registered_regions"] == 0
+    assert not any(
+        record[0] is adapter._engine
+        for record in transport.adapter._uncertain_native_registrations
+    )
 
 
 def test_regular_pd_does_not_change_process_environment(transport):

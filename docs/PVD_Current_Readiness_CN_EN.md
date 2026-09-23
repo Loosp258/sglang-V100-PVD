@@ -723,6 +723,15 @@ This is conservative fail-closed behavior, not GPU/RDMA fault-injection evidence
 If native submit/poll becomes untrackable, `health()` now reports the lifecycle
 quarantine and its reason. A new MR is refused before calling Mooncake; the
 source buffer and budget of an unknown WRITE remain retained.
+原生注销失败或抛异常时也会把对应 CUDA buffer 与 engine 保留在进程级隔离表，
+避免 adapter 被回收后悬挂 MR；只在该 MR 后续成功注销时删除它的隔离项。
+若同一 engine 还有别的未确认 MR，仍保持不健康。重试注销仍允许，
+新注册与 PUT 在故障恢复前拒绝。
+Native unregister failure or exception likewise retains its CUDA buffer and
+engine at process scope, even if the adapter becomes unreachable. Only a later
+successful unregister clears that MR's quarantine; another uncertain MR keeps
+the shared engine unhealthy. Retrying release remains allowed, while new
+registrations and PUTs are refused until recovery.
 
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。
   New requests never reset existing clocks/prefetch; count committed D tokens only.
