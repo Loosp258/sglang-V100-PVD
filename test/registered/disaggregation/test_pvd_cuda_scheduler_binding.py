@@ -1,13 +1,16 @@
 """Real binding/Decode method bodies on CPU; model/transport remain doubles."""
 
 from contextlib import contextmanager
+from concurrent.futures import Future
 from http import HTTPStatus
 from types import SimpleNamespace as NS
 
 import pytest
 from sglang.srt.disaggregation.pvd import cuda_scheduler_binding as module
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
+from sglang.srt.disaggregation.pvd.conn import PVDSelectedRouteBinding
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
+from sglang.srt.disaggregation.pvd.cuda_route_discovery import CUDARouteDiscoveryQueue
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeRefresher
 from test_pvd_cpu_release_driver import scheduler_methods
 from test_pvd_cuda_receiver_ownership import bound, pump
@@ -178,6 +181,46 @@ def test_new_unclaimed_request_does_not_reset_peer(monkeypatch):
         assert before == (record.outputs, record.refresh, t.c.session.clock.round)
         with pytest.raises(LifecycleError, match="receiver-claimed"):
             t.binding.waiting_ready(NS(rid="r"))
+
+
+def test_explicit_binding_polls_selected_v_without_admitting_unclaimed_req(monkeypatch):
+    with setup(monkeypatch) as t:
+        req = NS(
+            rid="new",
+            pvd_delivery_id="new:delivery",
+            pvd_vector_group_id="chosen",
+            is_retracted=False,
+            finished=lambda: False,
+        )
+        future = Future()
+        started = []
+        t.c.manager.vector_group_for = lambda req: req.pvd_vector_group_id
+        t.c.manager.bootstrap_runnable = lambda req: True
+        t.c.manager.start_selected_cuda_routes = lambda req: (
+            started.append(req) or future
+        )
+        t.binding.route_queue = CUDARouteDiscoveryQueue(t.c.manager, max_inflight=2)
+        t.s.waiting_queue = [t.c.request, req]
+        t.binding.poll()
+        assert started == [req]
+        assert t.binding.selected_routes_for(req) is None
+        assert not t.binding.waiting_ready(req)
+        selected = PVDSelectedRouteBinding(
+            t.c.manager,
+            req,
+            req.rid,
+            t.c.key,
+            "chosen",
+            req.pvd_delivery_id,
+            object(),
+        )
+        future.set_result(selected)
+        t.binding.poll()
+        assert t.binding.selected_routes_for(req) is selected
+        assert not t.binding.waiting_ready(req)
+        t.s.waiting_queue.clear()
+        t.binding.poll()
+        assert not t.binding.route_queue.pending
 
 
 def test_actual_selection_waits_before_decode_allocation(monkeypatch):

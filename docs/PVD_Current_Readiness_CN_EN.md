@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### CUDA waiting queue 的非阻塞已选 V 路由发现 / Nonblocking selected-V lookup
+
+显式安装的 CUDA Scheduler binding 现在可以附带有界 `CUDARouteDiscoveryQueue`：
+只对完整 Prompt 已安装、仍在 waiting queue 的请求异步查询 Router 选中的 V；
+owner 线程轮询完成结果，错误按请求停止，其他请求不被队首阻塞。换请求身份、
+取消或退出时不发布迟到回复；废弃的 HTTP Future 不用 `cancelled/done`
+冒充底层协程已排空，而是保留占用直到实际结果返回。发现结果只供后续工厂使用，
+**不会**直接让请求进入 Decode batch，也不自动装配 draft、probe 或稀疏银行。
+
+An explicitly installed CUDA Scheduler binding can now poll a bounded,
+nonblocking selected-V discovery queue for waiting requests whose initial
+Prompt is installed. A stale or failed lookup cannot publish a route or block
+unrelated waiting requests. Abandoned HTTP calls retain their bounded slot
+until they settle; a cancelled Future is not treated as coroutine completion.
+The result is only an input to the still-missing production request factory:
+it does not activate predictive serving or admit a request to Decode.
+
 ### D 侧已选路由绑定 / D-side selected-route binding
 
 D 的异步路由发现现在返回仅供本地使用的 `PVDSelectedRouteBinding`，将结果绑定到

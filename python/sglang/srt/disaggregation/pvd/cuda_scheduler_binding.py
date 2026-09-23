@@ -10,6 +10,9 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_route_discovery import (
+    CUDARouteDiscoveryQueue,
+)
 from sglang.srt.disaggregation.pvd.cuda_request_release import _require_supported_pools
 from sglang.srt.disaggregation.pvd.cuda_schedule_bridge import CUDAScheduleBridge
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
@@ -28,7 +31,7 @@ def binding_for(scheduler):
 
 
 class CUDADecodeSchedulerBinding:
-    def __init__(self, scheduler, driver, executor, *, pool_owner):
+    def __init__(self, scheduler, driver, executor, *, pool_owner, route_queue=None):
         if (
             not isinstance(driver, CUDARefreshDriver)
             or not isinstance(executor, CUDARankBatchExecutor)
@@ -88,11 +91,21 @@ class CUDADecodeSchedulerBinding:
             or executor._active
             or executor._quarantined
             or driver._execution_lock not in (None, executor.consumer._lock)
+            or (
+                route_queue is not None
+                and (
+                    not isinstance(route_queue, CUDARouteDiscoveryQueue)
+                    or route_queue.manager is not manager
+                    or route_queue.max_inflight > driver.max_requests
+                    or route_queue._closed
+                )
+            )
         ):
             raise LifecycleError(
                 "exact TP1 non-overlap CUDA backend/pools/bootstrap required"
             )
         self.scheduler, self.driver, self.executor = scheduler, driver, executor
+        self.route_queue = route_queue
         self.pool_owner, self.manager, self.runner = pool_owner, manager, runner
         self.closed = False
         self._pin = "cuda-scheduler:" + uuid.uuid4().hex
@@ -122,6 +135,10 @@ class CUDADecodeSchedulerBinding:
             or self.executor.dispatcher.arbiter is not self.driver.arbiter
             or self.scheduler.enable_overlap
             or not self.scheduler.server_args.disable_cuda_graph
+            or (
+                self.route_queue is not None
+                and self.route_queue.manager is not self.manager
+            )
         ):
             raise LifecycleError("CUDA Scheduler binding changed or closed")
 
@@ -158,11 +175,28 @@ class CUDADecodeSchedulerBinding:
 
     def poll(self):
         self._check()
+        if self.route_queue is not None:
+            unclaimed = [
+                req
+                for req in self.scheduler.waiting_queue
+                if self.driver._records.get(req.rid) is None
+            ]
+            for req, error in self.route_queue.poll(unclaimed):
+                self.scheduler._abort_pvd_cuda_requests(
+                    [req], f"selected V route discovery failed: {error}"
+                )
         # Emit already-stopped requests before poll can retire their records.
         self._abort_stopped()
         self.driver.poll()
         self._abort_stopped()
         return self.driver.snapshot()
+
+    def selected_routes_for(self, req):
+        """Return an already-validated binding, never block the Scheduler."""
+        self._check()
+        if self.route_queue is None:
+            return None
+        return self.route_queue.ready_for(req)
 
     def _abort_stopped(self):
         failures = [
@@ -231,6 +265,8 @@ class CUDADecodeSchedulerBinding:
             or self.executor._quarantined
         ):
             raise LifecycleError("CUDA controllers and batch executor must drain first")
+        if self.route_queue is not None and not self.route_queue.close():
+            raise LifecycleError("selected V route lookups must drain first")
         self.driver.close_loop()
         # Even a failing final pool callback must never re-enable scheduling.
         self.closed = True  # Leave a closed marker; no silent legacy fallback.
