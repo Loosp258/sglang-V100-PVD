@@ -74,7 +74,7 @@ for recall, without widening the cutoff using numerical tolerance.
 
 原先只检查有限分数与邻居召回，会漏掉正确 ID 搭配错误分数的问题。现在增加独立
 CPU 数值验证；分数容差为 rtol/atol 各 1e-3，仅用于数值检查，不扩大 recall 的
-Top-K cutoff。新增 10 个 CPU oracle 测试通过；这不代表实际执行了 cuVS kernel。
+Top-K cutoff。新增 10 个 CPU oracle 测试通过；后续独立的真实 V100S 探针见本页顶部。
 
 ```bash
 # No GPU import/build/search, no dependency changes
@@ -83,9 +83,8 @@ python scripts/pvd/check_cagra.py --mode inventory
 python scripts/pvd/check_cagra.py --mode smoke --expected-gpu V100S
 ```
 
-The smoke is synthetic, not real-query recall or generation quality. No CAGRA
-serving backend has been enabled. Native allocation bounds (retained graph,
-build/search scratch), stream completion, installed-package capability and
-real-model query evaluation remain necessary before such a backend can satisfy
-the existing IndexBackend lifetime/budget contract. CPU doubles cannot establish
-those native properties. No GPU/RDMA/performance acceptance is claimed here.
+The GPU smoke is synthetic, not real-query recall or generation quality. No
+CAGRA serving backend has been enabled. The bounded native adapter probe
+establishes one version/device/configuration, not safe multi-Entry admission,
+all 56 graphs, real-model queries, RDMA integration or performance. CPU doubles
+remain useful for lifecycle edge cases but cannot establish those GPU properties.

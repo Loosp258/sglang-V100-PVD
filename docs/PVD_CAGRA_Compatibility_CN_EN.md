@@ -1,6 +1,8 @@
 # PVD CAGRA 兼容性与接入约束 / Compatibility and integration gates
 
-核对日期 / Checked: 2026-09-22. **未做 GPU 实测 / No GPU execution.**
+首次核对 / Initially checked: 2026-09-22. This section records the historical
+candidate selection before GPU access; the later V100S execution evidence is in
+[CAGRA acceptance](PVD_CAGRA_Acceptance_CN_EN.md).
 
 ## 版本不能混为一谈 / Requirements are release-specific
 
