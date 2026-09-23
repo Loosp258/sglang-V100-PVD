@@ -462,6 +462,17 @@ either side. Both P→V and V→D legs now have independent single-rail samples
 for both ranks. **No** same-request KV was relayed continuously through V to D;
 full serving, real-model KV, concurrency stress, and performance remain open.
 
+新增独立的[同请求 P→V→D GPU 缓冲区接力验收工具](PVD_Native_Relay_CN_EN.md)：
+V 对同一 GPU 注册区先接收、后作为源发送；未知 WRITE 完成时保留 MR。
+8 个 CPU 契约用例已通过；**三节点连续接力尚未运行**，不能把历史上两段各自通过
+当作同请求接力已经通过。
+
+The standalone [same-request GPU-buffer relay gate](PVD_Native_Relay_CN_EN.md)
+reuses one V registration as the receive target and then the send source,
+retaining the MR on unknown completion. Eight CPU contract tests pass.
+**The continuous three-node relay has not yet run**; the previous independent
+P→V and V→D samples do not establish it.
+
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
 连同原生 engine 一起由进程级隔离表保有，避免启动栈回退时丢失 owner 或让
