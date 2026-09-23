@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### Draft 分支准入失败清理 / Draft branch admission-failure cleanup
+
+`SGLangDraftProvider.branch()` 创建 handle 后，如果 scratch 大小计算、类型校验或
+预算预留失败，现在先在共享执行锁下调用该 handle 的 `release()`，再退还准入槽位；
+若清理失败则保留 handle 并隔离整个 provider，拒绝再次复用可能仍活着的私有资源。
+scratch 大小不再把布尔/浮点数强制转成整数。CloudLab node-0 隔离 worktree 的
+draft 测试组为 **254 passed**。此项只修复分支生命周期，不会装配生产 Scheduler。
+
+After `SGLangDraftProvider.branch()` opens a handle, failure to size, validate
+or reserve scratch now releases that handle under the shared execution lock
+before returning admission. Failed cleanup retains the handle and quarantines
+the provider. Boolean/floating scratch declarations are rejected rather than
+coerced. The draft regression group passed **254 tests** in an isolated
+CloudLab node-0 worktree. Production Scheduler activation remains open.
+
 ### V100S 上的真实 CUDA draft 执行 / Real CUDA draft execution on V100S
 
 独立 `run_pvd_cuda_draft_smoke.py` 复用真实 SGLang ModelRunner/CUDA

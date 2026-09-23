@@ -769,6 +769,9 @@ class SGLangDraftProvider(DraftProvider):
                 )
             # Reserve the slot before anything is allocated against it.
             self._active[branch_id] = _Branch(branch_id, None, owner, 0)
+        handle = None
+        reserved = False
+        wanted = 0
         try:
             # Sized for the worst case this runner admits, because the
             # branch is opened before any prefix is seen and a reservation
@@ -778,21 +781,57 @@ class SGLangDraftProvider(DraftProvider):
                 prefix_tokens=self.capabilities.max_prefix_tokens,
                 max_tokens=self.config.predict_tokens,
             )
-            wanted = int(handle.scratch_bytes())
-            if wanted < 0:
+            wanted = handle.scratch_bytes()
+            if type(wanted) is not int or wanted < 0:
                 raise PredictionConfigError(
-                    "a handle must declare non-negative scratch bytes"
+                    "a handle must declare scratch bytes as a non-negative integer"
                 )
             self.scratch_budget.reserve(owner, wanted, 0)
-        except BaseException:
+            reserved = True
+            with self._lock:
+                if self._quarantined:
+                    raise TransferCapacityError("shared draft worker is quarantined")
+                record = self._active[branch_id]
+                record.handle = handle
+                record.reserved_bytes = wanted
+                self._current.branch = branch_id
+        except BaseException as admission_error:
+            # open() may already have minted branch-owned metadata. Its
+            # release must precede returning the admission slot, even when
+            # scratch sizing or reservation itself failed. Shared pool/backend
+            # cleanup is serialized with forwards and normal retirement.
+            if handle is not None:
+                with self._execution_lock:
+                    try:
+                        handle.release()
+                    except BaseException as cleanup_error:
+                        with self._lock:
+                            record = self._active.pop(branch_id)
+                            record.handle = handle
+                            record.reserved_bytes = wanted if reserved else 0
+                            self._retained[branch_id] = record
+                            self._quarantined.append(
+                                QuarantinedBranch(
+                                    branch_id=branch_id,
+                                    owner=owner,
+                                    reserved_bytes=record.reserved_bytes,
+                                    reason=(
+                                        f"admission: {type(admission_error).__name__}: "
+                                        f"{admission_error}; cleanup: "
+                                        f"{type(cleanup_error).__name__}: "
+                                        f"{cleanup_error}"
+                                    ),
+                                )
+                            )
+                        raise DraftWorkerError(
+                            "draft branch admission failed and its opened "
+                            "handle could not be released; provider quarantined"
+                        ) from cleanup_error
             with self._lock:
                 self._active.pop(branch_id, None)
+            if reserved:
+                self.scratch_budget.release(owner)
             raise
-        with self._lock:
-            record = self._active[branch_id]
-            record.handle = handle
-            record.reserved_bytes = wanted
-            self._current.branch = branch_id
         try:
             yield self
         finally:
