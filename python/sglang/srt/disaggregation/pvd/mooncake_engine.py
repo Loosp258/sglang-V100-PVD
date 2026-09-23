@@ -110,6 +110,12 @@ class MooncakePVDTransferEngine(TransferEngine):
         length = buffer.numel() * buffer.element_size()
         ptr = int(buffer.data_ptr())
         with self._lock:
+            transport_state = self.lifecycle_manager.snapshot()
+            if transport_state["quarantined"]:
+                raise RuntimeError(
+                    "PVD native transport is quarantined: "
+                    f"{transport_state['quarantine_reason']}"
+                )
             unknown_reason = getattr(
                 self._engine, "_pvd_registration_unknown_reason", None
             )
@@ -338,6 +344,7 @@ class MooncakePVDTransferEngine(TransferEngine):
         self.lifecycle_manager.request_cancel(handle)
 
     def health(self) -> Dict[str, Any]:
+        lifecycle = self.lifecycle_manager.snapshot()
         with self._lock:
             registrations = len(self._registrations)
             unknown_reason = getattr(
@@ -350,7 +357,7 @@ class MooncakePVDTransferEngine(TransferEngine):
             unknown_reason = unknown_reason or f"Mooncake session ID unavailable: {exc}"
         return {
             "backend": self.name,
-            "healthy": unknown_reason is None,
+            "healthy": unknown_reason is None and not lifecycle["quarantined"],
             "registration_unknown_reason": unknown_reason,
             "rail": self.rail,
             "session_id": session_id,
@@ -358,5 +365,5 @@ class MooncakePVDTransferEngine(TransferEngine):
             "metadata_policy": "fresh",
             "metadata_policy_verification": "version-pinned-pre-init",
             "mooncake_version": self._engine.pvd_metadata_version,
-            "lifecycle": self.lifecycle_manager.snapshot(),
+            "lifecycle": lifecycle,
         }

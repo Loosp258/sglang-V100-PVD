@@ -342,4 +342,5 @@ class TransferLifecycleManager:
                 for handle, _, _ in self._transfers.values()
             )
             result["quarantined"] = self._quarantine_reason is not None
+            result["quarantine_reason"] = self._quarantine_reason
         return result

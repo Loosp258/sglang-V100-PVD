@@ -717,6 +717,13 @@ buffer is released only after native unregister succeeds; failed rollback is
 quarantined the same way. Health remains reportable when session-ID lookup fails.
 This is conservative fail-closed behavior, not GPU/RDMA fault-injection evidence.
 
+另外，原生 submit/poll 进入不可追踪状态时，`health()` 现在会显示底层
+`TransferLifecycleManager` 的隔离状态及原因，新 MR 注册在调用 Mooncake 前即被拒绝。
+已有未知 WRITE 的源 buffer 和预算继续保留，不能因健康报告而被释放。
+If native submit/poll becomes untrackable, `health()` now reports the lifecycle
+quarantine and its reason. A new MR is refused before calling Mooncake; the
+source buffer and budget of an unknown WRITE remain retained.
+
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。
   New requests never reset existing clocks/prefetch; count committed D tokens only.
 - draft 只预测检索位置；目标模型输出是唯一正式输出，不启用原生 speculative

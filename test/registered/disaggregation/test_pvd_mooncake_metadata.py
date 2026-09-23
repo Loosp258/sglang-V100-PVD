@@ -290,6 +290,32 @@ def test_failed_descriptor_rollback_quarantines_cuda_storage(transport, monkeypa
     assert "native rollback failed" in adapter.health()["registration_unknown_reason"]
 
 
+def test_native_transfer_quarantine_is_unhealthy_and_blocks_new_mrs(
+    transport, monkeypatch
+):
+    from sglang.srt.disaggregation.pvd.transfer_engine import TransferStatus
+
+    adapter = transport.adapter.MooncakePVDTransferEngine(
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
+    )
+
+    def raise_after_submit(endpoint, source, destination, length):
+        raise RuntimeError("native submit outcome unknown")
+
+    monkeypatch.setattr(
+        adapter._engine.engine, "transfer_submit_write", raise_after_submit
+    )
+    handle = put(adapter, "unknown-submit")
+    assert handle.status == TransferStatus.FAILED
+    health = adapter.health()
+    assert health["healthy"] is False
+    assert health["lifecycle"]["quarantined"] is True
+    assert "native submit" in health["lifecycle"]["quarantine_reason"]
+    with pytest.raises(RuntimeError, match="native transport is quarantined"):
+        adapter.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
+    assert health["registered_regions"] == 1
+
+
 def test_regular_pd_does_not_change_process_environment(transport):
     engine = transport.shared.MooncakeTransferEngine("p", gpu_id=0, ib_device="mlx5_2")
     assert "MC_DISABLE_METACACHE" not in os.environ
