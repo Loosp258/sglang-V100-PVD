@@ -14,7 +14,7 @@ import threading
 import traceback
 
 
-def validate(runner):
+def validate(runner, *, checkpoint=False):
     import torch
     from sglang.srt.disaggregation.pvd.cuda_target_probe import (
         CUDALlamaTargetProbe,
@@ -53,9 +53,17 @@ def validate(runner):
     pools = runner.token_to_kv_pool.k_buffer + runner.token_to_kv_pool.v_buffer
     with torch.no_grad():
         for tensor in pools:
-            tensor.fill_(0.25)
-    before = [tensor.clone() for tensor in pools]
-    weights = [p.clone() for p in runner.model.parameters()]
+            (tensor[:1] if checkpoint else tensor).fill_(0.25)
+    # A real 7B checkpoint must not be duplicated just for this test. Keep
+    # bounded per-tensor canaries; the tiny fixture still checks every byte.
+    before = [
+        (tensor, tensor[:1].clone() if checkpoint else tensor.clone())
+        for tensor in pools
+    ]
+    weights = [
+        (p, p.detach().flatten()[:16].clone() if checkpoint else p.clone())
+        for p in runner.model.parameters()
+    ]
     mapping = runner.req_to_token_pool.req_to_token.clone()
     free = runner.token_to_kv_pool_allocator.free_pages.clone()
     slots = list(runner.req_to_token_pool.free_slots)
@@ -73,10 +81,17 @@ def validate(runner):
         actual = [query.vectors.clone() for query in actual_queries]
     assert budget.snapshot()["used_staging_bytes"] == 0
     assert not execution_lock.locked()
-    for old, current in zip(before, pools, strict=True):
-        torch.testing.assert_close(old, current, rtol=0, atol=0)
-    for old, current in zip(weights, runner.model.parameters(), strict=True):
-        torch.testing.assert_close(old, current, rtol=0, atol=0)
+    for current, old in before:
+        torch.testing.assert_close(
+            old, current[:1] if checkpoint else current, rtol=0, atol=0
+        )
+    for current, old in weights:
+        torch.testing.assert_close(
+            old,
+            current.detach().flatten()[:16] if checkpoint else current,
+            rtol=0,
+            atol=0,
+        )
     torch.testing.assert_close(
         mapping, runner.req_to_token_pool.req_to_token, rtol=0, atol=0
     )
@@ -86,30 +101,31 @@ def validate(runner):
     assert slots == runner.req_to_token_pool.free_slots
     assert torch.equal(rng, torch.cuda.get_rng_state(0))
 
-    # Independent TEST oracle observes ordinary target RoPE output. Probe code
-    # never installs a hook and uses no committed target allocator row.
-    oracle, raw, hooks, seen = [], [], [], set()
+    # Independent TEST oracle observes each layer's attention input after
+    # RoPE, plus the layer-local QKV projection before RoPE. A large model may
+    # share a RoPE module across layers, so hooking the module cannot identify
+    # which layer produced a query. Probe code itself installs no hooks.
+    oracle, raw, hooks = [], [], []
     allocator = PrivatePoolAllocator(
         runner.req_to_token_pool, runner.token_to_kv_pool_allocator
     )
     slot, rows = allocator.alloc_request(), []
     try:
-        for layer in runner.model.model.layers:
-            rope = layer.self_attn.rotary_emb
-            if id(rope) not in seen:
-                seen.add(id(rope))
-                hooks.append(
-                    rope.register_forward_pre_hook(
-                        lambda module, args: raw.append(args[1].detach().clone())
+        for layer in runner.model.model.layers[:2]:
+            attention = layer.self_attn
+            q_size = attention.q_size
+            hooks.append(
+                attention.qkv_proj.register_forward_hook(
+                    lambda module, args, output, size=q_size: raw.append(
+                        output[0][:, :size].detach().clone()
                     )
                 )
-                hooks.append(
-                    rope.register_forward_hook(
-                        lambda module, args, output: oracle.append(
-                            output[0].detach().clone()
-                        )
-                    )
+            )
+            hooks.append(
+                attention.attn.register_forward_pre_hook(
+                    lambda module, args: oracle.append(args[0].detach().clone())
                 )
+            )
         tokens = committed.tokens
         rows = allocator.alloc_kv(len(tokens))
         allocator.write_mapping(slot, 0, rows)
@@ -142,7 +158,11 @@ def validate(runner):
         allocator.free_kv(rows)
         allocator.free_request(slot)
         torch.cuda.synchronize("cuda:0")
-    assert len(oracle) == len(raw) == len(predicted) == 2
+    assert len(oracle) == len(raw) == len(predicted) == 2, (
+        len(oracle),
+        len(raw),
+        len(predicted),
+    )
     tolerance = 3e-3 if probe.dtype == torch.float16 else 2e-4
     errors = []
     for layer, value in enumerate(predicted):
@@ -160,7 +180,11 @@ def validate(runner):
         "max_q_abs_error": max(errors),
         "post_rope_oracle_matched": True,
         "actual_prefix_fallback_matched": True,
-        "target_weights_pools_mapping_cuda_rng_unchanged": True,
+        "target_state_check": (
+            "per-tensor bounded canaries, mapping and CUDA RNG unchanged"
+            if checkpoint
+            else "full weights/pools, mapping and CUDA RNG unchanged"
+        ),
         "probe_budget_restored": True,
     }
 
@@ -169,13 +193,23 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dtype", choices=("float16", "float32"), default="float16")
     parser.add_argument("--architecture", choices=("llama", "qwen2"), default="llama")
+    parser.add_argument("--model-path", default=None)
     args = parser.parse_args(argv)
     if not __debug__:
         parser.error("assertions must be enabled")
+    if args.model_path and (
+        not os.path.isabs(args.model_path)
+        or not os.path.isfile(os.path.join(args.model_path, "config.json"))
+    ):
+        parser.error("--model-path must be an absolute local checkpoint directory")
     report = {
         "schema": schema,
         "status": "blocked",
-        "fixture": f"random tiny {args.architecture}; not a production checkpoint",
+        "fixture": (
+            f"checkpoint at {args.model_path}"
+            if args.model_path
+            else f"random tiny {args.architecture}; not a production checkpoint"
+        ),
         "production_gpu_rdma_validated": False,
         "performance_validated": False,
     }
@@ -202,29 +236,34 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
         torch.manual_seed(8128)
         torch.cuda.set_device(0)
         with tempfile.TemporaryDirectory(prefix="pvd-cuda-probe-") as directory:
-            config_type = LlamaConfig if args.architecture == "llama" else Qwen2Config
-            config = config_type(
-                vocab_size=128,
-                hidden_size=256,
-                intermediate_size=512,
-                num_hidden_layers=2,
-                num_attention_heads=4,
-                num_key_value_heads=2,
-                max_position_embeddings=64,
-                architectures=[
-                    "LlamaForCausalLM"
-                    if args.architecture == "llama"
-                    else "Qwen2ForCausalLM"
-                ],
-                tie_word_embeddings=False,
-            )
-            config.save_pretrained(directory)
-            GenerationConfig(bos_token_id=1, eos_token_id=2).save_pretrained(directory)
+            if args.model_path is None:
+                config_type = (
+                    LlamaConfig if args.architecture == "llama" else Qwen2Config
+                )
+                config = config_type(
+                    vocab_size=128,
+                    hidden_size=256,
+                    intermediate_size=512,
+                    num_hidden_layers=2,
+                    num_attention_heads=4,
+                    num_key_value_heads=2,
+                    max_position_embeddings=64,
+                    architectures=[
+                        "LlamaForCausalLM"
+                        if args.architecture == "llama"
+                        else "Qwen2ForCausalLM"
+                    ],
+                    tie_word_embeddings=False,
+                )
+                config.save_pretrained(directory)
+                GenerationConfig(bos_token_id=1, eos_token_id=2).save_pretrained(
+                    directory
+                )
             server_args = ServerArgs(
-                model_path=directory,
+                model_path=args.model_path or directory,
                 device="cuda",
                 dtype=args.dtype,
-                load_format="dummy",
+                load_format="auto" if args.model_path else "dummy",
                 attention_backend="torch_native",
                 page_size=1,
                 max_total_tokens=128,
@@ -264,13 +303,23 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                 server_args=server_args,
                 is_draft_worker=True,
             )
-            with torch.no_grad():
-                for name, parameter in runner.model.named_parameters():
-                    if "norm" in name:
-                        parameter.fill_(1)
-                    else:
-                        parameter.normal_(mean=0, std=0.12)
-            report["evidence"] = validator(runner)
+            expected_architecture = (
+                "LlamaForCausalLM"
+                if args.architecture == "llama"
+                else "Qwen2ForCausalLM"
+            )
+            if type(runner.model).__name__ != expected_architecture:
+                raise RuntimeError(
+                    "loaded checkpoint architecture differs from --architecture"
+                )
+            if args.model_path is None:
+                with torch.no_grad():
+                    for name, parameter in runner.model.named_parameters():
+                        if "norm" in name:
+                            parameter.fill_(1)
+                        else:
+                            parameter.normal_(mean=0, std=0.12)
+            report["evidence"] = validator(runner, checkpoint=bool(args.model_path))
             report.update(
                 status="passed",
                 device=torch.cuda.get_device_name(0),

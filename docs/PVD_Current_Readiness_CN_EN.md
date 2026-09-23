@@ -21,6 +21,30 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 真实 Qwen2.5-7B checkpoint 的 TP1 Q probe / TP1 Q probe on real Qwen2.5-7B weights
+
+独立 CUDA smoke 新增严格本地 `--model-path` 模式：不下载、不重写权重，
+按层使用 QKV 投影输出和 attention 输入构造独立 pre-/post-RoPE oracle；
+大型权重只取每个 tensor 的有界 canary，不复制整个 15GB checkpoint。
+CloudLab node-0 V100S 上加载现有 `Qwen2.5-7B-Instruct` 的 FP16 权重并
+完成 TP1、`torch_native` probe；两层目标 Q 的最大绝对误差 **0**，
+正式前缀补查一致，KV canary/映射/CUDA RNG 与预算检查通过。
+原 tiny Llama 回归也再次通过。首次大模型尝试因测试 oracle 错按共享 RoPE
+模块计数而失败；改为按层 hook 后重测成功。**尚非 TP2、V 检索、Mooncake
+稀疏交付、生产 Scheduler 或端到端性能验证。**
+
+The standalone CUDA smoke now has a strict local `--model-path` mode. Its
+independent per-layer QKV/attention hooks compare pre- and post-RoPE Q without
+duplicating the 15 GB checkpoint; only bounded canaries are kept per tensor.
+Node-0 V100S loaded the existing FP16 Qwen2.5-7B-Instruct weights and passed a
+TP1 `torch_native` probe: two target-Q layers matched with **0 maximum absolute
+error**, committed-prefix fallback matched, and KV canaries/mapping/CUDA RNG
+and budget checks passed. Tiny Llama passed again. The first checkpoint run
+failed because the test oracle counted a possibly shared RoPE module instead
+of individual layers; per-layer hooks fixed that test defect. **This is not
+TP2, V search, sparse Mooncake delivery, production Scheduler or latency
+validation.**
+
 ### V100S tiny Qwen2 真实 CUDA Q probe / Real CUDA tiny-Qwen2 Q probe
 
 `run_pvd_cuda_probe_smoke.py` 现在可选 `--architecture qwen2`，同时保留默认
