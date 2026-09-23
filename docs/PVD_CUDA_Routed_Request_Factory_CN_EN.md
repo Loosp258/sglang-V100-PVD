@@ -82,6 +82,16 @@ CUDA Registry、compute layout、D rail 和 Mooncake session 交给请求工厂�
 pipeline 和显式复制/聚合预算，这里尚不启动生产准入。
 
 The returned `clients` mapping goes directly to `CUDARefreshDriver.register`.
+接收组健康状态现在汇总所有子 HCA adapter 和 region-ID 冲突隔离状态。
+任一子 adapter 不健康时，组合层拒绝新 MR；D 的选定路由发现和请求工厂
+也会在分配请求资源前拒绝不健康的接收组或 compute transport。
+这仅是准入保护，不表示生产预测 Scheduler 已启用。
+The receive group's health now aggregates every child HCA adapter and
+region-ID collision quarantine. An unhealthy child prevents new MRs; selected
+route discovery and request assembly reject unhealthy receive or compute
+transports before request resources are allocated. This is an admission guard,
+not activation of predictive serving in the production Scheduler.
+
 The request owns all HTTP clients. Its synchronous `close()` is prohibited;
 `aclose()` first drains remote destinations and the D bank, then closes search
 and Delivery sessions. An unresolved native owner prevents those control

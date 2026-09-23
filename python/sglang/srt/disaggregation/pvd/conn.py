@@ -549,6 +549,8 @@ class PVDKVManager:
                 raise PVDConnectionError(
                     f"D has no preflighted receive adapter for V rails {missing}"
                 )
+            if engine.health().get("healthy") is not True:
+                raise PVDConnectionError("D sparse receive transport is unhealthy")
             return selected
 
         return self.control.submit(discover())
@@ -585,11 +587,16 @@ class PVDKVManager:
         ):
             raise PVDConnectionError("D TP1 sparse receive is not initialized")
         registry._owner()
+        if self.sparse_receive_engine.health().get("healthy") is not True:
+            raise PVDConnectionError("D sparse receive transport is unhealthy")
         if not isinstance(selected, PVDSelectedShardRoutes) or (
             selected.manifest.key != self.key_for(req)
         ):
             raise PVDConnectionError("selected V routes differ from this D request")
-        endpoint = self.transfer_engine.health().get("session_id")
+        compute_health = self.transfer_engine.health()
+        if compute_health.get("healthy") is not True:
+            raise PVDConnectionError("D compute transport is unhealthy")
+        endpoint = compute_health.get("session_id")
         if not isinstance(endpoint, str) or not endpoint.strip():
             raise PVDConnectionError("D compute Mooncake session is unavailable")
         return assemble_routed_cuda_request(

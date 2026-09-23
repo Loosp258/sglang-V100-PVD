@@ -56,6 +56,8 @@ class RailMappedReceiveEngine(TransferEngine):
         if engine is None:
             raise MultiRailReceiveError(f"unconfigured receive rail {rail!r}")
         with self._lock:
+            if not self.health()["healthy"]:
+                raise MultiRailReceiveError("receive group is quarantined or unhealthy")
             registration = engine.register_memory(
                 buffer,
                 endpoint=endpoint,
@@ -96,11 +98,14 @@ class RailMappedReceiveEngine(TransferEngine):
 
     def health(self):
         with self._lock:
+            rails = {
+                rail: engine.health() for rail, engine in self.adapters.items()
+            }
             return {
                 "backend": self.name,
-                "rails": {
-                    rail: engine.health() for rail, engine in self.adapters.items()
-                },
+                "healthy": not self._quarantined_collisions
+                and all(state.get("healthy") is True for state in rails.values()),
+                "rails": rails,
                 "registered_destinations": len(self._registrations),
                 "quarantined_collisions": len(self._quarantined_collisions),
             }

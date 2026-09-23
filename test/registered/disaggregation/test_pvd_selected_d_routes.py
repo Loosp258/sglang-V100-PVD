@@ -99,7 +99,9 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
         engine=manager.sparse_receive_engine, _owner=lambda: None
     )
     manager.sparse_receive_registry = registry
-    manager.transfer_engine = SimpleNamespace(health=lambda: {"session_id": "D0"})
+    manager.transfer_engine = SimpleNamespace(
+        health=lambda: {"healthy": True, "session_id": "D0"}
+    )
     manager.tp_size = 1
     manager.tp_rank = 0
     manager.rail = "mlx5_0"
@@ -149,3 +151,61 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
     with pytest.raises(PVDConnectionError, match="not initialized"):
         manager.assemble_selected_cuda_request(req, selected, **supplied)
     assert len(calls) == 1
+
+
+def test_unhealthy_d_transport_blocks_route_discovery_and_assembly(monkeypatch):
+    from sglang.srt.disaggregation.pvd import cuda_routed_request
+
+    class UnhealthyFake(FakeTransferEngine):
+        def health(self):
+            return {**super().health(), "healthy": False}
+
+    manager, req, selected, _ = manager_for(("mlx5_0", "mlx5_1"))
+    manager.sparse_receive_engine = RailMappedReceiveEngine(
+        {"mlx5_0": FakeTransferEngine(), "mlx5_1": UnhealthyFake()}
+    )
+    with pytest.raises(PVDConnectionError, match="sparse receive transport is unhealthy"):
+        manager.start_selected_cuda_routes(req).result()
+
+    manager.sparse_receive_registry = SimpleNamespace(
+        engine=manager.sparse_receive_engine, _owner=lambda: None
+    )
+    manager.transfer_engine = SimpleNamespace(
+        health=lambda: {"healthy": True, "session_id": "D0"}
+    )
+    manager.tp_size = 1
+    manager.tp_rank = 0
+    manager.rail = "mlx5_0"
+    calls = []
+    monkeypatch.setattr(
+        cuda_routed_request,
+        "assemble_routed_cuda_request",
+        lambda *args, **kwargs: calls.append(1),
+    )
+    supplied = {
+        "group": object(),
+        "pipeline": object(),
+        "head_mapping": object(),
+        "vector_space": "space",
+        "metric": "l2",
+        "top_k": 4,
+        "max_union_tokens": 16,
+        "max_head_dim": 128,
+        "copy_budget": object(),
+        "aggregate_budget": object(),
+        "poll_interval_seconds": 0.01,
+    }
+    with pytest.raises(PVDConnectionError, match="sparse receive transport is unhealthy"):
+        manager.assemble_selected_cuda_request(req, selected, **supplied)
+    assert not calls
+
+    manager.sparse_receive_engine = RailMappedReceiveEngine(
+        {"mlx5_0": FakeTransferEngine(), "mlx5_1": FakeTransferEngine()}
+    )
+    manager.sparse_receive_registry.engine = manager.sparse_receive_engine
+    manager.transfer_engine = SimpleNamespace(
+        health=lambda: {"healthy": False, "session_id": "D0"}
+    )
+    with pytest.raises(PVDConnectionError, match="compute transport is unhealthy"):
+        manager.assemble_selected_cuda_request(req, selected, **supplied)
+    assert not calls

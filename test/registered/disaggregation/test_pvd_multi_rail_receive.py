@@ -25,6 +25,11 @@ class RailAdapter(FakeTransferEngine):
         super().release_memory(registration)
 
 
+class UnhealthyRailAdapter(RailAdapter):
+    def health(self):
+        return {**super().health(), "healthy": False}
+
+
 def test_two_rails_register_and_release_through_exact_native_owner():
     engines = {rail: RailAdapter(rail) for rail in ("mlx5_0", "mlx5_1")}
     receiver = RailMappedReceiveEngine(engines)
@@ -98,3 +103,24 @@ def test_startup_thread_can_hand_off_receive_adapter_to_control_thread():
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(control_turn).result() == 0
+
+
+def test_unhealthy_child_blocks_new_receive_registration():
+    receiver = RailMappedReceiveEngine(
+        {
+            "mlx5_0": RailAdapter("mlx5_0"),
+            "mlx5_1": UnhealthyRailAdapter("mlx5_1"),
+        }
+    )
+    health = receiver.health()
+    assert health["healthy"] is False
+    assert health["rails"]["mlx5_0"]["healthy"] is True
+    assert health["rails"]["mlx5_1"]["healthy"] is False
+    with pytest.raises(MultiRailReceiveError, match="unhealthy"):
+        receiver.register_memory(
+            torch.empty(16, dtype=torch.uint8),
+            endpoint="D",
+            rank=0,
+            rail="mlx5_0",
+        )
+    assert receiver.health()["registered_destinations"] == 0
