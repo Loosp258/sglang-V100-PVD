@@ -31,6 +31,8 @@ loads cuVS before SGLang/torch; the ordinary module entry point can fail to
 resolve `libcuvs_c.so` in this environment because of CUDA library load
 order. Exact/index-off V service keeps its original launcher and does not
 require cuVS. The flags and transfer protocol are otherwise unchanged.
+An installed wheel also exposes `pvd-cagra-server` with the same arguments;
+cuVS remains an explicitly installed optional dependency.
 
 Add these to the existing V command; choose budgets from the deployment's real
 capacity, not from this document:

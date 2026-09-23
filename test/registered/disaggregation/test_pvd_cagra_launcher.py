@@ -1,6 +1,7 @@
 """Keep the native V launcher ahead of SGLang's transitive torch imports."""
 
 import ast
+import tomllib
 from pathlib import Path
 
 
@@ -41,4 +42,13 @@ def test_native_launcher_imports_cuvs_before_sglang():
             else (node.module or "").startswith("sglang")
         )
         for node in module.body
+    )
+
+
+def test_native_launcher_is_in_wheel_and_exposes_console_script():
+    pyproject = Path(__file__).resolve().parents[3] / "python/pyproject.toml"
+    config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    assert config["tool"]["setuptools"]["py-modules"] == ["pvd_cagra_server"]
+    assert config["project"]["scripts"]["pvd-cagra-server"] == (
+        "pvd_cagra_server:main"
     )

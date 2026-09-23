@@ -202,6 +202,10 @@ vsa = ["torch", "setuptools"]
 [project.scripts]
 sglang = "sglang.cli.main:main"
 killall_sglang = "sglang.cli.killall:main"
+pvd-cagra-server = "pvd_cagra_server:main"
+
+[tool.setuptools]
+py-modules = ["pvd_cagra_server"]
 
 [tool.setuptools.package-data]
 "sglang" = [
