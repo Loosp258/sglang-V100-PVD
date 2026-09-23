@@ -1,4 +1,4 @@
-"""Shared private-pool Llama target-Q core and offline CPU reference.
+"""Shared private-pool Llama/Qwen2 target-Q core and offline CPU reference.
 
 Reuses target weights, never swaps target pools/backend or installs hooks.
 The caller must keep the target quiescent: ForwardContext is process-global,
@@ -130,13 +130,15 @@ class PostRopeQueryCapture:
 
 
 class _LlamaTargetProbeCore(TargetProbe):
-    """Full-prefix recomputation with private CPU pools and existing weights.
+    """Full-prefix recomputation with private pools and existing weights.
 
     ``target_model_id`` is an explicit deployment identity binding, not a hash
     inferred from weights. ``transient_bytes_bound`` is caller-declared extra
     headroom (backend/activation/allocator temporaries), not a measured bound.
     An entire branch is one capture. Query tensors are scoped to that branch.
     """
+
+    _model_architecture = "LlamaForCausalLM"
 
     def __init__(
         self,
@@ -149,11 +151,17 @@ class _LlamaTargetProbeCore(TargetProbe):
         transient_bytes_bound: int,
         budget: TransferBudget,
     ):
-        from sglang.srt.models.llama import LlamaForCausalLM
+        if self._model_architecture == "Qwen2ForCausalLM":
+            from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 
-        if type(runner.model) is not LlamaForCausalLM:
+            model_type = Qwen2ForCausalLM
+        else:
+            from sglang.srt.models.llama import LlamaForCausalLM
+
+            model_type = LlamaForCausalLM
+        if type(runner.model) is not model_type:
             raise PredictionConfigError(
-                "offline probe supports the exact LlamaForCausalLM class only"
+                f"probe requires exact {self._model_architecture} model class"
             )
         if runner.tp_size != 1 or runner.pp_size != 1:
             raise PredictionConfigError("probe requires TP1 and PP1")
@@ -378,7 +386,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             )
             resources.builder = DraftForwardAdapter(
                 None,
-                architecture="LlamaForCausalLM",
+                architecture=self._model_architecture,
                 attention_backend="torch_native",
                 bytes_per_token=self.layers * self.kv_heads * self.head_dim * 2 * 4,
                 device=self.device,
@@ -438,3 +446,9 @@ class _LlamaTargetProbeCore(TargetProbe):
 
 class OfflineLlamaTargetProbe(_LlamaTargetProbeCore):
     """CPU FP32 reference; CUDA probes use a distinct public type."""
+
+
+class OfflineQwen2TargetProbe(_LlamaTargetProbeCore):
+    """CPU FP32 Qwen2 reference with the same private-pool Q contract."""
+
+    _model_architecture = "Qwen2ForCausalLM"

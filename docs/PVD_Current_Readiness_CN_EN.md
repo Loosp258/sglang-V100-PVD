@@ -21,6 +21,21 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### Qwen2 目标 Q 捕获入口 / Qwen2 target-Q capture seam
+
+Qwen2 注意力现可在 RoPE 之后、调用 attention 之前把目标 Q 交给 batch-owned
+PVD collector；新增严格匹配 `Qwen2ForCausalLM` 的 CPU/CUDA probe 类型，继续
+使用私有 KV 池、共享目标权重与原有锁/预算策略。19 个定向测试验证调用顺序、
+post-RoPE 数值与 probe 类型契约。**尚未运行真实 Qwen2.5-7B 模型 forward、
+TP2 或 GPU 端到端检索**；当前 CUDA probe 仍只支持 TP1、`torch_native`。
+
+Qwen2 attention can now pass post-RoPE target Q to a batch-owned PVD
+collector before attention. Exact `Qwen2ForCausalLM` CPU/CUDA probe types
+reuse private KV pools, target weights and the existing lock/budget policy.
+Nineteen focused tests cover ordering, post-RoPE values and type contracts.
+**No real Qwen2.5-7B forward, TP2 or GPU end-to-end retrieval has run**;
+the CUDA probe still requires TP1 and `torch_native`.
+
 ### D 请求工作集身份前置核对 / D request-bank identity precheck
 
 已选 V 的 CUDA 请求工厂在建立 HTTP 客户端前，现需显式核对本地 Req ID、

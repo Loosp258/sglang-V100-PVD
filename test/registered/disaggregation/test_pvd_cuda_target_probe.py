@@ -14,7 +14,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd import draft_forward_adapter
-from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
+from sglang.srt.disaggregation.pvd.cuda_target_probe import (
+    CUDALlamaTargetProbe,
+    CUDAQwen2TargetProbe,
+)
 from sglang.srt.disaggregation.pvd.prediction import (
     CommittedPrefix,
     DraftPrediction,
@@ -27,7 +30,9 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 )
 
 
-def environment(monkeypatch, *, fail=None, dtype=torch.float16):
+def environment(
+    monkeypatch, *, fail=None, dtype=torch.float16, architecture="LlamaForCausalLM"
+):
     events, tensors, holders = [], [], {}
     lock = threading.Lock()
     budget = TransferBudget(65536, 1)
@@ -60,6 +65,7 @@ def environment(monkeypatch, *, fail=None, dtype=torch.float16):
 
     model = Model()
     publish("sglang.srt.models.llama", LlamaForCausalLM=Model)
+    publish("sglang.srt.models.qwen2", Qwen2ForCausalLM=Model)
     publish(
         "sglang.srt.compilation.piecewise_context_manager",
         get_forward_context=lambda: None,
@@ -137,6 +143,7 @@ def environment(monkeypatch, *, fail=None, dtype=torch.float16):
     class Builder:
         def __init__(self, *args, **kwargs):
             assert kwargs["device"] == "cuda:0"
+            assert kwargs["architecture"] == architecture
 
         def build_forward_batch(self, inputs):
             return SimpleNamespace(
@@ -186,7 +193,12 @@ def environment(monkeypatch, *, fail=None, dtype=torch.float16):
         ),
         model_config=SimpleNamespace(context_len=32, head_dim=3),
     )
-    probe = CUDALlamaTargetProbe(
+    probe_type = (
+        CUDAQwen2TargetProbe
+        if architecture == "Qwen2ForCausalLM"
+        else CUDALlamaTargetProbe
+    )
+    probe = probe_type(
         runner,
         config,
         device="cuda:0",
@@ -239,6 +251,15 @@ def test_probe_reuses_weights_but_fences_before_cleanup_and_refund(monkeypatch):
         assert result[0].positional_encoding == "rope_applied"
         assert c.events[-5:] == ["drain", "clear", "free_kv", "free_slot", "drain"]
     assert not c.lock.locked()
+    assert c.budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_qwen2_probe_uses_private_pool_and_same_post_rope_contract(monkeypatch):
+    c = environment(monkeypatch, architecture="Qwen2ForCausalLM")
+    with c.probe.branch():
+        result = c.probe.capture(c.prefix, c.prediction)
+        assert result[0].positions == (3, 4)
+        assert result[0].positional_encoding == "rope_applied"
     assert c.budget.snapshot()["used_staging_bytes"] == 0
 
 

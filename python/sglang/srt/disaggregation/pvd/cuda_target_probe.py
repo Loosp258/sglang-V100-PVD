@@ -1,4 +1,4 @@
-"""Explicit CUDA Llama probe using private pools and shared target weights.
+"""Explicit CUDA Llama/Qwen2 probes using private pools and target weights.
 
 TP1/PP1, torch_native, FP16/FP32 only. The caller's target executor MUST use
 the same execution lock. This is a synchronous baseline, not overlap evidence
@@ -97,3 +97,9 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
             if not self._quarantined:
                 self._execution_lock.release()
                 self._execution_held = False
+
+
+class CUDAQwen2TargetProbe(CUDALlamaTargetProbe):
+    """Exact Qwen2 target-Q capture with Llama's CUDA ownership policy."""
+
+    _model_architecture = "Qwen2ForCausalLM"
