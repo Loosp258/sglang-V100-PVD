@@ -165,6 +165,17 @@ class IndexBackend(abc.ABC):
 
     name: str = "abstract"
 
+    @property
+    def shared_footprint(self) -> int:
+        """One backend-wide reservation held for the manager's lifetime.
+
+        Normally zero. A backend with a native parent allocator may reserve
+        one global hard cap here, rather than charging that same cap once for
+        every index. The backend must actually enforce the cap across all of
+        its native allocations before overriding this value.
+        """
+        return 0
+
     def synchronize(self) -> None:
         """Complete backend work before publishing/refunding, including errors."""
         if self.device.type == "cuda":

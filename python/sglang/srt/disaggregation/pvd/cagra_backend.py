@@ -232,6 +232,7 @@ class CagraIndexBackend(IndexBackend):
         graph_degree,
         intermediate_degree,
         itopk_size,
+        global_native_cap_bytes=None,
         _runtime=None,
     ):
         self._device = torch.device(device)
@@ -247,16 +248,40 @@ class CagraIndexBackend(IndexBackend):
                 )
         if native_bytes_per_index < 256 or intermediate_degree < graph_degree:
             raise ValueError("invalid CAGRA allocation cap or graph degrees")
+        if global_native_cap_bytes is not None and (
+            type(global_native_cap_bytes) is not int
+            or global_native_cap_bytes < native_bytes_per_index
+        ):
+            raise ValueError("shared native cap must cover one full per-index cap")
         if self._device.type != "cuda" and _runtime is None:
             raise ValueError("native CAGRA requires CUDA")
         self.cap = native_bytes_per_index
         self.graph_degree, self.intermediate_degree = graph_degree, intermediate_degree
         self.itopk_size = itopk_size
         self.runtime = (
-            _runtime if _runtime is not None else CagraNativeRuntime(self._device)
+            _runtime
+            if _runtime is not None
+            else CagraNativeRuntime(
+                self._device,
+                **(
+                    {"global_native_cap_bytes": global_native_cap_bytes}
+                    if global_native_cap_bytes is not None
+                    else {}
+                ),
+            )
         )
         if torch.device(self.runtime.device) != self._device:
             raise ValueError("CAGRA runtime device mismatch")
+        runtime_cap = getattr(self.runtime, "global_native_cap_bytes", None)
+        if global_native_cap_bytes is not None and runtime_cap != global_native_cap_bytes:
+            raise ValueError("CAGRA runtime shared cap differs from configured cap")
+        if runtime_cap is not None and (
+            type(runtime_cap) is not int or runtime_cap < native_bytes_per_index
+        ):
+            raise ValueError("CAGRA runtime shared cap cannot cover an index")
+        if runtime_cap is not None and getattr(self.runtime, "global_limit", None) is None:
+            raise ValueError("CAGRA runtime shared cap lacks a native root limiter")
+        self._shared_native_cap = runtime_cap
         self._lock = threading.RLock()
         self._owners = {}
         self._unknown = None
@@ -264,6 +289,10 @@ class CagraIndexBackend(IndexBackend):
     @property
     def device(self):
         return self._device
+
+    @property
+    def shared_footprint(self):
+        return self._shared_native_cap or 0
 
     def _check(self):
         if self._unknown is not None:
@@ -283,7 +312,10 @@ class CagraIndexBackend(IndexBackend):
 
     def build_footprint(self, rows, dim, *, metric):
         self._shape(rows, dim, metric)
-        return self.cap
+        # In shared mode the parent's hard native cap was reserved once at
+        # manager construction. Charging it again per graph would restore the
+        # 56*cap V100S failure while providing no additional safety.
+        return 0 if self._shared_native_cap is not None else self.cap
 
     def build_scratch_footprint(self, rows, dim, *, metric):
         self._shape(rows, dim, metric)
@@ -429,6 +461,10 @@ class CagraAutoIndexBackend(IndexBackend):
     @property
     def device(self):
         return self.cagra.device
+
+    @property
+    def shared_footprint(self):
+        return self.cagra.shared_footprint
 
     def _for_rows(self, rows):
         if type(rows) is not int or rows <= 0:

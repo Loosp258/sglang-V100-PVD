@@ -2,7 +2,7 @@
 
 ## 2026-09-24 共享原生上限能力探针 / Shared native-cap capability gate
 
-`CagraNativeRuntime` 新增**尚未接生产预算**的可选父级 RMM limiter：每个图仍有
+`CagraNativeRuntime` 新增可选父级 RMM limiter：每个图仍有
 自己的 per-index limiter，但其上游可指向同一个全局 limiter。node-1 V100S、
 cuVS 25.02 的隔离探针先同时构建并检索两个 1024×32 原生索引；两个子 limiter
 各保留 131072 bytes，父 limiter 精确记录总计 262144 bytes。随后从两个
@@ -11,19 +11,24 @@ cuVS 25.02 的隔离探针先同时构建并检索两个 1024×32 原生索引�
 逆序销毁后父级计数回到零；门控输出 `passed`。
 
 这只证明 cuVS C API 与嵌套 RMM resource 在这套实测环境中共享计数和限额。
-**生产 `PromptIndexManager` 尚未对父级上限一次性计费，CLI 也尚未启用它；**
-因此不能用这项实验降低当前每图终生 cap 的预算。下一步必须先把父级 cap
-作为全局 reservation 纳入准入，并严格处理 build/search/cancel/UNKNOWN。
+随后增加的 `--prompt-index-cagra-global-native-bytes N` 已把父级 cap 纳入
+`PromptIndexManager` 的一次性预算预留：`N` 至少覆盖一个图 cap，不得超过总索引
+预算；每图 child limiter 保留，向量和其他内存另计。该接线的 node-2 焦点回归
+**219 passed / 3 skipped**，但尚未在真实 V 服务中验证，亦不能据此断言
+56 图或多个 Entry 的容量。
 
-`CagraNativeRuntime` now has an optional, **not yet serving-integrated**
+`CagraNativeRuntime` now has an optional
 parent RMM limiter shared by the per-index child limiters. The isolated
 node-1 V100S/cuVS 25.02 gate built and searched two 1024×32 indexes. The
 root recorded their combined 262144 retained bytes. A 360 MiB cuVS C-API
 allocation from one index succeeded; a second 360 MiB request from the other
 was rejected by the shared 640 MiB root even though each child allowed up to
 512 MiB. After safe release and reverse disposal, root allocation returned
-to zero. This proves the allocator capability on this artifact, **not**
-production budget integration or safe 56-graph admission.
+to zero. The later `--prompt-index-cagra-global-native-bytes N` integration
+reserves the parent cap once in `PromptIndexManager`, provided it covers a
+child cap and fits the total index budget. Focused node-2 regressions passed
+**219 / 3 skipped**. The combined serving path and safe 56-graph admission
+remain unverified.
 
 ```bash
 PYTHONPATH=python python test/registered/disaggregation/run_pvd_cagra_shared_cap_gpu.py \

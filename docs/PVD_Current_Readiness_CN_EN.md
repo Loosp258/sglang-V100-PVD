@@ -1,6 +1,6 @@
 # PVD 当前实现与验收边界 / Current implementation and acceptance scope
 
-Updated / 更新：2026-09-23。历史交接文档保留演进记录；本页集中说明当前边界。
+Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
 ## 结论 / Bottom line
@@ -21,21 +21,45 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### V 索引预算接入共享 CAGRA 上限 / Shared CAGRA cap in V admission
+
+V 可显式传 `--prompt-index-cagra-global-native-bytes N`（仅 `cagra` / `cagra-auto`）。
+`N` 必须覆盖一个图的 native cap 且不超过 V rank 的总索引预算。后端必须实际
+持有 RMM 根 limiter；管理器在任何 Entry 构建前对 `N` 一次性预留，并在管理器
+存续期间保持预留。图内 native 分配仍受每图子 limiter 和共享根 limiter 双重
+约束；向量副本、短 Prompt 精确索引及其他 scratch 另行计费。Entry 释放不会
+错误退还全局预留。未设置此参数时仍沿用每图终生预留。CloudLab node-2
+定向索引回归 **219 passed / 3 skipped**；原生双图根 limiter 行为曾在 node-1
+V100S/cuVS 25.02 单独实测，但新管理器接线尚未在真实 V 进程验收。此设计
+不保证给定预算能容纳 56 图或多个 Entry，也未测真实目标 Q 的召回。
+
+V can opt into `--prompt-index-cagra-global-native-bytes N` for `cagra` or
+`cagra-auto`. The root must cover one graph cap and fit the rank's total index
+budget. A real native RMM root limiter is required; the manager reserves `N`
+once before any Entry build and holds it for its lifetime. Child and root
+limiters bound native allocations; vector copies, short-prompt exact indexes
+and other scratch are charged separately. Closing an Entry does not refund the
+root. Without the flag, the per-graph lifetime reservation remains. Focused
+node-2 regressions: **219 passed / 3 skipped**. The native dual-graph root was
+separately measured on node-1 V100S/cuVS 25.02; the new manager wiring has
+not yet been validated inside a real V service. No 56-graph/multi-Entry
+capacity or real-target-Q recall claim follows.
+
 ### 跨图 CAGRA 原生限额能力 / Shared CAGRA native-limit capability
 
 node-1 V100S/cuVS 25.02 隔离探针验证：两个原生图的子 RMM limiter 可共用
 640 MiB 父级上限；两笔各 360 MiB 的 C API 分配中第一笔通过，第二笔被
 父级拒绝，图销毁后计数归零。CPU 契约与原 CAGRA 模式 **41 passed / 2 skipped**。
-**这只是 allocator 能力：生产工厂和 `PromptIndexManager` 尚未对父级上限
-一次性计费，不能据此降低当前每图终生预留。** 见
+此段仅记录 allocator 能力；上文新增了可选生产预算接线，但尚未完成真实 V
+进程验收。见
 [CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
 
 An isolated node-1 V100S/cuVS 25.02 probe proved two native graphs can share
 a 640 MiB parent RMM limiter: the first 360 MiB cuVS C-API request succeeded,
 the second was rejected at the parent, and root allocation returned to zero
 after disposal. CPU/CAGRA regressions passed **41 / 2 skipped**. This is an
-allocator capability only; serving has not yet reserved the parent cap once,
-so the current lifetime per-index budget remains in force.
+allocator capability; the optional serving reservation described above was
+added later and still needs a real V-service acceptance run.
 
 ### 短 Prompt 的显式 CAGRA 自动模式 / Explicit CAGRA-auto short fallback
 

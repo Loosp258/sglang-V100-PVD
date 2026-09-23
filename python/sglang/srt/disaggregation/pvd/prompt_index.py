@@ -182,6 +182,21 @@ class PromptIndexManager:
         self._quarantine_reason = None
         self._retained_operations = []
         self._retained_records = []
+        # A backend-wide native parent limiter is paid for exactly once,
+        # before any Entry build. It stays charged while this manager/backend
+        # exists: no serving-wide unload operation proves all native children
+        # have retired, so an Entry close must never refund the parent cap.
+        shared = getattr(self.backend, "shared_footprint", 0)
+        if type(shared) is not int or shared < 0:
+            raise ValueError("backend shared footprint must be a non-negative integer")
+        if shared and budget is None:
+            raise ValueError("shared native index footprint requires a budget")
+        self.shared_native_budget_bytes = shared
+        self._shared_owner = (
+            f"prompt-index:shared-native:{uuid.uuid4().hex}" if shared else None
+        )
+        if shared:
+            budget.reserve(self._shared_owner, shared, 0)
 
     @property
     def quarantined(self):

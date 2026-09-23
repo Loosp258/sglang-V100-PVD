@@ -167,6 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per layer/head native allocation cap, reserved for its entire index lifetime, including native workspace.",
     )
     parser.add_argument(
+        "--prompt-index-cagra-global-native-bytes",
+        type=_positive_int,
+        default=None,
+        help="Optional single native RMM parent cap across all CAGRA graphs on this V rank. Reserved once from --prompt-index-budget-bytes; must cover one per-index cap. Without it, the old per-graph lifetime reservation remains.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-graph-degree", type=_positive_int, default=64
     )
     parser.add_argument(
@@ -219,7 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_args(args: argparse.Namespace) -> List[str]:
-    if getattr(args, "prompt_index_backend", "exact") in ("cagra", "cagra-auto"):
+    index_mode = getattr(args, "prompt_index_backend", "exact")
+    shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
+    if index_mode in ("cagra", "cagra-auto"):
         if (
             not args.prompt_index_vector_space
             or not args.prompt_index_budget_bytes
@@ -230,6 +238,17 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
             )
         if args.allow_cpu_for_tests:
             raise ValueError("native CAGRA cannot use the CPU test override")
+        if shared_native is not None and (
+            type(shared_native) is not int
+            or shared_native < args.prompt_index_cagra_native_bytes
+            or shared_native > args.prompt_index_budget_bytes
+        ):
+            raise ValueError(
+                "shared CAGRA native cap must cover one per-index cap and fit "
+                "within the total index budget"
+            )
+    elif shared_native is not None:
+        raise ValueError("shared CAGRA native cap requires a CAGRA backend")
     bounds = (
         getattr(args, "full_kv_fanin_max_slices", None),
         getattr(args, "full_kv_fanin_max_inflight", None),
@@ -340,6 +359,7 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
     # A CAGRA backend replaces it without other changes.
     backend = None
     index_mode = getattr(args, "prompt_index_backend", "exact")
+    shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
     if index_mode in ("cagra", "cagra-auto"):
         from sglang.srt.disaggregation.pvd.cagra_backend import (
             CagraAutoIndexBackend,
@@ -348,14 +368,19 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
 
         if device is None:
             raise ValueError("CAGRA factory requires the V rank's actual device")
-        native = CagraIndexBackend(
+        native_kwargs = dict(
             device=device,
             native_bytes_per_index=args.prompt_index_cagra_native_bytes,
             graph_degree=args.prompt_index_cagra_graph_degree,
             intermediate_degree=args.prompt_index_cagra_intermediate_degree,
             itopk_size=args.prompt_index_cagra_itopk_size,
         )
+        if shared_native is not None:
+            native_kwargs["global_native_cap_bytes"] = shared_native
+        native = CagraIndexBackend(**native_kwargs)
         backend = CagraAutoIndexBackend(native) if index_mode == "cagra-auto" else native
+    elif shared_native is not None:
+        raise ValueError("shared CAGRA native cap requires a CAGRA backend")
     return PromptIndexManager(
         vector_space=args.prompt_index_vector_space,
         metric=getattr(args, "prompt_index_metric", "ip"),
