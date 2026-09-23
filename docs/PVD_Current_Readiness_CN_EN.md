@@ -21,6 +21,24 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 三节点 TP1 D GPU 工作集安装 / Three-node TP1 D GPU bank install
+
+沿用 P→V 合成上传及 V 双 rank 原生 CAGRA 建图，node-2 D GPU0 已通过
+Mooncake/RDMA 从两个 V rank 聚合完整 Prompt KV 并安装于边界 0，然后把
+稀疏选中 KV 安装于边界 4。两轮四个 layer/head 组逐字节一致，安装协议
+完成 RESUMED、Delivery 完成 ACK，D 预算归零、V Entry 释放。见
+[CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。**边界 4 是合成协议推进，
+没有真实 D 模型生成四个 token；真实 Q、attention 输出、流水线时延和生产
+Scheduler 仍未验收。**
+
+Building on native P-to-V upload and two-rank CAGRA indexes, node-2 D GPU0
+now aggregates full Prompt KV from both V ranks and installs it at boundary
+0, then installs a sparse selection at boundary 4. All four layer/head groups
+were bit-exact in both rounds, with RESUMED and Delivery ACK complete, D
+budgets zero, and the V Entry released. Boundary 4 is synthetic protocol
+progression, not four real target-model Decode tokens. Real Q, attention
+output, latency overlap and production Scheduler remain unvalidated.
+
 ### V→D 原生稀疏 KV 接收 / Native V-to-D sparse KV receive
 
 三节点单 rail `mlx5_0` 合成验收已将 P→V 完整 Prompt KV、V 双 rank 原生

@@ -1,5 +1,40 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 三节点 D 工作集安装与 ACK / Three-node D bank install and ACK
+
+在上一项跨节点稀疏交付基础上，新增
+`run_pvd_native_sparse_install_gpu.py`。CloudLab node-2 的 D GPU0
+以 TP1 计算布局将 V 两个存储 rank 的 K/V 汇入一个 CUDA Prompt 工作集：
+第一次从 V 拉完整 1024-token Prompt KV，安装于边界 0；第二次按两 V
+rank 各自的原生 CAGRA 逻辑选择拉稀疏 KV，安装于边界 4。两轮均完成
+PREPARED→PARKED→APPLIED→RESUMED 协议、V Delivery ACK，并对工作集
+中的四个 layer/head 组逐字节核对。脚本输出
+`installed_boundaries=[0,4]`、`released_entry=true`、`passed`；D 的接收、
+聚合、工作集预算均归零，V 两 rank 的 Entry/索引清空、只留根预算。
+
+The new `run_pvd_native_sparse_install_gpu.py` gate combines both V storage
+ranks into one TP1 D CUDA Prompt bank. It installs the complete 1024-token
+Prompt KV at boundary 0, then installs the sparse CAGRA-selected refresh at
+boundary 4. Both rounds passed PREPARED→PARKED→APPLIED→RESUMED, ACKed the V
+Deliveries, and produced bit-exact values for all four layer/head groups.
+The D receive, aggregation and bank budgets refunded to zero; both V Entry
+indexes were released. Final report: `installed_boundaries=[0,4]`, `passed`.
+
+This is still a synthetic protocol/installation gate. No target-model forward
+produced the intervening four D tokens; no actual target Q, attention output,
+recall or network/compute pipeline latency was measured. It does not activate
+production predictive retrieval in SGLang's Scheduler.
+
+```bash
+# After the same P --retain-entry upload below, run on D/node-2:
+python test/registered/disaggregation/run_pvd_native_sparse_install_gpu.py \
+  --decode-host 10.0.1.3 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --transfer-id <P-output-transfer-id> \
+  --layout-fingerprint <P-output-layout-fingerprint> \
+  --rail mlx5_0 --expected-gpu V100S
+```
+
 ## 2026-09-24 三节点原生稀疏交付 / Three-node native sparse Delivery
 
 CloudLab node-0 的 P GPU0 通过 `--retain-entry` 上传完整合成 Prompt KV 到
