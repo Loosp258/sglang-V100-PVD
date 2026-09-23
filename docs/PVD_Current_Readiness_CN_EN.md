@@ -481,7 +481,9 @@ full serving, real-model KV, concurrency stress, and performance remain open.
 V 对同一 GPU 注册区先接收、后作为源发送；未知 WRITE 完成时保留 MR。
 8 个 CPU 契约用例已通过。CloudLab 三节点在提交 `db13c5b9c` 上分别对 GPU 0、
 GPU 1 跑通 4 KiB 同请求连续接力，六份 P/V/D 报告均为 `passed`。这不是同时
-TP2、真实 Prompt KV、并发压力、稀疏交付或生产服务验收。
+TP2、真实 Prompt KV、并发压力、稀疏交付或生产服务验收。随后又将 GPU0/GPU1
+两套进程同时运行在 `mlx5_0` 上，独立端口的六份报告仍全部 `passed`；这只证明
+双 GPU 原生会话并存，不是模型 TP2。
 
 The standalone [same-request GPU-buffer relay gate](PVD_Native_Relay_CN_EN.md)
 reuses one V registration as the receive target and then the send source,
@@ -489,7 +491,8 @@ retaining the MR on unknown completion. Eight CPU contract tests pass.
 At commit `db13c5b9c`, both separate GPU-0 and GPU-1 three-node 4 KiB relay
 runs passed on CloudLab, with P/V/D reporting success. This does not establish
 simultaneous TP2, real Prompt KV, concurrent pressure, sparse Delivery or
-production serving.
+production serving. A later run coexisted both GPU sessions on `mlx5_0` with
+distinct ports and again passed all six reports; it was not TP2 model execution.
 
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，

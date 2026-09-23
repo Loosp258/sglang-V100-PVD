@@ -90,3 +90,16 @@ Eight CPU contract tests also passed on Linux at the same revision.
 These two successful rank samples do **not** establish simultaneous TP2 model
 execution, Prompt-KV tensor layout, throughput, loss/retry behaviour, native
 sparse Delivery, or production request scheduling.
+
+随后在同一提交的三个 worktree 上，同时启动 GPU 0 和 GPU 1 的两套 P/V/D
+进程；两套分别使用控制端口 `28175/28176` 与 `28177/28178`，共用
+`mlx5_0`。六份最终报告均为 `passed`，且三台节点结束后没有遗留接力进程。
+这验证的是同一 rail 上两个独立 GPU 会话可并存；**没有**运行 TP2 模型
+collective、请求级并发压力或真实 KV tensor。
+
+A second run started the GPU-0 and GPU-1 P/V/D processes concurrently on
+the same three worktrees, with distinct control-port pairs `28175/28176` and
+`28177/28178` and shared `mlx5_0`. All six final reports passed, and no
+relay process remained on any node. This establishes coexistence of two
+independent GPU relay sessions on one rail, **not** TP2 model collective
+execution, request-level stress or real KV tensors.
