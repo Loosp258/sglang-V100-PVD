@@ -21,6 +21,25 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### V100S 上的真实 CUDA draft 执行 / Real CUDA draft execution on V100S
+
+独立 `run_pvd_cuda_draft_smoke.py` 复用真实 SGLang ModelRunner/CUDA
+attention，随机 tiny Llama 和 Qwen2 分别执行 2 次完整前缀重算及 1 次
+EXTEND+DECODE draft 分支；两个预测 token 都与重算一致，释放后私有
+request/KV 池容量恢复。CloudLab node-0 V100S、FP16、`torch_native`：
+Llama 已知保留张量 2,725,712 字节，Qwen2 为 2,727,760 字节。
+这是随机小模型的执行/回收证据，**不是**选定 draft checkpoint、
+生产 Scheduler 装配、显存峰值、预测质量或隐藏网络时延的证据。
+
+The standalone `run_pvd_cuda_draft_smoke.py` runs real SGLang ModelRunner
+CUDA forwards with random tiny Llama and Qwen2. For each, both predicted
+tokens matched independent full-prefix recomputation, and private request/KV
+pool capacity was restored after release. On CloudLab node-0 V100S with FP16
+and `torch_native`, known retained-tensor bytes were 2,725,712 and 2,727,760
+respectively. This establishes execution/cleanup for random tiny models,
+**not** a chosen draft checkpoint, production Scheduler assembly, peak VRAM,
+prediction quality or network-latency hiding.
+
 ### draft 设备绑定 / Draft device binding
 
 `build_prediction_only_worker()` 在加载权重前核对 `--pvd-draft-device`
