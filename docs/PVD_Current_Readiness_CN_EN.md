@@ -21,6 +21,20 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 已选 V 查询完成语义 / Selected-V lookup completion semantics
+
+D 的路由发现现在向 CUDA waiting queue 暴露不可取消的完成 Future。它只在控制
+协程真正返回或抛错后变为完成；取消 `run_coroutine_threadsafe` 的代理 Future
+不能提前释放并发名额或允许相同 rid 的后续查询。真实控制线程与路由队列定向
+回归通过。这只修复控制面生命周期，不表示生产预测请求已经自动准入。
+
+D route discovery now exposes a non-cancellable completion Future to the CUDA
+waiting queue. It becomes done only after the control coroutine has returned
+or raised; cancellation of the `run_coroutine_threadsafe` proxy cannot free
+lookup capacity or admit a same-rid successor early. Focused real-control-loop
+and queue tests pass. This is a control-plane lifetime fix, not automatic
+predictive request admission.
+
 ### 接收凭据驱动的 TP1 CUDA Prompt group 工厂 / Receipt-derived Prompt group
 
 新增 `plan_received_prompt_bank` 与 `create_received_prompt_group`：前者从真实

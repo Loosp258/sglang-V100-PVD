@@ -126,6 +126,16 @@ class _AsyncControlLoop:
         return asyncio.run_coroutine_threadsafe(coroutine, self.loop)
 
 
+class _RouteLookupCompletion(concurrent.futures.Future):
+    """Expose coroutine termination, not cancellation of its proxy Future."""
+
+    def cancel(self) -> bool:
+        # Cancelling run_coroutine_threadsafe's proxy marks it done before the
+        # underlying coroutine has necessarily unwound. Route capacity and rid
+        # reuse must instead wait for the coroutine's own final publication.
+        return False
+
+
 class PVDKVManager:
     """Minimal shared context used by both scheduler-facing PVD adapters."""
 
@@ -547,36 +557,53 @@ class PVDKVManager:
         delivery_id = req.pvd_delivery_id
         engine = self.sparse_receive_engine
 
-        async def discover():
-            selected = await client.selected_shard_routes(key)
-            if (
-                not isinstance(selected, PVDSelectedShardRoutes)
-                or selected.manifest.key != key
-                or len(selected.shards) != 2
-                or tuple(route.rank for route in selected.shards) != (0, 1)
-            ):
-                raise PVDConnectionError("selected V route identity changed")
-            if isinstance(engine, RailMappedReceiveEngine):
-                missing = [
-                    route.rail
-                    for route in selected.shards
-                    if not engine.supports_rail(route.rail)
-                ]
-            else:
-                missing = [
-                    route.rail for route in selected.shards if route.rail != engine.rail
-                ]
-            if missing:
-                raise PVDConnectionError(
-                    f"D has no preflighted receive adapter for V rails {missing}"
-                )
-            if engine.health().get("healthy") is not True:
-                raise PVDConnectionError("D sparse receive transport is unhealthy")
-            return PVDSelectedRouteBinding(
-                self, req, rid, key, group_id, delivery_id, selected
-            )
+        completion = _RouteLookupCompletion()
 
-        return self.control.submit(discover())
+        async def discover():
+            try:
+                selected = await client.selected_shard_routes(key)
+                if (
+                    not isinstance(selected, PVDSelectedShardRoutes)
+                    or selected.manifest.key != key
+                    or len(selected.shards) != 2
+                    or tuple(route.rank for route in selected.shards) != (0, 1)
+                ):
+                    raise PVDConnectionError("selected V route identity changed")
+                if isinstance(engine, RailMappedReceiveEngine):
+                    missing = [
+                        route.rail
+                        for route in selected.shards
+                        if not engine.supports_rail(route.rail)
+                    ]
+                else:
+                    missing = [
+                        route.rail
+                        for route in selected.shards
+                        if route.rail != engine.rail
+                    ]
+                if missing:
+                    raise PVDConnectionError(
+                        f"D has no preflighted receive adapter for V rails {missing}"
+                    )
+                if engine.health().get("healthy") is not True:
+                    raise PVDConnectionError("D sparse receive transport is unhealthy")
+                result = PVDSelectedRouteBinding(
+                    self, req, rid, key, group_id, delivery_id, selected
+                )
+            except BaseException as exc:
+                completion.set_exception(exc)
+                raise
+            else:
+                completion.set_result(result)
+                return result
+
+        coroutine = discover()
+        try:
+            self.control.submit(coroutine)
+        except BaseException:
+            coroutine.close()
+            raise
+        return completion
 
     def assemble_selected_cuda_request(
         self,

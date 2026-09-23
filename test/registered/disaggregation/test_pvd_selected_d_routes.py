@@ -1,6 +1,7 @@
 """D resolves only the Gateway-selected Entry and preflighted V rails."""
 
 import asyncio
+import threading
 from concurrent.futures import Future
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from sglang.srt.disaggregation.pvd.conn import (
     PVDConnectionError,
     PVDKVManager,
     PVDSelectedRouteBinding,
+    _AsyncControlLoop,
 )
 from sglang.srt.disaggregation.pvd.multi_rail_receive import RailMappedReceiveEngine
 from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
@@ -77,6 +79,34 @@ def test_selected_entry_and_rails_are_checked_before_request_allocation():
     assert binding.req is req
     assert binding.group_id == "chosen"
     assert client.keys == [manager.key_for(req)]
+
+
+def test_route_future_does_not_announce_completion_before_http_coroutine_exits():
+    manager, req, selected, _ = manager_for(("mlx5_0", "mlx5_1"))
+    entered = threading.Event()
+    gate = asyncio.Event()
+
+    class WaitingClient:
+        async def selected_shard_routes(self, key):
+            entered.set()
+            await gate.wait()
+            return selected
+
+    manager.clients["chosen"] = WaitingClient()
+    control = _AsyncControlLoop()
+    manager.control = control
+    try:
+        future = manager.start_selected_cuda_routes(req)
+        assert entered.wait(5)
+        assert future.cancel() is False
+        assert not future.done()
+        control.loop.call_soon_threadsafe(gate.set)
+        assert future.result(timeout=5).selected is selected
+    finally:
+        control.loop.call_soon_threadsafe(control.loop.stop)
+        control.thread.join(timeout=5)
+        assert not control.thread.is_alive()
+        control.loop.close()
 
 
 def test_unconfigured_v_hca_or_entry_change_fails_closed():
