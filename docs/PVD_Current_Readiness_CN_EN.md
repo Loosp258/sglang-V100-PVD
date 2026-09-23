@@ -21,6 +21,51 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 三节点原生 PVD 全 Prompt 通路 / Three-node native full-Prompt PVD path
+
+2026-09-23 在三台 CloudLab V100S 上使用**独立验证 worktree** 和固定
+`mooncake-transfer-engine==0.3.13.post1` 完成 node-0 P → node-1 V → node-2 D
+单 rail (`mlx5_0,mlx5_0`) 验证。Mooncake 原生 GPU WRITE 的本地与跨节点
+4 KiB 样本均逐字节校验；随后同一 Qwen2.5-7B-Instruct TP2 模型的 Gateway
+请求成功生成 4 token 和 20 token。P 使用 `torch_native`，D 使用
+`flash_attn_v100`；两个并发的 20-token 请求也通过。每个 20-token 请求跨过默认
+16-token 刷新边界，V 两 rank 的 delivery 和 ACK 各增加两次，且 Mooncake
+`unknown_transfers=0`、`used_inflight=0`、`quarantined=false`。这证明当前
+**完整 Prompt KV** 传输/刷新路径的一组真实配置可运行，不证明 CAGRA、draft
+预测、稀疏传输/attention、双 rail 或正式性能。原始检出与 Conda 环境未改动；
+这些本地提交尚未推送 GitHub。
+
+The isolated three-node V100S validation now runs native Mooncake GPU writes
+on the single active rail. The same Qwen2.5-7B-Instruct TP2 model completed
+Gateway requests of 4 and 20 output tokens, including two concurrent 20-token
+requests. Each long request produced one initial and one refresh delivery per
+V rank, both ACKed, with no unknown or quarantined transfer. Prefill used
+`torch_native`; Decode used `flash_attn_v100`. This validates one real
+**full-Prompt KV** configuration, not CAGRA, draft prediction, sparse transfer
+or attention, dual rail, or representative performance. Original checkouts
+and Conda environments were left untouched; new commits remain local.
+
+首轮 P 使用 `flash_attn_v100` 启动成功，但真实 prefill 因节点 CUDA 13
+`nvcc` 不支持 `sm_70` 而失败。通用 PD warmup 与 `/health` 原本会发送缺少
+Gateway ID 的假 PVD 请求；现已跳过该 warmup，`/health` 直接反映 worker 状态，
+`/health_generate` 返回 503。Gateway HCA 校验不再硬编码设备名，4 个相关
+Rust 测试通过。P 崩溃后留在 V 上的两个取消 Entry 因缺少 sender terminal
+证明仍占页，这是防止旧 RDMA WRITE 触及重用显存的保守机制；TTL 不能代替证明，
+需确认旧 P 已停止，再在维护窗口重启 V 回收。
+
+The first Prefill attempt with `flash_attn_v100` failed on the actual model
+forward because this environment's CUDA 13 `nvcc` rejects `sm_70`; a successful
+server startup did not prove that backend works. Generic PD startup warmup and
+`/health` previously sent identity-free synthetic PVD requests; PVD now skips
+that warmup and reports `/health` from worker status, while
+`/health_generate` returns 503 rather than claiming to generate. Gateway HCA
+validation now accepts valid configured names such as `mlx5_2,mlx5_3` instead
+of only `mlx5_0,mlx5_1`; four related Rust tests passed. A P crash after V
+reservation left two cancelled Entry shards pinned without sender-terminal
+proof. This is intentional fail-closed ownership; TTL does not authorize MR
+reuse or release. Operators must fence the old P and restart V in a maintenance
+window to reclaim such abandoned reservations.
+
 ### 首次 CloudLab V100S CUDA 组件验收 / First CloudLab V100S CUDA component acceptance
 
 2026-09-23 在 `node-0` 的独立验证 worktree、Tesla V100S-PCIE-32GB（SM70）、
