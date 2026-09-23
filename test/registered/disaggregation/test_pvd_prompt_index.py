@@ -417,6 +417,59 @@ def budgeted(backend=None, limit=1 << 20):
     return manager(**kwargs), budget
 
 
+def test_http_query_placement_follows_identity_and_search_reservation(monkeypatch):
+    """CPU double checks order; the native V100S gate checks actual placement."""
+    index, budget = budgeted()
+    store, manifest, _, _ = stored_entry(index)
+    assert store.progress_prompt_indexes()["built"] == 1
+    before_search_bytes = budget.snapshot()["used_staging_bytes"]
+    query = index._entries[manifest.key.transfer_id].vectors[(0, 0)].vectors[:1]
+    index.backend_device = torch.device("cuda:0")
+    events = []
+    original_reserve = budget.reserve
+    original_to = torch.Tensor.to
+
+    def reserve(*args, **kwargs):
+        events.append("reserve")
+        return original_reserve(*args, **kwargs)
+
+    def place(tensor, *args, **kwargs):
+        if kwargs.get("device") == torch.device("cuda:0"):
+            events.append("place")
+            return tensor  # Simulates placement without requiring CUDA.
+        return original_to(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(budget, "reserve", reserve)
+    monkeypatch.setattr(torch.Tensor, "to", place)
+    with pytest.raises(ValueError, match="query is in"):
+        index.search(
+            ident(manifest.key.transfer_id, vector_space="wrong-model"),
+            queries=query, top_k=1,
+        )
+    assert events == []
+    result = index.search(
+        ident(manifest.key.transfer_id), queries=query, top_k=1,
+    )
+    assert result.selection.token_ids
+    assert events.index("reserve") < events.index("place")
+    assert budget.snapshot()["used_staging_bytes"] == before_search_bytes
+
+    from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+        TransferCapacityError,
+    )
+
+    events.clear()
+
+    def refuse(*_args, **_kwargs):
+        events.append("reserve")
+        raise TransferCapacityError("synthetic search capacity refusal")
+
+    monkeypatch.setattr(budget, "reserve", refuse)
+    with pytest.raises(TransferCapacityError, match="synthetic search capacity"):
+        index.search(ident(manifest.key.transfer_id), queries=query, top_k=1)
+    assert events == ["reserve"]
+
+
 class BrokenBackend:
     """A backend that declares its costs honestly and then fails to build.
 

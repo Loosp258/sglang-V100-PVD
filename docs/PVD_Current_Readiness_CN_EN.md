@@ -21,6 +21,25 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### P→V 原生上传、建图与 HTTP 检索 / Native P-to-V upload/index/search
+
+node-0 P GPU0 到 node-1 两张 V100S 的合成完整 Prompt KV，经单 rail
+`mlx5_0` Mooncake/RDMA 完成双 shard commit；V0/V1 各建两个原生 CAGRA 图，
+合成 K 行 HTTP 查询各 4/4 self-hit，释放 Entry 后只保留共享根预算。实验先
+暴露并修复 CPU HTTP query 与 CUDA 后端的设备不匹配：索引管理器现于身份
+校验和搜索预算预留后搬运 query。node-2 索引定向 **226 passed / 3 skipped**。
+没有真实目标 Q、D 稀疏接收、生产 Scheduler 或吞吐验收，详见
+[CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+Synthetic complete Prompt KV was uploaded from node-0 P GPU0 to both node-1
+V100S ranks over Mooncake/RDMA `mlx5_0`. Both shards committed; each V rank
+built two native CAGRA graphs and returned 4/4 self-hits for synthetic K-row
+HTTP queries. Entry release left only the shared root reservation. This run
+exposed and fixed CPU HTTP Q versus CUDA CAGRA placement: the manager now
+places Q after identity validation and search-budget admission. Focused
+node-2 tests: **226 passed / 3 skipped**. Real target Q, D sparse delivery,
+production Scheduler and throughput remain unvalidated.
+
 ### 原生 CAGRA 服务启动入口 / Native CAGRA service entry point
 
 CloudLab V 节点的 cuVS 25.02 候选环境中，普通 `python -m sglang...pvd.server`

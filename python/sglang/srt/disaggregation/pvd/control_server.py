@@ -508,7 +508,8 @@ def create_shard_app(
             ),
         )
         # The query is built on the host because that is where JSON numbers
-        # arrive; the backend places it on its own declared device. Both the
+        # arrive; the index manager places it on its backend's device only
+        # after identity checks and the search-scratch budget reservation. Both the
         # tensor build and the search run off the event loop.
         result = await asyncio.to_thread(_run_search, index, identity, queries, top_k)
         selection = result.selection

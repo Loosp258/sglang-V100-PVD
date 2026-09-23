@@ -605,6 +605,7 @@ class PromptIndexManager:
             record.users += 1
         scratch_owner = f"prompt-index-search:{transfer_id}:{uuid.uuid4().hex[:8]}"
         failure = None
+        placed_queries = queries
         try:
             # Encoding semantics and head dimension are the last two identity
             # checks, and like the rest they precede any backend call.
@@ -622,10 +623,20 @@ class PromptIndexManager:
                         index.count, index.dim, int(queries.shape[0]), int(top_k)
                     ),
                 )
+            # HTTP queries arrive on CPU, whereas native CAGRA (and the
+            # exact CUDA fallback) need the V rank's own GPU. Place only
+            # after identity checks and the backend's search reservation:
+            # the declared footprint includes the query copy, and an
+            # unauthorized or over-budget request must not allocate it.
+            if (
+                self.backend_device is not None
+                and placed_queries.device != torch.device(self.backend_device)
+            ):
+                placed_queries = queries.to(device=self.backend_device)
             selection = select(
                 self.backend,
                 index,
-                queries,
+                placed_queries,
                 layer=identity.layer,
                 kv_head=identity.kv_head,
                 mapping=item.mapping,
@@ -638,16 +649,16 @@ class PromptIndexManager:
             raise
         finally:
             try:
-                self._fence(queries)
+                self._fence(placed_queries)
             except IndexCompletionUnknown:
                 self._retain_operation(
-                    record, scratch_owner, item, index, queries, failure
+                    record, scratch_owner, item, index, queries, placed_queries, failure
                 )
                 raise
             else:
                 if failure is not None:
                     traceback.clear_frames(failure.__traceback__)
-                item = index = None
+                item = index = placed_queries = None
                 self._release_owners((scratch_owner,))
                 with self._lock:
                     record.users -= 1

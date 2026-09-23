@@ -1,5 +1,45 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 跨节点 P→V 原生上传与检索 / Native cross-node P-to-V gate
+
+CloudLab node-0（P GPU0）向 node-1（V GPU0/GPU1）用 Mooncake/RDMA
+`mlx5_0` 发送合成 1024-token、2-layer、2-KV-head 的完整 Prompt KV。V 每 rank
+接收一个 head，commit 后各建两个原生 CAGRA 图；HTTP 搜索各查询四个合成 K 行，
+两 rank 均 4/4 self-hit。释放 Entry 后两侧索引记录均清空，预算只剩各自
+671088640-byte 共享根预留，未隔离。最终脚本输出 `passed`、`committed_shards=2`、
+`indexed_heads_per_rank=[2,2]`、`root_only_after_release=true`。
+
+这次实测首先发现 V HTTP query 在 CPU、CAGRA 索引在 CUDA，原本会以
+`CAGRA requires contiguous float32 matrices on its declared device` 拒绝。
+修复后，管理器先验证请求身份并预留搜索预算，再将 query 放到后端设备，
+完成检索后同步并退还临时预算。node-2 定向回归 **226 passed / 3 skipped**。
+测试用 K 行充当 query，仅验证跨节点数据/索引/搜索链路，**不证明真实目标
+模型 Q 的 recall、稀疏 KV 交付给 D 或生产预测 Scheduler**。
+
+Node-0 P GPU0 sent synthetic 1024-token, two-layer/two-KV-head complete
+Prompt KV over Mooncake/RDMA `mlx5_0` to node-1 V GPUs 0 and 1. Each V rank
+committed one head and built two native CAGRA graphs. Four synthetic K-row
+queries per rank achieved 4/4 self-hits. Releasing the Entry cleared both
+indexes and refunded all per-Entry bytes, leaving only each rank's
+671088640-byte shared-root reservation. The final gate reported `passed`.
+
+The first real HTTP search exposed a device-placement bug: HTTP built CPU Q
+while native CAGRA required CUDA Q. The manager now checks query identity,
+reserves its search footprint, moves Q to the backend device, searches,
+synchronizes and refunds. Focused node-2 regressions: **226 passed / 3 skipped**.
+Synthetic stored K rows are only plumbing queries, not target-model Q or
+recall evidence. This gate does not exercise D delivery or predictive serving.
+
+```bash
+# With the isolated V service listening privately at 10.0.1.2:19100/19200/19201,
+# --page-bytes 1024 and cagra-auto/shared-native budget configured:
+PYTHONPATH=<pinned-mooncake-target>:python python \
+  test/registered/disaggregation/run_pvd_native_upload_index_gpu.py \
+  --prefill-host 10.0.1.1 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --rail mlx5_0 --page-bytes 1024 --expected-gpu V100S
+```
+
 ## 2026-09-24 原生 V 双 rank 服务门控 / Native dual-rank V service gate
 
 新增 `run_pvd_cagra_v_service_gpu.py`：在指定的空闲隔离端口上使用
