@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### V100S tiny Qwen2 真实 CUDA Q probe / Real CUDA tiny-Qwen2 Q probe
+
+`run_pvd_cuda_probe_smoke.py` 现在可选 `--architecture qwen2`，同时保留默认
+Llama。node-0 的独立 CloudLab 验证 worktree（Tesla V100S、PyTorch
+`2.9.1+cu128`）上，两种随机 tiny 模型的真实 CUDA forward/probe 均返回
+`passed`；两层 post-RoPE Q 对独立 hook oracle 的最大绝对误差均为 **0**，
+正式前缀补查一致，目标权重/KV 池映射/CUDA RNG 未改变，probe 预算归还。
+这不是 Qwen2.5-7B checkpoint、TP2、RDMA、CAGRA 或生产 Scheduler 的验证。
+
+The standalone CUDA probe smoke now accepts `--architecture qwen2` while
+retaining Llama as its default. On node-0 V100S with PyTorch `2.9.1+cu128`,
+both random tiny-model forwards passed: two layers of post-RoPE Q matched an
+independent hook oracle with **0 maximum absolute error**, committed-prefix
+fallback matched, target state/CUDA RNG stayed unchanged, and the probe budget
+was refunded. This does not validate the Qwen2.5-7B checkpoint, TP2, RDMA,
+CAGRA or production Scheduler admission.
+
 ### Qwen2 目标 Q 捕获入口 / Qwen2 target-Q capture seam
 
 Qwen2 注意力现可在 RoPE 之后、调用 attention 之前把目标 Q 交给 batch-owned

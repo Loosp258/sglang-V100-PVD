@@ -1,4 +1,4 @@
-"""Strict standalone real-CUDA probe smoke; random tiny Llama, no downloads.
+"""Strict standalone real-CUDA probe smoke; random tiny Llama/Qwen2.
 
 Owns process groups and the model. Never run inside a serving process. This
 checks target-Q extraction, not CAGRA, sparse Decode, RDMA or performance.
@@ -16,7 +16,10 @@ import traceback
 
 def validate(runner):
     import torch
-    from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
+    from sglang.srt.disaggregation.pvd.cuda_target_probe import (
+        CUDALlamaTargetProbe,
+        CUDAQwen2TargetProbe,
+    )
     from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
         DraftForwardAdapter,
         PrivatePoolAllocator,
@@ -31,7 +34,12 @@ def validate(runner):
 
     execution_lock = threading.Lock()
     budget = TransferBudget(128 << 20, 1)
-    probe = CUDALlamaTargetProbe(
+    architecture = type(runner.model).__name__
+    probe_type = {
+        "LlamaForCausalLM": CUDALlamaTargetProbe,
+        "Qwen2ForCausalLM": CUDAQwen2TargetProbe,
+    }[architecture]
+    probe = probe_type(
         runner,
         ProbeConfig("cuda-smoke-target", (0, 1), head_start=1, head_count=2),
         device="cuda:0",
@@ -107,7 +115,7 @@ def validate(runner):
         allocator.write_mapping(slot, 0, rows)
         adapter = DraftForwardAdapter(
             runner,
-            architecture="LlamaForCausalLM",
+            architecture=architecture,
             attention_backend="torch_native",
             bytes_per_token=probe.layers * probe.kv_heads * probe.head_dim * 2 * 4,
             device="cuda:0",
@@ -147,6 +155,7 @@ def validate(runner):
         )
         errors.append(float((value - expected).abs().max()))
     return {
+        "architecture": architecture,
         "layers": 2,
         "max_q_abs_error": max(errors),
         "post_rope_oracle_matched": True,
@@ -159,13 +168,14 @@ def validate(runner):
 def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dtype", choices=("float16", "float32"), default="float16")
+    parser.add_argument("--architecture", choices=("llama", "qwen2"), default="llama")
     args = parser.parse_args(argv)
     if not __debug__:
         parser.error("assertions must be enabled")
     report = {
         "schema": schema,
         "status": "blocked",
-        "fixture": "random tiny Llama; not a production checkpoint",
+        "fixture": f"random tiny {args.architecture}; not a production checkpoint",
         "production_gpu_rdma_validated": False,
         "performance_validated": False,
     }
@@ -187,12 +197,13 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
         from sglang.srt.layers.dp_attention import initialize_dp_attention
         from sglang.srt.model_executor.model_runner import ModelRunner
         from sglang.srt.server_args import ServerArgs
-        from transformers import GenerationConfig, LlamaConfig
+        from transformers import GenerationConfig, LlamaConfig, Qwen2Config
 
         torch.manual_seed(8128)
         torch.cuda.set_device(0)
         with tempfile.TemporaryDirectory(prefix="pvd-cuda-probe-") as directory:
-            config = LlamaConfig(
+            config_type = LlamaConfig if args.architecture == "llama" else Qwen2Config
+            config = config_type(
                 vocab_size=128,
                 hidden_size=256,
                 intermediate_size=512,
@@ -200,7 +211,11 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                 num_attention_heads=4,
                 num_key_value_heads=2,
                 max_position_embeddings=64,
-                architectures=["LlamaForCausalLM"],
+                architectures=[
+                    "LlamaForCausalLM"
+                    if args.architecture == "llama"
+                    else "Qwen2ForCausalLM"
+                ],
                 tie_word_embeddings=False,
             )
             config.save_pretrained(directory)
