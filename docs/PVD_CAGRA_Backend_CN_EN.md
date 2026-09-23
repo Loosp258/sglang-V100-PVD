@@ -32,6 +32,21 @@ capacity, not from this document:
 --prompt-index-cagra-itopk-size 512
 ```
 
+对短 Prompt，可显式将 `--prompt-index-backend cagra` 换成
+`--prompt-index-backend cagra-auto`。当实际索引行数 `<= intermediate_degree`
+时，它在同一 V GPU 上使用有界精确检索；更长的 Prompt 仍走原生 CAGRA。
+`cagra` 模式原来的短 Prompt 拒绝行为不变。自动模式分别向索引预算申报
+精确副本或 native cap，短 Prompt 不预留完整 CAGRA cap；但 GPU 精确副本
+仍和权威 KV pool 竞争显存，因此必须为它留出明确预算。
+
+For short prompts, explicitly select `--prompt-index-backend cagra-auto`
+instead of `cagra`. At `rows <= intermediate_degree`, this uses bounded
+exact search on the **same V GPU**; larger indexes still use native CAGRA.
+Pure `cagra` retains its prior short-prompt refusal. Each path declares its
+actual retained and scratch footprints to the index budget. Short indexes
+avoid the full native cap, but their exact GPU copy still competes with the
+authoritative KV pool and must be budgeted.
+
 The three numeric graph/search defaults above are configuration defaults, not
 tuned V100S results. CAGRA requires an actual indexed CUDA device; the factory
 passes each V shard's real local device, not a hard-coded GPU zero. CPU-test
@@ -43,14 +58,16 @@ shard 的实际 CUDA device，禁止 CPU override；不自动安装或强制指�
 Current positive capability subset: contiguous float32 vectors, IP or squared-L2
 native metric, IVF-PQ build, one graph per layer/KV head. Indexed row count must
 exceed the configured intermediate graph degree. Shorter prompts are explicitly
-refused for indexing (full-Prompt delivery remains available), not silently
-switched to another algorithm. `top_k` must not exceed the row count or itopk bound.
+refused in pure `cagra` mode (full-Prompt delivery remains available); only
+the explicitly selected `cagra-auto` mode uses exact GPU fallback. `top_k`
+must not exceed the row count or itopk bound on the native path.
 No page representatives, head averaging, cross-head score merge, or out-of-core
 CAGRA implementation is implied.
 
-当前支持连续 float32、IP/L2、IVF-PQ build、每个 layer/KV head 独立图。行数必须
-大于 intermediate degree，否则明确拒绝建索引，完整 Prompt 交付不受此索引状态
-限制；不会静默切算法。top-k 受行数和 itopk 限制。未实现页代表向量、跨 head
+当前支持连续 float32、IP/L2、IVF-PQ build、每个 layer/KV head 独立图。纯
+`cagra` 模式要求行数大于 intermediate degree，否则明确拒绝；仅显式
+`cagra-auto` 模式会对短 Prompt 使用 GPU 精确回退。完整 Prompt 交付不受索引状态
+限制。top-k 受行数和原生 itopk 限制。未实现页代表向量、跨 head
 平均/合分或 out-of-core CAGRA。
 
 ## Ownership and bounds / 所有权与容量

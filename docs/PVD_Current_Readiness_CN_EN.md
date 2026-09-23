@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 短 Prompt 的显式 CAGRA 自动模式 / Explicit CAGRA-auto short fallback
+
+V 可选 `--prompt-index-backend cagra-auto`：短 Prompt 用同设备精确检索，长
+Prompt 用原生 CAGRA；纯 `cagra` 保持拒绝短 Prompt。node-0 V100S 索引相关
+**213 passed / 3 skipped**，node-1 cuVS 25.02 上 16-row 精确索引与
+1024-row 原生索引同时 build/search/dispose 通过。预算按实际分支计，native
+UNKNOWN 会阻止继续服务。仍无真实目标 Q recall、56 图/多 Entry 容量与生产
+Scheduler 的验证，详见 [CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+V can explicitly select `cagra-auto`: short prompts use exact search on the
+same GPU, larger ones use native CAGRA; pure `cagra` keeps its refusal.
+Node-0 V100S index regressions passed **213 / 3 skipped**, and node-1 cuVS
+25.02 ran short exact and long native indexes concurrently through
+build/search/dispose. Actual-path budgets and sticky native UNKNOWN are
+enforced. Real target-Q recall, 56-graph/multi-Entry capacity and production
+Scheduler integration remain open.
+
 ### 合成 Prompt-KV 的三节点原生接力 / Synthetic Prompt-KV native relay
 
 原生接力工具新增可选 `--payload-kind packed-kv`：用项目 packer 打包合成

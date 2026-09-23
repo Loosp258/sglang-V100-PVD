@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 import torch
 from sglang.srt.disaggregation.pvd.index_search import (
+    BruteForceIndexBackend,
     BuiltIndex,
     IndexBackend,
     IndexCompletionUnknown,
@@ -376,3 +377,79 @@ class CagraIndexBackend(IndexBackend):
                 self._unknown = str(exc)
                 raise IndexCompletionUnknown(str(exc)) from exc
             self._owners.pop(id(owner))
+
+
+class CagraAutoIndexBackend(IndexBackend):
+    """CAGRA for supported row counts, exact on-device search for short K.
+
+    The mode is explicit: pure ``cagra`` still refuses short prompts. Both
+    paths declare the same device, while their actual retained and scratch
+    footprints are charged independently by PromptIndexManager. A native
+    UNKNOWN poisons this whole mode, including its exact fallback, because
+    the shared CUDA device/resource state can no longer be trusted.
+    """
+
+    name = "cagra_auto"
+
+    def __init__(self, cagra: CagraIndexBackend):
+        if not isinstance(cagra, CagraIndexBackend):
+            raise TypeError("a configured CAGRA backend is required")
+        self.cagra = cagra
+        self.exact = BruteForceIndexBackend(device=cagra.device)
+        self._lock = threading.RLock()
+        self._built = {}
+
+    @property
+    def device(self):
+        return self.cagra.device
+
+    def _for_rows(self, rows):
+        if type(rows) is not int or rows <= 0:
+            raise IndexSearchError("index rows must be a positive integer")
+        return self.exact if rows <= self.cagra.intermediate_degree else self.cagra
+
+    def build_footprint(self, rows, dim, *, metric):
+        return self._for_rows(rows).build_footprint(rows, dim, metric=metric)
+
+    def build_scratch_footprint(self, rows, dim, *, metric):
+        return self._for_rows(rows).build_scratch_footprint(rows, dim, metric=metric)
+
+    def search_footprint(self, rows, dim, num_queries, top_k):
+        return self._for_rows(rows).search_footprint(
+            rows, dim, num_queries, top_k
+        )
+
+    def synchronize(self):
+        with self._lock:
+            self.cagra.synchronize()
+            self.exact.synchronize()
+
+    def build(self, vectors, *, vector_space, metric):
+        if not isinstance(vectors, torch.Tensor) or vectors.ndim != 2:
+            raise IndexSearchError("index vectors must be a 2-D tensor")
+        with self._lock:
+            self.cagra._check()
+            selected = self._for_rows(int(vectors.shape[0]))
+            if vectors.device != self.device:
+                raise IndexSearchError("index vectors must be on the declared device")
+            index = selected.build(vectors, vector_space=vector_space, metric=metric)
+            self._built[id(index)] = (index, selected)
+            return index
+
+    def _owner(self, index):
+        entry = self._built.get(id(index))
+        if entry is None or entry[0] is not index:
+            raise IndexSearchError("unknown or disposed CAGRA-auto index")
+        return entry[1]
+
+    def search(self, index, queries, *, top_k):
+        with self._lock:
+            self.cagra._check()
+            return self._owner(index).search(index, queries, top_k=top_k)
+
+    def dispose(self, index):
+        with self._lock:
+            self.cagra._check()
+            selected = self._owner(index)
+            selected.dispose(index)
+            self._built.pop(id(index))

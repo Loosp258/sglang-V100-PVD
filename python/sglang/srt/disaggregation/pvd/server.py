@@ -157,7 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument(
-        "--prompt-index-backend", choices=("exact", "cagra"), default="exact"
+        "--prompt-index-backend", choices=("exact", "cagra", "cagra-auto"),
+        default="exact",
     )
     parser.add_argument(
         "--prompt-index-cagra-native-bytes",
@@ -218,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_args(args: argparse.Namespace) -> List[str]:
-    if getattr(args, "prompt_index_backend", "exact") == "cagra":
+    if getattr(args, "prompt_index_backend", "exact") in ("cagra", "cagra-auto"):
         if (
             not args.prompt_index_vector_space
             or not args.prompt_index_budget_bytes
@@ -338,18 +339,23 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
     # cuVS present, and its copies stay off the device holding the KV pool.
     # A CAGRA backend replaces it without other changes.
     backend = None
-    if getattr(args, "prompt_index_backend", "exact") == "cagra":
-        from sglang.srt.disaggregation.pvd.cagra_backend import CagraIndexBackend
+    index_mode = getattr(args, "prompt_index_backend", "exact")
+    if index_mode in ("cagra", "cagra-auto"):
+        from sglang.srt.disaggregation.pvd.cagra_backend import (
+            CagraAutoIndexBackend,
+            CagraIndexBackend,
+        )
 
         if device is None:
             raise ValueError("CAGRA factory requires the V rank's actual device")
-        backend = CagraIndexBackend(
+        native = CagraIndexBackend(
             device=device,
             native_bytes_per_index=args.prompt_index_cagra_native_bytes,
             graph_degree=args.prompt_index_cagra_graph_degree,
             intermediate_degree=args.prompt_index_cagra_intermediate_degree,
             itopk_size=args.prompt_index_cagra_itopk_size,
         )
+        backend = CagraAutoIndexBackend(native) if index_mode == "cagra-auto" else native
     return PromptIndexManager(
         vector_space=args.prompt_index_vector_space,
         metric=getattr(args, "prompt_index_metric", "ip"),
@@ -480,7 +486,7 @@ def _create_store(
         }
     prompt_index = (
         _build_prompt_index(args, device=device)
-        if getattr(args, "prompt_index_backend", "exact") == "cagra"
+        if getattr(args, "prompt_index_backend", "exact") in ("cagra", "cagra-auto")
         else _build_prompt_index(args)
     )
     store = VectorKVStore(

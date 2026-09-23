@@ -1,5 +1,42 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 短 Prompt 自动回退 / Explicit short-Prompt fallback
+
+新增显式 `--prompt-index-backend cagra-auto`，纯 `cagra` 模式保持原行为。
+短 Prompt（行数不超过 `intermediate_degree`）采用同一 V GPU 上的有界精确
+后端；长 Prompt 仍用原生 cuVS CAGRA。索引管理器按实际选择的后端分别预留
+保留内存与 build/search scratch，native UNKNOWN 会阻止整个组合后端继续运行。
+node-0 V100S 上索引/管理器相关回归 **213 passed / 3 skipped**，其中 GPU
+精确回退真的在 CUDA tensor 上运行；跳过项不是此回退用例。
+
+node-1 隔离 cuVS 25.02 候选环境的原生门控同时构建 16×32 精确 GPU 索引与
+1024×32 CAGRA 索引，各检索 4 条 query、Top-4，短/长自向量命中均 4/4，
+最大分数误差分别为 0 与约 3.81e-6；两个索引均正常销毁。短索引保留
+2048 bytes，长索引构建后保留 131072 bytes；长索引仍需 512 MiB 原生
+构建上限，不能把保留量当作峰值。没有真实模型 Q、56 图、多个 Entry、
+生产 Scheduler 或端到端性能证据。
+
+The explicit `cagra-auto` mode uses bounded exact search on the same V GPU
+for rows at or below `intermediate_degree`, and native cuVS CAGRA above it;
+pure `cagra` is unchanged. The manager charges each actual path separately,
+and native UNKNOWN poisons the combined mode. Node-0 V100S index regressions
+passed **213 / 3 skipped**, including a real CUDA exact-fallback case.
+In the isolated node-1 cuVS 25.02 candidate, a 16×32 exact GPU index and a
+1024×32 native index coexisted, each searched four Top-4 queries with 4/4
+self-hits, then both disposed. Score errors were 0 and about 3.81e-6.
+Retained bytes after build (2048 and 131072) are **not** peak-build bounds;
+the native test still used a 512 MiB cap. Real-model Q, 56 graphs,
+multi-Entry admission, production serving and latency remain unvalidated.
+
+在隔离候选环境从仓库根目录复验 / Reproduce from the repository root in the
+isolated candidate environment:
+
+```bash
+PYTHONPATH=python python test/registered/disaggregation/run_pvd_cagra_auto_gpu.py \
+  --device 0 --expected-gpu V100S --expect-cuvs-version 25.02.00 \
+  --native-cap-bytes 536870912
+```
+
 ## 2026-09-23 V100S 候选环境实测 / Candidate V100S execution
 
 在 node-1 的独立 `pvd-cagra25-venv` 中安装了 `cuvs-cu12==25.2.0`
