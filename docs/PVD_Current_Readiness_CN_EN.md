@@ -21,6 +21,30 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 首次 CloudLab V100S CUDA 组件验收 / First CloudLab V100S CUDA component acceptance
+
+2026-09-23 在 `node-0` 的独立验证 worktree、Tesla V100S-PCIE-32GB（SM70）、
+PyTorch `2.9.1+cu128` 上运行 `run_pvd_cuda_acceptance.py --expected-gpu V100S`。
+首次运行发现测试本身的 rail 配置不一致：store 使用 `mlx5_test`，Entry manifest
+使用 `mlx5_0`。测试改为使用 `shard.rail` 后，严格验收 **9/9 passed，0 skipped**。
+覆盖真实 CUDA 接收排序、稀疏打包生命周期、工作集切换和 attention 数值检查；
+V payload 仍是 fake transport。三台节点均有 2×V100S，只有 `mlx5_0` 为 ACTIVE；
+三台当前环境均未安装 `mooncake-transfer-engine`。因此尚无原生 Mooncake/RDMA、
+CAGRA、真实模型 forward、性能或生产 Scheduler 验收。原实验检出的
+`scripts/install_v100.sh` 本地修改保留；验证在独立 worktree 完成。
+
+On 2026-09-23 the strict component runner executed on node-0 with a real
+Tesla V100S-PCIE-32GB (SM70) and PyTorch `2.9.1+cu128`. Its initial failure
+was a test-only rail mismatch (`mlx5_test` store versus `mlx5_0` manifest).
+Using the manifest's `shard.rail` yielded **9/9 passed, 0 skipped**. This
+exercises real CUDA ordering, sparse packing lifetime, bank switching and
+attention math, but V payload transport is fake. All three nodes have two
+V100S GPUs and only `mlx5_0` ACTIVE; none currently has
+`mooncake-transfer-engine` installed. Native Mooncake/RDMA, CAGRA, real-model
+forward, performance and production Scheduler remain unvalidated. The existing
+checkout's local install-script edits were preserved by using a separate
+validation worktree.
+
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
 连同原生 engine 一起由进程级隔离表保有，避免启动栈回退时丢失 owner 或让

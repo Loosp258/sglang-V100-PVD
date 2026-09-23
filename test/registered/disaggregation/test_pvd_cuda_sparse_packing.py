@@ -240,7 +240,7 @@ def test_actual_cuda_store_pack_lifetime_and_bytes(monkeypatch, copy_failure):
     store = vector_store.VectorKVStore(
         rank=0,
         world_size=2,
-        rail="mlx5_test",
+        rail=shard.rail,
         device="cuda:0",
         total_pages=16,
         page_bytes=shard.expected_bytes // shard.page_count,
