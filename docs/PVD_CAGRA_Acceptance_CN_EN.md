@@ -3,7 +3,8 @@
 ## 2026-09-24 管理器与真实原生图联合门控 / Manager/native integration gate
 
 node-1 的 GPU 0 和 GPU 1 都在 V100S/cuVS 25.02 隔离候选环境运行
-`run_pvd_cagra_shared_manager_gpu.py`：真实 Prompt KV packer 将合成
+`run_pvd_cagra_shared_manager_gpu.py`：先通过真实 V CLI 解析、校验和
+`_build_prompt_index` 工厂构建管理器，然后用 Prompt KV packer 将合成
 1024-token、2-layer、rank-local 1-KV-head 数据打包；`PromptIndexManager`
 提取向量，为两个 Entry 共构建四个原生 CAGRA 图，并通过管理器完成一次检索。
 共享 RMM 根上限 671088640 bytes、每图子上限 536870912 bytes。管理器启动时
@@ -13,7 +14,8 @@ node-1 的 GPU 0 和 GPU 1 都在 V100S/cuVS 25.02 隔离候选环境运行
 worker、真实目标 Q、56 图容量、并发服务、召回或吞吐验收。
 
 The isolated node-1 V100S/cuVS 25.02 component gate passed separately on
-GPU 0 and GPU 1. It packed synthetic
+GPU 0 and GPU 1. It used the real V CLI parser, argument validator and
+`_build_prompt_index` factory, then packed synthetic
 1024-token Prompt KV, extracted rank-local K through `PromptIndexManager`,
 built four native CAGRA graphs across two Entries, and searched through the
 manager. The root cap was 671088640 bytes and each child cap 536870912.

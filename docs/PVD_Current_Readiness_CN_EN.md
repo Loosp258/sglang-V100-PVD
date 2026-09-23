@@ -30,7 +30,7 @@ V 可显式传 `--prompt-index-cagra-global-native-bytes N`（仅 `cagra` / `cag
 约束；向量副本、短 Prompt 精确索引及其他 scratch 另行计费。Entry 释放不会
 错误退还全局预留。未设置此参数时仍沿用每图终生预留。CloudLab node-2
 定向索引回归 **219 passed / 3 skipped**。node-1 两张 V100S/cuVS 25.02 的新增
-组件门控把真实 Prompt pack/extract、管理器和四个原生图组合运行：两个合成 Entry
+组件门控把真实 V CLI/工厂、Prompt pack/extract、管理器和四个原生图组合运行：两个合成 Entry
 各两图，共享 640 MiB 根限额，预算仅预留一次；释放 Entry 后图内分配归零，
 根预留仍保持。它尚不是生产 V 服务验收；也不保证给定预算能容纳 56 图或
 多个真实 Entry，未测真实目标 Q 的召回。
@@ -43,7 +43,7 @@ limiters bound native allocations; vector copies, short-prompt exact indexes
 and other scratch are charged separately. Closing an Entry does not refund the
 root. Without the flag, the per-graph lifetime reservation remains. Focused
 node-2 regressions: **219 passed / 3 skipped**. A new node-1 dual-V100S/cuVS 25.02
-component gate combined real Prompt packing/extraction, the manager and four
+component gate combined the real V CLI/factory, Prompt packing/extraction, the manager and four
 native graphs from two synthetic Entries. It charged the 640 MiB root once;
 native graph allocations returned to zero after Entry close while the root
 reservation remained. This is not a production V-service run or evidence of

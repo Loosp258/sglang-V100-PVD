@@ -19,22 +19,22 @@ def main(argv=None):
 
     import cuvs
     import torch
-    from sglang.srt.disaggregation.pvd.cagra_backend import CagraIndexBackend
     from sglang.srt.disaggregation.pvd.kv_packer import (
         PVD_TENSOR_LAYOUT,
         describe_kv_layout,
         pack_full_prompt_kv_head_shard,
     )
-    from sglang.srt.disaggregation.pvd.prompt_index import (
-        PromptIndexManager,
-        SearchRequestIdentity,
-    )
+    from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
     from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
     from sglang.srt.disaggregation.pvd.protocol import (
         KVLayoutSignature,
         KVShardManifest,
     )
-    from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+    from sglang.srt.disaggregation.pvd.server import (
+        _build_prompt_index,
+        _validate_args,
+        build_parser,
+    )
 
     if not torch.cuda.is_available():
         raise RuntimeError("requested CUDA device is unavailable")
@@ -84,16 +84,26 @@ def main(argv=None):
     )
 
     root_cap, graph_cap = 640 << 20, 512 << 20
-    budget = TransferBudget(root_cap + (32 << 20), 1)
-    backend = CagraIndexBackend(
-        device=f"cuda:{args.device}", native_bytes_per_index=graph_cap,
-        graph_degree=32, intermediate_degree=64, itopk_size=64,
-        global_native_cap_bytes=root_cap,
+    server_args = build_parser().parse_args(
+        [
+            "--advertise-host", "127.0.0.1",
+            "--disaggregation-ib-device", "mlx5_0",
+            "--transfer-staging-budget-bytes", str(1 << 20),
+            "--transfer-max-inflight", "1",
+            "--total-pages", "1", "--page-bytes", "256",
+            "--prompt-index-vector-space", "synthetic-target",
+            "--prompt-index-budget-bytes", str(root_cap + (32 << 20)),
+            "--prompt-index-backend", "cagra",
+            "--prompt-index-cagra-native-bytes", str(graph_cap),
+            "--prompt-index-cagra-global-native-bytes", str(root_cap),
+            "--prompt-index-cagra-graph-degree", "32",
+            "--prompt-index-cagra-intermediate-degree", "64",
+            "--prompt-index-cagra-itopk-size", "64",
+        ]
     )
-    manager = PromptIndexManager(
-        vector_space="synthetic-target", backend=backend, metric="ip",
-        budget=budget,
-    )
+    _validate_args(server_args)
+    manager = _build_prompt_index(server_args, device=f"cuda:{args.device}")
+    backend, budget = manager.backend, manager.budget
     report = {
         "schema": "pvd-cagra-shared-manager-gpu-v1", "status": "failed",
         "gpu": gpu, "device": args.device, "cuvs_version": cuvs.__version__,
