@@ -28,6 +28,9 @@ from sglang.srt.distributed.device_communicators.mooncake_transfer_engine import
 
 logger = logging.getLogger(__name__)
 _manager_lock = threading.Lock()
+# Native registration may have taken effect even when its Python call fails.
+# Keep both the engine and CUDA storage alive until process exit in that case.
+_uncertain_native_registrations: list[tuple[Any, torch.Tensor, int, str]] = []
 
 
 class MooncakePVDTransferEngine(TransferEngine):
@@ -77,6 +80,15 @@ class MooncakePVDTransferEngine(TransferEngine):
         self._registrations: Dict[str, RegisteredMemory] = {}
         self._guards: Dict[str, ResourceGuard] = {}
         self._lock = threading.Lock()
+        self._registration_unknown_reason: Optional[str] = None
+
+    def _quarantine_registration(
+        self, buffer: torch.Tensor, ptr: int, reason: str
+    ) -> None:
+        # Called with self._lock held. Never recycle possibly registered storage.
+        _uncertain_native_registrations.append((self._engine, buffer, ptr, reason))
+        self._registration_unknown_reason = reason
+        self._engine._pvd_registration_unknown_reason = reason
 
     def register_memory(
         self,
@@ -97,27 +109,87 @@ class MooncakePVDTransferEngine(TransferEngine):
             )
         length = buffer.numel() * buffer.element_size()
         ptr = int(buffer.data_ptr())
-        ret = self._engine.engine.register_memory(ptr, length)
-        if ret != 0:
-            raise RuntimeError(
-                f"Mooncake GPU memory registration failed on {rail} with code {ret}"
-            )
-        region_id = uuid.uuid4().hex
-        descriptor = RemoteRegionDescriptor(
-            endpoint=self._engine.get_session_id(),
-            region_id=region_id,
-            address=ptr,
-            length=length,
-            device=str(buffer.device),
-            rank=rank,
-            rail=rail,
-            backend_metadata={"transport": "mooncake", **dict(metadata or {})},
-        )
-        registration = RegisteredMemory(descriptor=descriptor, buffer=buffer)
-        guard = ResourceGuard(registration, lambda: self._unregister(registration))
         with self._lock:
-            self._registrations[region_id] = registration
-            self._guards[region_id] = guard
+            unknown_reason = getattr(
+                self._engine, "_pvd_registration_unknown_reason", None
+            )
+            if unknown_reason is not None:
+                raise RuntimeError(
+                    "Mooncake registration state is unknown: "
+                    f"{unknown_reason}"
+                )
+            try:
+                ret = self._engine.engine.register_memory(ptr, length)
+            except Exception as exc:
+                self._quarantine_registration(
+                    buffer, ptr, f"native register raised: {exc}"
+                )
+                raise RuntimeError("Mooncake native registration outcome is unknown") from exc
+            if ret != 0:
+                self._quarantine_registration(
+                    buffer, ptr, f"native register returned {ret}"
+                )
+                raise RuntimeError(
+                    f"Mooncake GPU memory registration failed on {rail} with code {ret}; "
+                    "registration outcome is unknown"
+                )
+            try:
+                region_id = uuid.uuid4().hex
+                descriptor = RemoteRegionDescriptor(
+                    endpoint=self._engine.get_session_id(),
+                    region_id=region_id,
+                    address=ptr,
+                    length=length,
+                    device=str(buffer.device),
+                    rank=rank,
+                    rail=rail,
+                    backend_metadata={"transport": "mooncake", **dict(metadata or {})},
+                )
+                registration = RegisteredMemory(descriptor=descriptor, buffer=buffer)
+                guard = ResourceGuard(
+                    registration, lambda: self._unregister(registration)
+                )
+            except Exception as exc:
+                try:
+                    rollback_result = self._engine.engine.unregister_memory(ptr)
+                    if rollback_result != 0:
+                        raise RuntimeError(
+                            f"native rollback returned {rollback_result}"
+                        )
+                except Exception as rollback_exc:
+                    self._quarantine_registration(
+                        buffer,
+                        ptr,
+                        f"descriptor construction failed ({exc}); "
+                        f"native rollback failed ({rollback_exc})",
+                    )
+                    raise RuntimeError(
+                        "Mooncake registration rollback failed; CUDA storage retained"
+                    ) from exc
+                raise
+            try:
+                self._registrations[region_id] = registration
+                self._guards[region_id] = guard
+            except Exception as exc:
+                self._registrations.pop(region_id, None)
+                self._guards.pop(region_id, None)
+                try:
+                    rollback_result = self._engine.engine.unregister_memory(ptr)
+                    if rollback_result != 0:
+                        raise RuntimeError(
+                            f"native rollback returned {rollback_result}"
+                        )
+                except Exception as rollback_exc:
+                    self._quarantine_registration(
+                        buffer,
+                        ptr,
+                        f"registration publication failed ({exc}); "
+                        f"native rollback failed ({rollback_exc})",
+                    )
+                    raise RuntimeError(
+                        "Mooncake registration rollback failed; CUDA storage retained"
+                    ) from exc
+                raise
         logger.debug(
             "PVD MR registered: session=%s region=%s rank=%s rail=%s address=%#x bytes=%s",
             descriptor.endpoint,
@@ -178,6 +250,14 @@ class MooncakePVDTransferEngine(TransferEngine):
 
         try:
             with self._lock:
+                unknown_reason = getattr(
+                    self._engine, "_pvd_registration_unknown_reason", None
+                )
+                if unknown_reason is not None:
+                    raise RuntimeError(
+                        "Mooncake registration state is unknown: "
+                        f"{unknown_reason}"
+                    )
                 registration = self._registrations.get(local.registration.descriptor.region_id)
                 guard = self._guards.get(local.registration.descriptor.region_id)
             if registration is not local.registration or guard is None:
@@ -260,11 +340,20 @@ class MooncakePVDTransferEngine(TransferEngine):
     def health(self) -> Dict[str, Any]:
         with self._lock:
             registrations = len(self._registrations)
+            unknown_reason = getattr(
+                self._engine, "_pvd_registration_unknown_reason", None
+            )
+        try:
+            session_id = self._engine.get_session_id()
+        except Exception as exc:
+            session_id = None
+            unknown_reason = unknown_reason or f"Mooncake session ID unavailable: {exc}"
         return {
             "backend": self.name,
-            "healthy": True,
+            "healthy": unknown_reason is None,
+            "registration_unknown_reason": unknown_reason,
             "rail": self.rail,
-            "session_id": self._engine.get_session_id(),
+            "session_id": session_id,
             "registered_regions": registrations,
             "metadata_policy": "fresh",
             "metadata_policy_verification": "version-pinned-pre-init",

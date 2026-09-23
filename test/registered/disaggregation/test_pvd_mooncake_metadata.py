@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import types
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,6 +209,85 @@ def test_two_v_ranks_share_preinit_policy_and_report_it(transport):
     for adapter in ranks:
         assert adapter.health().get("metadata_policy") == "fresh"
         assert adapter.health().get("mooncake_version") == "0.3.13.post1"
+
+
+def test_descriptor_failure_rolls_back_native_registration(transport, monkeypatch):
+    adapter = transport.adapter.MooncakePVDTransferEngine(
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
+    )
+    native = adapter._engine.engine
+    rollback_addresses = []
+    monkeypatch.setattr(
+        native,
+        "unregister_memory",
+        lambda address: rollback_addresses.append(address) or 0,
+    )
+    monkeypatch.setattr(
+        adapter._engine,
+        "get_session_id",
+        lambda: (_ for _ in ()).throw(RuntimeError("descriptor failed")),
+    )
+    with pytest.raises(RuntimeError, match="descriptor failed"):
+        adapter.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
+    assert rollback_addresses == [4096]
+    assert not adapter._registrations
+    assert adapter._registration_unknown_reason is None
+
+
+@pytest.mark.parametrize("failure", ["return", "raise"])
+def test_uncertain_native_registration_retains_buffer_and_refuses_reuse(
+    transport, monkeypatch, failure
+):
+    adapter = transport.adapter.MooncakePVDTransferEngine(
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
+    )
+    native = adapter._engine.engine
+    if failure == "return":
+        monkeypatch.setattr(native, "register_memory", lambda address, length: -1)
+    else:
+        def raise_after_register(address, length):
+            raise RuntimeError("native call failed")
+
+        monkeypatch.setattr(native, "register_memory", raise_after_register)
+    buffer = CudaBuffer()
+    retained = weakref.ref(buffer)
+    with pytest.raises(RuntimeError, match="outcome is unknown"):
+        adapter.register_memory(buffer, endpoint="v:1", rank=0, rail="mlx5_2")
+    del buffer
+    assert retained() is not None
+    assert transport.adapter._uncertain_native_registrations[-1][1] is retained()
+    assert not adapter.health()["healthy"]
+    with pytest.raises(RuntimeError, match="state is unknown"):
+        adapter.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
+    sibling = transport.adapter.MooncakePVDTransferEngine.from_existing(
+        adapter._engine, rail="mlx5_2"
+    )
+    assert not sibling.health()["healthy"]
+    with pytest.raises(RuntimeError, match="state is unknown"):
+        sibling.register_memory(CudaBuffer(), endpoint="v:1", rank=0, rail="mlx5_2")
+
+
+def test_failed_descriptor_rollback_quarantines_cuda_storage(transport, monkeypatch):
+    adapter = transport.adapter.MooncakePVDTransferEngine(
+        hostname="v", gpu_id=0, rail="mlx5_2", budget=pvd_budget()
+    )
+    monkeypatch.setattr(
+        adapter._engine,
+        "get_session_id",
+        lambda: (_ for _ in ()).throw(RuntimeError("descriptor failed")),
+    )
+    monkeypatch.setattr(
+        adapter._engine.engine, "unregister_memory", lambda address: -1
+    )
+    buffer = CudaBuffer()
+    retained = weakref.ref(buffer)
+    with pytest.raises(RuntimeError, match="rollback failed"):
+        adapter.register_memory(buffer, endpoint="v:1", rank=0, rail="mlx5_2")
+    del buffer
+    assert retained() is not None
+    assert transport.adapter._uncertain_native_registrations[-1][1] is retained()
+    assert not adapter.health()["healthy"]
+    assert "native rollback failed" in adapter.health()["registration_unknown_reason"]
 
 
 def test_regular_pd_does_not_change_process_environment(transport):

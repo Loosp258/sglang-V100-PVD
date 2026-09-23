@@ -700,6 +700,23 @@ unexecuted.
 
 ## 固定设计约束 / Invariants to preserve
 
+### 原生 MR 注册失败隔离 / Native MR registration failure isolation
+
+Mooncake 原生 `register_memory()` 抛异常或返回非零时，PVD 不能证明 GPU MR
+没有生效，因此将 engine 和 CUDA buffer 保留至进程结束，标记共享 engine
+不健康，并拒绝新的注册及 PUT。原生注册成功、但 descriptor/guard/发布失败时，
+先尝试原生注销；只有注销成功才放开 buffer。注销失败同样隔离并保留 buffer。
+健康检查即使无法读取 session ID 也会返回不健康状态。这是保守的失效保护，
+不是实际 Mooncake/GPU/RDMA 的错误注入验收。
+
+If native `register_memory()` raises or returns nonzero, PVD cannot prove the GPU
+MR was never installed. It retains the engine and CUDA buffer for process life,
+marks the shared engine unhealthy, and refuses new registrations and PUTs. If
+descriptor/guard/publication fails after a successful native registration, the
+buffer is released only after native unregister succeeds; failed rollback is
+quarantined the same way. Health remains reportable when session-ID lookup fails.
+This is conservative fail-closed behavior, not GPU/RDMA fault-injection evidence.
+
 - 新请求不重置旧请求的时钟或预取。刷新按每个请求正式提交的 D token 计数。
   New requests never reset existing clocks/prefetch; count committed D tokens only.
 - draft 只预测检索位置；目标模型输出是唯一正式输出，不启用原生 speculative
