@@ -86,6 +86,25 @@ struct PDRequestContext<'a> {
 struct BreakerOutcomesRecorded;
 
 impl PDRouter {
+    fn classify_pvd_rails(rank0_rail: &str, rank1_rail: &str) -> Result<&'static str, String> {
+        fn valid_hca_name(name: &str) -> bool {
+            let mut bytes = name.bytes();
+            matches!(bytes.next(), Some(first) if first.is_ascii_alphanumeric() || first == b'_')
+                && bytes.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'.' | b'-'))
+        }
+
+        if !valid_hca_name(rank0_rail) || !valid_hca_name(rank1_rail) {
+            return Err(format!(
+                "invalid PVD vector rank/rail mapping: rank0={rank0_rail:?}, rank1={rank1_rail:?}"
+            ));
+        }
+        Ok(if rank0_rail == rank1_rail {
+            "single-rail-debug"
+        } else {
+            "dual-rail"
+        })
+    }
+
     async fn validate_pvd_coordinator(
         client: &Client,
         base_url: &str,
@@ -129,25 +148,21 @@ impl PDRouter {
             .iter()
             .find(|item| item.get("rank").and_then(Value::as_u64) == Some(1))
             .ok_or_else(|| "PVD vector rank 1 is missing".to_string())?;
-        let reported_rank0_rail = rank0.get("rail").and_then(Value::as_str);
-        let reported_rank1_rail = rank1.get("rail").and_then(Value::as_str);
-        let (rank0_rail, rank1_rail, rail_mode) =
-            match (reported_rank0_rail, reported_rank1_rail) {
-                (Some(rank0_rail @ "mlx5_0"), Some(rank1_rail @ "mlx5_1")) => {
-                    (rank0_rail, rank1_rail, "dual-rail")
-                }
-                (Some(rank0_rail @ "mlx5_0"), Some(rank1_rail @ "mlx5_0")) => {
-                    warn!(
-                        "PVD vector group is using single-rail debug mode; both ranks share mlx5_0"
-                    );
-                    (rank0_rail, rank1_rail, "single-rail-debug")
-                }
-                _ => {
-                    return Err(format!(
-                        "unsupported PVD vector rank/rail mapping: rank0={reported_rank0_rail:?}, rank1={reported_rank1_rail:?}"
-                    ));
-                }
-            };
+        let rank0_rail = rank0
+            .get("rail")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "PVD vector rank 0 has no rail".to_string())?;
+        let rank1_rail = rank1
+            .get("rail")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "PVD vector rank 1 has no rail".to_string())?;
+        let rail_mode = Self::classify_pvd_rails(rank0_rail, rank1_rail)?;
+        if rail_mode == "single-rail-debug" {
+            warn!(
+                "PVD vector group is using single-rail debug mode; both ranks share {}",
+                rank0_rail
+            );
+        }
         for (rank, rail, shard) in [
             (0_u64, rank0_rail, rank0),
             (1_u64, rank1_rail, rank1),
@@ -1803,6 +1818,67 @@ mod tests {
             .build();
         worker.set_healthy(healthy);
         Box::new(worker)
+    }
+
+    #[test]
+    fn test_pvd_rail_names_are_not_hard_coded() {
+        assert_eq!(PDRouter::classify_pvd_rails("mlx5_2", "mlx5_3"), Ok("dual-rail"));
+        assert_eq!(
+            PDRouter::classify_pvd_rails("mlx5_2", "mlx5_2"),
+            Ok("single-rail-debug")
+        );
+        assert_eq!(PDRouter::classify_pvd_rails("mlx5_0", "mlx5_1"), Ok("dual-rail"));
+        for invalid in ["", "-mlx5_0", "mlx5/0", "mlx5 0", "éthernet"] {
+            assert!(PDRouter::classify_pvd_rails(invalid, "mlx5_3").is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pvd_coordinator_accepts_nondefault_hcas_and_checks_mode() {
+        use axum::{routing::get, Json, Router};
+
+        for (rail0, rail1, reported_mode, accepted) in [
+            ("mlx5_2", "mlx5_3", "dual-rail", true),
+            ("mlx5_2", "mlx5_2", "single-rail-debug", true),
+            ("mlx5_2", "mlx5_2", "dual-rail", false),
+        ] {
+            let shard = |rank, rail| {
+                json!({
+                    "rank": rank,
+                    "rail": rail,
+                    "preflight": {
+                        "rail": rail,
+                        "rail_mode": reported_mode,
+                        "rail_present": true,
+                        "active_port": true,
+                        "gpu_memory_registered": true,
+                        "local_gpu_transfer": true
+                    }
+                })
+            };
+            let health = json!({
+                "healthy": true,
+                "world_size": 2,
+                "shards": [shard(0, rail0), shard(1, rail1)]
+            });
+            let app = Router::new().route(
+                "/health",
+                get(move || {
+                    let health = health.clone();
+                    async move { Json(health) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let result = PDRouter::validate_pvd_coordinator(
+                &Client::new(),
+                &format!("http://{address}"),
+            )
+            .await;
+            server.abort();
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+        }
     }
 
     #[test]
