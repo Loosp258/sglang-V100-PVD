@@ -29,7 +29,7 @@ PyTorch `2.9.1+cu128` 上运行 `run_pvd_cuda_acceptance.py --expected-gpu V100S
 使用 `mlx5_0`。测试改为使用 `shard.rail` 后，严格验收 **9/9 passed，0 skipped**。
 覆盖真实 CUDA 接收排序、稀疏打包生命周期、工作集切换和 attention 数值检查；
 V payload 仍是 fake transport。三台节点均有 2×V100S，只有 `mlx5_0` 为 ACTIVE；
-三台当前环境均未安装 `mooncake-transfer-engine`。因此尚无原生 Mooncake/RDMA、
+当时三台原 Conda 环境均未安装 `mooncake-transfer-engine`。因此该次验收没有原生 Mooncake/RDMA、
 CAGRA、真实模型 forward、性能或生产 Scheduler 验收。原实验检出的
 `scripts/install_v100.sh` 本地修改保留；验证在独立 worktree 完成。
 
@@ -39,8 +39,8 @@ was a test-only rail mismatch (`mlx5_test` store versus `mlx5_0` manifest).
 Using the manifest's `shard.rail` yielded **9/9 passed, 0 skipped**. This
 exercises real CUDA ordering, sparse packing lifetime, bank switching and
 attention math, but V payload transport is fake. All three nodes have two
-V100S GPUs and only `mlx5_0` ACTIVE; none currently has
-`mooncake-transfer-engine` installed. Native Mooncake/RDMA, CAGRA, real-model
+V100S GPUs and only `mlx5_0` ACTIVE; none of the original Conda environments
+had `mooncake-transfer-engine` installed at that time. That run did not validate native Mooncake/RDMA, CAGRA, real-model
 forward, performance and production Scheduler remain unvalidated. The existing
 checkout's local install-script edits were preserved by using a separate
 validation worktree.
@@ -67,6 +67,28 @@ ten per-layer oracle checks, about 0.00194 maximum FP16 absolute error).
 Neither offline test ran the draft model or native network transport. The
 independent worktree does not carry the old checkout's Marlin MoE extension,
 so its tiny-Llama result does not validate MoE there.
+
+### 原生单节点预检 / Native single-node preflight
+
+随后只在 node-0 的隔离依赖目录安装精确版本
+`mooncake-transfer-engine==0.3.13.post1`，原 Conda 环境和原检出均未修改。
+`run_pvd_native_local_preflight.py` 在全新进程里、导入 Mooncake 前设置
+`MC_DISABLE_METACACHE=1`。使用 `10.0.1.1`、`mlx5_0` 分别对 GPU 0 和 GPU 1
+运行严格预检，均返回 `passed`：HCA ACTIVE、CUDA MR 注册、原生异步本机
+GPU→GPU PUT、终态与字节校验成功；结束时没有遗留注册区或传输句柄。
+这是 **single-rail debug** 的本机 loopback 结果，不能据此宣称跨节点
+RoCE/GPUDirect、P→V→D 链路或生产 PVD 已验证。
+
+The exact `mooncake-transfer-engine==0.3.13.post1` was installed only into
+an isolated dependency directory on node-0; the original Conda environment
+and checkout were untouched. In fresh processes,
+`run_pvd_native_local_preflight.py` set `MC_DISABLE_METACACHE=1` before
+Mooncake import and passed strict preflight on both GPU 0 and GPU 1 through
+`10.0.1.1` / `mlx5_0`. Active HCA, CUDA MR registration, native asynchronous
+local GPU-to-GPU PUT, terminal status and byte equality were observed, with
+no live registrations or transfer handles at exit. This is a **single-rail
+debug loopback** result, not proof of cross-node RoCE/GPUDirect, the P→V→D
+path, or production PVD serving.
 
 RDMA 预检现等待异步 PUT 的终态（最多 5 秒），不再将首次 `PENDING` 当作
 链路失败。超时、轮询异常或未知状态一律拒绝继续启动，并保留源/目标 MR，
