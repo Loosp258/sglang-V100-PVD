@@ -21,6 +21,25 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 真实 Qwen P→V→D 检索及回写 / Real Qwen P-to-V-to-D search and WRITE
+
+三节点已用同一真实 Qwen2.5-7B FP16 checkpoint 将 P 的完整 Prompt KV 上传
+V 双 rank；D 产生位置 1024 的真实 post-RoPE Q，在第 0 层从两个 V shard
+各检索一个 KV head。两路 Top-10 都与精确点积 10/10 重合，各收到 5120 字节
+稀疏 K/V，并与 D 独立模型 forward 的对应值逐字节一致。Entry/目的 MR 正常释放。
+这仍只覆盖**一个 prompt、一层、两个 head**；完整 D 工作集、生成期间刷新、
+生产 Scheduler 与流水线时延尚未连通。详见
+[CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+With the same real FP16 Qwen2.5-7B checkpoint across three nodes, P uploaded
+complete Prompt KV to both V ranks; D produced a real post-RoPE Q at position
+1024 and searched one KV head from each V shard at layer 0. Both native
+Top-10 sets had 10/10 overlap with exact dot products. Each 5120-byte sparse
+K/V payload matched D's independent model forward bit-for-bit. The Entry and
+receive MRs were safely released. This is **one prompt, one layer, two heads**;
+full D bank installation, generated-token refresh, production Scheduler and
+pipeline latency remain open.
+
 ### 真实 Qwen Prompt KV 跨节点 P→V / Real Qwen cross-node P-to-V
 
 node-0 已用真实 Qwen2.5-7B FP16 权重 Prefill 1024 tokens，按 V TP2

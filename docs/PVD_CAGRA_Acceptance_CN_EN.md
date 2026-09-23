@@ -1,5 +1,45 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 真实 Qwen 三节点检索与稀疏回写 / Real Qwen three-node search and sparse WRITE
+
+沿用真实 Qwen2.5-7B P→V Entry，node-2 D GPU0 加载同一 FP16 checkpoint，
+对相同的 1024-token 输入独立执行目标模型 forward 并生成位置 1024 的
+post-RoPE Q。第 0 层分别以 Q head 0→V0 KV head 0、Q head 14→V1 KV head 2
+检索。两路原生 CAGRA Top-10 均与 D 本地精确点积 **10/10 重合**。
+V0/V1 各将选中的 10 个 token 的 K/V 经单 rail `mlx5_0` Mooncake/RDMA
+写入 D 的独立 CUDA 目的缓冲区，各 **5120 字节**；完成证明及本地可见性同步
+之后，与 D 独立目标模型生成的对应 K/V **逐字节相同**。D 安全关闭目的 MR，
+释放 Entry 后 V0/V1 的索引记录为空、只剩各一次 671088640 字节共享根预留；
+V 测试服务退出并释放端口/GPU 显存。
+
+The retained real Qwen2.5-7B P-to-V Entry was queried from node-2 D GPU0,
+which loaded the same FP16 checkpoint and independently computed target
+post-RoPE Q at position 1024. At layer 0, Q head 0 searched V0/KV head 0
+and Q head 14 searched V1/KV head 2. Both native CAGRA Top-10 sets overlapped
+D's exact local dot-product Top-10 by **10/10**. Each V rank RDMA-wrote the
+selected K/V (10 tokens, **5120 bytes**) to a private D CUDA destination;
+after exact remote completion/fence/extent proof and local CUDA ordering,
+both payloads matched D's independent target-model K/V **bit-for-bit**.
+Receive MRs were closed safely, both V indexes released to root-only budget,
+and the bounded V service released its ports and GPU memory.
+
+This checks two selected heads in one layer and one prompt. It does **not**
+prove a general recall distribution, install a full 28-layer D working set,
+run generated-token attention over the RDMA payload, or enable production
+predictive Scheduler/pipeline overlap.
+
+```bash
+# After run_pvd_qwen_native_upload_gpu.py retained its Entry, on D/node-2:
+python test/registered/disaggregation/run_pvd_qwen_native_search_receive_gpu.py \
+  --decode-host 10.0.1.3 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --transfer-id <P-output-transfer-id> \
+  --layout-fingerprint <P-output-layout-fingerprint> \
+  --rail mlx5_0 --expected-gpu V100S --architecture qwen2 \
+  --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
+  --dtype float16 --context-length 1056 --max-total-tokens 4096
+```
+
 ## 2026-09-24 真实 Qwen Prompt KV 的 P→V 上传 / Real Qwen P-to-V upload
 
 CloudLab node-0 的 V100S GPU0 加载现有 FP16 Qwen2.5-7B-Instruct 权重，
