@@ -1045,9 +1045,13 @@ runtime staging, post-install ACK and retirement. Timeout never proves native
 completion; dtype is read from the destination bank. This is not production activation.
 
 设备可用后运行 [CUDA 组件严格验收](PVD_CUDA_Component_Acceptance_CN_EN.md)。入口要求
-9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；本地仍是 blocked。
+9 个明确 CUDA 用例全部执行成功，无设备/skip/缺测不会成为通过；无 GPU 的本地环境
+仍是 blocked。CloudLab `clgpu020` 已在提交 `82de6a548` 上以 V100S-PCIE-32GB
+通过 9/9 项，但不证明 RDMA、模型 forward、CAGRA、性能或生产服务。
 The strict CUDA component gate refuses missing/skipped evidence. Its local CPU-only
-result remains blocked, and a future component pass will not certify RDMA/serving.
+result remains blocked. CloudLab `clgpu020` has now run all 9/9 fixed CUDA
+component cases successfully on a V100S-PCIE-32GB at commit `82de6a548`; this
+does not certify RDMA, model forward, CAGRA, performance or production serving.
 
 [CUDA sparse receive](PVD_CUDA_Sparse_Receive_CN_EN.md) 已将私有 GPU destination、
 注册前 SYNC_MEMOPS、精确远端成功证明、CUDA 排序和 bank staging/RESUMED ACK 接通。

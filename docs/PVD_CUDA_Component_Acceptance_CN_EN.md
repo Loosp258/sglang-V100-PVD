@@ -55,3 +55,24 @@ and failures. That defect was fixed before committing.
 入口加入后 Windows 全量 **1974 passed / 23 skipped**，WSL 入口定向 **17 passed**。
 After adding the gate, Windows full regression is 1974/23; WSL harness regression
 is 17 passed. These counts do not change the blocked local CUDA acceptance result.
+
+## CloudLab V100S 实测 / CloudLab V100S execution
+
+2026-09-23，在 `clgpu020` 的独立 `82de6a548` 验证 worktree 中，以
+`Tesla V100S-PCIE-32GB`、PyTorch `2.9.1+cu128`、CUDA 12.8 工具链运行上述严格入口，
+报告 `status=passed`，固定的 **9/9** CUDA 用例全部通过，无 skip。
+测试用 `pytest==8.4.2` 安装到数据盘上的独立 `pvd-test-pydeps` 目录；原推理环境
+未安装测试依赖，首次运行因此报告缺少 `pytest`，不属于组件失败。
+
+On 2026-09-23, the isolated `82de6a548` worktree on CloudLab `clgpu020`
+returned `status=passed`: all **9/9** fixed CUDA cases ran on a
+`Tesla V100S-PCIE-32GB` with PyTorch `2.9.1+cu128` and the CUDA 12.8 toolkit,
+without skips. `pytest==8.4.2` was supplied through a separate data-disk
+test-dependency directory; the first attempt lacked pytest and did not execute
+the CUDA tests.
+
+This is component-level evidence only. The report explicitly keeps
+`production_gpu_rdma_validated=false`, `cagra_validated=false`,
+`model_forward_validated=false` and `performance_validated=false`. It must not be
+used to claim native Mooncake delivery, production Scheduler activation or
+multi-rank model TP acceptance.
