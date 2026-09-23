@@ -13,6 +13,7 @@ import copy
 import math
 import threading
 import time
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -54,6 +55,23 @@ from sglang.srt.disaggregation.pvd.worker_epoch import worker_epoch
 
 class PVDConnectionError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, eq=False)
+class PVDSelectedRouteBinding:
+    """A selected V reply bound to the exact D request and Gateway choice.
+
+    This is local control-plane provenance, not a transport or storage lease.
+    It must not be reconstructed from a V JSON reply by a caller.
+    """
+
+    manager: object
+    req: object
+    rid: str
+    key: KVEntryKey
+    group_id: str
+    delivery_id: str
+    selected: object
 
 
 def _build_sparse_receive_engine(server_args, shared_engine, existing_adapter, budget):
@@ -523,7 +541,10 @@ class PVDKVManager:
         if self.sparse_receive_registry is None:
             raise PVDConnectionError("D sparse receive was not initialized")
         key = self.key_for(req)
-        client = self.clients[self.vector_group_for(req)]
+        group_id = self.vector_group_for(req)
+        client = self.clients[group_id]
+        rid = req.rid
+        delivery_id = req.pvd_delivery_id
         engine = self.sparse_receive_engine
 
         async def discover():
@@ -551,14 +572,16 @@ class PVDKVManager:
                 )
             if engine.health().get("healthy") is not True:
                 raise PVDConnectionError("D sparse receive transport is unhealthy")
-            return selected
+            return PVDSelectedRouteBinding(
+                self, req, rid, key, group_id, delivery_id, selected
+            )
 
         return self.control.submit(discover())
 
     def assemble_selected_cuda_request(
         self,
         req,
-        selected,
+        binding,
         *,
         group,
         pipeline,
@@ -589,10 +612,21 @@ class PVDKVManager:
         registry._owner()
         if self.sparse_receive_engine.health().get("healthy") is not True:
             raise PVDConnectionError("D sparse receive transport is unhealthy")
-        if not isinstance(selected, PVDSelectedShardRoutes) or (
-            selected.manifest.key != self.key_for(req)
+        if (
+            not isinstance(binding, PVDSelectedRouteBinding)
+            or binding.manager is not self
+            or binding.req is not req
+            or binding.rid != req.rid
+            or binding.key != self.key_for(req)
+            or binding.group_id != self.vector_group_for(req)
+            or binding.delivery_id != req.pvd_delivery_id
+            or not isinstance(binding.selected, PVDSelectedShardRoutes)
+            or binding.selected.manifest.key != binding.key
         ):
-            raise PVDConnectionError("selected V routes differ from this D request")
+            raise PVDConnectionError(
+                "selected V routes differ from this D request or Gateway group"
+            )
+        selected = binding.selected
         compute_health = self.transfer_engine.health()
         if compute_health.get("healthy") is not True:
             raise PVDConnectionError("D compute transport is unhealthy")

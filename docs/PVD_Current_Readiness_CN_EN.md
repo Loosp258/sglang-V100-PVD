@@ -21,6 +21,23 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### D 侧已选路由绑定 / D-side selected-route binding
+
+D 的异步路由发现现在返回仅供本地使用的 `PVDSelectedRouteBinding`，将结果绑定到
+同一个 manager、Req 对象、rid、Entry key、Gateway 选中的 V group 与 delivery ID。
+请求工厂拒绝裸 `PVDSelectedShardRoutes`，也拒绝发现后换请求、换 V group 或换
+delivery ID；检查发生在分配稀疏接收目标之前。这是生产准入的安全前置步骤，
+**尚未**自动构造 draft/target pipeline 或启用预测检索。WSL 相关路由/工厂
+回归通过；CloudLab SSH 可连接，但当前节点未保留先前的项目检出和 torch 环境，
+本步未在 GPU 上运行。
+
+Route discovery now returns a local `PVDSelectedRouteBinding` tied to the same
+manager, Req object, rid, Entry key, Gateway-selected V group and delivery ID.
+The D request factory refuses a bare route reply or a changed request/group
+before allocating a sparse destination. This is an admission prerequisite,
+not automatic draft/probe construction or predictive-serving activation.
+Focused WSL route/factory tests pass; no GPU execution was performed in this step.
+
 ### 隔离 cuVS 25.02 CAGRA 探针 / Isolated cuVS 25.02 CAGRA probe
 
 node-1 V100S 的独立候选环境现已用 cuVS 25.02 跑通真实 CAGRA build/search，

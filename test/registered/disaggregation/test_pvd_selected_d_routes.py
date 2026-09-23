@@ -9,7 +9,11 @@ from sglang.srt.disaggregation.pvd.client import (
     PVDSelectedShardRoute,
     PVDSelectedShardRoutes,
 )
-from sglang.srt.disaggregation.pvd.conn import PVDConnectionError, PVDKVManager
+from sglang.srt.disaggregation.pvd.conn import (
+    PVDConnectionError,
+    PVDKVManager,
+    PVDSelectedRouteBinding,
+)
 from sglang.srt.disaggregation.pvd.multi_rail_receive import RailMappedReceiveEngine
 from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
 
@@ -46,7 +50,12 @@ def manager_for(rails):
         {rail: FakeTransferEngine() for rail in rails}
     )
     manager.control = DeferredControl()
-    req = SimpleNamespace(pvd_transfer_id="entry", pvd_vector_group_id="chosen")
+    req = SimpleNamespace(
+        rid="local-rid",
+        pvd_transfer_id="entry",
+        pvd_delivery_id="delivery",
+        pvd_vector_group_id="chosen",
+    )
     key = manager.key_for(req)
     selected = PVDSelectedShardRoutes(
         SimpleNamespace(key=key),
@@ -62,7 +71,11 @@ def manager_for(rails):
 
 def test_selected_entry_and_rails_are_checked_before_request_allocation():
     manager, req, selected, client = manager_for(("mlx5_0", "mlx5_1"))
-    assert manager.start_selected_cuda_routes(req).result() is selected
+    binding = manager.start_selected_cuda_routes(req).result()
+    assert isinstance(binding, PVDSelectedRouteBinding)
+    assert binding.selected is selected
+    assert binding.req is req
+    assert binding.group_id == "chosen"
     assert client.keys == [manager.key_for(req)]
 
 
@@ -127,7 +140,8 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
         "aggregate_budget": object(),
         "poll_interval_seconds": 0.01,
     }
-    assert manager.assemble_selected_cuda_request(req, selected, **supplied) is assembly
+    binding = manager.start_selected_cuda_routes(req).result()
+    assert manager.assemble_selected_cuda_request(req, binding, **supplied) is assembly
     assert calls == [
         (
             (selected,),
@@ -144,12 +158,12 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
     ]
     manager.sparse_receive_registry = None
     with pytest.raises(PVDConnectionError, match="not initialized"):
-        manager.assemble_selected_cuda_request(req, selected, **supplied)
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
     manager.sparse_receive_registry = SimpleNamespace(
         engine=object(), _owner=lambda: None
     )
     with pytest.raises(PVDConnectionError, match="not initialized"):
-        manager.assemble_selected_cuda_request(req, selected, **supplied)
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
     assert len(calls) == 1
 
 
@@ -161,10 +175,13 @@ def test_unhealthy_d_transport_blocks_route_discovery_and_assembly(monkeypatch):
             return {**super().health(), "healthy": False}
 
     manager, req, selected, _ = manager_for(("mlx5_0", "mlx5_1"))
+    binding = manager.start_selected_cuda_routes(req).result()
     manager.sparse_receive_engine = RailMappedReceiveEngine(
         {"mlx5_0": FakeTransferEngine(), "mlx5_1": UnhealthyFake()}
     )
-    with pytest.raises(PVDConnectionError, match="sparse receive transport is unhealthy"):
+    with pytest.raises(
+        PVDConnectionError, match="sparse receive transport is unhealthy"
+    ):
         manager.start_selected_cuda_routes(req).result()
 
     manager.sparse_receive_registry = SimpleNamespace(
@@ -195,8 +212,10 @@ def test_unhealthy_d_transport_blocks_route_discovery_and_assembly(monkeypatch):
         "aggregate_budget": object(),
         "poll_interval_seconds": 0.01,
     }
-    with pytest.raises(PVDConnectionError, match="sparse receive transport is unhealthy"):
-        manager.assemble_selected_cuda_request(req, selected, **supplied)
+    with pytest.raises(
+        PVDConnectionError, match="sparse receive transport is unhealthy"
+    ):
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
     assert not calls
 
     manager.sparse_receive_engine = RailMappedReceiveEngine(
@@ -207,5 +226,71 @@ def test_unhealthy_d_transport_blocks_route_discovery_and_assembly(monkeypatch):
         health=lambda: {"healthy": False, "session_id": "D0"}
     )
     with pytest.raises(PVDConnectionError, match="compute transport is unhealthy"):
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
+    assert not calls
+
+
+def test_route_binding_rejects_other_gateway_group_request_and_raw_reply(monkeypatch):
+    from sglang.srt.disaggregation.pvd import cuda_routed_request
+
+    manager, req, selected, _ = manager_for(("mlx5_0", "mlx5_1"))
+    binding = manager.start_selected_cuda_routes(req).result()
+    manager.sparse_receive_registry = SimpleNamespace(
+        engine=manager.sparse_receive_engine, _owner=lambda: None
+    )
+    manager.transfer_engine = SimpleNamespace(
+        health=lambda: {"healthy": True, "session_id": "D0"}
+    )
+    manager.tp_size = 1
+    manager.tp_rank = 0
+    manager.rail = "mlx5_0"
+    manager.layout = lambda: object()
+    calls = []
+    monkeypatch.setattr(
+        cuda_routed_request,
+        "assemble_routed_cuda_request",
+        lambda *args, **kwargs: calls.append(1),
+    )
+    supplied = dict(
+        group=object(),
+        pipeline=object(),
+        head_mapping=object(),
+        vector_space="space",
+        metric="l2",
+        top_k=4,
+        max_union_tokens=16,
+        max_head_dim=128,
+        copy_budget=object(),
+        aggregate_budget=object(),
+        poll_interval_seconds=0.01,
+    )
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
         manager.assemble_selected_cuda_request(req, selected, **supplied)
+    other = SimpleNamespace(**vars(req))
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
+        manager.assemble_selected_cuda_request(other, binding, **supplied)
+    other_manager, _, _, _ = manager_for(("mlx5_0", "mlx5_1"))
+    other_manager.sparse_receive_registry = manager.sparse_receive_registry
+    other_manager.sparse_receive_engine = manager.sparse_receive_engine
+    other_manager.transfer_engine = manager.transfer_engine
+    other_manager.tp_size = 1
+    other_manager.tp_rank = 0
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
+        other_manager.assemble_selected_cuda_request(req, binding, **supplied)
+    req.rid = "successor-rid"
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
+    req.rid = "local-rid"
+    req.pvd_transfer_id = "successor-entry"
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
+    req.pvd_transfer_id = "entry"
+    req.pvd_vector_group_id = "other"
+    manager.clients["other"] = SelectedClient(selected)
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
+    req.pvd_vector_group_id = "chosen"
+    req.pvd_delivery_id = "successor"
+    with pytest.raises(PVDConnectionError, match="Gateway group"):
+        manager.assemble_selected_cuda_request(req, binding, **supplied)
     assert not calls
