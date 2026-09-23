@@ -61,6 +61,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse, Response, StreamingResponse
 
 from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
+from sglang.srt.disaggregation.pvd.health import pvd_health_http_status
 from sglang.srt.disaggregation.utils import FAKE_BOOTSTRAP_HOST, DisaggregationMode
 from sglang.srt.entrypoints.anthropic.protocol import (
     AnthropicCountTokensRequest,
@@ -521,6 +522,15 @@ async def health_generate(request: Request) -> Response:
 
     if _global_state.tokenizer_manager.server_status == ServerStatus.Starting:
         return Response(status_code=503)
+
+    pvd_status = pvd_health_http_status(
+        topology=_global_state.tokenizer_manager.server_args.disaggregation_topology,
+        mode=_global_state.tokenizer_manager.server_args.disaggregation_mode,
+        endpoint=request.url.path,
+        server_status=_global_state.tokenizer_manager.server_status.value,
+    )
+    if pvd_status is not None:
+        return Response(status_code=pvd_status)
 
     if (
         not envs.SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION.get()
