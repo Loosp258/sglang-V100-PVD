@@ -164,6 +164,7 @@ async def run(args):
             if any(record["indexed_heads"] != 2 for record in records):
                 raise AssertionError("V did not build both layer/head indexes")
             hits = []
+            versions = []
             for rank in (0, 1):
                 queries = [pool.k_buffer[0][token, rank].float().tolist()
                            for token in range(4)]
@@ -183,10 +184,21 @@ async def run(args):
                 hits.append(found)
                 if found != 4 or answer["kv_head"] != rank:
                     raise AssertionError("native V search lost synthetic self-hits")
+                versions.append({
+                    "index_version": answer["index_version"],
+                    "id_mapping_version": answer["id_mapping_version"],
+                })
             report["self_hits_per_rank"] = hits
+            report["index_versions_per_rank"] = versions
+            report["entry_key"] = lease.manifest.key.to_dict()
+            report["layout_fingerprint"] = layout.fingerprint
             report["indexed_heads_per_rank"] = [
                 record["indexed_heads"] for record in records
             ]
+        if args.retain_entry:
+            report["retained_entry"] = True
+            report["status"] = "passed"
+            return report
         await coordinator.release_entry(lease.manifest.key)
         async with aiohttp.ClientSession() as session:
             deadline = time.monotonic() + 10
@@ -228,6 +240,10 @@ def main(argv=None):
     parser.add_argument("--rail", required=True)
     parser.add_argument("--page-bytes", type=int, required=True)
     parser.add_argument("--expected-gpu", required=True)
+    parser.add_argument(
+        "--retain-entry", action="store_true",
+        help="Leave the committed Entry available for a separate D-side gate",
+    )
     args = parser.parse_args(argv)
     report = asyncio.run(run(args))
     print(json.dumps(report, indent=2, allow_nan=False), flush=True)

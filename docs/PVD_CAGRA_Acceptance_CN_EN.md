@@ -1,5 +1,50 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 三节点原生稀疏交付 / Three-node native sparse Delivery
+
+CloudLab node-0 的 P GPU0 通过 `--retain-entry` 上传完整合成 Prompt KV 到
+node-1 的 V GPU0/GPU1；V 各建两个 CAGRA 图。node-2 的 D GPU0 取 V 的逻辑
+检索结果和版本，分别给两个 V rank 注册私有 CUDA 接收缓冲区，走 Mooncake
+`mlx5_0` RDMA WRITE。D 仅在 V 返回精确的 terminal-success、写入 fence 和
+字节数证明后执行 CUDA 接收同步，再逐字节核对每个 rank 的两个 layer/KV-head
+K/V 组。两 rank 各收到 512 字节；关闭 Delivery 和 MR 后，D 接收预算归零；
+释放 Entry 后，V 两 rank 索引均无 Entry，且各只保留 671088640 字节根预算。
+`run_pvd_native_sparse_receive_gpu.py` 最终输出 `passed`。首次试运行的 V
+分量不一致是验收脚本随机数重建顺序错误，修正后复跑通过。
+
+P GPU0 on node-0 uploaded synthetic full Prompt KV with `--retain-entry` to
+the two V100S ranks on node-1. D GPU0 on node-2 took the V search results and
+versions, registered a private CUDA destination per V rank, and received sparse
+K/V by Mooncake RDMA WRITE over `mlx5_0`. D read nothing until exact remote
+terminal-success, fence and byte-count proof plus local CUDA receive ordering.
+Both layers' K/V were bit-exact for each rank (512 bytes/rank). Closing the
+Deliveries refunded D's receive budget; releasing the Entry cleared both V
+indexes, leaving only their 671088640-byte root reservations. The first run
+exposed an incorrect synthetic RNG reconstruction order in the gate itself;
+the corrected run passed.
+
+The D gate only inspects a private receive buffer. It does **not** install a
+Decode working set, ACK a completed install, run model attention, use real
+post-RoPE target Q, measure CAGRA recall, or validate latency hiding. The
+successful unacknowledged Deliveries are closed with an explicit V fence.
+
+```bash
+# Start isolated V with --experimental-cuda-sparse-packing, cagra-auto,
+# shared native cap, Mooncake and private ports 19100/19200/19201.
+# On P/node-0, record entry_key.transfer_id and layout_fingerprint:
+python test/registered/disaggregation/run_pvd_native_upload_index_gpu.py \
+  --prefill-host 10.0.1.1 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --rail mlx5_0 --page-bytes 1024 --expected-gpu V100S --retain-entry
+# On D/node-2, use those exact two values:
+python test/registered/disaggregation/run_pvd_native_sparse_receive_gpu.py \
+  --decode-host 10.0.1.3 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --transfer-id <P-output-transfer-id> \
+  --layout-fingerprint <P-output-layout-fingerprint> \
+  --rail mlx5_0 --expected-gpu V100S
+```
+
 ## 2026-09-24 跨节点 P→V 原生上传与检索 / Native cross-node P-to-V gate
 
 CloudLab node-0（P GPU0）向 node-1（V GPU0/GPU1）用 Mooncake/RDMA

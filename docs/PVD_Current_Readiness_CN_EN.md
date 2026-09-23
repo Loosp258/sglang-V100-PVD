@@ -21,6 +21,25 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### V→D 原生稀疏 KV 接收 / Native V-to-D sparse KV receive
+
+三节点单 rail `mlx5_0` 合成验收已将 P→V 完整 Prompt KV、V 双 rank 原生
+CAGRA 检索和 V→D GPU RDMA 稀疏交付串起。D GPU0 在远端 terminal-success、
+fence 与字节数确认和本地 CUDA 同步之后，比对两 V rank、每 rank 两层的 K/V
+均逐字节一致（各 512 字节）。D 关闭目的 MR 后预算归零；Entry 释放后 V 的
+索引记录均清空、预算只保留根预留。**尚未验证 D 工作集安装、模型 attention、
+真实目标 Q recall、投机流水线或生产 Scheduler**。详见
+[CAGRA 验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+A three-node, single-rail `mlx5_0` synthetic gate now connects full Prompt KV
+upload, two-rank native CAGRA search and V-to-D GPU RDMA sparse Delivery.
+After exact remote success/fence/extent proof and local CUDA ordering, D GPU0
+verified bit-exact K/V for two layers on each V rank (512 bytes/rank). D's
+receive budget returned to zero; releasing the Entry cleared both V indexes,
+leaving only the root reservations. Decode working-set installation, model
+attention, real target-Q recall, speculative overlap and production Scheduler
+remain unvalidated.
+
 ### P→V 原生上传、建图与 HTTP 检索 / Native P-to-V upload/index/search
 
 node-0 P GPU0 到 node-1 两张 V100S 的合成完整 Prompt KV，经单 rail
