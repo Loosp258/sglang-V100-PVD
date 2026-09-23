@@ -177,6 +177,7 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
             (selected,),
             {
                 **supplied,
+                "request_id": req.rid,
                 "compute_layout": layout,
                 "compute_rank": 0,
                 "registry": registry,

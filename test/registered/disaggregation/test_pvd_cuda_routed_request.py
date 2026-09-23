@@ -72,6 +72,7 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
                 },
             )
             kwargs = {
+                "request_id": c.group.coordinator.identity[0],
                 "compute_layout": c.compute,
                 "compute_rank": 0,
                 "group": c.group,
@@ -100,6 +101,18 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
             with pytest.raises(ValueError, match="exact selected Entry"):
                 assemble_routed_cuda_request(
                     selected, **{**kwargs, "head_mapping": QueryHeadMapping(16, 8)}
+                )
+            with pytest.raises(ValueError, match="exact selected Entry"):
+                assemble_routed_cuda_request(
+                    selected, **{**kwargs, "request_id": "other-local-req"}
+                )
+            with pytest.raises(ValueError, match="exact selected Entry"):
+                assemble_routed_cuda_request(
+                    selected,
+                    **{
+                        **kwargs,
+                        "compute_layout": replace(c.compute, model_revision="other"),
+                    },
                 )
             mixed = PVDSelectedShardRoutes(
                 replace(
@@ -233,6 +246,7 @@ def test_factory_controller_runs_two_v_search_delivery_and_install(
                 ),
             )
             kwargs = {
+                "request_id": c.group.coordinator.identity[0],
                 "compute_layout": c.compute,
                 "compute_rank": 0,
                 "group": c.group,

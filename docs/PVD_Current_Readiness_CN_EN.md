@@ -21,6 +21,19 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### D 请求工作集身份前置核对 / D request-bank identity precheck
+
+已选 V 的 CUDA 请求工厂在建立 HTTP 客户端前，现需显式核对本地 Req ID、
+bank/coordinator 的三元身份及 D KV layout 指纹；只检查 Entry transfer ID 不足以
+防止同一 Entry 的不同 D 请求误用工作集。双 V 分片装配回归 **10 passed**。
+这仍是显式请求工厂，不会自动开启生产预测检索。
+
+Before creating V HTTP clients, the selected-V CUDA request factory now
+checks the local Req ID, bank/coordinator identity and D KV layout fingerprint.
+An Entry transfer ID alone cannot distinguish two D requests reusing that
+Entry. The two-shard assembly regression passed 10 tests. This remains an
+explicit factory, not production predictive-serving activation.
+
 ### 已选 V 路由一次性领取 / One-shot selected-V route claim
 
 CUDA waiting queue 的 `ready_for()` 现在只交付一次路由绑定；已领取但仍在 waiting

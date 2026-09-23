@@ -62,6 +62,7 @@ class CUDARoutedRequestAssembly:
 def assemble_routed_cuda_request(
     selected: PVDSelectedShardRoutes,
     *,
+    request_id: str,
     compute_layout: KVLayoutSignature,
     compute_rank: int,
     group,
@@ -95,6 +96,8 @@ def assemble_routed_cuda_request(
             not isinstance(route, PVDSelectedShardRoute) for route in selected.shards
         )
         or not isinstance(compute_layout, KVLayoutSignature)
+        or not isinstance(request_id, str)
+        or not request_id.strip()
         or type(compute_rank) is not int
         or not isinstance(group, CUDARuntimeInstallGroup)
         or not isinstance(registry, CUDASparseReceiveRegistry)
@@ -118,7 +121,10 @@ def assemble_routed_cuda_request(
         or pipeline.probe_config.head_start != 0
         or pipeline.probe_config.head_count != head_mapping.num_query_heads
         or pipeline.probe_config.layers != tuple(range(compute_layout.num_layers))
+        or group.coordinator.identity[0] != request_id
         or group.coordinator.identity[2] != selected.manifest.key.transfer_id
+        or group._banks[compute_rank].identity[:3] != group.coordinator.identity
+        or group._banks[compute_rank].identity[3] != compute_layout.fingerprint
         or len(selected.shards) != 2
         or tuple(route.rank for route in selected.shards) != (0, 1)
         or any(

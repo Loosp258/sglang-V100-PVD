@@ -662,6 +662,7 @@ class PVDKVManager:
             raise PVDConnectionError("D compute Mooncake session is unavailable")
         return assemble_routed_cuda_request(
             selected,
+            request_id=req.rid,
             compute_layout=self.layout(),
             compute_rank=self.tp_rank,
             group=group,
