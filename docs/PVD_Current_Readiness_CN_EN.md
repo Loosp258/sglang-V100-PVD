@@ -21,6 +21,24 @@ activation.
 
 ## 最新增量 / Latest increment
 
+### 真实 7B 权重的稀疏 Decode 数值验证 / Real-7B sparse Decode numerical check
+
+node-0 V100S 在独立临时 worktree 中加载现有 FP16
+`Qwen2.5-7B-Instruct` checkpoint，用 TP1、`torch_native` 运行离线稀疏模型
+smoke：5 次真实 Decode forward，28 层共 **140** 次逐层独立 dense SDPA
+对照，最大绝对误差约 **0.00388**；初始完整 Prompt、一次稀疏刷新和
+allocator 退还均通过。该 smoke 的 Prompt 很短、检索选择由测试提供；
+**没有经过 V 上的 CAGRA/精确检索、Mooncake 稀疏 RDMA、生产 Scheduler、
+TP2 或性能测试**。
+
+In an isolated node-0 V100S worktree, the existing FP16 Qwen2.5-7B-Instruct
+checkpoint passed an offline TP1 `torch_native` sparse model smoke: five real
+Decode forwards, **140** layer-wise comparisons with independent dense SDPA
+across 28 layers, about **0.00388** maximum absolute error, one sparse refresh
+and allocator retirement. Its Prompt is short and its selection is supplied
+by the test. It does **not** exercise V search/CAGRA, native sparse Mooncake
+RDMA, production Scheduler, TP2 or latency.
+
 ### Qwen2 CUDA 稀疏 attention 基线 / Qwen2 CUDA sparse-attention baseline
 
 显式 `make_cuda_sparse_backend` 工厂现接纳精确的非量化

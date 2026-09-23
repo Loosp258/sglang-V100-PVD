@@ -5,7 +5,7 @@ refresh and compares every real model layer with independent dense SDPA math.
 """
 
 
-def validate(runner):
+def validate(runner, *, checkpoint=False):
     import threading
 
     import torch
@@ -253,6 +253,8 @@ def validate(runner):
         for b in (bank_budget, scratch_budget, output_budget, bootstrap_budget)
     )
     return {
+        "checkpoint_weights": bool(checkpoint),
+        "architecture": type(runner.model).__name__,
         "model_forwards": 5,
         "layer_oracle_checks": len(errors),
         "max_attention_abs_error": max(errors),
