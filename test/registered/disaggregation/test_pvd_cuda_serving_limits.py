@@ -1,5 +1,6 @@
 import dataclasses
 import json
+from pathlib import Path
 
 import pytest
 from sglang.srt.disaggregation.pvd.cuda_serving_limits import (
@@ -169,3 +170,10 @@ def test_accepts_pathlike_and_integer_json_seconds(tmp_path):
     assert type(limits.request_timeout_seconds) is float
     assert limits.poll_interval_seconds == 1.0
     assert type(limits.poll_interval_seconds) is float
+
+
+def test_qwen_v100s_example_matches_four_token_refresh():
+    example = Path(__file__).with_name("pvd_qwen_v100s_serving_limits.json")
+    limits = load_cuda_serving_limits(example, refresh_interval=4, predict_tokens=2)
+    assert limits.max_sequence_tokens == 128
+    assert limits.lead_tokens == 2
