@@ -30,12 +30,45 @@ def union_query_head_selections(
         raise SparsePayloadError(
             "complete probe selection and explicit head mapping required"
         )
-    if not selection.queries or len(selection.queries) != len(selection.selections):
+    if not selection.queries:
         raise SparsePayloadError("search query/result counts disagree")
+    query_groups = selection.query_groups
+    if query_groups is None:
+        query_groups = tuple((index,) for index in range(len(selection.queries)))
+    if (
+        len(query_groups) != len(selection.selections)
+        or any(not members for members in query_groups)
+        or any(type(index) is not int for members in query_groups for index in members)
+        or sorted(index for members in query_groups for index in members)
+        != list(range(len(selection.queries)))
+    ):
+        raise SparsePayloadError(
+            "search query/result provenance must cover every query once"
+        )
     groups = {}
     window = selection.window
-    for query, result in zip(selection.queries, selection.selections, strict=True):
+    for members, result in zip(query_groups, selection.selections, strict=True):
+        query = selection.queries[members[0]]
         route = query.route
+        # A multi-row response carries one aggregate union. Check each member
+        # against the grouping contract without attributing that union to an
+        # individual Q head or fabricating per-head scores.
+        if (
+            any(
+                (
+                    selection.queries[index].route.identity,
+                    selection.queries[index].route.scope,
+                    selection.queries[index].route.top_k,
+                    selection.queries[index].query_version,
+                )
+                != (route.identity, route.scope, route.top_k, query.query_version)
+                for index in members
+            )
+            or not 1
+            <= sum(len(selection.queries[index].rows) for index in members)
+            <= 64
+        ):
+            raise SparsePayloadError("incompatible grouped query provenance")
         identity = result.identity
         if (
             identity.entry_transfer_id != window.entry_transfer_id
@@ -43,7 +76,11 @@ def union_query_head_selections(
             or identity.kv_head != route.identity.kv_head
             or identity.vector_space != route.identity.vector_space
             or identity.positional_encoding != route.identity.positional_encoding
-            or mapping.kv_head_for(route.query_head) != identity.kv_head
+            or any(
+                mapping.kv_head_for(selection.queries[index].route.query_head)
+                != identity.kv_head
+                for index in members
+            )
         ):
             raise SparsePayloadError("result does not match its query route/Entry")
         key = (identity.layer, identity.kv_head)
@@ -57,7 +94,13 @@ def union_query_head_selections(
         if key not in groups:
             groups[key] = (version, context, set(), set())
         versions, bound_context, heads, tokens = groups[key]
-        if version != versions or context != bound_context or route.query_head in heads:
+        member_heads = [selection.queries[index].route.query_head for index in members]
+        if (
+            version != versions
+            or context != bound_context
+            or len(set(member_heads)) != len(member_heads)
+            or heads.intersection(member_heads)
+        ):
             raise SparsePayloadError("mixed versions or duplicate Q head in union")
         if (
             identity.entry_transfer_id != route.identity.entry_transfer_id
@@ -71,7 +114,7 @@ def union_query_head_selections(
             for t in result.token_ids
         ):
             raise SparsePayloadError("out-of-range union token")
-        heads.add(route.query_head)
+        heads.update(member_heads)
         tokens.update(result.token_ids)
         if len(tokens) > max_union_tokens:
             raise SparsePayloadError(

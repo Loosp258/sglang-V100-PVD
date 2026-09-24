@@ -294,7 +294,7 @@ def test_request_id_reuse_and_forged_prepared_operation_are_refused():
     asyncio.run(run())
 
 
-def test_multiple_q_heads_stay_separate_and_pin_one_index_build():
+def test_multiple_q_heads_coalesce_with_explicit_provenance():
     async def run():
         _, store, session, window, pipeline, _, route = setup(heads=2)
         routes = (route, replace(route, query_head=1))
@@ -306,10 +306,10 @@ def test_multiple_q_heads_stay_separate_and_pin_one_index_build():
             try:
                 await session.search(prepared, client)
                 result = session.take_selection(window)
-                assert len(result.selections) == 2  # no implicit head union
+                assert len(result.selections) == 1
+                assert result.query_groups == ((0, 1),)
                 assert [q.route.query_head for q in result.queries] == [0, 1]
                 assert "index_version" not in result.selections[0].validated
-                assert "index_version" in result.selections[1].validated
                 assert len({s.index_version for s in result.selections}) == 1
             finally:
                 await client.close()
@@ -317,13 +317,13 @@ def test_multiple_q_heads_stay_separate_and_pin_one_index_build():
     asyncio.run(run())
 
 
-def test_rebuild_between_heads_discards_the_entire_selection():
+def test_rebuild_between_groups_discards_the_entire_selection():
     async def run():
         index, store, session, window, pipeline, _, route = setup(heads=2)
         prepared = session.prepare(
             window,
             pipeline,
-            routes=(route, replace(route, query_head=1)),
+            routes=(route, replace(route, query_head=1, top_k=2)),
             head_mapping=QueryHeadMapping(2, 1),
         )
 

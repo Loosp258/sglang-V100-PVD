@@ -103,3 +103,57 @@ def test_duplicate_query_head_is_refused():
                 selections=value.selections + (value.selections[0],),
             )
         )
+
+
+def grouped_fixture():
+    value = fixture()
+    members = tuple((i, i + 1) for i in range(0, len(value.queries), 2))
+    results = []
+    for indices in members:
+        first = value.selections[indices[0]]
+        tokens = tuple(
+            sorted({t for i in indices for t in value.selections[i].token_ids})
+        )
+        results.append(
+            replace(
+                first,
+                token_ids=tokens,
+                page_ids=tuple(sorted({t // 2 for t in tokens})),
+                scores=(1.0,) * len(tokens),
+            )
+        )
+    return replace(value, selections=tuple(results), query_groups=members)
+
+
+def test_grouped_provenance_has_identical_union_and_capacity_semantics():
+    assert plan(grouped_fixture()) == plan(fixture())
+    with pytest.raises(SparsePayloadError, match="capacity exceeded"):
+        plan(grouped_fixture(), limit=2)
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        ((0,), (2, 3), (4, 5), (6, 7)),
+        ((0, 0, 1), (2, 3), (4, 5), (6, 7)),
+        ((0, True), (2, 3), (4, 5), (6, 7)),
+        ((0, 1), (), (2, 3, 4, 5, 6, 7)),
+    ],
+)
+def test_grouped_provenance_must_cover_every_query_once(members):
+    with pytest.raises(SparsePayloadError, match="provenance"):
+        plan(replace(grouped_fixture(), query_groups=members))
+
+
+def test_grouped_provenance_cannot_merge_different_kv_heads():
+    value = grouped_fixture()
+    with pytest.raises(SparsePayloadError, match="incompatible grouped"):
+        plan(replace(value, query_groups=((0, 2), (1, 3), (4, 5), (6, 7))))
+
+
+def test_grouped_provenance_still_rejects_duplicate_query_head():
+    value = grouped_fixture()
+    queries = list(value.queries)
+    queries[1] = replace(queries[1], route=replace(queries[1].route, query_head=0))
+    with pytest.raises(SparsePayloadError, match="duplicate Q head"):
+        plan(replace(value, queries=tuple(queries)))

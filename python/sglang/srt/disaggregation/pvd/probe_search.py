@@ -104,6 +104,36 @@ class ProbeSelection:
     window: ProbeWindow
     queries: tuple[PreparedProbeQuery, ...]
     selections: tuple[ShardSearchResult, ...]
+    # Each response is the union for these complete query indices, not a
+    # fabricated per-head response. None retains legacy one-query/one-result.
+    query_groups: tuple[tuple[int, ...], ...] | None = None
+
+
+def _group_search_queries(queries, source_scopes):
+    """Coalesce compatible rows, keeping every complete Q-head's provenance.
+
+    A prepared query has at most 64 rows. Chunk only between queries so one
+    head never loses the identity of the positions it contributed.
+    """
+    grouped = {}
+    for index, (query, source) in enumerate(zip(queries, source_scopes, strict=True)):
+        route = query.route
+        key = (source, route.identity, route.scope, route.top_k, query.query_version)
+        if not 1 <= len(query.rows) <= 64:
+            raise ValueError("prepared query must contain 1..64 rows")
+        grouped.setdefault(key, []).append(index)
+    chunks = []
+    for indices in grouped.values():
+        chunk, count = [], 0
+        for index in indices:
+            size = len(queries[index].rows)
+            if count + size > 64:
+                chunks.append(tuple(chunk))
+                chunk, count = [], 0
+            chunk.append(index)
+            count += size
+        chunks.append(tuple(chunk))
+    return tuple(chunks)
 
 
 class ProbeSearchSession:
@@ -415,8 +445,11 @@ class ProbeSearchSession:
                 else 0
                 for query in prepared.queries
             )
+            query_groups = _group_search_queries(prepared.queries, source_scopes)
             source_versions = {}
-            for query, source in zip(prepared.queries, source_scopes, strict=True):
+            for members in query_groups:
+                query = prepared.queries[members[0]]
+                source = source_scopes[members[0]]
                 self._match(window)
                 identity = query.route.identity
                 versions = source_versions.get(source)
@@ -436,7 +469,9 @@ class ProbeSearchSession:
                     )
                 reply = await client.search(
                     identity,
-                    queries=query.rows,
+                    queries=tuple(
+                        row for index in members for row in prepared.queries[index].rows
+                    ),
                     top_k=query.route.top_k,
                     scope=query.route.scope,
                 )
@@ -450,7 +485,9 @@ class ProbeSearchSession:
                     raise ValueError("index changed within a probe window")
                 source_versions[source] = current_versions
                 results.append(reply)
-            self._ready = ProbeSelection(window, prepared.queries, tuple(results))
+            self._ready = ProbeSelection(
+                window, prepared.queries, tuple(results), query_groups
+            )
         except BaseException:
             if self._pending is window:
                 self.invalidate()

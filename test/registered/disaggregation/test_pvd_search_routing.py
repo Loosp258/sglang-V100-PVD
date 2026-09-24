@@ -310,8 +310,9 @@ def test_actual_http_two_source_versions_and_gqa_union(corrupt):
                 return
             await session.search(prepared, r)
             result = session.take_selection(window)
+            assert result.query_groups == ((0, 2), (1, 3), (4, 6), (5, 7))
             for rank, client in clients.items():
-                assert len(client.calls) == 4
+                assert len(client.calls) == 2
                 assert client.calls[0].expected_index_version is None
                 assert all(
                     call.expected_index_version == versions[rank]
