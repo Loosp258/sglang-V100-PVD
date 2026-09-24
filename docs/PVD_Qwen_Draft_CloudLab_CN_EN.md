@@ -1,5 +1,22 @@
 # CloudLab 独立 draft 模型 / Independent draft checkpoint
 
+2026-09-24 复测：在 D 节点新建隔离检出 `ecf94fb07` 的 `sglang` 代码上，
+复用原实验目录的只读双模型 smoke 脚本，同卡目标 7B + draft 0.5B
+再次通过。预测 token 为 `[13, 2585]`，28 层目标 post-RoPE Q 的位置为
+9、10；已知同卡峰值 CUDA allocated **16328797184** 字节、reserved
+**16435380224** 字节。测试结束后两张 GPU 均显示 0 MiB 使用量。
+脚本来自原实验目录，导入的 `sglang` 来自新检出；不是生产服务、RDMA、
+检索或延迟隐藏验收。
+
+2026-09-24 rerun: using `sglang` from the new isolated D checkout at
+`ecf94fb07`, the read-only dual-model smoke script from the previous
+experimental directory passed again with target 7B and draft 0.5B on one
+GPU. It predicted `[13, 2585]` and captured target post-RoPE Q at positions
+9 and 10 in all 28 layers. Observed same-GPU CUDA peaks were **16328797184**
+allocated and **16435380224** reserved bytes; both GPUs reported 0 MiB used
+after exit. This does not validate production serving, RDMA, retrieval or
+latency hiding.
+
 2026-09-24 在隔离的 D 节点工作区下载官方
 [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)，
 固定 revision `7ae557604adf67be50417f59c2c2f167def9a775`，位置为
