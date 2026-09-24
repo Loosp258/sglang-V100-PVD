@@ -23,6 +23,8 @@ from sglang.srt.disaggregation.pvd.protocol import KVLayoutSignature
 from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
+_PARTIAL_GROUP_QUARANTINE = []
+
 
 @dataclass(frozen=True)
 class CUDAInitialBankPlan:
@@ -171,16 +173,28 @@ def create_received_prompt_group(
         head_dim=plan.head_dim,
         max_union_tokens=plan.max_union_tokens,
     )
-    group = CUDARuntimeInstallGroup(
-        {0: bank},
-        interval=plan.interval,
-        lead_tokens=lead_tokens,
-        peer_epochs={0: plan.peer_epoch},
-        timeout_seconds=float(timeout_seconds),
-        max_pending_events=max_pending_events,
-        max_pending_bytes=max_pending_bytes,
-    )
-    importer = CUDAPromptBootstrap(
-        group, execution_lock=execution_lock, staging_budget=staging_budget
-    )
+    group = None
+    try:
+        group = CUDARuntimeInstallGroup(
+            {0: bank},
+            interval=plan.interval,
+            lead_tokens=lead_tokens,
+            peer_epochs={0: plan.peer_epoch},
+            timeout_seconds=float(timeout_seconds),
+            max_pending_events=max_pending_events,
+            max_pending_bytes=max_pending_bytes,
+        )
+        importer = CUDAPromptBootstrap(
+            group, execution_lock=execution_lock, staging_budget=staging_budget
+        )
+    except BaseException:
+        # Before the importer is returned, neither model rows nor a native
+        # destination have been published. Still retain the partial owner if
+        # close itself cannot prove retirement.
+        try:
+            (bank if group is None else group).close()
+        except BaseException:
+            _PARTIAL_GROUP_QUARANTINE.append((bank, group))
+            raise
+        raise
     return CUDAInitialGroup(plan, bank, group, importer)

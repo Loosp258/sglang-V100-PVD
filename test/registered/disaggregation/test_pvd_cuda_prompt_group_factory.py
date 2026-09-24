@@ -108,16 +108,16 @@ def test_factory_refuses_wrong_receiver_pool_or_bounds(monkeypatch, fault):
 def test_creation_requires_real_cuda_but_does_not_install(monkeypatch):
     c, _ = receiver(monkeypatch)
     budgets = (TransferBudget(4096, 2), TransferBudget(4096, 2))
-    kwargs = dict(
-        bank_budget=budgets[0],
-        staging_budget=budgets[1],
-        execution_lock=threading.RLock(),
-        max_union_tokens=2,
-        lead_tokens=1,
-        timeout_seconds=10,
-        max_pending_events=8,
-        max_pending_bytes=65536,
-    )
+    kwargs = {
+        "bank_budget": budgets[0],
+        "staging_budget": budgets[1],
+        "execution_lock": threading.RLock(),
+        "max_union_tokens": 2,
+        "lead_tokens": 1,
+        "timeout_seconds": 10,
+        "max_pending_events": 8,
+        "max_pending_bytes": 65536,
+    }
     with pytest.raises(InstallProtocolError, match="CUDA placement"):
         module.create_received_prompt_group(c.session, **kwargs)
 
@@ -155,6 +155,69 @@ def test_creation_requires_real_cuda_but_does_not_install(monkeypatch):
     assert built[2][2]["execution_lock"] is kwargs["execution_lock"]
     assert all(b.snapshot()["reservations"] == 0 for b in budgets)
     c.group.close()
+
+
+@pytest.mark.parametrize("fault", ("group", "importer", "close"))
+def test_partial_group_creation_retires_or_quarantines_owners(monkeypatch, fault):
+    c, _ = receiver(monkeypatch)
+    plan = module.plan_received_prompt_bank(c.session, max_union_tokens=2)
+    monkeypatch.setattr(
+        module,
+        "plan_received_prompt_bank",
+        lambda *a, **k: replace(plan, device=torch.device("cuda:0")),
+    )
+    events = []
+
+    class Bank:
+        def __init__(self, **kwargs):
+            events.append("bank")
+
+        def close(self):
+            events.append("bank-close")
+
+    class Group:
+        def __init__(self, banks, **kwargs):
+            events.append("group")
+            if fault == "group":
+                raise RuntimeError("group construction failed")
+
+        def close(self):
+            events.append("group-close")
+            if fault == "close":
+                raise RuntimeError("group close uncertain")
+
+    class Importer:
+        def __init__(self, group, **kwargs):
+            events.append("importer")
+            raise RuntimeError("importer construction failed")
+
+    monkeypatch.setattr(module, "CUDASparseWorkingSet", Bank)
+    monkeypatch.setattr(module, "CUDARuntimeInstallGroup", Group)
+    monkeypatch.setattr(module, "CUDAPromptBootstrap", Importer)
+    try:
+        with pytest.raises(RuntimeError):
+            module.create_received_prompt_group(
+                c.session,
+                bank_budget=TransferBudget(4096, 2),
+                staging_budget=TransferBudget(4096, 2),
+                execution_lock=threading.RLock(),
+                max_union_tokens=2,
+                lead_tokens=1,
+                timeout_seconds=10,
+                max_pending_events=8,
+                max_pending_bytes=65536,
+            )
+        if fault == "group":
+            assert events == ["bank", "group", "bank-close"]
+        else:
+            assert events == ["bank", "group", "importer", "group-close"]
+        if fault == "close":
+            assert module._PARTIAL_GROUP_QUARANTINE[-1][1] is not None
+            module._PARTIAL_GROUP_QUARANTINE.pop()
+        else:
+            assert not module._PARTIAL_GROUP_QUARANTINE
+    finally:
+        c.group.close()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="real CUDA device required")
