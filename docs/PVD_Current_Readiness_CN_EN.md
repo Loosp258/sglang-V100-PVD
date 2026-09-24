@@ -3,6 +3,39 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 索引等待截止及并发复测 / Readiness deadline and concurrent retest
+
+`38a037e3a` 修复 D 的索引就绪等待：截止现在约束**整个 HTTP 搜索尝试**，
+不再只约束两次拒绝之间的 sleep；迟到的成功不能发布 selection。
+0 秒配置仍保留一次正常搜索但不重试。慢成功、`index_capacity` 持续拒绝、
+取消期间不发布 selection 均有 CPU 回归；完整 PVD CPU 套件为
+**2898 passed / 23 skipped**，所改文件 lint/format 通过。
+
+修复前，当前三机服务先通过一次 8-token 请求（HTTP 200，约 22.1 秒），
+再同时通过两条不同 Prompt 的 8-token 请求（均 HTTP 200，约 44.4 和
+47.5 秒）。之后仅 D 从新隔离检出 `38a037e3a` 重启，保持 P、V 和
+Gateway 不变；一条真实请求再次 HTTP 200（约 52.1 秒）。P、V、D、
+Gateway 健康检查均为 200，V 两 rank 无在途/UNKNOWN/隔离传输。
+这是一组有界功能复测，不是吞吐或尾延迟基准；重启后该条 Entry 的 TTL
+回收尚待复查。
+
+Commit `38a037e3a` makes D's index-readiness deadline bound the **entire
+HTTP search attempt**, not just sleeps between refusals; a late success cannot
+publish a selection. A zero-second setting still permits one ordinary search
+without retry. CPU regressions cover slow success, persistent
+`index_capacity`, and cancellation without publication. The complete PVD CPU
+suite reported **2898 passed / 23 skipped**; changed files pass lint/format.
+
+Before this fix, the current three-node service completed one eight-token
+request (HTTP 200, about 22.1 seconds) and then two simultaneous requests with
+different Prompts (both HTTP 200, about 44.4 and 47.5 seconds). Only D was
+then restarted from a new isolated `38a037e3a` checkout, leaving P, V and the
+Gateway unchanged. A real request again returned HTTP 200 (about 52.1
+seconds). All four health checks returned 200, with zero in-flight, UNKNOWN
+or quarantined transfers on both V ranks. This is a bounded functional retest,
+not a throughput or tail-latency benchmark. TTL reclamation for the request
+after restart remains to be checked.
+
 ## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
 
 `aa658b08d` 在 V 端加入默认关闭的 `--full-kv-fanin-native-batch`。
