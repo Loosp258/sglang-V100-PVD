@@ -735,6 +735,51 @@ def test_coordinator_serializes_concurrent_entry_release():
     asyncio.run(scenario())
 
 
+def test_coordinator_retries_unconfirmed_shard_cancellation():
+    async def scenario():
+        engine = FakeTransferEngine()
+        stores = [make_store(rank, engine) for rank in (0, 1)]
+        coordinator = VectorCoordinator([LocalShardClient(store) for store in stores])
+        manifest = make_manifest("cancel-retry")
+        key = manifest.key
+        try:
+            await coordinator.create_entry(manifest)
+            await coordinator.commit_shard(
+                key, 0, ENTRY_BYTES, FirstTokenMetadata(output_token_id=12)
+            )
+            await coordinator.commit_shard(key, 1, ENTRY_BYTES)
+            shard1 = coordinator.shards[1]
+            cancel = shard1.cancel_entry
+            attempts = 0
+
+            async def fail_once(entry_key, reason):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise OSError("shard 1 temporarily unreachable")
+                await cancel(entry_key, reason)
+
+            shard1.cancel_entry = fail_once
+            with unittest.TestCase().assertRaisesRegex(
+                CoordinatorError, "shard cancellation unconfirmed"
+            ):
+                await coordinator.cancel_entry(key, "client aborted")
+            assert coordinator.entries[key].state == EntryState.CANCELLED
+            assert key in coordinator._pending_entry_cancellations
+            assert stores[0].entries[key].resources_released
+            assert not stores[1].entries[key].resources_released
+
+            await coordinator.reap_expired(time.monotonic() + 1000)
+            assert key not in coordinator._pending_entry_cancellations
+            assert all(store.entries[key].resources_released for store in stores)
+            assert attempts == 2
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     suite = unittest.TestSuite(
         unittest.FunctionTestCase(test)

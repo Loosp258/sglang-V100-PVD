@@ -321,6 +321,7 @@ class VectorCoordinator:
         self._lock = asyncio.Lock()
         self._entry_create_locks: Dict[KVEntryKey, asyncio.Lock] = {}
         self._entry_cleanup_locks: Dict[KVEntryKey, asyncio.Lock] = {}
+        self._pending_entry_cancellations: Dict[KVEntryKey, str] = {}
         self._delivery_reserve_locks: Dict[str, asyncio.Lock] = {}
         self._delivery_start_locks: Dict[str, asyncio.Lock] = {}
         self.selector = PassThroughSelector(self.entry_state)
@@ -1118,33 +1119,54 @@ class VectorCoordinator:
         return f"{delivery_id}:d{destination_rank}"
 
     async def cancel_entry(self, key: KVEntryKey, reason: str) -> EntryRecord:
-        if self.fanin is not None:
-            await self.fanin.cancel_entry(key)
-        async with self._lock:
-            entry = self.entries[key]
-            delivery_ids = [
-                delivery_id
-                for delivery_id, delivery in self.deliveries.items()
-                if delivery.entry_key == key
-                and delivery.state not in DELIVERY_TERMINAL_STATES
-            ]
-        for delivery_id in delivery_ids:
-            await self.cancel_delivery(delivery_id, reason)
-        await asyncio.gather(
-            *(self.shards[rank].cancel_entry(key, reason) for rank in (0, 1)),
-            return_exceptions=True,
-        )
-        async with self._lock:
-            if entry.state not in (
-                EntryState.RELEASED,
-                EntryState.FAILED,
-                EntryState.CANCELLED,
-                EntryState.EXPIRED,
-            ):
-                entry.state = transition(entry.state, EntryState.CANCELLED)
-            entry.error = reason
-            self.metrics.increment("coordinator_entries_cancelled")
-            return entry
+        async with self._entry_cleanup_locks.setdefault(key, asyncio.Lock()):
+            async with self._lock:
+                entry = self.entries[key]
+                if entry.state == EntryState.RELEASED:
+                    return entry
+                if entry.state == EntryState.RELEASING:
+                    raise CoordinatorError(
+                        "entry release must complete before cancellation"
+                    )
+                if (
+                    entry.state == EntryState.CANCELLED
+                    and key not in self._pending_entry_cancellations
+                ):
+                    return entry
+                if entry.state not in (
+                    EntryState.FAILED,
+                    EntryState.CANCELLED,
+                    EntryState.EXPIRED,
+                ):
+                    entry.state = transition(entry.state, EntryState.CANCELLED)
+                entry.error = reason
+                self._pending_entry_cancellations[key] = reason
+                delivery_ids = [
+                    delivery_id
+                    for delivery_id, delivery in self.deliveries.items()
+                    if delivery.entry_key == key
+                    and delivery.state not in DELIVERY_TERMINAL_STATES
+                ]
+            # A terminal coordinator state closes admission, but does not mean
+            # either shard acknowledged cleanup. Keep the retry record until
+            # every operation has succeeded (including ambiguous HTTP replies).
+            if self.fanin is not None:
+                await self.fanin.cancel_entry(key)
+            for delivery_id in delivery_ids:
+                await self.cancel_delivery(delivery_id, reason)
+            replies = await asyncio.gather(
+                *(self.shards[rank].cancel_entry(key, reason) for rank in (0, 1)),
+                return_exceptions=True,
+            )
+            errors = [reply for reply in replies if isinstance(reply, BaseException)]
+            if errors:
+                if not isinstance(errors[0], Exception):
+                    raise errors[0]
+                raise CoordinatorError(f"shard cancellation unconfirmed: {errors[0]}")
+            async with self._lock:
+                self._pending_entry_cancellations.pop(key, None)
+                self.metrics.increment("coordinator_entries_cancelled")
+                return entry
 
     async def release_entry(self, key: KVEntryKey) -> EntryRecord:
         # A shard RPC can fail after the remote shard has already released its
@@ -1176,6 +1198,8 @@ class VectorCoordinator:
             )
             errors = [reply for reply in replies if isinstance(reply, BaseException)]
             if errors:
+                if not isinstance(errors[0], Exception):
+                    raise errors[0]
                 raise CoordinatorError(f"shard release unconfirmed: {errors[0]}")
             async with self._lock:
                 entry.state = transition(entry.state, EntryState.RELEASED)
@@ -1257,6 +1281,7 @@ class VectorCoordinator:
                 "max_records": self.fanin.max_records if self.fanin else None,
                 "retained_records": len(self.fanin.records) if self.fanin else 0,
             },
+            "pending_entry_cancellations": len(self._pending_entry_cancellations),
             "shards": [
                 {"error": str(item)} if isinstance(item, Exception) else item
                 for item in shard_health
@@ -1312,6 +1337,7 @@ class VectorCoordinator:
                     EntryState.EXPIRED,
                 )
             ]
+            pending_cancellations = list(self._pending_entry_cancellations.items())
         released = 0
         for key in releasable_keys:
             try:
@@ -1323,6 +1349,11 @@ class VectorCoordinator:
             try:
                 await self.cancel_entry(key, "entry creation timeout")
                 released += 1
+            except Exception:
+                self.metrics.increment("coordinator_reap_failures")
+        for key, reason in pending_cancellations:
+            try:
+                await self.cancel_entry(key, reason)
             except Exception:
                 self.metrics.increment("coordinator_reap_failures")
         if delivery_ids:
