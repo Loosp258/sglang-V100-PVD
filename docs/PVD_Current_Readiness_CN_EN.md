@@ -3,6 +3,18 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+2026-09-24 CloudLab D 节点（`clgpu019`）使用**新建、干净的隔离检出**验证了本地
+`ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项测试
+通过。该检出来自经用户授权传输的增量 Git bundle；原有实验工作区未被覆盖。
+这些测试未执行真实模型 forward、Mooncake WRITE 或生产 Scheduler 自动准入。
+
+On 2026-09-24, a **new clean isolated checkout** on CloudLab D (`clgpu019`)
+validated local commit `ecf94fb07`: 38 CUDA routed-assembly, received-Prompt
+admission and refresh-driver tests passed. The checkout used a user-authorized
+incremental Git bundle; the existing experimental workspace was untouched.
+These tests did not exercise real model forwards, Mooncake WRITE or automatic
+production Scheduler admission.
+
 CUDA 请求准入已有只读 preflight 和显式的预构建资源接管事务：核对完整 Prompt
 receipt、同一 Req 与 Gateway 所选 V 路由；随后按 provisional driver 注册、
 Req/KV 延迟释放绑定、初始 Prompt 导入、receiver claim 的顺序执行。失败走有序
