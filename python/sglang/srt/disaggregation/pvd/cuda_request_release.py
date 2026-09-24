@@ -141,6 +141,22 @@ class CUDARequestRelease:
             raise LifecycleError("CUDA retirement is active or quarantined")
         self._binding()
         record = self.record
+        # A separate initial Prompt import or sparse receive may have lost
+        # completion proof after this release owner was attached.  Closing the
+        # controller alone does not make those model-pool rows safe to reuse.
+        if (
+            getattr(self.cache.req_to_token_pool, "pvd_cuda_retirement_error", None)
+            is not None
+            or getattr(
+                self.cache.token_to_kv_pool_allocator,
+                "pvd_cuda_retirement_error",
+                None,
+            )
+            is not None
+        ):
+            raise LifecycleError(
+                "CUDA model pools are poisoned; request KV retirement is unsafe"
+            )
         if (
             not record.stopping
             or record.close_task is None

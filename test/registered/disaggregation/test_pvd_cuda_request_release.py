@@ -307,6 +307,21 @@ def test_failed_controller_close_never_calls_original_cache_release(monkeypatch)
         assert len(c.allocator.free_pages) == 8 and not c.events
 
 
+def test_late_pool_poison_blocks_retirement_after_controller_close(monkeypatch):
+    with case(monkeypatch) as c:
+        c.pool.pvd_cuda_retirement_error = "initial Prompt import completion unknown"
+        c.allocator.pvd_cuda_retirement_error = (
+            "initial Prompt import completion unknown"
+        )
+        c.wrapper(c.req, c.cache)
+        drain(c)
+        assert c.driver._records["r"].quarantined
+        assert c.owner.state == "pending" and c.req.req_pool_idx == 1
+        assert len(c.allocator.free_pages) == 8 and not c.events
+        c.guard.request_release()
+        assert c.guard.value is not None
+
+
 def test_release_inside_free_group_refuses_without_clearing_views(monkeypatch):
     with case(monkeypatch) as c:
         c.allocator.is_not_in_free_group = False
