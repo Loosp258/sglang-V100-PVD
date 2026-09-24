@@ -675,7 +675,8 @@ def _validate(runner, args, *, checkpoint=False):
                     while time.monotonic() < deadline:
                         records = delivery._rounds.get(epoch, {})
                         if len(records) == 2 and all(
-                            record._published for record in records.values()
+                            record.snapshot()["source_started"]
+                            for record in records.values()
                         ):
                             break
                         if pending_stage.done():
@@ -686,7 +687,7 @@ def _validate(runner, args, *, checkpoint=False):
                         await asyncio.sleep(0.01)
                     else:
                         raise TimeoutError(
-                            "D destinations did not start local publication before forward"
+                            "both V source starts were not acknowledged before forward"
                         )
                     if pending_stage.done():
                         pending_stage.result()  # Surface a failed native publication.
@@ -697,7 +698,7 @@ def _validate(runner, args, *, checkpoint=False):
                     receipt = await pending_stage
                     pending_stage = None
                     report["delivery_overlap_attempt"] = {
-                        "both_local_publications_started_before_forward": True,
+                        "both_v_source_starts_acknowledged_before_forward": True,
                         "stage_pending_at_forward_start": True,
                         "remote_terminal_proof_awaited_after_forward": True,
                     }

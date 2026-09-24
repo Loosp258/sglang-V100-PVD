@@ -166,7 +166,7 @@ class SparseReceiveRecord:
         self.owner = f"d-sparse:{identity.transfer_id}"
         self._buffer = self._registration = None
         self._registration_unknown = False
-        self._published = self._safe = self._ready = False
+        self._published = self._source_started = self._safe = self._ready = False
         self._closing = self._closed = self._acknowledged = False
         self._group = self._receipt = None
         self._installed = False
@@ -227,11 +227,19 @@ class SparseReceiveRecord:
                 self._registration.descriptor,
             )
             self._observe(reply)
-            return self._observe(
-                await self._client.start_delivery(
-                    self.identity.key, self.identity.transfer_id
-                )
+            reply = await self._client.start_delivery(
+                self.identity.key, self.identity.transfer_id
             )
+            ready = self._observe(reply)
+            # The response comes from V only after start_delivery has entered
+            # its source-submission path. A lost reply does not prove this.
+            self._source_started = reply.get("state") in (
+                "v_writing",
+                "delivered",
+                "acked",
+                "released",
+            )
+            return ready
 
     async def poll(self):
         async with self._lock:
@@ -320,6 +328,7 @@ class SparseReceiveRecord:
         self._registry._owner()
         return {
             "published": self._published,
+            "source_started": self._source_started,
             "fenced": self._safe,
             "ready": self._ready,
             "staged": self._receipt is not None,

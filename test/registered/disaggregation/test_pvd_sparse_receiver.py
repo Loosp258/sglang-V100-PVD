@@ -143,7 +143,9 @@ def test_http_delivery_install_ack_and_free_are_distinct():
     async def run():
         async with receiving() as c:
             r = c.record
+            assert not r.snapshot()["source_started"]
             assert not await r.start()
+            assert r.snapshot()["source_started"]
             with pytest.raises(SparseReceiveError, match="successful delivery"):
                 r.stage(c.group, c.epoch)
             assert not await r.poll()
@@ -254,6 +256,7 @@ def test_lost_response_keeps_published_destination_owned(method, monkeypatch):
             with pytest.raises(TimeoutError):
                 await c.record.start()
             assert c.record.snapshot()["published"]
+            assert not c.record.snapshot()["source_started"]
             assert (
                 c.registry.budget.snapshot()["used_staging_bytes"] == c.manifest.nbytes
             )

@@ -5,15 +5,16 @@ Historical handoffs contain earlier states; this page consolidates the current s
 
 最新隔离三节点验收在两路稀疏交付任务 pending 时运行第 4 次真实
 Qwen2.5-7B Decode 前向，再等待写入终态、于正式计数 4 安装新 bank，
-第 5 次前向成功消费它。只验证了**安全交错顺序**；本地发布标志不代表
-V 已开始 RDMA，尚无网络/计算重叠的时间测量或延迟收益证明。详见
+第 5 次前向成功消费它。最新门槛等待两个 V rank 的 `start_delivery` 响应，
+强于旧版 D 本地发布标志；但仍无网络/计算重叠的时间测量或延迟收益证明。详见
 [CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。
 
 The latest isolated three-node gate ran a fourth real Qwen2.5-7B Decode
 forward while two sparse-delivery tasks were pending, awaited terminal write
 proofs, installed at committed count four, and consumed the new bank in a
-fifth forward. It validates **safe interleaving order**, not actual RDMA/GPU
-time overlap or latency hiding; see the
+fifth forward. The latest gate waits for both V `start_delivery` responses,
+rather than relying on D-local publication. It validates source-start and
+safe-installation order, not measured RDMA/GPU time overlap or latency hiding; see the
 [CAGRA acceptance gate](PVD_CAGRA_Acceptance_CN_EN.md).
 
 最新 112 组真实 Qwen GQA 原生 CAGRA 对精确并集的召回：初始查询最低
