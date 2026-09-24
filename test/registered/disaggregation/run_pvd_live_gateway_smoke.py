@@ -17,16 +17,20 @@ def main(argv=None):
     parser.add_argument("--gateway-url", required=True)
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument("--min-completion-tokens", type=int, default=1)
+    parser.add_argument("--prompt-repetitions", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=float, default=120)
     args = parser.parse_args(argv)
     if not (
         1 <= args.min_completion_tokens <= args.max_new_tokens <= 32
+        and 1 <= args.prompt_repetitions <= 10
         and 0 < args.timeout_seconds <= 600
     ):
         parser.error("smoke bounds exceeded")
     marker = f"PVD_NATIVE_SMOKE_{uuid.uuid4().hex[:12]}"
+    sentence = "Explain GPU RDMA in one short sentence."
     body = {
-        "text": f"{marker}: Explain GPU RDMA in one short sentence.",
+        "text": f"{marker}: {sentence}"
+        + (f" {sentence}" * (args.prompt_repetitions - 1)),
         "sampling_params": {
             "temperature": 0,
             "max_new_tokens": args.max_new_tokens,
@@ -68,6 +72,7 @@ def main(argv=None):
         json.dumps(
             {
                 "marker": marker,
+                "prompt_repetitions": args.prompt_repetitions,
                 "status": "passed" if ok else "failed",
                 "http_status": status,
                 "completion_tokens": completion_tokens,
