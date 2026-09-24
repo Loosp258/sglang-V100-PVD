@@ -9,6 +9,9 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
     LifecycleError,
     TargetExecutionArbiter,
 )
+from sglang.srt.disaggregation.pvd.cuda_route_discovery import (
+    CUDARouteDiscoveryQueue,
+)
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
@@ -36,6 +39,7 @@ def setup(monkeypatch, *, fail=None):
         def __init__(self, **kw):
             events.append("workspace")
             self.closed = False
+            self.budget = kw["budget"]
 
         def close(self):
             events.append("workspace.close")
@@ -91,11 +95,12 @@ def setup(monkeypatch, *, fail=None):
         if fail in ("backend", "close"):
             raise RuntimeError("backend failed")
         return NS(
+            output_budget=kw["output_budget"],
             consumer=NS(
                 req_pool=req_pool,
                 kv_pool=kv_pool,
                 _lock=kw["execution_lock"],
-            )
+            ),
         )
 
     monkeypatch.setattr(startup, "CUDASparseAttentionWorkspace", Workspace)
@@ -108,12 +113,11 @@ def setup(monkeypatch, *, fail=None):
         "dtype": "half",
         "head_dim": 128,
         "chunk_tokens": 32,
-        "attention_budget": TransferBudget(65536, 1),
-        "output_budget": TransferBudget(65536, 1),
+        "target_scratch_budget": TransferBudget(65536, 1),
         "max_batch_size": 4,
         "max_requests": 4,
         "max_prefix_tokens": 4096,
-        "retire_pools": lambda: events.append("pools.retire"),
+        "execution_lock": threading.RLock(),
     }
     return scheduler, runner, native, kwargs, events
 
@@ -134,15 +138,23 @@ def test_success_assembles_exact_pools_and_retirement(monkeypatch):
     assert owner.driver.arbiter is owner.arbiter
     assert owner.execution_lock is shared_lock
     assert owner.arbiter is shared_arbiter
+    assert owner.workspace.budget is kwargs["target_scratch_budget"]
+    assert owner.backend.output_budget is kwargs["target_scratch_budget"]
     assert "pools.retire" not in events
-    owner.retire_drained()
-    assert events[-5:] == [
+    assert owner.workspace is not None
+    owner.close_drained()
+    assert events[-4:] == [
         "driver.begin_shutdown",
         "binding.close",
         "driver.close_loop",
         "workspace.close",
-        "pools.retire",
     ]
+    assert (
+        owner.pool_owner.value.kv_pool
+        is scheduler.token_to_kv_pool_allocator.get_kvcache()
+    )
+    with pytest.raises(LifecycleError, match="process-owned"):
+        owner.pool_owner.request_release()
     assert runner.attn_backend is owner.backend
     assert runner.attn_backend is not native
 
@@ -175,14 +187,28 @@ def test_published_or_uncertain_cleanup_retains_owners(monkeypatch):
             )
 
 
-def test_missing_retirement_or_foreign_pool_is_rejected_before_allocation(monkeypatch):
+def test_missing_shared_budget_or_foreign_pool_is_rejected_before_allocation(
+    monkeypatch,
+):
     scheduler, runner, native, kwargs, events = setup(monkeypatch)
-    kwargs["retire_pools"] = None
-    with pytest.raises(LifecycleError, match="retirement"):
+    kwargs["target_scratch_budget"] = None
+    with pytest.raises(LifecycleError, match="scratch budget"):
         startup.install_cuda_target_components(scheduler, **kwargs)
-    kwargs["retire_pools"] = lambda: None
+    kwargs["target_scratch_budget"] = TransferBudget(65536, 1)
     runner.token_to_kv_pool_allocator = object()
     with pytest.raises(LifecycleError, match="exact pools"):
         startup.install_cuda_target_components(scheduler, **kwargs)
     assert not events
     assert runner.attn_backend is native
+
+
+def test_pending_route_lookup_refused_before_backend_swap(monkeypatch):
+    scheduler, runner, native, kwargs, events = setup(monkeypatch)
+    queue = CUDARouteDiscoveryQueue(
+        scheduler.disagg_decode_prealloc_queue.kv_manager, max_inflight=1
+    )
+    queue._records[1] = object()
+    with pytest.raises(LifecycleError, match="route queue must be idle"):
+        startup.install_cuda_target_components(scheduler, route_queue=queue, **kwargs)
+    assert runner.attn_backend is native
+    assert not events

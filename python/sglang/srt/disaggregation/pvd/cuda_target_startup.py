@@ -1,12 +1,12 @@
 """Explicit, fail-closed assembly of the TP1 CUDA target serving components.
 
 This factory is not a Scheduler startup hook. The caller supplies concrete
-limits and the callback that retires the Scheduler's exact model pools at
-worker shutdown. A failed installation never releases those shared pools.
+limits and one shared target scratch budget. The Scheduler owns its model
+pools for the lifetime of the worker process; closing this binding must never
+claim to free those pools while the runner and cache still reference them.
 """
 
 import threading
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
@@ -19,6 +19,7 @@ from sglang.srt.disaggregation.pvd.cuda_model_attention import (
 )
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_route_discovery import CUDARouteDiscoveryQueue
 from sglang.srt.disaggregation.pvd.cuda_scheduler_binding import (
     CUDADecodeSchedulerBinding,
 )
@@ -35,6 +36,10 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 _STARTUP_QUARANTINE = []
 
 
+def _refuse_in_process_pool_release():
+    raise LifecycleError("Scheduler model pools are process-owned")
+
+
 @dataclass(frozen=True)
 class CUDATargetServingComponents:
     scheduler: object
@@ -48,8 +53,8 @@ class CUDATargetServingComponents:
     pool_owner: ResourceGuard
     binding: CUDADecodeSchedulerBinding
 
-    def retire_drained(self):
-        """Retire an idle worker; a closed binding never restores native decode."""
+    def close_drained(self):
+        """Close an idle binding; the exact model pools remain process-owned."""
         self.driver._owner()
         if (
             self.scheduler.pvd_cuda_binding is not self.binding
@@ -66,7 +71,6 @@ class CUDATargetServingComponents:
             self.driver.begin_shutdown()
             self.binding.close()
             self.workspace.close()
-            self.pool_owner.request_release()
         except BaseException:
             _STARTUP_QUARANTINE.append(self)
             raise
@@ -79,13 +83,11 @@ def install_cuda_target_components(
     dtype,
     head_dim,
     chunk_tokens,
-    attention_budget,
-    output_budget,
+    target_scratch_budget,
     max_batch_size,
     max_requests,
     max_prefix_tokens,
-    retire_pools: Callable[[], None],
-    execution_lock=None,
+    execution_lock,
     arbiter=None,
     route_queue=None,
     prepare_cuda_admission=None,
@@ -97,9 +99,7 @@ def install_cuda_target_components(
     No request may be admitted while this owner-thread function is executing.
     """
     if (
-        not callable(retire_pools)
-        or not isinstance(attention_budget, TransferBudget)
-        or not isinstance(output_budget, TransferBudget)
+        not isinstance(target_scratch_budget, TransferBudget)
         or any(
             type(value) is not int or value <= 0
             for value in (
@@ -114,7 +114,7 @@ def install_cuda_target_components(
         or getattr(scheduler, "pvd_cuda_binding", None) is not None
     ):
         raise LifecycleError(
-            "explicit CUDA target bounds, budgets and pool retirement required"
+            "explicit CUDA target bounds and shared scratch budget required"
         )
     runner = scheduler.tp_worker.model_runner
     manager = scheduler.disagg_decode_prealloc_queue.kv_manager
@@ -133,8 +133,6 @@ def install_cuda_target_components(
 
     native_backend = runner.attn_backend
     workspace = driver = backend = executor = pool_owner = None
-    if execution_lock is None:
-        execution_lock = threading.RLock()
     if arbiter is None:
         arbiter = TargetExecutionArbiter()
     if not isinstance(execution_lock, type(threading.RLock())) or not isinstance(
@@ -146,19 +144,26 @@ def install_cuda_target_components(
     arbiter.owner()
     if arbiter.busy:
         raise LifecycleError("target execution is busy during CUDA startup")
+    if route_queue is not None and (
+        not isinstance(route_queue, CUDARouteDiscoveryQueue)
+        or route_queue.manager is not manager
+        or route_queue._closed
+        or route_queue.pending
+    ):
+        raise LifecycleError("selected-route queue must be idle and owned by this D")
     try:
         workspace = CUDASparseAttentionWorkspace(
             device=device,
             dtype=dtype,
             head_dim=head_dim,
             chunk_tokens=chunk_tokens,
-            budget=attention_budget,
+            budget=target_scratch_budget,
         )
         backend = make_cuda_sparse_backend(
             runner,
             workspace=workspace,
             execution_lock=execution_lock,
-            output_budget=output_budget,
+            output_budget=target_scratch_budget,
             max_batch_size=max_batch_size,
         )
         if (
@@ -173,7 +178,9 @@ def install_cuda_target_components(
         executor = CUDARankBatchExecutor(
             backend.consumer, arbiter, max_requests=max_requests
         )
-        pool_owner = ResourceGuard(CUDAModelPools(req_pool, kv_pool), retire_pools)
+        pool_owner = ResourceGuard(
+            CUDAModelPools(req_pool, kv_pool), _refuse_in_process_pool_release
+        )
 
         # The binding requires this identity. If its constructor fails before
         # publishing itself, the native backend is restored below.
