@@ -31,6 +31,18 @@ def _require_supported_pools(cache):
         raise LifecycleError("CUDA retirement requires exact page-1 ChunkCache pools")
 
 
+def _allocator_owns_request_device(allocator, req_pool):
+    """Compare materialized devices; SGLang may declare CUDA without an index."""
+    actual = req_pool.req_to_token.device
+    declared = torch.device(allocator.device)
+    return (
+        declared.type == actual.type
+        and (declared.index is None or declared.index == actual.index)
+        and allocator.free_pages.device == actual
+        and allocator.release_pages.device == actual
+    )
+
+
 class _FreePlan:
     """No pool publication during the original Req bookkeeping operation."""
 
@@ -75,7 +87,7 @@ class CUDARequestRelease:
             or not isinstance(pools, CUDAModelPools)
             or pools.req_pool is not cache.req_to_token_pool
             or pools.kv_pool is not allocator.get_kvcache()
-            or torch.device(allocator.device) != pools.req_pool.req_to_token.device
+            or not _allocator_owns_request_device(allocator, pools.req_pool)
             or getattr(allocator, "pvd_cuda_retirement_error", None) is not None
             or getattr(pools.req_pool, "pvd_cuda_retirement_error", None) is not None
         ):

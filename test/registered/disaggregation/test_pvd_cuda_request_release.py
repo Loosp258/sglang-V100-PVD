@@ -41,6 +41,22 @@ def test_real_decode_request_pool_is_supported_by_exact_retirement_guard():
         release_module._require_supported_pools(cache)
 
 
+def test_generic_cuda_declaration_matches_only_materialized_allocator_device():
+    cuda0, cuda1 = torch.device("cuda:0"), torch.device("cuda:1")
+    req_pool = NS(req_to_token=NS(device=cuda0))
+    allocator = NS(
+        device="cuda",
+        free_pages=NS(device=cuda0),
+        release_pages=NS(device=cuda0),
+    )
+    assert release_module._allocator_owns_request_device(allocator, req_pool)
+    allocator.free_pages.device = cuda1
+    assert not release_module._allocator_owns_request_device(allocator, req_pool)
+    allocator.free_pages.device = cuda0
+    allocator.device = "cuda:1"
+    assert not release_module._allocator_owns_request_device(allocator, req_pool)
+
+
 def source(path, name, cls=None, namespace=None):
     tree = ast.parse(Path(path).read_text(encoding="utf-8"))
     nodes = (
@@ -103,6 +119,7 @@ def case(monkeypatch, *, real=False):
     allocator.device, allocator.need_sort = "cpu", False
     allocator.get_kvcache = lambda: kv
     allocator.free_pages = torch.arange(9, 17, dtype=torch.int64)
+    allocator.release_pages = torch.empty((0,), dtype=torch.int64)
     allocator.is_not_in_free_group, allocator.free_group = True, []
     cache = Cache()
     cache.req_to_token_pool, cache.token_to_kv_pool_allocator = pool, allocator

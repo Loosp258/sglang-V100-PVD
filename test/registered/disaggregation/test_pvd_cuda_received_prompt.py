@@ -33,7 +33,12 @@ def received(monkeypatch, *, limit=65536, complete=True):
     gate.mark_received(ticket)
     gate.mark_installed(ticket)
     gate.handoff()
-    allocator = NS(get_kvcache=lambda: c.pool)
+    allocator = NS(
+        get_kvcache=lambda: c.pool,
+        device="cpu",
+        free_pages=torch.empty((0,), dtype=torch.int64),
+        release_pages=torch.empty((0,), dtype=torch.int64),
+    )
     cache = NS(req_to_token_pool=c.req, token_to_kv_pool_allocator=allocator)
     manager = NS(
         scheduler=NS(
