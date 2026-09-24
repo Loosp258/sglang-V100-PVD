@@ -651,6 +651,90 @@ def test_coordinator_owns_entry_ttl():
     asyncio.run(scenario())
 
 
+def test_coordinator_retries_partially_confirmed_shard_release():
+    async def scenario():
+        engine = FakeTransferEngine()
+        stores = [make_store(rank, engine) for rank in (0, 1)]
+        coordinator = VectorCoordinator(
+            [LocalShardClient(store) for store in stores], entry_ttl_secs=0.01
+        )
+        manifest = make_manifest("release-retry")
+        key = manifest.key
+        try:
+            await coordinator.create_entry(manifest)
+            await coordinator.commit_shard(
+                key, 0, ENTRY_BYTES, FirstTokenMetadata(output_token_id=12)
+            )
+            await coordinator.commit_shard(key, 1, ENTRY_BYTES)
+            shard1 = coordinator.shards[1]
+            release = shard1.release_entry
+            attempts = 0
+
+            async def fail_once(entry_key):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise OSError("shard 1 temporarily unreachable")
+                await release(entry_key)
+
+            shard1.release_entry = fail_once
+            with unittest.TestCase().assertRaisesRegex(
+                CoordinatorError, "shard release unconfirmed"
+            ):
+                await coordinator.release_entry(key)
+            assert coordinator.entries[key].state == EntryState.RELEASING
+            assert stores[0].entries[key].resources_released
+            assert not stores[1].entries[key].resources_released
+
+            result = await coordinator.reap_expired(time.monotonic() + 1000)
+            assert result["entries"] == 1
+            assert coordinator.entries[key].state == EntryState.RELEASED
+            assert all(store.entries[key].resources_released for store in stores)
+            assert attempts == 2
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(scenario())
+
+
+def test_coordinator_serializes_concurrent_entry_release():
+    async def scenario():
+        engine = FakeTransferEngine()
+        stores = [make_store(rank, engine) for rank in (0, 1)]
+        coordinator = VectorCoordinator([LocalShardClient(store) for store in stores])
+        manifest = make_manifest("release-concurrent")
+        key = manifest.key
+        try:
+            await coordinator.create_entry(manifest)
+            await coordinator.commit_shard(
+                key, 0, ENTRY_BYTES, FirstTokenMetadata(output_token_id=12)
+            )
+            await coordinator.commit_shard(key, 1, ENTRY_BYTES)
+            shard1 = coordinator.shards[1]
+            release = shard1.release_entry
+            attempts = 0
+
+            async def delayed_release(entry_key):
+                nonlocal attempts
+                attempts += 1
+                await asyncio.sleep(0.01)
+                await release(entry_key)
+
+            shard1.release_entry = delayed_release
+            first, second = await asyncio.gather(
+                coordinator.release_entry(key), coordinator.release_entry(key)
+            )
+            assert first.state == second.state == EntryState.RELEASED
+            assert attempts == 1
+            assert all(store.entries[key].resources_released for store in stores)
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     suite = unittest.TestSuite(
         unittest.FunctionTestCase(test)

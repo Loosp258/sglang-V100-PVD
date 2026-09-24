@@ -320,6 +320,7 @@ class VectorCoordinator:
         self.deliveries: Dict[str, DeliveryRecord] = {}
         self._lock = asyncio.Lock()
         self._entry_create_locks: Dict[KVEntryKey, asyncio.Lock] = {}
+        self._entry_cleanup_locks: Dict[KVEntryKey, asyncio.Lock] = {}
         self._delivery_reserve_locks: Dict[str, asyncio.Lock] = {}
         self._delivery_start_locks: Dict[str, asyncio.Lock] = {}
         self.selector = PassThroughSelector(self.entry_state)
@@ -1146,25 +1147,40 @@ class VectorCoordinator:
             return entry
 
     async def release_entry(self, key: KVEntryKey) -> EntryRecord:
-        async with self._lock:
-            entry = self.entries[key]
-            if any(
-                deadline > time.monotonic()
-                for deadline in entry.consumer_leases.values()
-            ):
-                raise CoordinatorError("entry has active consumer leases")
-            if entry.active_delivery_count:
-                raise CoordinatorError(
-                    f"entry has {entry.active_delivery_count} active deliveries"
-                )
-            if entry.state == EntryState.RELEASED:
+        # A shard RPC can fail after the remote shard has already released its
+        # allocation. Both shard releases are idempotent, so repeat the whole
+        # pair on retry, but serialize attempts for this Entry.
+        async with self._entry_cleanup_locks.setdefault(key, asyncio.Lock()):
+            async with self._lock:
+                entry = self.entries[key]
+                if any(
+                    deadline > time.monotonic()
+                    for deadline in entry.consumer_leases.values()
+                ):
+                    raise CoordinatorError("entry has active consumer leases")
+                if entry.active_delivery_count:
+                    raise CoordinatorError(
+                        f"entry has {entry.active_delivery_count} active deliveries"
+                    )
+                if entry.state == EntryState.RELEASED:
+                    return entry
+                if entry.state == EntryState.STORED:
+                    entry.state = transition(entry.state, EntryState.RELEASING)
+                elif entry.state != EntryState.RELEASING:
+                    raise CoordinatorError(
+                        f"entry cannot be released from state {entry.state.value}"
+                    )
+            replies = await asyncio.gather(
+                *(self.shards[rank].release_entry(key) for rank in (0, 1)),
+                return_exceptions=True,
+            )
+            errors = [reply for reply in replies if isinstance(reply, BaseException)]
+            if errors:
+                raise CoordinatorError(f"shard release unconfirmed: {errors[0]}")
+            async with self._lock:
+                entry.state = transition(entry.state, EntryState.RELEASED)
+                self.metrics.increment("coordinator_entries_released")
                 return entry
-            entry.state = transition(entry.state, EntryState.RELEASING)
-        await asyncio.gather(*(self.shards[rank].release_entry(key) for rank in (0, 1)))
-        async with self._lock:
-            entry.state = transition(entry.state, EntryState.RELEASED)
-            self.metrics.increment("coordinator_entries_released")
-            return entry
 
     async def selected_shard_routes(self, key: KVEntryKey) -> Mapping:
         """Advertise only the selected Entry's live V shards, not a new V choice.
@@ -1279,7 +1295,7 @@ class VectorCoordinator:
                 if entry.active_delivery_count == 0
                 and not entry.consumer_leases
                 and entry.expires_at <= now
-                and entry.state == EntryState.STORED
+                and entry.state in (EntryState.STORED, EntryState.RELEASING)
             ]
             cancellable_keys = [
                 key
@@ -1289,6 +1305,7 @@ class VectorCoordinator:
                 and entry.state
                 not in (
                     EntryState.STORED,
+                    EntryState.RELEASING,
                     EntryState.RELEASED,
                     EntryState.FAILED,
                     EntryState.CANCELLED,
