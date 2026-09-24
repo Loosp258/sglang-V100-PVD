@@ -16,7 +16,10 @@ from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequ
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
 from sglang.srt.disaggregation.pvd.cuda_request_release import CUDARequestRelease
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeRefresher
-from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    ResourceGuard,
+    TransferCapacityError,
+)
 from test_pvd_cuda_received_prompt import install, received
 
 
@@ -29,9 +32,10 @@ def pump(driver, until):
 
 
 @contextmanager
-def bound(monkeypatch, *, claim=True):
+def bound(monkeypatch, *, claim=True, provisional=False, import_prompt=True):
     c = received(monkeypatch)
-    install(c)
+    if not provisional:
+        install(c)
     driver = CUDARefreshDriver(c.arbiter, max_requests=2, max_prefix_tokens=32)
     controller = CUDAPrefetchRequest.__new__(CUDAPrefetchRequest)
     controller.group = c.group
@@ -57,7 +61,15 @@ def bound(monkeypatch, *, claim=True):
         events.append("sparse drained")
 
     controller.aclose = close_controller
-    driver.register(c.request, controller, clients={0: object()}, timeout_seconds=20)
+    driver.register(
+        c.request,
+        controller,
+        clients={0: object()},
+        timeout_seconds=20,
+        initial_import_pending=provisional,
+        initial_session=c.session if provisional else None,
+        pool_owner=c.c.owner if provisional else None,
+    )
     c.allocator.device = "cpu"
     retirement = CUDARequestRelease(
         c.request,
@@ -91,6 +103,8 @@ def bound(monkeypatch, *, claim=True):
         retirement.state = "released"
 
     retirement.release_after_controller_close = retire
+    if provisional and import_prompt:
+        install(c)
     if claim:
         driver.claim_received_session(c.session)
     result = NS(**locals())
@@ -138,11 +152,113 @@ def test_claim_disables_old_full_refresh_but_keeps_consumer_lease(monkeypatch):
         assert b.driver.snapshot()["requests"]["r"]["stopping"]
 
 
+def test_provisional_registration_is_idle_until_receiver_import(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True, import_prompt=False) as b:
+        record = b.driver._records["r"]
+        assert record.provisional and record.full_session is None
+        assert b.driver.snapshot()["requests"]["r"]["owns_provisional_source"]
+        assert record.provisional_source is b.c.session
+        assert b.c.session._cuda_refresh_driver is b.driver
+        assert record.retirement is b.retirement
+        assert not b.c.group.can_decode(0)
+        for _ in range(3):
+            b.driver.poll()
+        assert not record.stopping and record.refresh is None
+        assert not b.events
+        install(b.c)
+        b.driver.claim_received_session(b.c.session)
+        assert not record.provisional and record.provisional_source is None
+        assert record.full_session is b.c.session
+
+
+def test_provisional_precopy_capacity_refusal_can_drain(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True, import_prompt=False) as b:
+        b.c.budget.reserve("other", 65536, 0)
+        with pytest.raises(TransferCapacityError):
+            install(b.c)
+        assert not b.c.importer._used and not b.c.importer._quarantined
+        assert b.c.session._cuda_prompt_importer is None
+        b.driver.cancel(b.c.request)
+        b.sparse_done.set_result(None)
+        b.lease_done.set_result(None)
+        pump(b.driver, lambda: not b.driver._records)
+        assert b.events[-1] == "request pool returned"
+
+
+def test_provisional_successful_import_requires_exact_claim(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True) as b:
+        original = b.c.importer._received_pool_owner
+        b.c.importer._received_pool_owner = object()
+        with pytest.raises(ValueError, match="release owner required"):
+            b.driver.claim_received_session(b.c.session)
+        assert b.driver._records["r"].provisional
+        assert b.c.session._cuda_refresh_driver is b.driver
+        b.c.importer._received_pool_owner = original
+        b.driver.claim_received_session(b.c.session)
+        assert not b.driver._records["r"].provisional
+
+
+def test_preimport_cancel_drains_both_owners_before_pool_return(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True, import_prompt=False) as b:
+        b.driver.cancel(b.c.request)
+        pump(b.driver, lambda: "sparse close started" in b.events)
+        assert b.retirement.state == "attached"
+        assert b.c.session.receive_guard.value is not None
+        b.sparse_done.set_result(None)
+        pump(b.driver, lambda: "lease close started" in b.events)
+        assert "request pool returned" not in b.events
+        b.lease_done.set_result(None)
+        pump(b.driver, lambda: not b.driver._records)
+        assert b.events[-2:] == ["lease closed", "request pool returned"]
+
+
+def test_unknown_preclaim_import_quarantines_provisional_owners(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True, import_prompt=False) as b:
+
+        def unknown_completion():
+            raise RuntimeError("GPU Prompt completion unknown")
+
+        monkeypatch.setattr(b.c.importer, "_synchronize", unknown_completion)
+        with pytest.raises(RuntimeError, match="initial Prompt completion unknown"):
+            install(b.c)
+        assert b.c.importer._quarantined and b.c.importer._receive_lease is not None
+        b.driver.cancel(b.c.request, "initial Prompt completion unknown")
+        record = b.driver._records["r"]
+        assert record.quarantined and record.provisional
+        assert record.provisional_source is b.c.session
+        assert record.provisional_pool_owner is b.c.c.owner
+        assert b.retirement.state == "attached"
+        assert b.c.session.receive_guard.value is not None
+        assert b.driver.arbiter.busy
+        assert b.c.allocator.pvd_cuda_retirement_error
+        with pytest.raises(ValueError, match="driver quarantined"):
+            b.driver.poll()
+
+
+def test_provisional_controller_cancel_failure_poison_pools(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True, import_prompt=False) as b:
+
+        def fail_cancel(reason):
+            raise RuntimeError("sparse cancel completion unknown")
+
+        b.controller.cancel = fail_cancel
+        with pytest.raises(RuntimeError, match="sparse cancel completion unknown"):
+            b.driver.cancel(b.c.request)
+        record = b.driver._records["r"]
+        assert record.quarantined and record.provisional
+        assert record.provisional_source is b.c.session
+        assert b.retirement.state == "attached"
+        assert b.c.session.receive_guard.value is not None
+        assert b.c.allocator.pvd_cuda_retirement_error
+        assert b.driver.arbiter.busy
+
+
+@pytest.mark.parametrize("provisional", [False, True])
 @pytest.mark.parametrize("finish", [False, True])
 def test_original_release_intent_waits_for_sparse_then_full_session_close(
-    monkeypatch, finish
+    monkeypatch, finish, provisional
 ):
-    with bound(monkeypatch) as b:
+    with bound(monkeypatch, provisional=provisional) as b:
         c = b.c
         refresher = PVDDecodeRefresher(c.manager)
         if finish:

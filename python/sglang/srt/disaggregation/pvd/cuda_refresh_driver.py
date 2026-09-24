@@ -42,6 +42,9 @@ class _Request:
     retirement: object = None
     full_session: object = None
     receiver_lease: object = None
+    provisional: bool = False
+    provisional_source: object = None
+    provisional_pool_owner: object = None
 
 
 class CUDARefreshDriver:
@@ -96,8 +99,52 @@ class CUDARefreshDriver:
             raise LifecycleError("nonempty nonnegative token sequence required")
         return tuple(values)
 
-    def register(self, req, controller, *, clients, timeout_seconds):
+    def register(
+        self,
+        req,
+        controller,
+        *,
+        clients,
+        timeout_seconds,
+        initial_import_pending=False,
+        initial_session=None,
+        pool_owner=None,
+    ):
         self._owner()
+        if type(initial_import_pending) is not bool:
+            raise LifecycleError("initial import state must be explicit")
+        if initial_import_pending:
+            from sglang.srt.disaggregation.pvd.cuda_model_attention import (
+                CUDAModelPools,
+            )
+            from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
+            from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
+
+            if (
+                not isinstance(initial_session, PVDDecodeSession)
+                or initial_session.req is not req
+                or initial_session._cuda_refresh_driver is not None
+                or getattr(initial_session, "_cuda_prompt_importer", None) is not None
+                or not isinstance(pool_owner, ResourceGuard)
+                or not isinstance(pool_owner.value, CUDAModelPools)
+            ):
+                raise LifecycleError(
+                    "unclaimed full Prompt source and model pools required"
+                )
+            receipt = initial_session.require_initial_prompt()
+            cache = initial_session.manager.scheduler.tree_cache
+            pools = pool_owner.value
+            if (
+                receipt.request_id != req.rid
+                or receipt.slot != req.req_pool_idx
+                or pools.req_pool is not cache.req_to_token_pool
+                or pools.kv_pool is not cache.token_to_kv_pool_allocator.get_kvcache()
+            ):
+                raise LifecycleError("provisional source and model pools differ")
+        elif initial_session is not None or pool_owner is not None:
+            raise LifecycleError(
+                "initial source/owner require provisional registration"
+            )
         if (
             self._closing
             or self._source_quarantine is not None
@@ -129,8 +176,9 @@ class CUDARefreshDriver:
             len(outputs) != 1
             or len(prompt) + 1 > self.max_prefix_tokens
             or state["state"] != "idle"
-            or state["installed_tokens"] != 0
-            or not controller.can_decode(0)
+            or state["installed_tokens"] != (None if initial_import_pending else 0)
+            or (not initial_import_pending and not controller.can_decode(0))
+            or (initial_import_pending and state["completed"] is not None)
             or controller._active is not None
             or controller._tasks
             or any(
@@ -163,8 +211,59 @@ class CUDARefreshDriver:
             outputs,
             req.req_pool_idx,
             float(timeout_seconds),
+            provisional=initial_import_pending,
+            provisional_source=initial_session,
+            provisional_pool_owner=pool_owner,
         )
+        if initial_import_pending:
+            # Make release_request() delegate to this driver before any bank
+            # copy can begin; no await or fallible call separates the claims.
+            initial_session._cuda_refresh_driver = self
         controller._refresh_driver_claimed = True
+
+    def quarantine_provisional(self, req, reason):
+        """Retain an unclaimed receiver after any uncertain admission mutation.
+
+        This is deliberately not rollback. A provisional record cannot be
+        polled, decoded or released here; both model pools are poisoned before
+        another allocator user can reuse their rows. The source session and
+        pool owner remain strongly referenced until worker termination or an
+        explicit future recovery protocol proves every native operation safe.
+        """
+        self._owner()
+        record = self._records.get(req.rid)
+        if (
+            record is None
+            or record.req is not req
+            or not record.provisional
+            or record.full_session is not None
+            or record.provisional_source is None
+            or record.provisional_pool_owner is None
+            or type(reason) is not str
+            or not reason.strip()
+        ):
+            raise LifecycleError(
+                "exact provisional Req, source and pool owner required"
+            )
+        if record.quarantined:
+            return
+        session = record.provisional_source
+        pool_owner = record.provisional_pool_owner
+        cache = session.manager.scheduler.tree_cache
+        pools = pool_owner.value
+        if (
+            pools.req_pool is not cache.req_to_token_pool
+            or pools.kv_pool is not cache.token_to_kv_pool_allocator.get_kvcache()
+        ):
+            raise LifecycleError("provisional source and model pools differ")
+        message = "CUDA provisional admission uncertain: " + reason[:256]
+        cache.req_to_token_pool.pvd_cuda_retirement_error = message
+        cache.token_to_kv_pool_allocator.pvd_cuda_retirement_error = message
+        record.error = LifecycleError(message)
+        record.quarantined = True
+        self._source_quarantine = message
+        if not self.arbiter.busy:
+            record.receiver_lease = self.arbiter.acquire()
 
     def claim_received_session(self, session):
         """One-way switch after receiver import, registration and release binding.
@@ -192,7 +291,9 @@ class CUDARefreshDriver:
             or record.req is not session.req
             or record.stopping
             or record.full_session is not None
-            or session._cuda_refresh_driver is not None
+            or session._cuda_refresh_driver
+            is not (self if record.provisional else None)
+            or (record.provisional and record.provisional_source is not session)
             or not isinstance(record.retirement, CUDARequestRelease)
             or record.retirement.state != "attached"
             or record.retirement.driver is not self
@@ -218,9 +319,12 @@ class CUDARefreshDriver:
         # No await or fallible work between the two ownership publications.
         record.full_session = session
         session._cuda_refresh_driver = self
+        record.provisional = False
+        record.provisional_source = None
+        record.provisional_pool_owner = None
 
     def _session_binding(self, record):
-        session = record.full_session
+        session = record.full_session or record.provisional_source
         if session is not None and (
             session.req is not record.req
             or session._cuda_refresh_driver is not self
@@ -266,9 +370,10 @@ class CUDARefreshDriver:
         self._source_quarantine = str(exc)[:512]
         if not self.arbiter.busy:
             record.receiver_lease = self.arbiter.acquire()
-        cache = (
-            record.retirement.cache or record.full_session.manager.scheduler.tree_cache
-        )
+        source = record.full_session or record.provisional_source
+        cache = record.retirement.cache if record.retirement is not None else None
+        if cache is None:
+            cache = source.manager.scheduler.tree_cache
         reason = "CUDA receiver close uncertain; worker pools quarantined"
         cache.req_to_token_pool.pvd_cuda_retirement_error = reason
         cache.token_to_kv_pool_allocator.pvd_cuda_retirement_error = reason
@@ -329,6 +434,24 @@ class CUDARefreshDriver:
     def _stop(self, record, reason):
         if record.stopping:
             return
+        if record.provisional:
+            source = record.provisional_source
+            cache = source.manager.scheduler.tree_cache
+            importer = getattr(source, "_cuda_prompt_importer", None)
+            if (
+                record.retirement is None
+                or getattr(importer, "_quarantined", False)
+                or getattr(cache.req_to_token_pool, "pvd_cuda_retirement_error", None)
+                is not None
+                or getattr(
+                    cache.token_to_kv_pool_allocator,
+                    "pvd_cuda_retirement_error",
+                    None,
+                )
+                is not None
+            ):
+                self.quarantine_provisional(record.req, reason)
+                return
         record.stopping = True
         if record.refresh is not None:
             record.refresh.cancel()
@@ -336,6 +459,8 @@ class CUDARefreshDriver:
             record.controller.cancel(reason)
         except BaseException as exc:
             record.error, record.quarantined = exc, True
+            if record.full_session is not None or record.provisional_source is not None:
+                self._quarantine_receiver(record, exc)
             raise
 
     def cancel(self, req, reason="request finished, cancelled or retracted"):
@@ -349,6 +474,8 @@ class CUDARefreshDriver:
         due = None
         for key, record in tuple(self._records.items()):
             if record.quarantined:
+                continue
+            if record.provisional and not record.stopping:
                 continue
             if record.refresh is not None and record.refresh.done():
                 self._release_capture(record)  # Also cancel-before-first-dispatch.
@@ -369,7 +496,10 @@ class CUDARefreshDriver:
                     except (Exception, asyncio.CancelledError) as exc:
                         # No retry or capacity refund after uncertain cleanup.
                         record.error, record.quarantined = exc, True
-                        if record.full_session is not None:
+                        if (
+                            record.full_session is not None
+                            or record.provisional_source is not None
+                        ):
                             self._quarantine_receiver(record, exc)
                             return
                     else:
@@ -518,6 +648,8 @@ class CUDARefreshDriver:
                     "ready": r.ready,
                     "stopping": r.stopping,
                     "quarantined": r.quarantined,
+                    "provisional": r.provisional,
+                    "owns_provisional_source": r.provisional_source is not None,
                     "owns_full_receiver": r.full_session is not None,
                     "retirement_state": None
                     if r.retirement is None

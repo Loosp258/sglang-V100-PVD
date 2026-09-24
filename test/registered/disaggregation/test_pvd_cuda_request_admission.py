@@ -65,7 +65,9 @@ def test_unsupported_order_refuses_before_mutation_or_import(monkeypatch):
     context, binding, driver = setup_admission(monkeypatch)
     try:
         plan = preflight_received_cuda_admission(context.session, binding, driver)
-        with pytest.raises(CUDAAdmissionBlocked, match="provisional driver"):
+        with pytest.raises(
+            CUDAAdmissionBlocked, match="scheduler-owned provisional transaction"
+        ):
             admit_received_cuda_request(plan)
         assert not driver._records and not driver.arbiter.busy
         assert getattr(context.session, "_cuda_prompt_importer", None) is None

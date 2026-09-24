@@ -1,14 +1,13 @@
 """Read-only admission preflight for a received CUDA Prompt request.
 
-This is intentionally not a serving switch. The requested transaction order is
-currently impossible: ``CUDARefreshDriver.register`` requires ``can_decode(0)``,
-which becomes true only after ``CUDAPromptBootstrap.install_received``. Moving
-the install before registration is not a safe workaround: a failed registration
-would leave an installed bank without a driver or a deferred allocator owner.
+This is intentionally not a serving switch. Provisional driver registration
+now exists, but admission still needs a scheduler-owned transaction that
+registers the driver, attaches deferred Req/KV retirement, imports the full
+Prompt, and claims the receiver before making the Req runnable.
 
-No group, HTTP client, GPU bank, or native destination is allocated here. A
-future provisional driver registration must also provide an explicit abort that
-drains the controller and the full-Prompt receiver before releasing either MR.
+No group, HTTP client, GPU bank, or native destination is allocated here. The
+transaction must use the driver's ordered close/quarantine path on failure;
+an unclaimed receiver must never use ordinary scheduler release.
 """
 
 from dataclasses import dataclass
@@ -103,18 +102,14 @@ def preflight_received_cuda_admission(session, binding, driver):
 def admit_received_cuda_request(preflight):
     """Refuse the currently unsupported transaction before its first mutation.
 
-    Required upstream seam: reserve a provisional driver record without an
-    installed bank, prevent driver polling/decode until final claim, and expose
-    an abort that *successfully fences both source and destination* or retains
-    every owner and quarantines the worker on UNKNOWN. Current ``cancel()``
-    closes an unclaimed controller without closing the full-Prompt receiver;
-    treating it as rollback would permit stale RDMA against freed GPU memory.
+    The provisional driver seam exists, but this function must not claim to
+    admit a request until the Scheduler constructs all exact CUDA resources
+    and owns the register/retirement/import/claim transaction.
     """
     if not isinstance(preflight, CUDAAdmissionPreflight):
         raise CUDAAdmissionBlocked("validated CUDA admission preflight required")
     preflight.revalidate()
     raise CUDAAdmissionBlocked(
-        "CUDA admission requires a provisional driver register/abort API: "
-        "register currently requires the initial Prompt bank installed, "
-        "but safe release binding must precede that installation"
+        "CUDA admission requires the scheduler-owned provisional transaction: "
+        "register, attach deferred release, import Prompt, then claim receiver"
     )
