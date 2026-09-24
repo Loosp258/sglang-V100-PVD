@@ -149,6 +149,7 @@ def test_retrieval_configuration_requires_explicit_identity_bounds_and_budgets(f
     "overrides,error",
     [
         ({"disaggregation_mode": "prefill"}, "Decode-only"),
+        ({"pvd_kv_refresh_interval": 1}, "pvd-kv-refresh-interval >= 2"),
         ({"tp_size": 2}, "Decode TP1"),
         ({"pp_size": 2}, "--pp-size 1"),
         ({"dp_size": 2}, "DP1"),

@@ -88,6 +88,16 @@ def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
         raise ValueError("PVD predictive-retrieval configuration requires topology pvd")
     if server_args.disaggregation_mode != "decode":
         raise ValueError("PVD predictive-retrieval configuration is Decode-only")
+    refresh_interval = getattr(server_args, "pvd_kv_refresh_interval", None)
+    if (
+        isinstance(refresh_interval, bool)
+        or not isinstance(refresh_interval, int)
+        or refresh_interval < 2
+    ):
+        raise ValueError(
+            "PVD predictive retrieval requires --pvd-kv-refresh-interval >= 2 "
+            "because the CUDA retrieval group needs lead_tokens < interval"
+        )
 
     vector_space = getattr(server_args, "pvd_retrieval_vector_space", None)
     if (
