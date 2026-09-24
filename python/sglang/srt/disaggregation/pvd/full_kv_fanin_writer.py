@@ -6,7 +6,9 @@ Only layout-derived relative ranges are submitted. No CUDA repacking is done.
 """
 
 import copy
+import logging
 import threading
+import time
 
 from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
     FULL_KV_FANIN_PROTOCOL,
@@ -29,6 +31,8 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransportState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FullKVFanInWriter:
@@ -116,6 +120,11 @@ class FullKVFanInWriter:
         self._terminal = None
         self.error = None
         self._authorization = WriteAuthorization(identity, source_guard)
+        # Local diagnostics only. Never include them in the wire proof: the
+        # receiver validates that proof's exact field set.
+        self._started_at = None
+        self._submit_calls = self._poll_calls = 0
+        self._submit_seconds = 0.0
 
     def snapshot(self):
         with self._lock:
@@ -153,6 +162,8 @@ class FullKVFanInWriter:
         with self._lock:
             if not self._cancelled and self._terminal is None:
                 self._started = True
+                if self._started_at is None:
+                    self._started_at = time.monotonic()
         return self.poll()
 
     def cancel(self):
@@ -170,6 +181,7 @@ class FullKVFanInWriter:
                         self._engine.abort(handle)
                     except Exception as exc:
                         self.error = f"abort unconfirmed: {exc}"
+                self._poll_calls += 1
                 self._engine.poll(handle)
             except BaseException as exc:
                 with self._lock:
@@ -210,6 +222,7 @@ class FullKVFanInWriter:
                     self._authorization.close()
 
     def _finish(self):
+        report = None
         with self._lock:
             if self._submitting or self._pending or self._unknown:
                 return
@@ -226,7 +239,29 @@ class FullKVFanInWriter:
                     else TransportState.TERMINAL_SUCCESS
                 )
                 self._authorization.close()
+                report = (
+                    self.identity.transfer_id,
+                    self.source_rank,
+                    self._terminal.value,
+                    len(self._parts),
+                    self._submit_calls,
+                    self._poll_calls,
+                    self._submit_seconds,
+                    (
+                        time.monotonic() - self._started_at
+                        if self._started_at is not None
+                        else 0.0
+                    ),
+                    self._bytes,
+                )
             state = self._terminal
+        if report is not None:
+            logger.info(
+                "PVD full-KV fan-in writer terminal: transfer=%s rank=%s "
+                "state=%s planned_slices=%s submit_calls=%s poll_calls=%s "
+                "submit_seconds=%.6f elapsed_seconds=%.6f bytes=%s",
+                *report,
+            )
         try:
             # Native closure and local source cleanup are distinct: retry only
             # local cleanup on later polls; never replay a PUT.
@@ -272,6 +307,8 @@ class FullKVFanInWriter:
                         self._authorization.begin(self.identity)
                     self._attempted = self._submitting = True
                 try:
+                    submit_started = time.monotonic()
+                    self._submit_calls += 1
                     handle = self._engine.submit_put(
                         local, self.plan.destination, remote_offset=part.remote_offset
                     )
@@ -303,6 +340,7 @@ class FullKVFanInWriter:
                             self._failed = self._cancelled = True
                             self._authorization.close()
                 finally:
+                    self._submit_seconds += time.monotonic() - submit_started
                     with self._lock:
                         self._submitting = False
                 self._drain()

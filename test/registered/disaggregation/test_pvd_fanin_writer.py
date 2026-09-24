@@ -124,6 +124,34 @@ def test_two_writers_reconstruct_bytes_and_feed_receiver_proofs(case):
         assert c.released == ["MR released"]
 
 
+def test_fanin_terminal_diagnostic_is_aggregated_once(case, caplog):
+    c = case
+    c.manifest = c.receiver.publish()
+    with (
+        writer(c, 0) as w,
+        caplog.at_level(
+            "INFO", logger="sglang.srt.disaggregation.pvd.full_kv_fanin_writer"
+        ),
+    ):
+        result = w.result.start()
+        for _ in range(20):
+            if result["fenced"]:
+                break
+            result = w.result.poll()
+        assert result["transport_state"] == "terminal_success"
+        assert w.result.poll() == result
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "PVD full-KV fan-in writer terminal:" in record.getMessage()
+        ]
+        assert len(lines) == 1
+        assert f"planned_slices={len(c.manifest['writers']['0'])}" in lines[0]
+        assert f"submit_calls={len(c.manifest['writers']['0'])}" in lines[0]
+        assert "elapsed_seconds=" in lines[0]
+        assert "submit_seconds=" in lines[0]
+
+
 def test_cancelled_handles_stay_pinned_until_native_completion(case):
     c = case
     c.manifest = c.receiver.publish()
