@@ -278,6 +278,20 @@ def build_parser() -> argparse.ArgumentParser:
         "Complete-identity write fences have their separate bound.",
     )
     parser.add_argument(
+        "--max-admissions",
+        type=_positive_int,
+        default=8192,
+        help="Maximum concurrent Router admission records at the V coordinator. "
+        "Expired admissions are removed by the maintenance reaper.",
+    )
+    parser.add_argument(
+        "--max-unknown-retrieval-fences",
+        type=_positive_int,
+        default=4096,
+        help="Maximum unknown Delivery IDs permanently fenced by the V "
+        "coordinator in one worker epoch. Never evict an issued fence.",
+    )
+    parser.add_argument(
         "--prompt-index-backend",
         choices=("exact", "cagra", "cagra-auto"),
         default="exact",
@@ -741,6 +755,12 @@ async def _serve_rank(args: argparse.Namespace) -> None:
             ],
             entry_ttl_secs=args.entry_ttl_secs,
             delivery_timeout_secs=args.delivery_timeout_secs,
+            max_entry_records=getattr(args, "max_entry_records", 8192),
+            max_delivery_records=getattr(args, "max_delivery_records", 65536),
+            max_admissions=getattr(args, "max_admissions", 8192),
+            max_unknown_retrieval_fences=getattr(
+                args, "max_unknown_retrieval_fences", 4096
+            ),
             **_fanin_coordinator_args(args),
         )
         coordinator_runner = web.AppRunner(
@@ -809,6 +829,12 @@ async def _serve_group(args: argparse.Namespace) -> None:
             ],
             entry_ttl_secs=args.entry_ttl_secs,
             delivery_timeout_secs=args.delivery_timeout_secs,
+            max_entry_records=getattr(args, "max_entry_records", 8192),
+            max_delivery_records=getattr(args, "max_delivery_records", 65536),
+            max_admissions=getattr(args, "max_admissions", 8192),
+            max_unknown_retrieval_fences=getattr(
+                args, "max_unknown_retrieval_fences", 4096
+            ),
             **_fanin_coordinator_args(args),
         )
         coordinator_runner = web.AppRunner(

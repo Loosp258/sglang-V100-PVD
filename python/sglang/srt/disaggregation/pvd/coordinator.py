@@ -36,7 +36,10 @@ from sglang.srt.disaggregation.pvd.sharding import (
     source_rank_and_head_offset,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
-from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
+from sglang.srt.disaggregation.pvd.vector_store import (
+    ResourceExhaustedError,
+    VectorKVStore,
+)
 
 
 class CoordinatorError(RuntimeError):
@@ -307,18 +310,35 @@ class VectorCoordinator:
         entry_ttl_secs: float = 300.0,
         delivery_timeout_secs: float = 300.0,
         metrics: Optional[PVDMetrics] = None,
+        max_entry_records: int = 8192,
+        max_delivery_records: int = 65536,
+        max_admissions: int = 8192,
+        max_unknown_retrieval_fences: int = 4096,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_records: Optional[int] = None,
     ) -> None:
         ranks = sorted(client.rank for client in shard_clients)
         if ranks != [0, 1]:
             raise ValueError(f"PVD requires V storage shard ranks [0, 1], got {ranks}")
+        for name, bound in (
+            ("max_entry_records", max_entry_records),
+            ("max_delivery_records", max_delivery_records),
+            ("max_admissions", max_admissions),
+            ("max_unknown_retrieval_fences", max_unknown_retrieval_fences),
+        ):
+            if type(bound) is not int or bound <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         self.shards = {client.rank: client for client in shard_clients}
         self.metrics = metrics or PVDMetrics()
         self.entry_ttl_secs = entry_ttl_secs
         self.delivery_timeout_secs = delivery_timeout_secs
         self.entries: Dict[KVEntryKey, EntryRecord] = {}
         self.deliveries: Dict[str, DeliveryRecord] = {}
+        self._max_entry_records = max_entry_records
+        self._max_delivery_records = max_delivery_records
+        self._max_admissions = max_admissions
+        self._max_unknown_retrieval_fences = max_unknown_retrieval_fences
+        self._unknown_retrieval_fences = set()
         self._lock = asyncio.Lock()
         # Each operation keeps a strong local reference while active. A lock
         # must not remain in a permanent registry after the last waiter exits.
@@ -364,6 +384,15 @@ class VectorCoordinator:
             if delivery is None:
                 # Block a delayed reservation, but never infer NOT_SUBMITTED
                 # merely from the absence of a coordinator record.
+                if delivery_id not in self._fenced_retrievals:
+                    if (
+                        len(self._unknown_retrieval_fences)
+                        >= self._max_unknown_retrieval_fences
+                    ):
+                        raise ResourceExhaustedError(
+                            "unknown retrieval fence capacity exceeded"
+                        )
+                    self._unknown_retrieval_fences.add(delivery_id)
                 self._fenced_retrievals.add(delivery_id)
                 raise CoordinatorError(
                     "write identity cannot be confirmed for an unknown delivery"
@@ -456,6 +485,11 @@ class VectorCoordinator:
                 previous = self.admissions.get(transfer_id)
                 if previous and previous[0] != (delivery_id, group_id):
                     raise CoordinatorError("conflicting Router admission identity")
+            new_count = sum(
+                transfer_id not in self.admissions for transfer_id, _, _ in identities
+            )
+            if len(self.admissions) + new_count > self._max_admissions:
+                raise ResourceExhaustedError("Router admission capacity exceeded")
             for transfer_id, delivery_id, group_id in identities:
                 self.admissions[transfer_id] = (
                     (delivery_id, group_id),
@@ -562,6 +596,10 @@ class VectorCoordinator:
                         "entry key already exists with a different uploader epoch"
                     )
                 return existing
+            if len(self.entries) >= self._max_entry_records:
+                raise ResourceExhaustedError(
+                    "V coordinator Entry record capacity exceeded"
+                )
             now = time.monotonic()
             record = EntryRecord(
                 manifest=manifest,
@@ -870,6 +908,10 @@ class VectorCoordinator:
                         "delivery id already exists with different parameters"
                     )
                 return existing
+            if len(self.deliveries) >= self._max_delivery_records:
+                raise ResourceExhaustedError(
+                    "V coordinator Delivery record capacity exceeded"
+                )
             state = (
                 DeliveryState.D_RESERVED
                 if entry.state == EntryState.STORED
@@ -1285,6 +1327,16 @@ class VectorCoordinator:
                 "retained_records": len(self.fanin.records) if self.fanin else 0,
             },
             "pending_entry_cancellations": len(self._pending_entry_cancellations),
+            "record_capacity": {
+                "entry_records": len(self.entries),
+                "max_entry_records": self._max_entry_records,
+                "delivery_records": len(self.deliveries),
+                "max_delivery_records": self._max_delivery_records,
+                "admissions": len(self.admissions),
+                "max_admissions": self._max_admissions,
+                "unknown_retrieval_fences": len(self._unknown_retrieval_fences),
+                "max_unknown_retrieval_fences": self._max_unknown_retrieval_fences,
+            },
             "shards": [
                 {"error": str(item)} if isinstance(item, Exception) else item
                 for item in shard_health
