@@ -154,6 +154,64 @@ def test_probe_http_roundtrip_isolated_owned_and_consumed_once():
     asyncio.run(run())
 
 
+def test_explicit_index_ready_wait_reuses_one_immutable_probe():
+    class InitiallyUnready(PVDShardSearchClient):
+        def __init__(self, url):
+            super().__init__(url)
+            self.calls = []
+
+        async def search(self, identity, *, queries, top_k, scope):
+            self.calls.append((identity, queries))
+            if len(self.calls) < 3:
+                raise SearchRefused(400, "index_not_ready", "building")
+            return await super().search(
+                identity, queries=queries, top_k=top_k, scope=scope
+            )
+
+    async def run():
+        _, store, session, window, pipeline, probe, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        async with shard_client(store) as http:
+            client = InitiallyUnready(str(http.make_url("")))
+            try:
+                await session.search(prepared, client, index_ready_wait_seconds=1.0)
+                assert len(client.calls) == 3
+                assert client.calls[0] == client.calls[1] == client.calls[2]
+                assert probe.closed == 1  # No draft/probe recapture on retry.
+                assert session.take_selection(window).selections[0].token_ids == (3,)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("code", ["request_refused", "index_not_ready"])
+def test_index_ready_wait_never_retries_fatal_or_expired_refusal(code):
+    class Refusing(PVDShardSearchClient):
+        calls = 0
+
+        async def search(self, *args, **kwargs):
+            self.calls += 1
+            raise SearchRefused(400, code, "refused")
+
+    async def run():
+        _, _, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        client = Refusing("http://127.0.0.1:1")
+        with pytest.raises(SearchRefused):
+            await session.search(
+                prepared,
+                client,
+                index_ready_wait_seconds=1.0 if code == "request_refused" else 0.0,
+            )
+        assert client.calls == 1
+        with pytest.raises(StaleProbeSearch):
+            session.take_selection(window)
+        await client.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "changes,error",
     [

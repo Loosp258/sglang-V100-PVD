@@ -569,6 +569,7 @@ class CUDARefreshDriver:
                 query_positions=(len(prefix.tokens) + boundary - n - 1,),
                 clients=record.clients,
                 execution_scope=lambda: self._capture(record),
+                index_ready_wait_seconds=record.timeout,
             )
             try:
                 record.refresh = self._loop.create_task(coroutine)

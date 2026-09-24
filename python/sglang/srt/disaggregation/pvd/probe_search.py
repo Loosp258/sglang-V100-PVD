@@ -8,6 +8,9 @@ No live request, writable committed KV or sampler is passed to providers.
 
 from __future__ import annotations
 
+import asyncio
+import math
+import time
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
@@ -22,6 +25,7 @@ from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED, QueryHeadMapping
 from sglang.srt.disaggregation.pvd.search_client import (
     PVDShardSearchClient,
+    SearchRefused,
     SearchScope,
     ShardSearchResult,
 )
@@ -417,8 +421,20 @@ class ProbeSearchSession:
                 self.invalidate()
             raise
 
-    async def search(self, prepared: PreparedProbeSearch, client: PVDShardSearchClient):
+    async def search(
+        self,
+        prepared: PreparedProbeSearch,
+        client: PVDShardSearchClient,
+        *,
+        index_ready_wait_seconds: float = 0.0,
+    ):
         """Publish only a complete same-version set; never mark KV ready."""
+        if (
+            type(index_ready_wait_seconds) not in (int, float)
+            or not math.isfinite(index_ready_wait_seconds)
+            or index_ready_wait_seconds < 0
+        ):
+            raise ValueError("index ready wait must be finite and non-negative")
         self._match(prepared.window)
         if (
             self._prepared is not prepared
@@ -428,6 +444,7 @@ class ProbeSearchSession:
         ):
             raise ValueError("search requires this session's unused prepared operation")
         window = prepared.window
+        ready_deadline = time.monotonic() + index_ready_wait_seconds
         self._searching = window
         try:
             results = []
@@ -467,14 +484,26 @@ class ProbeSearchSession:
                         expected_index_version=versions[0],
                         expected_id_mapping_version=versions[1],
                     )
-                reply = await client.search(
-                    identity,
-                    queries=tuple(
-                        row for index in members for row in prepared.queries[index].rows
-                    ),
-                    top_k=query.route.top_k,
-                    scope=query.route.scope,
+                query_rows = tuple(
+                    row for index in members for row in prepared.queries[index].rows
                 )
+                while True:
+                    self._match(window)
+                    try:
+                        reply = await client.search(
+                            identity,
+                            queries=query_rows,
+                            top_k=query.route.top_k,
+                            scope=query.route.scope,
+                        )
+                    except SearchRefused as exc:
+                        remaining = ready_deadline - time.monotonic()
+                        if not exc.retryable or remaining <= 0:
+                            raise
+                        # Same immutable Q/Entry/route; no new draft or probe.
+                        await asyncio.sleep(min(0.2, remaining))
+                    else:
+                        break
                 self._match(window)
                 if reply.identity != identity:
                     raise ValueError(

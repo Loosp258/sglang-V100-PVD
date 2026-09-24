@@ -104,6 +104,7 @@ class _PrefetchRequestCore:
         clients,
         pack_source=None,
         execution_scope=None,
+        index_ready_wait_seconds=0.0,
     ):
         """Predict ahead of boundary; a first start AT it uses committed Q.
 
@@ -162,7 +163,13 @@ class _PrefetchRequestCore:
                 )
             children = self._session.fork_prepared(prepared, partitions)
             self._tasks = tuple(
-                asyncio.create_task(child.search(part, clients[rank]))
+                asyncio.create_task(
+                    child.search(
+                        part,
+                        clients[rank],
+                        index_ready_wait_seconds=index_ready_wait_seconds,
+                    )
+                )
                 for rank, (child, part) in children.items()
             )
             await asyncio.gather(*self._tasks)
