@@ -1,5 +1,31 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 91-token Gateway Prompt / Bounded longer-Prompt gate
+
+在同一组三机隔离服务上，D 检出更新至 `b9ba454e6` 的测试工具，以
+`--prompt-repetitions 8 --max-new-tokens 8` 发送真实 Gateway 请求。
+Qwen2.5-7B 返回 HTTP 200，实际 Prompt 为 **91 token**，生成 8 token，
+端到端约 **42.3 秒**。V 使用原生 CAGRA 配置；日志含 RAFT
+`Graph optimized, creating index`，结束后两个 shard 均 `ready=true`、
+`available_pages=1024`，Mooncake staging/inflight/UNKNOWN 均为零，
+无隔离事务。此次 V/Gateway/P 仍为 `fbd77287b`，D 服务仍运行
+`e197e928c`；更新的是 D 隔离检出中的测试工具，不是热替换服务代码。
+这证明 91-token 请求能跑通，不证明 1024-token 生产 Gateway 容量、
+性能收益或长时间稳定性。
+
+On the same isolated three-node service, the D checkout's smoke utility
+was updated to `b9ba454e6` and sent a real Gateway request with
+`--prompt-repetitions 8 --max-new-tokens 8`. Qwen2.5-7B returned HTTP
+200 for an actual **91-token** Prompt and eight generated tokens in about
+**42.3 seconds**. V used the native CAGRA configuration; its log contained
+RAFT `Graph optimized, creating index`. Afterward both shards were ready
+with 1024 available pages each, zero Mooncake staging/inflight/UNKNOWN
+work, and no quarantined transaction. V/Gateway/P remained at `fbd77287b`
+and the running D service at `e197e928c`; only the D checkout's smoke
+utility changed. This is a bounded 91-token functional gate, not proof of
+1024-token production Gateway capacity, performance benefit or long-run
+stability.
+
 ## 2026-09-24 Gateway 真实请求中的原生 CAGRA / Native CAGRA in live Gateway requests
 
 在用户授权的三机隔离检出中，真实 Qwen2.5-7B-Instruct 请求经 Gateway、P、
@@ -49,16 +75,18 @@ directories and the candidate venv's `libcuvs/lib64` and `libraft/lib64`.
 Without it, the loader either cannot find `libcuvs_c.so` or mixes system
 `cusolver` with an incompatible `cublas`. Do not replace system CUDA libraries.
 
-This validates two short-Prompt native-CAGRA requests and safe sparse
-delivery, **not** recall distribution, long Prompt capacity, a large Entry
-corpus, concurrent clients, dual rail, measured network/GPU overlap, or a
-latency/throughput gain. The exact-index live baseline completed the same
+The two-request gate below validates short-Prompt native CAGRA and safe
+sparse delivery; the later sections separately validate two concurrent
+clients and one 91-token Prompt. They do **not** establish a recall
+distribution, large-Entry corpus capacity, dual rail, measured network/GPU
+overlap, or a latency/throughput gain. The exact-index live baseline completed the same
 eight-token output in two requests around 9.9/9.6 seconds, but that is not
 an apples-to-apples benchmark because both configurations built fresh
 per-Entry indexes and only two requests were sampled.
 
-这只验收两个短 Prompt 的原生 CAGRA 请求与安全稀疏交付；尚未证明召回分布、
-长 Prompt/大 Entry 库、并发、双 rail、网络/计算重叠或性能收益。精确索引
+这两条请求验收短 Prompt 的原生 CAGRA 与安全稀疏交付；下文另有双请求并发和
+91-token Prompt 的有限验证。尚未证明召回分布、大 Entry 库容量、双 rail、
+网络/计算重叠或性能收益。精确索引
 基线两次约 9.9/9.6 秒；两边都为每个新 Entry 建索引且样本量仅为 2，
 不能据此作公平性能结论。
 

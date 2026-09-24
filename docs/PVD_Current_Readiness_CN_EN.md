@@ -65,6 +65,21 @@ after the batched-QKV packing fix in D `e197e928c`. This establishes only
 two-request functional correctness; higher concurrency, throughput, tail
 latency and sustained resource pressure remain unverified.
 
+同一组原生 CAGRA 服务又通过一个实际 **91-token Prompt / 8-token 输出**
+的 Gateway 请求（HTTP 200，约 42.3 秒）；结束时 V 两 rank 各有 1024
+空闲页、无 Mooncake 在途或隔离事务。D 的测试工具检出为 `b9ba454e6`，
+运行中的 D 服务仍为 `e197e928c`。这是有限的较长 Prompt 功能验证，
+不是 1024-token 生产 Gateway 容量或性能结论。详见
+[CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+The same native-CAGRA services also passed one actual **91-token Prompt /
+eight-token output** Gateway request (HTTP 200, about 42.3 seconds). Both
+V ranks ended with 1024 free pages and no Mooncake in-flight or quarantined
+work. The D smoke utility checkout was `b9ba454e6`, while the running D
+service remained `e197e928c`. This is a bounded longer-Prompt functional
+gate, not a 1024-token production Gateway capacity or performance result.
+See the [CAGRA acceptance boundary](PVD_CAGRA_Acceptance_CN_EN.md).
+
 2026-09-24 CloudLab D 节点（`clgpu019`）使用**新建、干净的隔离检出**验证了本地
 `ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项
 聚焦测试通过；进一步运行 `test_pvd_cuda_*.py`，**445 项通过**。该检出来自
