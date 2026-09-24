@@ -6,6 +6,7 @@ import pytest
 import torch
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import TargetExecutionArbiter
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
+    CUDABatchResultRefused,
     CUDARankBatchExecutor,
     CUDARuntimeBatchMember,
 )
@@ -108,7 +109,7 @@ def test_late_peer_loss_discards_all_outputs_and_retires_every_permit(monkeypatc
         assert members[1].group.runtime.peer_lost(peer_rank=0, peer_epoch="worker")
         return output
 
-    with pytest.raises(InstallProtocolError, match="commit nothing"):
+    with pytest.raises(CUDABatchResultRefused, match="commit nothing"):
         executor.run(
             members,
             pool_owner=c.owner,

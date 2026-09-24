@@ -9,7 +9,10 @@ import pytest
 from sglang.srt.disaggregation.pvd import cuda_scheduler_binding as module
 from sglang.srt.disaggregation.pvd.conn import PVDSelectedRouteBinding
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
-from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
+from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
+    CUDABatchResultRefused,
+    CUDARankBatchExecutor,
+)
 from sglang.srt.disaggregation.pvd.cuda_route_discovery import CUDARouteDiscoveryQueue
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeRefresher
 from test_pvd_cpu_release_driver import scheduler_methods
@@ -475,3 +478,81 @@ def test_run_preserves_original_scheduler_result_wrapper(monkeypatch):
 
         monkeypatch.setattr(module, "CUDAScheduleBridge", Bridge)
         assert t.binding.run(batch) is result
+
+
+def test_drained_precommit_refusal_aborts_only_the_batch(monkeypatch):
+    with setup(monkeypatch) as t:
+        batch = Batch([t.c.request])
+        before = tuple(t.c.request.output_ids)
+        t.s.batch_result_processor = object()
+        t.s.process_batch_result = lambda *_: pytest.fail("result committed")
+        t.s.run_batch = lambda *_: pytest.fail("mock bridge must not forward")
+
+        class Bridge:
+            def __init__(self, executor, driver, selected, *, pool_owner):
+                assert selected is batch
+                self.state = "attached"
+                self._result_processing_started = False
+                self.records = ()
+
+            def run(self, **kwargs):
+                record = t.b.driver._records[t.c.request.rid]
+                t.b.driver._stop(record, "rank installation round timed out")
+                self.records = (
+                    NS(registration=record, request_id=t.c.request.rid, outputs=before),
+                )
+                self.state = "failed"
+                raise CUDABatchResultRefused("commit nothing")
+
+        monkeypatch.setattr(module, "CUDAScheduleBridge", Bridge)
+        assert t.binding.run(batch) is None
+        assert batch.is_empty() and not batch.batch_is_full
+        assert tuple(t.c.request.output_ids) == before
+        assert [event[0] for event in t.events].count("abort") == 1
+        assert [event[0] for event in t.events].count("stream") == 1
+        assert not t.executor._quarantined
+
+
+@pytest.mark.parametrize(
+    "unsafe", ["unstopped", "quarantined", "changed_outputs", "processing_started"]
+)
+def test_refusal_is_not_absorbed_when_cleanup_or_output_is_uncertain(
+    monkeypatch, unsafe
+):
+    with setup(monkeypatch) as t:
+        batch = Batch([t.c.request])
+        before = tuple(t.c.request.output_ids)
+        t.s.batch_result_processor = object()
+        t.s.process_batch_result = lambda *_: pytest.fail("result committed")
+        t.s.run_batch = lambda *_: pytest.fail("mock bridge must not forward")
+
+        class Bridge:
+            def __init__(self, executor, driver, selected, *, pool_owner):
+                self.state = "attached"
+                self._result_processing_started = unsafe == "processing_started"
+                self.records = ()
+
+            def run(self, **kwargs):
+                record = t.b.driver._records[t.c.request.rid]
+                t.b.driver._stop(record, "rank installation round timed out")
+                view = NS(
+                    stopping=unsafe != "unstopped",
+                    quarantined=unsafe == "quarantined",
+                    req=t.c.request,
+                )
+                self.records = (
+                    NS(
+                        registration=view,
+                        request_id=t.c.request.rid,
+                        outputs=(
+                            before + (7,) if unsafe == "changed_outputs" else before
+                        ),
+                    ),
+                )
+                self.state = "failed"
+                raise CUDABatchResultRefused("commit nothing")
+
+        monkeypatch.setattr(module, "CUDAScheduleBridge", Bridge)
+        with pytest.raises(CUDABatchResultRefused, match="commit nothing"):
+            t.binding.run(batch)
+        assert not any(event[0] == "abort" for event in t.events)

@@ -139,6 +139,7 @@ def test_sampled_tokens_written_once_under_all_runtime_permits(monkeypatch):
 
         processor._process_batch_result_decode = process
         bridge.run(forward=forward, processor=processor)
+        assert bridge._result_processing_started
         assert bridge.state == "completed" and not driver.arbiter.busy
         assert [tuple(r.output_ids) for r in batch.reqs] == [(7, 8, 13), (7, 8, 17)]
         assert c.released == [True]

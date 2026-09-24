@@ -8,7 +8,10 @@ import uuid
 
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
-from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
+from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
+    CUDABatchResultRefused,
+    CUDARankBatchExecutor,
+)
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
 from sglang.srt.disaggregation.pvd.cuda_request_release import _require_supported_pools
 from sglang.srt.disaggregation.pvd.cuda_route_discovery import (
@@ -289,11 +292,40 @@ class CUDADecodeSchedulerBinding:
         bridge = CUDAScheduleBridge(
             self.executor, self.driver, batch, pool_owner=self.pool_owner
         )
-        return bridge.run(
-            forward=lambda: self.scheduler.run_batch(batch),
-            processor=self.scheduler.batch_result_processor,
-            result_handler=self.scheduler.process_batch_result,
-        )
+        try:
+            return bridge.run(
+                forward=lambda: self.scheduler.run_batch(batch),
+                processor=self.scheduler.batch_result_processor,
+                result_handler=self.scheduler.process_batch_result,
+            )
+        except CUDABatchResultRefused as exc:
+            # Only this pre-commit refusal can become a request-local abort.
+            # Unknown GPU completion, a failed result hook, or uncertain stop
+            # ownership must still fail closed at the worker boundary.
+            if (
+                bridge.state != "failed"
+                or bridge._result_processing_started
+                or self.executor._quarantined
+                or self.executor._active
+                or self.executor.dispatcher._ticket is not None
+                or self.executor.consumer.snapshot()["quarantine"] is not None
+                or len(bridge.records) != len(batch.reqs)
+                or any(
+                    saved.registration.req is not req
+                    or saved.registration.req.rid != saved.request_id
+                    or not saved.registration.stopping
+                    or saved.registration.quarantined
+                    or tuple(saved.registration.req.output_ids) != saved.outputs
+                    for saved, req in zip(bridge.records, batch.reqs, strict=True)
+                )
+            ):
+                raise
+            self.scheduler._abort_pvd_cuda_requests(
+                list(batch.reqs), f"rank result refused: {exc}"
+            )
+            batch.filter_batch(v1_spec_info_filtered=True)
+            batch.batch_is_full = False
+            return None
 
     def close(self):
         """Worker shutdown only; never fall back to the normal backend afterwards."""

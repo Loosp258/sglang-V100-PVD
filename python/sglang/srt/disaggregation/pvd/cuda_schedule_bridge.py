@@ -69,6 +69,7 @@ class CUDAScheduleBridge:
         self.pool_owner = pool_owner
         self.state = "attached"
         self._processor = self._result = None
+        self._result_processing_started = False
         self._committed_tokens = None
         self._check_batch()
         reqs = tuple(batch.reqs)
@@ -177,6 +178,7 @@ class CUDAScheduleBridge:
         def process(result):
             # Called only inside the rank executor's drained result scope.
             self._unchanged()
+            self._result_processing_started = True
             self._result, self.state = result, "awaiting_results"
             value = (
                 processor.process_batch_result_decode(self.batch, result)

@@ -22,6 +22,10 @@ from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
 
 
+class CUDABatchResultRefused(InstallProtocolError):
+    """The drained forward has no admissible result; no Req output was committed."""
+
+
 @dataclass(frozen=True)
 class CUDARuntimeBatchMember:
     group: CUDARuntimeInstallGroup
@@ -135,7 +139,7 @@ class CUDARankBatchExecutor:
                         )
                         if not decision.accepted
                     )
-                    raise InstallProtocolError(
+                    raise CUDABatchResultRefused(
                         f"CUDA batch result refused; commit nothing; refused={refused}"
                     )
                 # Runtime tickets and outer target lock remain held here.
