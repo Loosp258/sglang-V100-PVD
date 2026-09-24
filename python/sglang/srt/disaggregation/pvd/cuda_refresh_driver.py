@@ -160,6 +160,8 @@ class CUDARefreshDriver:
             req.rid != identity[0]
             or req.rid in self._records
             or getattr(controller, "_refresh_driver_claimed", False)
+            or getattr(controller, "_initial_import_pending", False)
+            is not initial_import_pending
             or type(req.req_pool_idx) is not int
             or req.req_pool_idx <= 0
             or req.is_retracted

@@ -1,8 +1,8 @@
 """Assemble one selected V group into a bounded TP1 CUDA refresh request.
 
 This is a request factory, not a Scheduler startup switch. The caller supplies
-the already-installed D bank, concrete draft/target pipeline and discovered
-routes from the Gateway-selected V coordinator. Client sessions outlive every
+an installed or explicitly pending D bank, the concrete draft/target pipeline
+and Gateway-selected V routes. Client sessions outlive every
 remote destination and are closed only after the controller drains.
 """
 
@@ -79,6 +79,7 @@ def assemble_routed_cuda_request(
     d_endpoint: str,
     d_rail: str,
     poll_interval_seconds: float,
+    initial_import_pending: bool = False,
     d_rails: Mapping[int, str] | None = None,
     d_endpoints: Mapping[int, str] | None = None,
 ) -> CUDARoutedRequestAssembly:
@@ -253,6 +254,7 @@ def assemble_routed_cuda_request(
         head_mapping=head_mapping,
         rank_routes={compute_rank: rank_routes},
         max_union_tokens=max_union_tokens,
+        initial_import_pending=initial_import_pending,
         delivery=delivery,
         owned_clients=tuple(search_clients.values()) + tuple(control_clients.values()),
     )

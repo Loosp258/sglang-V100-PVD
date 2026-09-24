@@ -36,6 +36,7 @@ class _PrefetchRequestCore:
         rank_routes,
         max_union_tokens,
         delivery=None,
+        initial_import_pending=False,
     ):
         self._validate_group(group)
         state = group.coordinator.snapshot()
@@ -43,10 +44,18 @@ class _PrefetchRequestCore:
             raise ValueError(
                 "controlled predictive loop requires a positive lead window"
             )
-        if state["state"] != "idle" or state["installed_tokens"] != 0:
+        if type(initial_import_pending) is not bool:
+            raise InstallProtocolError("initial import state must be explicit")
+        if (
+            state["state"] != "idle"
+            or state["installed_tokens"] != (None if initial_import_pending else 0)
+            or (initial_import_pending and state["completed"] is not None)
+            or (not initial_import_pending and state["completed"] is None)
+        ):
             raise InstallProtocolError(
-                "complete initial Prompt must be installed first"
+                "expected initial Prompt install state differs from request mode"
             )
+        self._initial_import_pending = initial_import_pending
         self.group, self.pipeline, self.mapping = group, pipeline, head_mapping
         self._validate_delivery(delivery, group)
         self.delivery = delivery
@@ -78,6 +87,11 @@ class _PrefetchRequestCore:
         self.group.coordinator._live()
         if self._closed:
             raise StaleProbeSearch("prefetch request is closed")
+        if self._initial_import_pending:
+            state = self.group.coordinator.snapshot()
+            if state["installed_tokens"] != 0 or state["completed"] is None:
+                raise InstallProtocolError("initial Prompt import is still pending")
+            self._initial_import_pending = False
 
     def _validate_search_clients(self, clients):
         """Concrete transports may bind search to their Delivery route."""

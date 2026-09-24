@@ -1,6 +1,7 @@
 """TP1 CUDA request: prediction/search -> HTTP Delivery -> runtime install.
 
-Initial complete Prompt must already be installed independently of the index.
+The controller may be constructed with an explicitly pending initial Prompt,
+but no query/refresh is legal until the full Prompt bank is installed.
 This explicit component does not register itself with the serving Scheduler.
 """
 

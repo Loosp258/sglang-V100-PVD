@@ -23,7 +23,7 @@ from test_pvd_cuda_sparse_delivery import case, complete
 from test_pvd_prompt_index import ident
 
 
-def controller(c, monkeypatch):
+def controller(c, monkeypatch, *, initial_import_pending=False):
     _, _, _, pipeline, _, budget, _ = bridge(monkeypatch)
     pipeline.probe_config = ProbeConfig("target/model-8b", (0, 1), head_count=1)
     pipeline.probe.config = pipeline.probe_config
@@ -73,11 +73,32 @@ def controller(c, monkeypatch):
         max_union_tokens=2,
         delivery=c.sink,
     )
-    request = CUDAPrefetchRequest(c.group, pipeline, **kwargs)
+    request = CUDAPrefetchRequest(
+        c.group, pipeline, initial_import_pending=initial_import_pending, **kwargs
+    )
     monkeypatch.setattr(
         request._session, "_query_device", lambda t: t.device.type == "cpu"
     )
     return request, captures, kwargs
+
+
+def test_controller_can_be_prepared_before_but_not_used_until_prompt_import(
+    monkeypatch,
+):
+    async def run():
+        async with case(monkeypatch) as c:
+            with pytest.raises(InstallProtocolError, match="initial Prompt"):
+                controller(c, monkeypatch)
+            request, _, _ = controller(c, monkeypatch, initial_import_pending=True)
+            with pytest.raises(InstallProtocolError, match="still pending"):
+                request._live()
+            assert request._initial_import_pending
+            await complete(c, 0, tuple(range(8)))
+            request._live()
+            assert not request._initial_import_pending
+            assert request.can_decode(0)
+
+    asyncio.run(run())
 
 
 async def run_refresh(c, request, client, count):

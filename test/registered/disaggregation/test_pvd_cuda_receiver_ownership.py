@@ -58,6 +58,7 @@ def bound(
         install(c)
     driver = CUDARefreshDriver(c.arbiter, max_requests=2, max_prefix_tokens=32)
     controller = CUDAPrefetchRequest.__new__(CUDAPrefetchRequest)
+    controller._initial_import_pending = provisional
     controller.group = c.group
     controller.pipeline = NS(
         _lock=c.c.lock,

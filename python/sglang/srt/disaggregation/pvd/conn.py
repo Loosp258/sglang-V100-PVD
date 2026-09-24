@@ -621,6 +621,7 @@ class PVDKVManager:
         copy_budget,
         aggregate_budget,
         poll_interval_seconds,
+        initial_import_pending=False,
     ):
         """Bind a request factory to this worker's owned D receive resources."""
         from sglang.srt.disaggregation.pvd.client import PVDSelectedShardRoutes
@@ -680,6 +681,7 @@ class PVDKVManager:
             d_rail=self.rail,
             d_rails={route.rank: route.rail for route in selected.shards},
             poll_interval_seconds=poll_interval_seconds,
+            initial_import_pending=initial_import_pending,
         )
 
     def client_for(self, req) -> PVDCoordinatorClient:
