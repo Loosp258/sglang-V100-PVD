@@ -3,6 +3,30 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 V 终态轮询优化在线验证 / Live V terminal-polling gate
+
+V 从新隔离检出 `4b12da0c4` 启动两张 V100S 的原生 CAGRA worker group；
+D 使用修复后的 `6537b8f02` 和 90 秒配置，P/Gateway 不变。一个真实
+29-token Prompt、8-token 输出请求经 Gateway 返回 HTTP 200（约 33.1 秒）。
+V 日志记录 112 次分组索引搜索；两 rank 各有 2 次 Delivery 完成并 ACK。
+coordinator/reaper 健康、reaper 失败 0、待取消 0、Mooncake 在途/UNKNOWN/
+隔离为 0。请求后两 rank 各有 995 空闲页，Entry 尚在 TTL 内；本次重启后的
+TTL 回收与长时轮询成本仍待复查。该请求验证新 V 生命周期代码的功能兼容，
+不证明终态原生 poll 次数或端到端延迟改善；后两者需要专门计数/对照实验。
+
+V launched native CAGRA on two V100S GPUs from a new isolated `4b12da0c4`
+checkout; D used fixed code `6537b8f02` and the 90-second profile while
+P/Gateway were unchanged. One real 29-token Prompt/eight-token output Gateway
+request returned HTTP 200 (about 33.1 seconds). V logged 112 grouped index
+searches, and both ranks completed and ACKed two Deliveries each. The
+coordinator and reaper were healthy, with zero reaper failures, pending
+cancellations, in-flight or UNKNOWN Mooncake operations, or quarantine. Each
+rank had 995 free pages immediately afterwards because the Entry remained
+inside its TTL. TTL reclamation after this restart and long-run polling cost
+need later checks. This is a functional compatibility gate for the updated V
+lifecycle, not proof that native poll calls or end-to-end latency improved;
+those require dedicated counters and controlled comparisons.
+
 ## 2026-09-24 分组检索在线验证 / Live grouped-search gate
 
 D 节点从隔离检出 `b91642561` 运行真实 Qwen2.5-7B-Instruct 和独立
