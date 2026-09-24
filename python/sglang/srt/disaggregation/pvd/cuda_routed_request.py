@@ -37,6 +37,11 @@ _PARTIAL_ASSEMBLY_QUARANTINE = []
 _UNSTARTED_ASSEMBLY_QUARANTINE = []
 
 
+def partial_assembly_quarantined(group):
+    """Tell the caller when constructor cleanup could not retire a group."""
+    return any(owner is group for owner, *_ in _PARTIAL_ASSEMBLY_QUARANTINE)
+
+
 class CUDARoutedPrefetchRequest(CUDAPrefetchRequest):
     """The request owns both HTTP client sets after native owners have drained."""
 

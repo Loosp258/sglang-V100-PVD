@@ -15,6 +15,20 @@ incremental Git bundle; the existing experimental workspace was untouched.
 These tests did not exercise real model forwards, Mooncake WRITE or automatic
 production Scheduler admission.
 
+实验性 CUDA Scheduler binding 现在可在**显式提供启动侧准备回调**时消费已发现的
+V 路由：在最终 waiting queue 上重新核验完整 Prompt receipt，按实际 Prompt
+长度收紧检索上限，先构建待导入工作集，再执行 provisional 准入事务。注册前
+失败只清理未认领资源；driver 已认领后由 driver 排空或隔离。尚无生产启动
+代码安装该回调，因此默认服务行为仍不变。
+
+The experimental CUDA Scheduler binding can now consume a discovered V route
+when startup **explicitly supplies a preparation callback**. It revalidates
+the full-Prompt receipt in the final waiting queue, clamps retrieval bounds
+to the actual Prompt length, constructs a pending working set, and invokes
+provisional admission. Pre-registration failures retire only unclaimed
+resources; claimed requests drain or quarantine through the driver. No
+production startup installs this callback yet, so default serving is unchanged.
+
 CUDA 请求准入已有只读 preflight 和显式的预构建资源接管事务：核对完整 Prompt
 receipt、同一 Req 与 Gateway 所选 V 路由；随后按 provisional driver 注册、
 Req/KV 延迟释放绑定、初始 Prompt 导入、receiver claim 的顺序执行。失败走有序

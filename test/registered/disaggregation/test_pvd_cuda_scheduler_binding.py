@@ -1,14 +1,14 @@
 """Real binding/Decode method bodies on CPU; model/transport remain doubles."""
 
-from contextlib import contextmanager
 from concurrent.futures import Future
+from contextlib import contextmanager
 from http import HTTPStatus
 from types import SimpleNamespace as NS
 
 import pytest
 from sglang.srt.disaggregation.pvd import cuda_scheduler_binding as module
-from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.conn import PVDSelectedRouteBinding
+from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
 from sglang.srt.disaggregation.pvd.cuda_route_discovery import CUDARouteDiscoveryQueue
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeRefresher
@@ -49,17 +49,17 @@ def setup(monkeypatch, *, attach=True):
         c, events = b.c, []
         s = c.manager.scheduler
         args = s.server_args
-        for key, value in dict(
-            disaggregation_topology="pvd",
-            disaggregation_mode="decode",
-            disable_cuda_graph=True,
-            dp_size=1,
-            enable_dp_attention=False,
-            speculative_algorithm=None,
-            disaggregation_decode_enable_radix_cache=False,
-            disaggregation_decode_enable_offload_kvcache=False,
-            page_size=1,
-        ).items():
+        for key, value in {
+            "disaggregation_topology": "pvd",
+            "disaggregation_mode": "decode",
+            "disable_cuda_graph": True,
+            "dp_size": 1,
+            "enable_dp_attention": False,
+            "speculative_algorithm": None,
+            "disaggregation_decode_enable_radix_cache": False,
+            "disaggregation_decode_enable_offload_kvcache": False,
+            "page_size": 1,
+        }.items():
             setattr(args, key, value)
         s.enable_overlap = s.enable_hisparse = False
         s.max_running_requests = 2
@@ -254,6 +254,55 @@ def test_explicit_binding_polls_selected_v_without_admitting_unclaimed_req(monke
         t.s.waiting_queue.clear()
         t.binding.poll()
         assert not t.binding.route_queue.pending
+
+
+def test_opt_in_admission_consumes_one_ready_route_on_scheduler_poll(monkeypatch):
+    with setup(monkeypatch) as t:
+        req = NS(
+            rid="new",
+            pvd_delivery_id="new:delivery",
+            pvd_vector_group_id="chosen",
+            is_retracted=False,
+            finished=lambda: False,
+        )
+        future = Future()
+        selected = PVDSelectedRouteBinding(
+            t.c.manager,
+            req,
+            req.rid,
+            t.c.key,
+            "chosen",
+            req.pvd_delivery_id,
+            object(),
+        )
+        t.c.manager.vector_group_for = lambda req: req.pvd_vector_group_id
+        t.c.manager.bootstrap_runnable = lambda req: True
+        t.c.manager.start_selected_cuda_routes = lambda req: future
+        t.binding.route_queue = CUDARouteDiscoveryQueue(t.c.manager, max_inflight=2)
+        admitted = []
+        t.binding.admission = NS(admit=lambda req, route: admitted.append((req, route)))
+        t.s.waiting_queue = [t.c.request, req]
+        t.binding.poll()
+        future.set_result(selected)
+        t.binding.poll()
+        t.binding.poll()
+        assert admitted == [(req, selected)]
+        t.s.waiting_queue.clear()
+        t.binding.poll()
+
+
+def test_admission_factory_requires_selected_route_queue(monkeypatch):
+    with (
+        setup(monkeypatch, attach=False) as t,
+        pytest.raises(LifecycleError, match="exact TP1"),
+    ):
+        module.CUDADecodeSchedulerBinding(
+            t.s,
+            t.b.driver,
+            t.executor,
+            pool_owner=t.c.c.owner,
+            prepare_cuda_admission=lambda _: None,
+        )
 
 
 def test_actual_selection_waits_before_decode_allocation(monkeypatch):

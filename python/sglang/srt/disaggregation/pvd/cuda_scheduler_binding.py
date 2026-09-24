@@ -10,11 +10,14 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import CUDARankBatchExecutor
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_request_release import _require_supported_pools
 from sglang.srt.disaggregation.pvd.cuda_route_discovery import (
     CUDARouteDiscoveryQueue,
 )
-from sglang.srt.disaggregation.pvd.cuda_request_release import _require_supported_pools
 from sglang.srt.disaggregation.pvd.cuda_schedule_bridge import CUDAScheduleBridge
+from sglang.srt.disaggregation.pvd.cuda_waiting_admission import (
+    CUDAWaitingAdmissionCoordinator,
+)
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
 
 
@@ -31,7 +34,16 @@ def binding_for(scheduler):
 
 
 class CUDADecodeSchedulerBinding:
-    def __init__(self, scheduler, driver, executor, *, pool_owner, route_queue=None):
+    def __init__(
+        self,
+        scheduler,
+        driver,
+        executor,
+        *,
+        pool_owner,
+        route_queue=None,
+        prepare_cuda_admission=None,
+    ):
         if (
             not isinstance(driver, CUDARefreshDriver)
             or not isinstance(executor, CUDARankBatchExecutor)
@@ -92,6 +104,10 @@ class CUDADecodeSchedulerBinding:
             or executor._quarantined
             or driver._execution_lock not in (None, executor.consumer._lock)
             or (
+                prepare_cuda_admission is not None
+                and (route_queue is None or not callable(prepare_cuda_admission))
+            )
+            or (
                 route_queue is not None
                 and (
                     not isinstance(route_queue, CUDARouteDiscoveryQueue)
@@ -104,8 +120,16 @@ class CUDADecodeSchedulerBinding:
             raise LifecycleError(
                 "exact TP1 non-overlap CUDA backend/pools/bootstrap required"
             )
+        admission = (
+            CUDAWaitingAdmissionCoordinator(
+                manager, driver, pool_owner, prepare_cuda_admission
+            )
+            if prepare_cuda_admission is not None
+            else None
+        )
         self.scheduler, self.driver, self.executor = scheduler, driver, executor
         self.route_queue = route_queue
+        self.admission = admission
         self.pool_owner, self.manager, self.runner = pool_owner, manager, runner
         self.closed = False
         self._pin = "cuda-scheduler:" + uuid.uuid4().hex
@@ -185,6 +209,22 @@ class CUDADecodeSchedulerBinding:
                 self.scheduler._abort_pvd_cuda_requests(
                     [req], f"selected V route discovery failed: {error}"
                 )
+            if self.admission is not None:
+                for req in unclaimed:
+                    if (
+                        req.finished()
+                        or self.driver.arbiter.busy
+                        or len(self.driver._records) >= self.driver.max_requests
+                    ):
+                        continue
+                    try:
+                        selected = self.route_queue.ready_for(req)
+                        if selected is not None:
+                            self.admission.admit(req, selected)
+                    except Exception as exc:  # noqa: BLE001 - request-level abort boundary
+                        self.scheduler._abort_pvd_cuda_requests(
+                            [req], f"CUDA waiting admission failed: {exc}"
+                        )
         # Emit already-stopped requests before poll can retire their records.
         self._abort_stopped()
         self.driver.poll()
