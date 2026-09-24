@@ -562,6 +562,15 @@ class Scheduler(
 
         self.init_batch_result_processor()
 
+        if self.server_args.pvd_cuda_predictive_serving:
+            from sglang.srt.disaggregation.pvd.cuda_serving_startup import (
+                maybe_install_cuda_predictive_serving,
+            )
+
+            # Fail closed before the Scheduler is published to the parent.
+            # Configuration-only PVD keeps the existing full-Prompt path.
+            maybe_install_cuda_predictive_serving(self)
+
         maybe_revert_pr_fix()
 
         self.is_initializing = False
