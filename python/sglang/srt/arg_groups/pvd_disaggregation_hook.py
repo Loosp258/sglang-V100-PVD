@@ -59,13 +59,147 @@ def _require_positive_int(name: str, value: object) -> int:
     return value
 
 
+def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
+    """Validate opt-in D retrieval settings without activating a serving path."""
+    enabled = getattr(server_args, "pvd_predictive_retrieval_config", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("--pvd-predictive-retrieval-config must be a boolean")
+
+    names = (
+        "pvd_retrieval_vector_space",
+        "pvd_retrieval_top_k",
+        "pvd_retrieval_max_union_tokens",
+        "pvd_retrieval_bank_budget_bytes",
+        "pvd_retrieval_scratch_budget_bytes",
+    )
+    if not enabled:
+        supplied = [
+            name for name in names if getattr(server_args, name, None) is not None
+        ]
+        if supplied:
+            flags = ", ".join(f"--{name.replace('_', '-')}" for name in supplied)
+            raise ValueError(
+                f"{flags} require --pvd-predictive-retrieval-config; "
+                "configuration values are otherwise ignored"
+            )
+        return False
+
+    if server_args.disaggregation_topology != "pvd":
+        raise ValueError("PVD predictive-retrieval configuration requires topology pvd")
+    if server_args.disaggregation_mode != "decode":
+        raise ValueError("PVD predictive-retrieval configuration is Decode-only")
+
+    vector_space = getattr(server_args, "pvd_retrieval_vector_space", None)
+    if (
+        not isinstance(vector_space, str)
+        or not vector_space
+        or vector_space.strip() != vector_space
+    ):
+        raise ValueError(
+            "--pvd-retrieval-vector-space is required and must be a non-empty "
+            "exact identity"
+        )
+    if getattr(server_args, "pvd_retrieval_metric", "ip") != "ip":
+        raise ValueError("PVD predictive retrieval currently supports metric ip only")
+    top_k = _require_positive_int(
+        "--pvd-retrieval-top-k", getattr(server_args, "pvd_retrieval_top_k", None)
+    )
+    if top_k > 512:
+        raise ValueError("--pvd-retrieval-top-k must not exceed 512")
+    max_union_tokens = _require_positive_int(
+        "--pvd-retrieval-max-union-tokens",
+        getattr(server_args, "pvd_retrieval_max_union_tokens", None),
+    )
+    if max_union_tokens < top_k:
+        raise ValueError(
+            "--pvd-retrieval-max-union-tokens must be at least --pvd-retrieval-top-k"
+        )
+    _require_positive_int(
+        "--pvd-retrieval-bank-budget-bytes",
+        getattr(server_args, "pvd_retrieval_bank_budget_bytes", None),
+    )
+    _require_positive_int(
+        "--pvd-retrieval-scratch-budget-bytes",
+        getattr(server_args, "pvd_retrieval_scratch_budget_bytes", None),
+    )
+
+    # This is the current executable CUDA sparse backend's declared envelope.
+    # The checks are necessary but not sufficient: model architecture,
+    # quantization, actual pools and backend objects are verified at runtime by
+    # the lower-level factories, which are not wired into the Scheduler yet.
+    if server_args.tp_size != 1:
+        raise ValueError("PVD predictive retrieval currently requires Decode TP1")
+    if server_args.pp_size != 1:
+        raise ValueError("PVD predictive retrieval currently requires --pp-size 1")
+    if server_args.dp_size != 1 or server_args.enable_dp_attention:
+        raise ValueError("PVD predictive retrieval requires DP1 with DP attention off")
+    if not getattr(server_args, "pvd_waiting_queue_bootstrap", False):
+        raise ValueError(
+            "PVD predictive retrieval requires --pvd-waiting-queue-bootstrap"
+        )
+    if (
+        getattr(server_args, "pvd_full_kv_fanin_max_slices", None) is None
+        or getattr(server_args, "pvd_full_kv_fanin_response_bytes", None) is None
+    ):
+        raise ValueError(
+            "PVD predictive retrieval requires bounded initial full-KV fan-in"
+        )
+    device = getattr(server_args, "device", None)
+    if not isinstance(device, str) or not device.startswith("cuda"):
+        raise ValueError("PVD predictive retrieval currently requires a CUDA device")
+    if getattr(server_args, "page_size", None) != 1:
+        raise ValueError(
+            "PVD predictive retrieval currently requires explicit --page-size 1"
+        )
+    decode_backend = getattr(server_args, "decode_attention_backend", None) or getattr(
+        server_args, "attention_backend", None
+    )
+    if decode_backend != "torch_native":
+        raise ValueError(
+            "PVD predictive retrieval currently requires explicit "
+            "torch_native Decode attention"
+        )
+    if not getattr(server_args, "disable_cuda_graph", False):
+        raise ValueError("PVD predictive retrieval currently requires CUDA graphs off")
+
+    # Candidate generation is part of predictive retrieval, and its two
+    # lifetimes must stay separately budgeted from the copied KV bank/scratch.
+    if not getattr(server_args, "pvd_draft_model_path", None):
+        raise ValueError("PVD predictive retrieval requires --pvd-draft-model-path")
+    _require_positive_int(
+        "--pvd-draft-scratch-budget-bytes",
+        getattr(server_args, "pvd_draft_scratch_budget_bytes", None),
+    )
+    _require_positive_int(
+        "--pvd-draft-persistent-budget-bytes",
+        getattr(server_args, "pvd_draft_persistent_budget_bytes", None),
+    )
+    fraction = getattr(server_args, "pvd_draft_mem_fraction_static", None)
+    if (
+        isinstance(fraction, bool)
+        or not isinstance(fraction, (int, float))
+        or not 0 < fraction < 1
+    ):
+        raise ValueError(
+            "--pvd-draft-mem-fraction-static is required and must be between 0 and 1"
+        )
+    logger.warning(
+        "PVD predictive-retrieval configuration passed validation, but this is "
+        "configuration only: the production Scheduler does not construct the "
+        "predictive pipeline and continues to use full-Prompt refresh"
+    )
+    return True
+
+
 def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     """Keep legacy PD untouched unless ``--disaggregation-topology pvd`` is set."""
     topology = server_args.disaggregation_topology
     if topology not in ("pd", "pvd"):
         raise ValueError(f"invalid disaggregation topology: {topology!r}")
     if topology == "pd":
+        _validate_predictive_retrieval_config(server_args)
         return
+    _validate_predictive_retrieval_config(server_args)
     # The generic PD HTTP warmup posts a synthetic /generate without the
     # Gateway-selected PVD transfer/delivery/vector IDs. PVD must reject that
     # request, so the generic warmup would mark an otherwise ready worker

@@ -839,6 +839,15 @@ class ServerArgs:
     pvd_draft_scratch_budget_bytes: Optional[int] = None
     pvd_draft_persistent_budget_bytes: Optional[int] = None
     pvd_draft_mem_fraction_static: Optional[float] = None
+    # Configuration-only contract for the experimental D-side retrieval path.
+    # These values are not consumed by the production Scheduler today.
+    pvd_predictive_retrieval_config: bool = False
+    pvd_retrieval_vector_space: Optional[str] = None
+    pvd_retrieval_metric: str = "ip"
+    pvd_retrieval_top_k: Optional[int] = None
+    pvd_retrieval_max_union_tokens: Optional[int] = None
+    pvd_retrieval_bank_budget_bytes: Optional[int] = None
+    pvd_retrieval_scratch_budget_bytes: Optional[int] = None
     # No default is guessed: a staging budget that fits one GPU can be fatal on
     # another, so PVD startup requires both values explicitly.
     pvd_transfer_staging_budget_bytes: Optional[int] = None
@@ -7068,6 +7077,61 @@ class ServerArgs:
             "Required before loading a draft; the target model's fraction is "
             "never reused. Configuration only; predictive retrieval is not "
             "automatically activated.",
+        )
+        parser.add_argument(
+            "--pvd-predictive-retrieval-config",
+            action="store_true",
+            default=ServerArgs.pvd_predictive_retrieval_config,
+            help="Validate the experimental PVD D predictive-retrieval configuration. "
+            "Configuration only: this does NOT activate retrieval in the serving "
+            "Scheduler; full-Prompt refresh remains active until a production "
+            "factory is integrated.",
+        )
+        parser.add_argument(
+            "--pvd-retrieval-vector-space",
+            type=str,
+            default=ServerArgs.pvd_retrieval_vector_space,
+            help="Exact V index vector-space identity required with "
+            "--pvd-predictive-retrieval-config. Configuration only; the production "
+            "Scheduler does not currently send it.",
+        )
+        parser.add_argument(
+            "--pvd-retrieval-metric",
+            type=str,
+            choices=("ip",),
+            default=ServerArgs.pvd_retrieval_metric,
+            help="Retrieval metric. The current PVD CUDA path supports only ip; "
+            "this setting does not activate that path.",
+        )
+        parser.add_argument(
+            "--pvd-retrieval-top-k",
+            type=int,
+            default=ServerArgs.pvd_retrieval_top_k,
+            help="Per-query top-k bound (1..512), required with "
+            "--pvd-predictive-retrieval-config. Configuration only.",
+        )
+        parser.add_argument(
+            "--pvd-retrieval-max-union-tokens",
+            type=int,
+            default=ServerArgs.pvd_retrieval_max_union_tokens,
+            help="Maximum deduplicated token union for one layer/KV-head, "
+            "required with --pvd-predictive-retrieval-config. Configuration only.",
+        )
+        parser.add_argument(
+            "--pvd-retrieval-bank-budget-bytes",
+            type=int,
+            default=ServerArgs.pvd_retrieval_bank_budget_bytes,
+            help="Explicit persistent GPU byte ceiling for the copied Prompt KV "
+            "working set; required with --pvd-predictive-retrieval-config. "
+            "Configuration only until a serving factory consumes it.",
+        )
+        parser.add_argument(
+            "--pvd-retrieval-scratch-budget-bytes",
+            type=int,
+            default=ServerArgs.pvd_retrieval_scratch_budget_bytes,
+            help="Explicit transient byte ceiling for probe/search/receive staging; "
+            "required with --pvd-predictive-retrieval-config. Configuration only "
+            "until a serving factory consumes it.",
         )
         parser.add_argument(
             "--pvd-strict-rdma-preflight",

@@ -3,6 +3,19 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+Decode 侧现在可用 `--pvd-predictive-retrieval-config` **只校验配置**：
+显式指定 V 向量空间、每路 Top-K、同 KV-head 并集上限、工作集与临时字节预算，
+并要求当前 CUDA TP1/full-KV fan-in/native-attention 环境及独立 draft 配置。
+它**不会**创建预测/检索 Scheduler binding，生产路径仍为完整 Prompt KV 刷新；
+通过参数检查不等于 PVD 预测已启用。
+
+Decode now accepts `--pvd-predictive-retrieval-config` for **configuration
+validation only**: explicit V vector-space identity, per-query Top-K,
+same-KV-head union bound, bank/scratch budgets, the current CUDA TP1/full-KV
+fan-in/native-attention envelope and independent draft settings. It **does
+not** construct a predictive Scheduler binding; serving still uses full-Prompt
+KV refresh. Passing argument validation is not predictive activation.
+
 CloudLab D 隔离工作区现备有固定 revision 的独立 Qwen2.5-0.5B-Instruct
 实验 draft，且与目标 Qwen2.5-7B 的实际 `VocabularySignature` 相同。
 其**独立进程**内的两步真实 CUDA draft forward 已通过，私有池容量恢复；
