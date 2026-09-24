@@ -3,6 +3,46 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 初始 Prompt fan-in 性能诊断 / Initial Prompt fan-in profiling
+
+CloudLab 两张 V100S 上，V 独立检出 `e42d0a825` 与 `bbef59a1b` 分别运行
+同一条 39-token Prompt / 8-token 输出请求，经 Gateway 返回 HTTP 200，
+端到端分别约 36.2 秒、40.4 秒；两次均有 112 次 CAGRA 索引搜索。
+每个 V rank 的初始完整 Prompt fan-in 都规划并提交 **2184 个** Mooncake
+PUT，总计 1,118,208 字节，平均每 PUT 512 字节。第一轮每 rank 的提交
+调用累计约 24–25 秒、fan-in 约 29 秒；第二轮提交调用累计约 29.8 秒、
+fan-in 约 33.1 秒。第二轮 Mooncake 原生 `transfer_submit_write` 累计
+约 29.3 秒/rank，而 CUDA 同步仅约 0.09/0.35 秒/rank。两 rank 均成功
+完成，没有在途或 UNKNOWN 传输。这是瓶颈定位，不是受控性能对照。
+
+Mooncake 0.3.13 的[原生 Python 包装源码](https://github.com/kvcache-ai/Mooncake/blob/v0.3.13/mooncake-integration/transfer_engine/transfer_engine_py.cpp)
+显示：`transfer_check_status` 只查询 batch 的 task 0，不能作为批量
+PUT 的完整完成证明；`get_batch_transfer_status` 才查询整个 batch，
+但失败/超时路径会释放 native batch ID。后续批量优化必须把失败或
+未知结果视为不确定，保留源和目标 MR，不能凭单任务完成或失败返回
+就回收内存。
+
+On two CloudLab V100S GPUs, isolated V checkouts `e42d0a825` and
+`bbef59a1b` each served the same 39-token Prompt/eight-token output request
+through Gateway with HTTP 200, taking about 36.2 and 40.4 seconds end to
+end; each produced 112 CAGRA index searches. Per V rank, initial full
+Prompt fan-in planned and submitted **2184 Mooncake PUTs** for 1,118,208
+bytes (512 bytes per PUT on average). The first run spent about 24–25
+seconds/rank in submit calls and 29 seconds in fan-in; the second spent about
+29.8 seconds/rank in submit calls and 33.1 seconds in fan-in. In the second
+run, native `transfer_submit_write` accounted for about 29.3 seconds/rank,
+versus only 0.09/0.35 seconds/rank in CUDA synchronization. Both ranks
+completed with no in-flight or UNKNOWN transfer. This locates a bottleneck;
+it is not a controlled performance comparison.
+
+The [Mooncake 0.3.13 Python binding source](https://github.com/kvcache-ai/Mooncake/blob/v0.3.13/mooncake-integration/transfer_engine/transfer_engine_py.cpp)
+shows that `transfer_check_status` queries only task 0 of a batch and cannot
+prove full-batch completion. `get_batch_transfer_status` checks the aggregate,
+but its failure/timeout path frees the native batch ID. Any future batch
+optimization must treat failure or uncertainty as non-terminal for MR
+release, retaining both source and destination rather than releasing them
+on a single-task result or a failed aggregate call.
+
 ## 2026-09-24 V 历史容量与 Coordinator 扫描 / V history bounds and coordinator scans
 
 `413f8bf60`、`f76894d61` 分别给 V shard 的历史 Entry、Delivery 与旧版
