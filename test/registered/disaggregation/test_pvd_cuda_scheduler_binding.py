@@ -131,6 +131,38 @@ def test_binding_is_explicit_and_owner_scoped(monkeypatch):
             )
 
 
+def test_scheduler_abort_keeps_quarantined_provisional_rows(monkeypatch):
+    with bound(monkeypatch, claim=False, provisional=True, import_prompt=False) as b:
+        c, scheduler = b.c, b.c.manager.scheduler
+        b.driver.quarantine_provisional(c.request, "initial import completion unknown")
+        c.manager.decode_refresher = PVDDecodeRefresher(c.manager)
+        scheduler.disagg_decode_prealloc_queue = NS(kv_manager=c.manager)
+        scheduler.pvd_cuda_binding = NS(driver=b.driver)
+        scheduler.output_streamer = NS(stream_output=lambda *args: None)
+        c.request.return_logprob = False
+
+        def abort(req, message, status_code):
+            assert req is c.request
+            assert status_code == HTTPStatus.SERVICE_UNAVAILABLE
+            req.finished = lambda: True
+
+        def forbidden_release(*args, **kwargs):
+            raise AssertionError("quarantined Req/KV rows must not be released")
+
+        abort_method = method(
+            "_abort_pvd_cuda_requests",
+            HTTPStatus=HTTPStatus,
+            prepare_abort=abort,
+            release_kv_cache=forbidden_release,
+        )
+        abort_method(scheduler, [c.request], "initial import completion unknown")
+        assert not scheduler.waiting_queue
+        assert b.driver._records["r"].quarantined
+        assert b.retirement.state == "attached"
+        assert c.session.receive_guard.value is not None
+        assert c.request.req_pool_idx == 1
+
+
 @pytest.mark.parametrize(
     "fault",
     [

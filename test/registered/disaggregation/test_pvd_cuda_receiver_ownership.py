@@ -331,6 +331,10 @@ def test_unknown_preclaim_import_quarantines_provisional_owners(monkeypatch):
         assert b.c.session.receive_guard.value is not None
         assert b.driver.arbiter.busy
         assert b.c.allocator.pvd_cuda_retirement_error
+        b.controller.cancel = lambda reason: pytest.fail(
+            "quarantined controller must not be cancelled again"
+        )
+        b.driver.cancel(b.c.request)
         with pytest.raises(ValueError, match="driver quarantined"):
             b.driver.poll()
 

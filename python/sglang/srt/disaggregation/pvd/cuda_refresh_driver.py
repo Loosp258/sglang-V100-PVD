@@ -432,7 +432,7 @@ class CUDARefreshDriver:
             self._release_capture(record)
 
     def _stop(self, record, reason):
-        if record.stopping:
+        if record.stopping or record.quarantined:
             return
         if record.provisional:
             source = record.provisional_source

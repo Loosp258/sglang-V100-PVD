@@ -1626,7 +1626,12 @@ class SchedulerDisaggregationDecodeMixin:
             )
             manager.decode_refresher.release_request(req)
             self.output_streamer.stream_output([req], req.return_logprob)
-            release_kv_cache(req, self.tree_cache, is_insert=False)
+            driver = getattr(getattr(self, "pvd_cuda_binding", None), "driver", None)
+            record = None if driver is None else driver._records.get(req.rid)
+            if record is None or not record.quarantined:
+                release_kv_cache(req, self.tree_cache, is_insert=False)
+            # UNKNOWN retains Req/KV rows and the full receiver under the
+            # driver; ordinary release would reuse a possibly live RDMA MR.
             self.waiting_queue[:] = [
                 queued for queued in self.waiting_queue if queued is not req
             ]
