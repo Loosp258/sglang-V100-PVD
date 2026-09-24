@@ -24,6 +24,23 @@ from sglang.srt.disaggregation.pvd.cuda_request_release import CUDARequestReleas
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
 
 
+def test_real_decode_request_pool_is_supported_by_exact_retirement_guard():
+    from sglang.srt.disaggregation.decode import DecodeReqToTokenPool
+    from sglang.srt.mem_cache.allocator.token import TokenToKVPoolAllocator
+    from sglang.srt.mem_cache.chunk_cache import ChunkCache
+    from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+
+    cache = object.__new__(ChunkCache)
+    cache.token_to_kv_pool_allocator = object.__new__(TokenToKVPoolAllocator)
+    cache.page_size = 1
+    for pool_type in (ReqToTokenPool, DecodeReqToTokenPool):
+        cache.req_to_token_pool = object.__new__(pool_type)
+        release_module._require_supported_pools(cache)
+    cache.req_to_token_pool = object()
+    with pytest.raises(LifecycleError, match="exact page-1"):
+        release_module._require_supported_pools(cache)
+
+
 def source(path, name, cls=None, namespace=None):
     tree = ast.parse(Path(path).read_text(encoding="utf-8"))
     nodes = (

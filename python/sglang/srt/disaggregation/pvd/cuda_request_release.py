@@ -17,13 +17,14 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
 
 
 def _require_supported_pools(cache):
+    from sglang.srt.disaggregation.decode import DecodeReqToTokenPool
     from sglang.srt.mem_cache.allocator.token import TokenToKVPoolAllocator
     from sglang.srt.mem_cache.chunk_cache import ChunkCache
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 
     if (
         type(cache) is not ChunkCache
-        or type(cache.req_to_token_pool) is not ReqToTokenPool
+        or type(cache.req_to_token_pool) not in (ReqToTokenPool, DecodeReqToTokenPool)
         or type(cache.token_to_kv_pool_allocator) is not TokenToKVPoolAllocator
         or cache.page_size != 1
     ):
