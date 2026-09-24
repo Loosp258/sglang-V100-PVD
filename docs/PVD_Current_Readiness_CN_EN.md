@@ -3,6 +3,15 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+CloudLab D 隔离工作区现备有固定 revision 的独立 Qwen2.5-0.5B-Instruct
+实验 draft，且与目标 Qwen2.5-7B 的实际 `VocabularySignature` 相同；
+**尚未运行 draft forward**。见 [draft 模型记录](PVD_Qwen_Draft_CloudLab_CN_EN.md)。
+
+The isolated CloudLab D worktree now has a pinned independent
+Qwen2.5-0.5B-Instruct experimental draft with an exact target-matching
+`VocabularySignature`; **no draft forward has run yet**. See the
+[draft checkpoint record](PVD_Qwen_Draft_CloudLab_CN_EN.md).
+
 最新隔离三节点验收在两路稀疏交付任务 pending 时运行第 4 次真实
 Qwen2.5-7B Decode 前向，再等待写入终态、于正式计数 4 安装新 bank，
 第 5 次前向成功消费它。最新门槛等待两个 V rank 的 `start_delivery` 响应，
