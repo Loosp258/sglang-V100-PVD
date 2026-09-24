@@ -187,7 +187,7 @@ def _validate(runner, args, *, checkpoint=False):
         device="cuda:0",
         execution_lock=lock,
         target_model_id=space,
-        max_tokens=token_count + 2,
+        max_tokens=token_count + (8 if args.generated_refresh else 2),
         max_predict_tokens=1,
         transient_bytes_bound=64 << 20,
         budget=probe_budget,
@@ -330,6 +330,102 @@ def _validate(runner, args, *, checkpoint=False):
             ):
                 raise AssertionError("sparse attention budgets were not refunded")
 
+    class GeneratedDecode:
+        """Keep actual generated rows on D across a full-to-sparse refresh."""
+
+        def __init__(self, group):
+            self.group = group
+            self.workspace_budget = TransferBudget(1 << 20, 1)
+            self.output_budget = TransferBudget(1 << 20, 1)
+            self.workspace = CUDASparseAttentionWorkspace(
+                device="cuda:0",
+                dtype=torch.float16,
+                head_dim=128,
+                chunk_tokens=64,
+                budget=self.workspace_budget,
+            )
+            self.decoder = PrivatePoolAllocator(
+                runner.req_to_token_pool, runner.token_to_kv_pool_allocator
+            )
+            self.slot = self.decoder.alloc_request()
+            self.rows = []
+            self.inputs = []
+            self.original_backend = runner.attn_backend
+
+            def retire_rows():
+                torch.cuda.synchronize("cuda:0")
+                self.decoder.clear_mapping(self.slot)
+                self.decoder.free_kv(self.rows)
+                self.decoder.free_request(self.slot)
+
+            self.guard = ResourceGuard(
+                CUDAModelPools(runner.req_to_token_pool, runner.token_to_kv_pool),
+                retire_rows,
+            )
+            self.backend = make_cuda_sparse_backend(
+                runner,
+                workspace=self.workspace,
+                execution_lock=lock,
+                output_budget=self.output_budget,
+                max_batch_size=1,
+            )
+            self.adapter = DraftForwardAdapter(
+                runner,
+                architecture="Qwen2ForCausalLM",
+                attention_backend="torch_native",
+                bytes_per_token=28 * 4 * 128 * 2 * 2,
+                device="cuda:0",
+            )
+            self.closed = False
+
+        def forward(self, count, input_token):
+            if self.closed or count != len(self.inputs):
+                raise AssertionError("generated Decode count is not committed")
+            row = self.decoder.alloc_kv(1)
+            self.rows.extend(row)
+            self.decoder.write_mapping(self.slot, token_count + count, row)
+            runner.attn_backend = self.backend
+            try:
+                with self.group.model_forward(
+                    self.backend.consumer,
+                    slot=self.slot,
+                    decode_tokens=count,
+                    pool_owner=self.guard,
+                ):
+                    logits = self.adapter.forward(
+                        DraftForwardInputs(
+                            "decode",
+                            (input_token,),
+                            (token_count + count,),
+                            (token_count + count + 1,),
+                            (self.slot,),
+                            tuple(row),
+                        )
+                    )
+                if not torch.isfinite(logits).all():
+                    raise AssertionError("generated Decode logits are nonfinite")
+                self.inputs.append(input_token)
+                return int(logits.argmax(-1).item())
+            finally:
+                runner.attn_backend = self.original_backend
+
+        def close(self):
+            if self.closed:
+                return
+            runner.attn_backend = self.original_backend
+            if self.backend.consumer.snapshot()["quarantine"] is not None:
+                raise RuntimeError("unknown model completion retains generated rows")
+            self.guard.request_release()
+            if self.guard.value is not None:
+                raise AssertionError("generated row owner was not retired")
+            self.workspace.close()
+            if any(
+                budget.snapshot()["used_staging_bytes"]
+                for budget in (self.workspace_budget, self.output_budget)
+            ):
+                raise AssertionError("generated Decode budgets were not refunded")
+            self.closed = True
+
     async def install():
         key = KVEntryKey(space, "real-qwen-prompt", args.transfer_id)
         engine = MooncakePVDTransferEngine(
@@ -391,7 +487,7 @@ def _validate(runner, args, *, checkpoint=False):
             max_pending_bytes=131072,
         )
         coordinator = PVDCoordinatorClient(args.coordinator_url)
-        delivery = None
+        delivery = generated = None
         report = {
             "installed_boundaries": [],
             "groups_per_round": 112,
@@ -438,6 +534,48 @@ def _validate(runner, args, *, checkpoint=False):
                 poll_interval_seconds=0.1,
             )
             for decode_tokens in (0, 3):
+                if decode_tokens == 3 and args.generated_refresh:
+                    if generated is None or len(generated.inputs) != 3:
+                        raise AssertionError("three real Decode steps required")
+                    official = CommittedPrefix(
+                        key.req_id,
+                        tokens + tuple(generated.inputs) + (next_token,),
+                        3,
+                        "actual-decode-three",
+                    )
+                    with probe.branch():
+                        actual_queries = probe.capture_committed(
+                            official, (token_count + 3,)
+                        )
+                    if any(
+                        item.positions != (token_count + 3,)
+                        or item.positional_encoding != "rope_applied"
+                        for item in actual_queries
+                    ):
+                        raise AssertionError("refresh Q is not from actual prefix")
+                    actual_q = {
+                        (item.layer, head): [
+                            item.vectors[0, head * 7 + member].float().tolist()
+                            for member in range(7)
+                        ]
+                        for item in actual_queries
+                        for head in range(4)
+                    }
+                    for layer in range(28):
+                        for head in range(4):
+                            results[layer, head] = await routing.search(
+                                SearchRequestIdentity(
+                                    space,
+                                    "rope_applied",
+                                    key.transfer_id,
+                                    layer,
+                                    head,
+                                ),
+                                queries=actual_q[layer, head],
+                                top_k=10,
+                                scope=routing.scope,
+                            )
+                    report["refresh_q_position"] = token_count + 3
                 epoch = group.begin(decode_tokens)
                 specs = tuple(
                     SparseKVSpec(
@@ -462,6 +600,8 @@ def _validate(runner, args, *, checkpoint=False):
                 )
                 receipt = await delivery.stage(epoch, 0, specs)
                 delivery.require_installable(epoch)
+                if decode_tokens == 3 and args.generated_refresh:
+                    next_token = generated.forward(3, next_token)
                 if not group.try_install(epoch, {0: epoch.target_tokens}):
                     raise RuntimeError("D CUDA bank did not complete install")
                 if receipt.epoch != epoch or not group.can_decode(epoch.target_tokens):
@@ -488,6 +628,20 @@ def _validate(runner, args, *, checkpoint=False):
                 report["installed_boundaries"].append(epoch.target_tokens)
                 if decode_tokens == 0 and args.model_forward:
                     report["real_model_forward"] = verify_model_forward(group)
+                if decode_tokens == 0 and args.generated_refresh:
+                    generated = GeneratedDecode(group)
+                    next_token = 42
+                    for count in range(3):
+                        next_token = generated.forward(count, next_token)
+                if decode_tokens == 3 and args.generated_refresh:
+                    next_token = generated.forward(4, next_token)
+                    report["generated_refresh"] = {
+                        "actual_steps_before_refresh": 4,
+                        "sparse_bank_consumed_at_count": 4,
+                        "next_target_token": next_token,
+                    }
+            if generated is not None:
+                generated.close()
             if await delivery.close() or registry.snapshot():
                 raise RuntimeError("D retained sparse receive registrations")
             group.close()
@@ -500,6 +654,8 @@ def _validate(runner, args, *, checkpoint=False):
             report["released_entry"] = True
             return report
         finally:
+            if generated is not None:
+                generated.close()
             if delivery is not None:
                 errors = await delivery.close()
             else:
@@ -527,7 +683,10 @@ def main(argv=None):
     parser.add_argument("--rail", required=True)
     parser.add_argument("--expected-gpu", required=True)
     parser.add_argument("--model-forward", action="store_true")
+    parser.add_argument("--generated-refresh", action="store_true")
     args, model_args = parser.parse_known_args(argv)
+    if args.generated_refresh and not args.model_forward:
+        parser.error("--generated-refresh requires --model-forward")
     from run_pvd_cuda_probe_smoke import main as run_model
 
     return run_model(

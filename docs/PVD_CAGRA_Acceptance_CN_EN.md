@@ -1,5 +1,41 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 真实 Decode 计数驱动的稀疏刷新 / Generated-token-driven sparse refresh
+
+`run_pvd_qwen_native_bank_gpu.py --model-forward --generated-refresh` 在
+CloudLab 三节点真实 Qwen2.5-7B 上通过。D 在初始完整 Prompt bank 上执行
+**4 次真实目标模型 Decode 前向**，逐次将生成 K/V 写入并保留在 D 模型池，
+由这些正式前向的贪心输出驱动下一 token。第 3 次之后，用当前正式 token
+前缀在位置 **1027** 做目标模型 Q 补查；每 KV head 的全部 7 个 Q heads
+检索 V 的 Prompt 索引，按同组有界并集取 K/V。第 4 次前向仍读取旧 bank；
+随后在正式计数 4 完成双 V RDMA 接收、安装、ACK，并让第 **5 次**
+目标模型前向读取新的稀疏 bank。D 的工作集/接收预算和真实生成行最终
+回收，V 两 rank 的 Entry/索引清空。验证脚本输出 `passed`。
+
+该离线验证以 token ID **42** 作为 D 的初始输入；它不是 P 对本次输入
+真实采样的 first token。目标 Q 使用正式前缀的**迟到补查**，并非独立
+draft 小模型的提前预测；检索/网络传输先于边界前向等待完成，因此**没有
+证明计算与网络重叠或延迟隐藏**。第五次输出仅校验有限值与完整执行，
+未作质量/召回分布评估，也未接入生产 Scheduler。
+
+The real Qwen2.5-7B three-node gate passed with `--generated-refresh`.
+D performed **four actual target-model Decode forwards** over the complete
+Prompt bank, retained their generated KV locally and used greedy target
+outputs to drive the next input. After step three, it captured target Q at
+position **1027** from the current official token prefix (late fallback),
+searched all seven GQA query heads per KV head and fetched bounded Prompt
+unions from both V shards. Step four still read the old bank; at committed
+count four D installed/ACKed the new sparse bank, and a **fifth real target
+forward consumed it**. D owners drained and both V Entry/index records were
+empty afterward.
+
+The gate seeds D with token ID **42**, not a token sampled by P for this
+prompt. The refresh Q is actual-prefix fallback, not independent draft
+prediction. Delivery completed before the boundary forward, so this test
+does **not** establish compute/network overlap or latency hiding. It checks
+finite execution of the fifth forward, not retrieval-quality distributions,
+and production Scheduler integration remains open.
+
 ## 2026-09-24 完整 GQA Q-head 并集 / Full GQA Q-head union
 
 真实 Qwen2.5-7B 三节点测试现对每个 KV head 使用对应的 **7 个**目标模型

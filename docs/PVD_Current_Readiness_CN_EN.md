@@ -3,6 +3,20 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+2026-09-24 CloudLab 新增真实 token 驱动刷新验收：D 在完整 bank 上连续执行
+4 次 Qwen2.5-7B 目标前向并保留生成 K/V；位置 1027 的正式前缀目标 Q
+用于补查 V，正式计数 4 安装稀疏 bank，第 5 次前向已实际消费它。初始
+token 42 是测试种子，不是 P 的真实采样输出；网络交付未与计算重叠，
+独立 draft 预测和生产 Scheduler 仍未验收。详见
+[CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+CloudLab now validates a generated-token-driven refresh: D ran four real
+Qwen2.5-7B target forwards over the full bank, kept generated KV locally,
+captured actual-prefix Q at position 1027, installed the sparse bank at
+committed count four and consumed it in a fifth target forward. Token 42 was
+a test seed, not P's sampled first token. No network/compute overlap,
+independent draft prediction or production Scheduler activation is claimed.
+
 GQA 硬件验证已从单一代表 Q head 扩展为每个 KV head 对应的全部 7 个
 Q heads：每路 Top-10、同组去重并集、每组最多 70 token；真实
 Qwen2.5-7B 的 112 组并集实测 17–65 token，模拟边界 4 的远端 K/V
