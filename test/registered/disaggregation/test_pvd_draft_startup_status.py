@@ -199,6 +199,15 @@ def test_retrieval_configuration_flag_is_pvd_only():
 
 def test_retrieval_cli_is_explicitly_configuration_only():
     source = Path("python/sglang/srt/server_args.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    serving_default = next(
+        node.value
+        for node in ast.walk(module)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "pvd_cuda_predictive_serving"
+    )
+    assert ast.literal_eval(serving_default) is False
     for flag in (
         "--pvd-predictive-retrieval-config",
         "--pvd-retrieval-vector-space",
@@ -207,6 +216,71 @@ def test_retrieval_cli_is_explicitly_configuration_only():
         "--pvd-retrieval-max-union-tokens",
         "--pvd-retrieval-bank-budget-bytes",
         "--pvd-retrieval-scratch-budget-bytes",
+        "--pvd-cuda-predictive-serving",
+        "--pvd-cuda-serving-config",
     ):
         assert flag in source
-    assert "does NOT activate retrieval in the serving" in source
+    assert "production CUDA retrieval additionally" in source
+
+
+def test_cuda_serving_opt_in_requires_the_configuration_only_opt_in():
+    with pytest.raises(ValueError, match="requires.*pvd-predictive-retrieval-config"):
+        handle_pvd_disaggregation(
+            pvd_args(
+                pvd_cuda_predictive_serving=True,
+                pvd_cuda_serving_config="bounds.json",
+            )
+        )
+
+
+def test_cuda_serving_opt_in_requires_explicit_bounds_file():
+    for path in (None, "", "  ", 1):
+        with pytest.raises(ValueError, match="pvd-cuda-serving-config is required"):
+            handle_pvd_disaggregation(
+                _retrieval_config_args(
+                    pvd_cuda_predictive_serving=True,
+                    pvd_cuda_serving_config=path,
+                )
+            )
+
+
+def test_bounds_file_without_serving_opt_in_is_refused():
+    with pytest.raises(ValueError, match="requires.*pvd-cuda-predictive-serving"):
+        handle_pvd_disaggregation(pvd_args(pvd_cuda_serving_config="bounds.json"))
+
+
+def test_cuda_serving_opt_in_passes_static_preflight_and_disables_overlap(caplog):
+    args = _retrieval_config_args(
+        pvd_cuda_predictive_serving=True,
+        pvd_cuda_serving_config="bounds.json",
+    )
+    with caplog.at_level(logging.INFO):
+        handle_pvd_disaggregation(args)
+    assert args.disable_overlap_schedule
+    assert "startup still must construct and install" in caplog.text
+    assert args.pvd_cuda_predictive_serving
+    assert args.speculative_algorithm is None
+
+
+@pytest.mark.parametrize(
+    "overrides,error",
+    [
+        ({"speculative_algorithm": "EAGLE"}, "native speculative decoding off"),
+        ({"attention_backend": "triton"}, "torch_native"),
+        ({"decode_attention_backend": "triton"}, "torch_native"),
+        ({"enable_hierarchical_cache": True}, "hierarchical cache"),
+        (
+            {"pvd_draft_persistent_budget_bytes": None},
+            "pvd-draft-persistent-budget-bytes",
+        ),
+        ({"pvd_draft_predict_tokens": 17}, "at most 16 draft tokens"),
+    ],
+)
+def test_cuda_serving_opt_in_fails_closed_for_unsupported_features(overrides, error):
+    args = _retrieval_config_args(
+        pvd_cuda_predictive_serving=True,
+        pvd_cuda_serving_config="bounds.json",
+        **overrides,
+    )
+    with pytest.raises(ValueError, match=error):
+        handle_pvd_disaggregation(args)

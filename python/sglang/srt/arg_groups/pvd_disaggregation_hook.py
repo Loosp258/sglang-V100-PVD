@@ -60,10 +60,28 @@ def _require_positive_int(name: str, value: object) -> int:
 
 
 def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
-    """Validate opt-in D retrieval settings without activating a serving path."""
+    """Validate retrieval settings and the optional CUDA-serving preflight."""
     enabled = getattr(server_args, "pvd_predictive_retrieval_config", False)
     if not isinstance(enabled, bool):
         raise ValueError("--pvd-predictive-retrieval-config must be a boolean")
+    serving_enabled = getattr(server_args, "pvd_cuda_predictive_serving", False)
+    if not isinstance(serving_enabled, bool):
+        raise ValueError("--pvd-cuda-predictive-serving must be a boolean")
+    serving_config = getattr(server_args, "pvd_cuda_serving_config", None)
+    if serving_config is not None and not serving_enabled:
+        raise ValueError(
+            "--pvd-cuda-serving-config requires --pvd-cuda-predictive-serving"
+        )
+    if serving_enabled and not enabled:
+        raise ValueError(
+            "--pvd-cuda-predictive-serving requires --pvd-predictive-retrieval-config"
+        )
+    if serving_enabled and (
+        not isinstance(serving_config, str) or not serving_config.strip()
+    ):
+        raise ValueError(
+            "--pvd-cuda-serving-config is required with --pvd-cuda-predictive-serving"
+        )
 
     names = (
         "pvd_retrieval_vector_space",
@@ -193,10 +211,62 @@ def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
         raise ValueError(
             "--pvd-draft-mem-fraction-static is required and must be between 0 and 1"
         )
-    logger.warning(
-        "PVD predictive-retrieval configuration passed validation, but this is "
-        "configuration only: the production Scheduler does not construct the "
-        "predictive pipeline and continues to use full-Prompt refresh"
+    if not serving_enabled:
+        logger.warning(
+            "PVD predictive-retrieval configuration passed validation, but this is "
+            "configuration only: the production Scheduler does not construct the "
+            "predictive pipeline and continues to use full-Prompt refresh"
+        )
+        return True
+
+    # The serving opt-in is narrower than the existing configuration-only
+    # surface. These conditions are consumed by the CUDA Scheduler binding and
+    # must be proven before startup is allowed to construct it.
+    if server_args.speculative_algorithm is not None:
+        raise ValueError(
+            "--pvd-cuda-predictive-serving requires native speculative decoding off"
+        )
+    if not getattr(server_args, "disable_overlap_schedule", False):
+        raise ValueError(
+            "--pvd-cuda-predictive-serving requires overlap scheduling off"
+        )
+    attention_backend = getattr(server_args, "attention_backend", None)
+    decode_attention_backend = getattr(server_args, "decode_attention_backend", None)
+    if attention_backend != "torch_native" or decode_attention_backend not in (
+        None,
+        "torch_native",
+    ):
+        raise ValueError(
+            "--pvd-cuda-predictive-serving requires attention_backend and "
+            "decode_attention_backend to be torch_native"
+        )
+    if (
+        getattr(server_args, "disaggregation_decode_enable_radix_cache", False)
+        or getattr(server_args, "disaggregation_decode_enable_offload_kvcache", False)
+        or getattr(server_args, "enable_hierarchical_cache", False)
+        or getattr(server_args, "enable_hisparse", False)
+        or getattr(server_args, "enable_prefill_context_parallel", False)
+    ):
+        raise ValueError(
+            "--pvd-cuda-predictive-serving requires radix/offload/hierarchical "
+            "cache, HiSparse and prefill context parallelism off"
+        )
+    _require_positive_int(
+        "--pvd-draft-persistent-budget-bytes",
+        getattr(server_args, "pvd_draft_persistent_budget_bytes", None),
+    )
+    predict_tokens = _require_positive_int(
+        "--pvd-draft-predict-tokens",
+        getattr(server_args, "pvd_draft_predict_tokens", None),
+    )
+    if predict_tokens > 16:
+        raise ValueError(
+            "--pvd-cuda-predictive-serving supports at most 16 draft tokens"
+        )
+    logger.info(
+        "PVD CUDA predictive-serving arguments passed preflight; startup still "
+        "must construct and install the model-specific CUDA serving binding "
+        "before admitting requests"
     )
     return True
 
@@ -209,6 +279,11 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     if topology == "pd":
         _validate_predictive_retrieval_config(server_args)
         return
+    # PVD Decode always runs without the overlap scheduler. Normalize this
+    # before validating the stricter opt-in so the accepted ServerArgs object
+    # already satisfies the CUDA binding's runtime precondition.
+    if server_args.disaggregation_mode == "decode":
+        server_args.disable_overlap_schedule = True
     _validate_predictive_retrieval_config(server_args)
     # The generic PD HTTP warmup posts a synthetic /generate without the
     # Gateway-selected PVD transfer/delivery/vector IDs. PVD must reject that

@@ -842,6 +842,10 @@ class ServerArgs:
     # Configuration-only contract for the experimental D-side retrieval path.
     # These values are not consumed by the production Scheduler today.
     pvd_predictive_retrieval_config: bool = False
+    # Explicitly request the production CUDA retrieval startup integration.
+    # Runtime construction still has to validate the loaded model and pools.
+    pvd_cuda_predictive_serving: bool = False
+    pvd_cuda_serving_config: Optional[str] = None
     pvd_retrieval_vector_space: Optional[str] = None
     pvd_retrieval_metric: str = "ip"
     pvd_retrieval_top_k: Optional[int] = None
@@ -7083,9 +7087,25 @@ class ServerArgs:
             action="store_true",
             default=ServerArgs.pvd_predictive_retrieval_config,
             help="Validate the experimental PVD D predictive-retrieval configuration. "
-            "Configuration only: this does NOT activate retrieval in the serving "
-            "Scheduler; full-Prompt refresh remains active until a production "
-            "factory is integrated.",
+            "Configuration only by itself; production CUDA retrieval additionally "
+            "requires --pvd-cuda-predictive-serving.",
+        )
+        parser.add_argument(
+            "--pvd-cuda-predictive-serving",
+            action="store_true",
+            default=ServerArgs.pvd_cuda_predictive_serving,
+            help="Explicitly request CUDA sparse predictive retrieval in PVD Decode. "
+            "Requires --pvd-predictive-retrieval-config and its explicit budgets, "
+            "CUDA TP1 torch_native bounds, and a supported runtime model/pool setup. "
+            "Startup must install the CUDA serving binding before requests are admitted.",
+        )
+        parser.add_argument(
+            "--pvd-cuda-serving-config",
+            type=str,
+            default=ServerArgs.pvd_cuda_serving_config,
+            help="Path to the explicit JSON bounds required by "
+            "--pvd-cuda-predictive-serving (lead window, attention chunk, timeouts, "
+            "pending limits and transient byte ceilings). No runtime defaults are guessed.",
         )
         parser.add_argument(
             "--pvd-retrieval-vector-space",
