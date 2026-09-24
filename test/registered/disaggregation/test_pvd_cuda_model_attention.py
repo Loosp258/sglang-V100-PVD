@@ -28,6 +28,7 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferBudget,
     TransferCapacityError,
 )
+from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from test_pvd_cuda_sparse_attention import policy_workspace
 from test_pvd_cuda_working_set import options, packed_payloads
 from test_pvd_sparse_cpu_backend import Pool
@@ -165,6 +166,16 @@ def test_model_pool_mapping_matches_dense_oracle_and_retirement_is_fenced(monkey
     assert c.consumer.snapshot()["retained_outputs"] == 0
     torch.testing.assert_close(c.pool.k[10], before[0][10], rtol=0, atol=0)
     torch.testing.assert_close(c.pool.k[11], c.k[0], rtol=0, atol=0)
+
+
+def test_model_accepts_explicit_disabled_speculation_and_rejects_active(monkeypatch):
+    c = fixture(monkeypatch)
+    c.batch.spec_algorithm = SpeculativeAlgorithm.NONE
+    with c.consumer.bind([c.binding], pool_owner=c.owner):
+        assert run(c).shape == (1, 12)
+        c.batch.spec_algorithm = SpeculativeAlgorithm.EAGLE
+        with pytest.raises(SparsePayloadError, match="unsupported CUDA sparse"):
+            run(c)
 
 
 @pytest.mark.parametrize(

@@ -257,7 +257,13 @@ class CUDAModelSparseConsumer:
             not batch.forward_mode.is_decode()
             or batch.encoder_lens is not None
             or getattr(batch, "spec_info", None) is not None
-            or getattr(batch, "spec_algorithm", None) is not None
+            or (
+                (spec_algorithm := getattr(batch, "spec_algorithm", None)) is not None
+                and not (
+                    callable(getattr(spec_algorithm, "is_none", None))
+                    and spec_algorithm.is_none()
+                )
+            )
             or getattr(batch, "pvd_query_capture", None) is not None
             or layer.layer_id not in self.layers
             or layer.is_cross_attention
