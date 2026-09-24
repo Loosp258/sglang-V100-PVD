@@ -263,6 +263,21 @@ def build_parser() -> argparse.ArgumentParser:
         "are refused without evicting old identities.",
     )
     parser.add_argument(
+        "--max-delivery-records",
+        type=_positive_int,
+        default=65536,
+        help="Maximum Delivery records retained by each V rank in one worker "
+        "epoch, including terminal tombstones. New Delivery IDs are refused "
+        "at capacity; existing ones can still be retried or fenced.",
+    )
+    parser.add_argument(
+        "--max-legacy-absent-fences",
+        type=_positive_int,
+        default=4096,
+        help="Maximum ID-only absent Delivery fences retained by each V rank. "
+        "Complete-identity write fences have their separate bound.",
+    )
+    parser.add_argument(
         "--prompt-index-backend",
         choices=("exact", "cagra", "cagra-auto"),
         default="exact",
@@ -663,6 +678,8 @@ def _create_store(
         transfer_engine=engine,
         entry_ttl_secs=args.entry_ttl_secs,
         max_entry_records=getattr(args, "max_entry_records", 8192),
+        max_delivery_records=getattr(args, "max_delivery_records", 65536),
+        max_legacy_absent_fences=getattr(args, "max_legacy_absent_fences", 4096),
         delivery_timeout_secs=args.delivery_timeout_secs,
         allow_cpu_for_tests=args.allow_cpu_for_tests,
         prompt_index=prompt_index,

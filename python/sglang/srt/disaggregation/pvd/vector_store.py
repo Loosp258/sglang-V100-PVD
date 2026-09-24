@@ -311,6 +311,8 @@ class VectorKVStore:
         metrics: Optional[PVDMetrics] = None,
         prompt_index: Optional[Any] = None,
         max_entry_records: int = 8192,
+        max_delivery_records: int = 65536,
+        max_legacy_absent_fences: int = 4096,
         max_absent_write_fences: int = 4096,
         allow_cuda_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
@@ -330,6 +332,10 @@ class VectorKVStore:
         self._fanin_max_slices, self._fanin_max_inflight = fanin_limits
         if type(max_entry_records) is not int or max_entry_records <= 0:
             raise ValueError("max_entry_records must be a positive integer")
+        if type(max_delivery_records) is not int or max_delivery_records <= 0:
+            raise ValueError("max_delivery_records must be a positive integer")
+        if type(max_legacy_absent_fences) is not int or max_legacy_absent_fences <= 0:
+            raise ValueError("max_legacy_absent_fences must be a positive integer")
         if type(max_absent_write_fences) is not int or max_absent_write_fences <= 0:
             raise ValueError("max_absent_write_fences must be a positive integer")
         if type(allow_cuda_sparse_packing) is not bool:
@@ -378,6 +384,10 @@ class VectorKVStore:
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
         self._max_entry_records = max_entry_records
+        self._max_delivery_records = max_delivery_records
+        self._delivery_records = 0
+        self._max_legacy_absent_fences = max_legacy_absent_fences
+        self._legacy_absent_fences = set()
         # Historical records remain addressable for replay rejection. Only
         # allocations that can still expire, build an index or drain a write
         # belong to the maintenance scan.
@@ -761,6 +771,8 @@ class VectorKVStore:
                         "delivery id already exists with a different fan-in plan"
                     )
                 return existing
+            if self._delivery_records >= self._max_delivery_records:
+                raise ResourceExhaustedError("V Delivery record capacity exceeded")
             source = MemorySlice(
                 self.registration,
                 entry.allocation.start_page * self.page_bytes,
@@ -793,6 +805,7 @@ class VectorKVStore:
                 fanin_writer=writer,
             )
             entry.deliveries[delivery_id] = delivery
+            self._delivery_records += 1
             self._active_progress[(entry.key, delivery_id)] = (entry, delivery)
             entry.active_delivery_count += 1
             self.metrics.increment("vector_deliveries_created")
@@ -881,6 +894,8 @@ class VectorKVStore:
                         "delivery id already exists with a different destination"
                     )
                 return existing
+            if self._delivery_records >= self._max_delivery_records:
+                raise ResourceExhaustedError("V Delivery record capacity exceeded")
             sparse = None
             if SPARSE_DELIVERY_KEY in destination.backend_metadata:
                 sparse = SparseDeliveryManifest.from_dict(
@@ -925,6 +940,7 @@ class VectorKVStore:
                 # Staged legacy callers receive no lifecycle-v1 fence proof.
                 entry.allocation_guard.pin(delivery.owner)
             entry.deliveries[delivery_id] = delivery
+            self._delivery_records += 1
             self._active_progress[(entry.key, delivery_id)] = (entry, delivery)
             entry.active_delivery_count += 1
             self.metrics.increment("vector_deliveries_created")
@@ -1502,9 +1518,16 @@ class VectorKVStore:
     def fence_delivery(self, key: KVEntryKey, delivery_id: str):
         # Legacy ID-only callers can close a gate, never establish MR safety.
         with self._lock:
-            self._fenced_deliveries.add((key, delivery_id))
+            token = (key, delivery_id)
             entry = self.entries.get(key)
             delivery = entry.deliveries.get(delivery_id) if entry else None
+            if delivery is None and token not in self._fenced_deliveries:
+                if len(self._legacy_absent_fences) >= self._max_legacy_absent_fences:
+                    raise ResourceExhaustedError(
+                        "legacy absent fence capacity exceeded"
+                    )
+                self._legacy_absent_fences.add(token)
+            self._fenced_deliveries.add(token)
             if delivery:
                 self._cancel_delivery_locked(entry, delivery, "legacy fence")
         if delivery:
@@ -1759,6 +1782,10 @@ class VectorKVStore:
                 "pending_release_entries": len(self._release_pending),
                 "live_entries": len(self._live_entries),
                 "max_entry_records": self._max_entry_records,
+                "delivery_records": self._delivery_records,
+                "max_delivery_records": self._max_delivery_records,
+                "legacy_absent_fences": len(self._legacy_absent_fences),
+                "max_legacy_absent_fences": self._max_legacy_absent_fences,
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],

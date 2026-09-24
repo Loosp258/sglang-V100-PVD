@@ -720,6 +720,51 @@ def test_entry_record_bound_validated_before_pool_registration(bound):
         )
 
 
+def test_delivery_record_bound_keeps_existing_retry_and_fence_available():
+    engine, store, entry = ready_store()
+    store._max_delivery_records = 1
+    first, destination = reserve(engine, store, entry, "first")
+    assert store.reserve_delivery(entry.key, "first", destination.descriptor) is first
+    with pytest.raises(ResourceExhaustedError, match="Delivery record capacity"):
+        store.reserve_delivery(entry.key, "second", destination.descriptor)
+    assert store.snapshot()["delivery_records"] == 1
+    assert list(entry.deliveries) == ["first"]
+    assert store.fence_delivery(entry.key, "first")["fenced"] is False
+    store.close()
+
+
+def test_legacy_absent_fence_bound_preserves_existing_proof():
+    engine, store, entry = ready_store()
+    store._max_legacy_absent_fences = 1
+    known, _ = reserve(engine, store, entry, "known")
+    assert store.fence_delivery(entry.key, "late-one")["fenced"] is False
+    assert store.fence_delivery(entry.key, "late-one")["fenced"] is False
+    with pytest.raises(ResourceExhaustedError, match="legacy absent fence"):
+        store.fence_delivery(entry.key, "late-two")
+    assert store.snapshot()["legacy_absent_fences"] == 1
+    assert (entry.key, "late-two") not in store._fenced_deliveries
+    assert store.fence_delivery(entry.key, known.delivery_id)["fenced"] is False
+    store.close()
+
+
+@pytest.mark.parametrize("name", ["max_delivery_records", "max_legacy_absent_fences"])
+@pytest.mark.parametrize("bound", [0, -1, True, 1.5])
+def test_delivery_history_bounds_validated_before_pool_registration(name, bound):
+    with pytest.raises(ValueError, match=name):
+        VectorKVStore(
+            rank=0,
+            world_size=2,
+            rail="mlx5_0",
+            device="cpu",
+            total_pages=1,
+            page_bytes=1,
+            endpoint="V",
+            transfer_engine=None,
+            allow_cpu_for_tests=True,
+            **{name: bound},
+        )
+
+
 def test_failed_allocation_release_remains_pending_for_retry(monkeypatch):
     _, store, entry = ready_store()
 
