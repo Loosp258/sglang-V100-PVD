@@ -1,0 +1,171 @@
+import dataclasses
+import json
+
+import pytest
+from sglang.srt.disaggregation.pvd.cuda_serving_limits import (
+    CUDAServingLimits,
+    load_cuda_serving_limits,
+)
+
+
+def valid_config():
+    return {
+        "max_sequence_tokens": 8192,
+        "lead_tokens": 2,
+        "attention_chunk_tokens": 128,
+        "request_timeout_seconds": 30.0,
+        "poll_interval_seconds": 0.01,
+        "max_pending_events": 64,
+        "max_pending_bytes": 1 << 20,
+        "draft_transient_bytes_bound": 0,
+        "probe_transient_bytes_bound": 4096,
+        "target_scratch_max_reservations": 8,
+        "bank_max_reservations": 4,
+    }
+
+
+def write_config(tmp_path, value):
+    path = tmp_path / "cuda-serving.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def load(path, *, refresh_interval=16, predict_tokens=4):
+    return load_cuda_serving_limits(
+        path, refresh_interval=refresh_interval, predict_tokens=predict_tokens
+    )
+
+
+def test_loads_exact_config_as_immutable_dataclass(tmp_path):
+    config = valid_config()
+    limits = load(write_config(tmp_path, config))
+
+    assert isinstance(limits, CUDAServingLimits)
+    assert dataclasses.is_dataclass(limits)
+    assert limits.max_sequence_tokens == 8192
+    assert limits.lead_tokens == 2
+    assert limits.request_timeout_seconds == 30.0
+    assert limits.poll_interval_seconds == 0.01
+    assert limits.draft_transient_bytes_bound == 0
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        limits.lead_tokens = 3
+
+
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda config: config.pop("lead_tokens"), "missing keys"),
+        (lambda config: config.update(unexpected=1), "unknown keys"),
+    ],
+)
+def test_rejects_missing_or_unknown_keys(tmp_path, mutate, message):
+    config = valid_config()
+    mutate(config)
+    with pytest.raises(ValueError, match=message):
+        load(write_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    [
+        ("[]", "root must be an object"),
+        ('{"lead_tokens": 1, "lead_tokens": 2}', "duplicate JSON key"),
+        ('{"duration": NaN}', "non-finite JSON number"),
+        ("{", "could not read"),
+    ],
+)
+def test_rejects_non_object_duplicate_nonstandard_and_malformed_json(
+    tmp_path, raw, message
+):
+    path = tmp_path / "cuda-serving.json"
+    path.write_text(raw, encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load(path)
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("max_sequence_tokens", True, "positive integer"),
+        ("max_sequence_tokens", 1.0, "positive integer"),
+        ("lead_tokens", 0, "positive integer"),
+        ("attention_chunk_tokens", -1, "positive integer"),
+        ("max_pending_events", False, "positive integer"),
+        ("max_pending_bytes", 0, "positive integer"),
+        ("draft_transient_bytes_bound", -1, "nonnegative integer"),
+        ("probe_transient_bytes_bound", 1.5, "nonnegative integer"),
+        ("target_scratch_max_reservations", True, "positive integer"),
+        ("bank_max_reservations", 0, "positive integer"),
+        ("request_timeout_seconds", True, "finite positive JSON number"),
+        ("request_timeout_seconds", 0, "finite positive JSON number"),
+        ("request_timeout_seconds", -1.0, "finite positive JSON number"),
+        ("request_timeout_seconds", float("inf"), "non-finite JSON number"),
+        ("poll_interval_seconds", float("nan"), "non-finite JSON number"),
+        ("poll_interval_seconds", "0.1", "finite positive JSON number"),
+    ],
+)
+def test_rejects_values_with_wrong_types_or_bounds(tmp_path, field, value, message):
+    config = valid_config()
+    config[field] = value
+    with pytest.raises(ValueError, match=message):
+        load(write_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    "config_updates, context, message",
+    [
+        ({"lead_tokens": 16}, {}, "less than refresh_interval"),
+        ({"lead_tokens": 5}, {"predict_tokens": 4}, "must not exceed predict_tokens"),
+        (
+            {"max_sequence_tokens": 4},
+            {"predict_tokens": 4},
+            "must exceed predict_tokens",
+        ),
+    ],
+)
+def test_checks_relationships_to_pvd_runtime_settings(
+    tmp_path, config_updates, context, message
+):
+    config = valid_config()
+    config.update(config_updates)
+    with pytest.raises(ValueError, match=message):
+        load(write_config(tmp_path, config), **context)
+
+
+@pytest.mark.parametrize(
+    "context, message",
+    [
+        ({"refresh_interval": True}, "refresh_interval must be a positive integer"),
+        ({"refresh_interval": 1}, "refresh_interval must be at least 2"),
+        ({"predict_tokens": 0}, "predict_tokens must be a positive integer"),
+    ],
+)
+def test_validates_context_values(tmp_path, context, message):
+    with pytest.raises(ValueError, match=message):
+        load(write_config(tmp_path, valid_config()), **context)
+
+
+@pytest.mark.parametrize("path", [None, 1, object()])
+def test_requires_filesystem_path(path):
+    with pytest.raises(TypeError, match="filesystem path"):
+        load_cuda_serving_limits(path, refresh_interval=16, predict_tokens=4)
+
+
+def test_requires_existing_file_not_directory(tmp_path):
+    with pytest.raises(ValueError, match="is not a file"):
+        load(tmp_path)
+    with pytest.raises(ValueError, match="is not a file"):
+        load(tmp_path / "missing.json")
+
+
+def test_accepts_pathlike_and_integer_json_seconds(tmp_path):
+    config = valid_config()
+    config["request_timeout_seconds"] = 30
+    config["poll_interval_seconds"] = 1
+
+    limits = load(write_config(tmp_path, config))
+
+    assert limits.request_timeout_seconds == 30.0
+    assert type(limits.request_timeout_seconds) is float
+    assert limits.poll_interval_seconds == 1.0
+    assert type(limits.poll_interval_seconds) is float
