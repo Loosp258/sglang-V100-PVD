@@ -154,7 +154,7 @@ def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
     # This is the current executable CUDA sparse backend's declared envelope.
     # The checks are necessary but not sufficient: model architecture,
     # quantization, actual pools and backend objects are verified at runtime by
-    # the lower-level factories, which are not wired into the Scheduler yet.
+    # the lower-level factories. The CUDA opt-in installs them in Scheduler startup.
     if server_args.tp_size != 1:
         raise ValueError("PVD predictive retrieval currently requires Decode TP1")
     if server_args.pp_size != 1:
@@ -282,7 +282,7 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     # PVD Decode always runs without the overlap scheduler. Normalize this
     # before validating the stricter opt-in so the accepted ServerArgs object
     # already satisfies the CUDA binding's runtime precondition.
-    if server_args.disaggregation_mode == "decode":
+    if getattr(server_args, "disaggregation_mode", None) == "decode":
         server_args.disable_overlap_schedule = True
     _validate_predictive_retrieval_config(server_args)
     # The generic PD HTTP warmup posts a synthetic /generate without the
@@ -440,13 +440,21 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
             or not 0 < fraction < 1
         ):
             raise ValueError("--pvd-draft-mem-fraction-static must be between 0 and 1")
-        logger.warning(
-            "PVD draft configuration recorded (%s), but production predictive "
-            "retrieval is not active: --pvd-draft-* does not instantiate the "
-            "CPU reference pipeline in this serving Scheduler. The full-Prompt "
-            "refresh path remains in use; speculative decoding remains off.",
-            server_args.pvd_draft_model_path,
-        )
+        if getattr(server_args, "pvd_cuda_predictive_serving", False):
+            logger.info(
+                "PVD draft configuration recorded (%s); CUDA predictive serving "
+                "will be installed during Scheduler startup. Native speculative "
+                "decoding remains off.",
+                server_args.pvd_draft_model_path,
+            )
+        else:
+            logger.warning(
+                "PVD draft configuration recorded (%s), but production predictive "
+                "retrieval is not active: --pvd-draft-* does not instantiate the "
+                "CPU reference pipeline in this serving Scheduler. The full-Prompt "
+                "refresh path remains in use; speculative decoding remains off.",
+                server_args.pvd_draft_model_path,
+            )
     elif getattr(server_args, "pvd_draft_scratch_budget_bytes", None) is not None:
         raise ValueError(
             "--pvd-draft-scratch-budget-bytes has no meaning without "

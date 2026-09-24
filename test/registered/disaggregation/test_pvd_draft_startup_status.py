@@ -258,6 +258,8 @@ def test_cuda_serving_opt_in_passes_static_preflight_and_disables_overlap(caplog
         handle_pvd_disaggregation(args)
     assert args.disable_overlap_schedule
     assert "startup still must construct and install" in caplog.text
+    assert "CUDA predictive serving will be installed" in caplog.text
+    assert "production predictive retrieval is not active" not in caplog.text
     assert args.pvd_cuda_predictive_serving
     assert args.speculative_algorithm is None
 
