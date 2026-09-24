@@ -184,6 +184,7 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
                 "d_endpoint": "D0",
                 "d_rail": "mlx5_0",
                 "d_rails": {0: "mlx5_0", 1: "mlx5_1"},
+                "initial_import_pending": False,
             },
         )
     ]
