@@ -538,7 +538,7 @@ def _validate(runner, args, *, checkpoint=False):
             max_pending_bytes=131072,
         )
         coordinator = PVDCoordinatorClient(args.coordinator_url)
-        delivery = generated = pending_stage = None
+        delivery = generated = pending_stage = next_token = None
         report = {
             "installed_boundaries": [],
             "groups_per_round": 112,
@@ -594,7 +594,11 @@ def _validate(runner, args, *, checkpoint=False):
             )
             for decode_tokens in (0, 3):
                 if decode_tokens == 3 and args.generated_refresh:
-                    if generated is None or len(generated.inputs) != 3:
+                    if (
+                        generated is None
+                        or len(generated.inputs) != 3
+                        or type(next_token) is not int
+                    ):
                         raise AssertionError("three real Decode steps required")
                     official = CommittedPrefix(
                         key.req_id,
