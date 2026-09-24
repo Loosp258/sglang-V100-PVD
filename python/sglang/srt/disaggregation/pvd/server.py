@@ -255,6 +255,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument(
+        "--max-entry-records",
+        type=_positive_int,
+        default=8192,
+        help="Maximum Entry records retained by each V rank in one worker epoch, "
+        "including terminal replay tombstones. At capacity, new Entry keys "
+        "are refused without evicting old identities.",
+    )
+    parser.add_argument(
         "--prompt-index-backend",
         choices=("exact", "cagra", "cagra-auto"),
         default="exact",
@@ -654,6 +662,7 @@ def _create_store(
         endpoint=endpoint,
         transfer_engine=engine,
         entry_ttl_secs=args.entry_ttl_secs,
+        max_entry_records=getattr(args, "max_entry_records", 8192),
         delivery_timeout_secs=args.delivery_timeout_secs,
         allow_cpu_for_tests=args.allow_cpu_for_tests,
         prompt_index=prompt_index,

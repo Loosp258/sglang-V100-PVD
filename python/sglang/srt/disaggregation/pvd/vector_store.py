@@ -310,6 +310,7 @@ class VectorKVStore:
         allow_cpu_for_tests: bool = False,
         metrics: Optional[PVDMetrics] = None,
         prompt_index: Optional[Any] = None,
+        max_entry_records: int = 8192,
         max_absent_write_fences: int = 4096,
         allow_cuda_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
@@ -327,6 +328,8 @@ class VectorKVStore:
         ):
             raise ValueError("both full-KV fan-in bounds must be positive integers")
         self._fanin_max_slices, self._fanin_max_inflight = fanin_limits
+        if type(max_entry_records) is not int or max_entry_records <= 0:
+            raise ValueError("max_entry_records must be a positive integer")
         if type(max_absent_write_fences) is not int or max_absent_write_fences <= 0:
             raise ValueError("max_absent_write_fences must be a positive integer")
         if type(allow_cuda_sparse_packing) is not bool:
@@ -372,6 +375,9 @@ class VectorKVStore:
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
+        # A worker epoch retains all keys for replay refusal. Refuse new keys
+        # at the bound rather than silently evicting a live protocol fence.
+        self._max_entry_records = max_entry_records
         # Historical records remain addressable for replay rejection. Only
         # allocations that can still expire, build an index or drain a write
         # belong to the maintenance scan.
@@ -459,6 +465,9 @@ class VectorKVStore:
                         "entry key already exists with a different uploader epoch"
                     )
                 return existing
+
+            if len(self.entries) >= self._max_entry_records:
+                raise ResourceExhaustedError("V Entry record capacity exceeded")
 
             allocation = self.allocator.allocate(shard.page_count)
             offset = allocation.start_page * self.page_bytes
@@ -1749,6 +1758,7 @@ class VectorKVStore:
                 "max_absent_write_fences": self._max_absent_write_fences,
                 "pending_release_entries": len(self._release_pending),
                 "live_entries": len(self._live_entries),
+                "max_entry_records": self._max_entry_records,
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],

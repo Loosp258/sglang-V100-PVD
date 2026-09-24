@@ -16,6 +16,10 @@ from sglang.srt.disaggregation.pvd.transfer_engine import (
     TransferStatus,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
+from sglang.srt.disaggregation.pvd.vector_store import (
+    ResourceExhaustedError,
+    VectorKVStore,
+)
 from test_pvd_core import ENTRY_BYTES, make_manifest, make_store
 
 
@@ -682,6 +686,38 @@ def test_pending_release_stays_live_until_transport_finishes():
     assert store.snapshot()["live_entries"] == 0
     assert store.snapshot()["pending_release_entries"] == 0
     store.close()
+
+
+def test_entry_record_bound_retains_replay_tombstone_without_allocating_again():
+    _, store, entry = ready_store()
+    store._max_entry_records = 1
+    store.release_entry(entry.key)
+    pages = store.allocator.available_pages
+    assert store.create_entry(dataclasses.replace(make_manifest(), key=entry.key)) is entry
+    with pytest.raises(ResourceExhaustedError, match="Entry record capacity"):
+        store.create_entry(make_manifest("another-request"))
+    assert store.allocator.available_pages == pages
+    assert store.snapshot()["max_entry_records"] == 1
+    assert store.snapshot()["live_entries"] == 0
+    assert len(store.entries) == 1
+    store.close()
+
+
+@pytest.mark.parametrize("bound", [0, -1, True, 1.5])
+def test_entry_record_bound_validated_before_pool_registration(bound):
+    with pytest.raises(ValueError, match="max_entry_records"):
+        VectorKVStore(
+            rank=0,
+            world_size=2,
+            rail="mlx5_0",
+            device="cpu",
+            total_pages=1,
+            page_bytes=1,
+            endpoint="V",
+            transfer_engine=None,
+            allow_cpu_for_tests=True,
+            max_entry_records=bound,
+        )
 
 
 def test_failed_allocation_release_remains_pending_for_retry(monkeypatch):
