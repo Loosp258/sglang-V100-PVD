@@ -117,6 +117,8 @@ def test_submit_timing_counts_cuda_sync_and_native_submission(transport):
         "cuda_sync_seconds": 0.0,
         "native_submit_calls": 0,
         "native_submit_seconds": 0.0,
+        "batch_submit_calls": 0,
+        "batch_submit_seconds": 0.0,
     }
     handle = adapter.submit_put(local, remote)
     adapter.poll(handle)
@@ -126,6 +128,125 @@ def test_submit_timing_counts_cuda_sync_and_native_submission(transport):
     assert after["cuda_sync_seconds"] >= 0
     assert after["native_submit_seconds"] >= 0
     assert native.submit_calls == [("d:2", 4096, 8192, 16)]
+
+
+@pytest.mark.parametrize("aggregate_result", [0, -1])
+def test_native_batch_uses_aggregate_completion_or_quarantines(
+    transport, aggregate_result
+):
+    class BatchNative(NativeStub):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = []
+            self.aggregate_calls = []
+
+        def batch_transfer_async_write(self, *args):
+            self.batch_calls.append(args)
+            return 51
+
+        def get_batch_transfer_status(self, ids):
+            self.aggregate_calls.append(ids)
+            return aggregate_result
+
+    native = BatchNative()
+    adapter, local, remote = make_adapter_with_source(transport, native)
+    halves = (
+        MemorySlice(local.registration, 0, 8),
+        MemorySlice(local.registration, 8, 8),
+    )
+    handle = adapter.submit_batch_put(halves, remote, remote_offsets=(0, 8))
+    handle.backend_handle.aggregate.result(timeout=5)
+    adapter.poll(handle)
+    assert native.batch_calls == [
+        ("d:2", [4096, 4104], [8192, 8200], [8, 8])
+    ]
+    assert native.aggregate_calls == [[51]]
+    assert native.check_calls == []  # Task-0 polling is not a batch proof.
+    assert adapter.health()["submit_timing"]["batch_submit_calls"] == 1
+    if aggregate_result == 0:
+        assert handle.transport_state == TransportState.TERMINAL_SUCCESS
+        assert handle.transferred_bytes == 16
+        assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
+        adapter.release_memory(local.registration)
+        assert native.unregister_calls == [4096]
+    else:
+        assert handle.transport_state == TransportState.UNKNOWN
+        assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 1
+        adapter.release_memory(local.registration)
+        assert native.unregister_calls == []
+
+
+def test_native_batch_rejects_overlapping_destinations_before_submit(transport):
+    class BatchNative(NativeStub):
+        batch_transfer_async_write = lambda self, *args: 51
+        get_batch_transfer_status = lambda self, ids: 0
+
+    native = BatchNative()
+    adapter, local, remote = make_adapter_with_source(transport, native)
+    halves = (
+        MemorySlice(local.registration, 0, 8),
+        MemorySlice(local.registration, 8, 8),
+    )
+    handle = adapter.submit_batch_put(halves, remote, remote_offsets=(0, 7))
+    assert handle.status == TransferStatus.FAILED
+    assert handle.transport_state == TransportState.NOT_SUBMITTED
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
+
+
+def test_native_batch_capability_checked_before_serving(transport):
+    adapter, _, _ = make_adapter_with_source(transport, NativeStub())
+    with pytest.raises(RuntimeError, match="batch_transfer_async_write"):
+        adapter.require_native_batch()
+
+
+def test_cancelled_native_batch_keeps_mr_until_aggregate_success(transport):
+    entered = threading.Event()
+    complete = threading.Event()
+
+    class WaitingBatchNative(NativeStub):
+        def batch_transfer_async_write(self, *args):
+            return 51
+
+        def get_batch_transfer_status(self, ids):
+            entered.set()
+            assert complete.wait(timeout=5)
+            return 0
+
+    native = WaitingBatchNative()
+    adapter, local, remote = make_adapter_with_source(transport, native)
+    handle = adapter.submit_batch_put((local,), remote, remote_offsets=(0,))
+    assert entered.wait(timeout=5)
+    adapter.abort(handle)
+    adapter.release_memory(local.registration)
+    assert native.unregister_calls == []
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 1
+    complete.set()
+    handle.backend_handle.aggregate.result(timeout=5)
+    adapter.poll(handle)
+    assert handle.transport_state == TransportState.TERMINAL_SUCCESS
+    assert handle.status == TransferStatus.CANCELLED
+    assert native.unregister_calls == [4096]
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
+
+
+@pytest.mark.parametrize("result", [0, RuntimeError("batch submit uncertain")])
+def test_untrackable_native_batch_quarantines_source(transport, result):
+    class FailedBatchNative(NativeStub):
+        def batch_transfer_async_write(self, *args):
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        def get_batch_transfer_status(self, ids):
+            raise AssertionError("untrackable batch must not be polled")
+
+    native = FailedBatchNative()
+    adapter, local, remote = make_adapter_with_source(transport, native)
+    handle = adapter.submit_batch_put((local,), remote, remote_offsets=(0,))
+    adapter.release_memory(local.registration)
+    assert handle.transport_state == TransportState.UNKNOWN
+    assert native.unregister_calls == []
+    assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 1
 
 
 @pytest.mark.parametrize("result", [0, RuntimeError("partial submit")])

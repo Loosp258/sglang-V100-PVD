@@ -49,6 +49,7 @@ class FullKVFanInWriter:
         sender_epoch,
         max_slices,
         max_inflight,
+        use_native_batch=False,
     ):
         plan = validate_fanin_plan(manifest, max_slices=max_slices)
         if (
@@ -60,6 +61,11 @@ class FullKVFanInWriter:
             or source_rank not in plan.writers
             or type(max_inflight) is not int
             or max_inflight <= 0
+            or type(use_native_batch) is not bool
+            or (
+                use_native_batch
+                and not callable(getattr(engine, "submit_batch_put", None))
+            )
             or type(source.offset) is not int
             or type(source.length) is not int
             or source_key != plan.key
@@ -111,6 +117,7 @@ class FullKVFanInWriter:
         self._source, self._engine = source, engine
         self._source_descriptor = copy.deepcopy(source.registration.descriptor)
         self._parts, self._max_inflight = plan.writers[source_rank], max_inflight
+        self._native_batch = use_native_batch
         self._lock, self._drive_lock = threading.RLock(), threading.Lock()
         self._cursor, self._bytes = 0, 0
         self._pending = []
@@ -276,6 +283,11 @@ class FullKVFanInWriter:
             return self.snapshot()
         try:
             self._drain()
+            if self._native_batch:
+                self._submit_batch()
+                self._drain()
+                self._finish()
+                return self.snapshot()
             for _ in range(self._max_inflight):
                 with self._lock:
                     if (
@@ -348,3 +360,75 @@ class FullKVFanInWriter:
             return self.snapshot()
         finally:
             self._drive_lock.release()
+
+    def _submit_batch(self):
+        # The validated plan already proves disjoint destination ranges. One
+        # aggregate handle owns all slices until native full-batch completion.
+        with self._lock:
+            if (
+                not self._started
+                or self._cancelled
+                or self._unknown
+                or self._terminal is not None
+                or self._cursor != 0
+            ):
+                return
+            source = self._source
+            if (
+                source.registration.descriptor != self._source_descriptor
+                or source.registration.buffer.data_ptr()
+                != self._source_descriptor.address
+            ):
+                self._failed = self._cancelled = True
+                self.error = "source registration changed"
+                self._authorization.close()
+                return
+            slices = tuple(
+                MemorySlice(
+                    source.registration,
+                    source.offset + part.local_offset,
+                    part.length,
+                )
+                for part in self._parts
+            )
+            offsets = tuple(part.remote_offset for part in self._parts)
+            expected = sum(part.length for part in self._parts)
+            self._authorization.begin(self.identity)
+            self._attempted = self._submitting = True
+        submit_started = time.monotonic()
+        self._submit_calls += 1
+        try:
+            handle = self._engine.submit_batch_put(
+                slices, self.plan.destination, remote_offsets=offsets
+            )
+            if not isinstance(handle, TransferHandle):
+                raise TypeError("native batch submission did not return a handle")
+            if (
+                not isinstance(handle.transfer_id, str)
+                or not handle.transfer_id
+                or handle.transfer_id in self._seen_transfers
+            ):
+                raise ValueError("native batch handle identity missing or reused")
+            self._seen_transfers.add(handle.transfer_id)
+        except BaseException as exc:
+            with self._lock:
+                self._unknown = self._cancelled = True
+                self.error = f"batch submission uncertain: {exc}"
+                self._authorization.close()
+            if not isinstance(exc, Exception):
+                raise
+        else:
+            with self._lock:
+                self._pending.append((handle, expected))
+                self._cursor = len(self._parts)
+                if handle.transport_state in (
+                    TransportState.UNKNOWN,
+                    TransportState.TERMINAL_FAILED,
+                    TransportState.NOT_SUBMITTED,
+                ):
+                    self._failed = self._cancelled = True
+                    self._authorization.close()
+        finally:
+            self._submit_seconds += time.monotonic() - submit_started
+            with self._lock:
+                self._submitting = False

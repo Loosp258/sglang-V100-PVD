@@ -331,6 +331,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum outstanding PUTs per fan-in writer. Both fan-in bounds are required.",
     )
     parser.add_argument(
+        "--full-kv-fanin-native-batch",
+        action="store_true",
+        help="Experimental V-only Mooncake aggregate batch PUT for full Prompt fan-in. "
+        "Requires fan-in bounds and Mooncake; a failed aggregate quarantines the "
+        "source and destination rather than assuming all tasks stopped.",
+    )
+    parser.add_argument(
         "--full-kv-fanin-max-records",
         type=_positive_int,
         default=None,
@@ -391,6 +398,10 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
     )
     if bounds != (None, None) and any(type(v) is not int or v <= 0 for v in bounds):
         raise ValueError("both full-KV fan-in bounds must be positive integers")
+    if getattr(args, "full_kv_fanin_native_batch", False) and (
+        bounds == (None, None) or args.transfer_backend != "mooncake"
+    ):
+        raise ValueError("native fan-in batch requires Mooncake and fan-in bounds")
     records = getattr(args, "full_kv_fanin_max_records", None)
     if records is not None and (
         type(records) is not int or records <= 0 or bounds == (None, None)
@@ -699,6 +710,7 @@ def _create_store(
         prompt_index=prompt_index,
         full_kv_fanin_max_slices=getattr(args, "full_kv_fanin_max_slices", None),
         full_kv_fanin_max_inflight=getattr(args, "full_kv_fanin_max_inflight", None),
+        full_kv_fanin_native_batch=getattr(args, "full_kv_fanin_native_batch", False),
         allow_cuda_sparse_packing=getattr(
             args, "experimental_cuda_sparse_packing", False
         ),

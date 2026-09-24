@@ -317,6 +317,7 @@ class VectorKVStore:
         allow_cuda_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
+        full_kv_fanin_native_batch: bool = False,
     ) -> None:
         if rank < 0 or rank >= world_size:
             raise ValueError(f"rank {rank} is outside world size {world_size}")
@@ -330,6 +331,17 @@ class VectorKVStore:
         ):
             raise ValueError("both full-KV fan-in bounds must be positive integers")
         self._fanin_max_slices, self._fanin_max_inflight = fanin_limits
+        if type(full_kv_fanin_native_batch) is not bool or (
+            full_kv_fanin_native_batch and fanin_limits == (None, None)
+        ):
+            raise ValueError("native fan-in batch requires configured fan-in bounds")
+        if full_kv_fanin_native_batch:
+            if not callable(getattr(transfer_engine, "submit_batch_put", None)):
+                raise ValueError("transfer engine has no native batch PUT")
+            require_batch = getattr(transfer_engine, "require_native_batch", None)
+            if callable(require_batch):
+                require_batch()
+        self._fanin_native_batch = full_kv_fanin_native_batch
         if type(max_entry_records) is not int or max_entry_records <= 0:
             raise ValueError("max_entry_records must be a positive integer")
         if type(max_delivery_records) is not int or max_delivery_records <= 0:
@@ -789,6 +801,7 @@ class VectorKVStore:
                 sender_epoch=self.worker_epoch,
                 max_slices=self._fanin_max_slices,
                 max_inflight=self._fanin_max_inflight,
+                use_native_batch=self._fanin_native_batch,
             )
             now = time.monotonic()
             delivery = DeliveryShardRecord(
@@ -1363,9 +1376,7 @@ class VectorKVStore:
                 safe
                 and source_done
                 and staging_done
-                and (
-                    handle is None or self.transfer_engine.cleanup_complete(handle)
-                )
+                and (handle is None or self.transfer_engine.cleanup_complete(handle))
                 and delivery.state
                 in (DeliveryState.DELIVERED, *DELIVERY_TERMINAL_STATES)
             ):
@@ -1774,6 +1785,7 @@ class VectorKVStore:
                     "enabled": self._fanin_max_slices is not None,
                     "max_slices": self._fanin_max_slices,
                     "max_inflight": self._fanin_max_inflight,
+                    "native_batch": self._fanin_native_batch,
                 },
                 "closed": self._closed,
                 "isolated_reason": self._isolated_reason,

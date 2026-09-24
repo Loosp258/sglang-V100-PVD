@@ -6,6 +6,8 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
 import torch
@@ -33,6 +35,12 @@ _uncertain_lock = threading.Lock()
 # Native registration may have taken effect even when its Python call fails.
 # Keep both the engine and CUDA storage alive until process exit in that case.
 _uncertain_native_registrations: list[tuple[Any, torch.Tensor, int, str]] = []
+
+
+@dataclass(frozen=True)
+class _NativeBatchStatus:
+    batch_id: int
+    aggregate: Future
 
 
 class MooncakePVDTransferEngine(TransferEngine):
@@ -83,11 +91,16 @@ class MooncakePVDTransferEngine(TransferEngine):
         self._guards: Dict[str, ResourceGuard] = {}
         self._lock = threading.Lock()
         self._timing_lock = threading.Lock()
+        self._batch_waiters = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="pvd-mooncake-batch"
+        )
         self._submit_timing = {
             "cuda_sync_calls": 0,
             "cuda_sync_seconds": 0.0,
             "native_submit_calls": 0,
             "native_submit_seconds": 0.0,
+            "batch_submit_calls": 0,
+            "batch_submit_seconds": 0.0,
         }
         self._registration_unknown_reason: Optional[str] = None
 
@@ -96,6 +109,11 @@ class MooncakePVDTransferEngine(TransferEngine):
         with self._timing_lock:
             self._submit_timing[f"{kind}_calls"] += 1
             self._submit_timing[f"{kind}_seconds"] += elapsed
+
+    def require_native_batch(self) -> None:
+        for name in ("batch_transfer_async_write", "get_batch_transfer_status"):
+            if not callable(getattr(self._engine.engine, name, None)):
+                raise RuntimeError(f"Mooncake native batch requires {name}")
 
     def _quarantine_registration(
         self, buffer: torch.Tensor, ptr: int, reason: str
@@ -365,26 +383,156 @@ class MooncakePVDTransferEngine(TransferEngine):
         self.lifecycle_manager.submit_native(handle, native_submit)
         return handle
 
+    def submit_batch_put(
+        self,
+        slices: tuple[MemorySlice, ...],
+        remote: RemoteRegionDescriptor,
+        *,
+        remote_offsets: tuple[int, ...],
+    ) -> TransferHandle:
+        """One aggregate native handle for disjoint, bounded fan-in slices.
+
+        The whole batch is one lifecycle owner. Aggregate failure is UNKNOWN:
+        this Mooncake version may free its batch ID while other tasks remain.
+        """
+        handle = TransferHandle(transfer_id=uuid.uuid4().hex)
+        if (
+            not slices
+            or len(slices) != len(remote_offsets)
+            or remote.rail != self.rail
+            or not callable(getattr(self._engine.engine, "batch_transfer_async_write", None))
+            or not callable(getattr(self._engine.engine, "get_batch_transfer_status", None))
+        ):
+            handle.status = TransferStatus.FAILED
+            handle.error = "bounded native batch PUT is unavailable"
+            return handle
+        registration = slices[0].registration
+        lengths = []
+        source_addresses = []
+        destination_addresses = []
+        ranges = []
+        try:
+            with self._lock:
+                unknown_reason = getattr(
+                    self._engine, "_pvd_registration_unknown_reason", None
+                )
+                if unknown_reason is not None:
+                    raise RuntimeError(
+                        f"Mooncake registration state is unknown: {unknown_reason}"
+                    )
+                owned = self._registrations.get(registration.descriptor.region_id)
+                guard = self._guards.get(registration.descriptor.region_id)
+            if owned is not registration or guard is None:
+                raise ValueError("batch source registration is not owned")
+            if registration.descriptor.rail != self.rail:
+                raise ValueError("batch source rail mismatch")
+            if (
+                not registration.buffer.is_contiguous()
+                or registration.buffer.data_ptr()
+                != registration.descriptor.address
+            ):
+                raise ValueError("batch source backing storage changed")
+            for local, offset in zip(slices, remote_offsets, strict=True):
+                if (
+                    not isinstance(local, MemorySlice)
+                    or local.registration is not registration
+                    or type(offset) is not int
+                    or offset < 0
+                    or offset + local.length > remote.length
+                ):
+                    raise ValueError("batch slice exceeds one owned source/destination")
+                lengths.append(local.length)
+                source_addresses.append(registration.descriptor.address + local.offset)
+                destination_addresses.append(remote.address + offset)
+                ranges.append((offset, offset + local.length))
+            ranges.sort()
+            if any(left[1] > right[0] for left, right in zip(ranges, ranges[1:])):
+                raise ValueError("batch destination ranges overlap")
+            self._engine.require_pvd_metadata_policy()
+            sync_started = time.perf_counter()
+            try:
+                torch.cuda.synchronize(registration.buffer.device)
+            finally:
+                self._record_submit_timing(
+                    "cuda_sync", time.perf_counter() - sync_started
+                )
+            self.lifecycle_manager.attach(handle, guard, sum(lengths))
+        except Exception as exc:
+            handle.status = TransferStatus.FAILED
+            handle.error = f"PVD batch source preparation failed: {exc}"
+            return handle
+
+        def native_submit():
+            submit_started = time.perf_counter()
+            try:
+                batch_id = self._engine.engine.batch_transfer_async_write(
+                    remote.endpoint, source_addresses, destination_addresses, lengths
+                )
+                # Guard against an older unsigned binding returning -1 as UINT64_MAX.
+                return (
+                    0
+                    if type(batch_id) is not int or batch_id == (1 << 64) - 1
+                    else batch_id
+                )
+            finally:
+                self._record_submit_timing(
+                    "batch_submit", time.perf_counter() - submit_started
+                )
+
+        self.lifecycle_manager.submit_native(handle, native_submit)
+        if handle.transport_state == TransportState.IN_FLIGHT:
+            try:
+                batch_id = handle.backend_handle
+                aggregate = self._batch_waiters.submit(
+                    self._engine.engine.get_batch_transfer_status, [batch_id]
+                )
+                handle.backend_handle = _NativeBatchStatus(batch_id, aggregate)
+            except Exception as exc:
+                self.lifecycle_manager.mark_unknown(
+                    handle, f"native batch status could not be scheduled: {exc}"
+                )
+        return handle
+
     def poll(self, handle: TransferHandle) -> TransferStatus:
         terminal_success = None
         with handle._lock:
             if handle.transport_state in (TransportState.IN_FLIGHT, TransportState.DRAINING):
-                try:
-                    result = self._engine.engine.transfer_check_status(handle.backend_handle)
-                except Exception as exc:
-                    self.lifecycle_manager.mark_unknown(handle, f"native poll raised: {exc}")
+                batch = handle.backend_handle
+                if isinstance(batch, _NativeBatchStatus):
+                    if batch.aggregate.done():
+                        try:
+                            result = batch.aggregate.result()
+                        except Exception as exc:
+                            self.lifecycle_manager.mark_unknown(
+                                handle, f"native batch completion uncertain: {exc}"
+                            )
+                        else:
+                            if result == 0:
+                                terminal_success = True
+                                handle.transport_state = TransportState.TERMINAL_SUCCESS
+                            else:
+                                # The native wrapper frees the batch ID on
+                                # failure/timeout, possibly before all tasks stop.
+                                self.lifecycle_manager.mark_unknown(
+                                    handle, f"native batch completion uncertain: {result}"
+                                )
                 else:
-                    if result in (1, -1):
-                        terminal_success = result == 1
-                        handle.transport_state = (
-                            TransportState.TERMINAL_SUCCESS
-                            if terminal_success
-                            else TransportState.TERMINAL_FAILED
-                        )
-                    elif result == -2:
-                        handle.transport_state = TransportState.DRAINING
-                    elif result != 0:
-                        self.lifecycle_manager.mark_unknown(handle, f"unexpected native status {result}")
+                    try:
+                        result = self._engine.engine.transfer_check_status(batch)
+                    except Exception as exc:
+                        self.lifecycle_manager.mark_unknown(handle, f"native poll raised: {exc}")
+                    else:
+                        if result in (1, -1):
+                            terminal_success = result == 1
+                            handle.transport_state = (
+                                TransportState.TERMINAL_SUCCESS
+                                if terminal_success
+                                else TransportState.TERMINAL_FAILED
+                            )
+                        elif result == -2:
+                            handle.transport_state = TransportState.DRAINING
+                        elif result != 0:
+                            self.lifecycle_manager.mark_unknown(handle, f"unexpected native status {result}")
             elif handle.transport_state in (TransportState.TERMINAL_SUCCESS, TransportState.TERMINAL_FAILED):
                 terminal_success = handle.transport_state == TransportState.TERMINAL_SUCCESS
         if terminal_success is not None:

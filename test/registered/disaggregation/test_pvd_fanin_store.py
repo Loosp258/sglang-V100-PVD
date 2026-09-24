@@ -31,11 +31,13 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 )
 from sglang.srt.disaggregation.pvd.vector_store import EntryConflictError, VectorKVStore
 from test_pvd_core import ENTRY_BYTES, PAGE_BYTES, make_manifest
-from test_pvd_fanin_writer import DelayedEngine
+from test_pvd_fanin_writer import BatchEngine, DelayedEngine
 
 
 @contextmanager
-def setup(*, engine=None, enabled=True, committed=True, publish=True):
+def setup(
+    *, engine=None, enabled=True, committed=True, publish=True, native_batch=False
+):
     engine = engine or FakeTransferEngine()
     original = make_manifest()
     manifest = replace(
@@ -55,6 +57,7 @@ def setup(*, engine=None, enabled=True, committed=True, publish=True):
             allow_cpu_for_tests=True,
             full_kv_fanin_max_slices=64 if enabled else None,
             full_kv_fanin_max_inflight=2 if enabled else None,
+            full_kv_fanin_native_batch=native_batch,
         )
         for rank in (0, 1)
     ]
@@ -153,6 +156,23 @@ def test_real_store_two_source_delivery_reuses_entry_after_ack():
         for store in c.stores:
             store.release_entry(c.key)
             assert store.entries[c.key].resources_released
+
+
+def test_real_store_native_batch_delivers_and_acks_same_proof():
+    engine = BatchEngine()
+    with setup(engine=engine, native_batch=True) as c:
+        ds = [s.reserve_fanin_delivery(c.wire) for s in c.stores]
+        c.receiver.adopt({r: d.authorization.identity for r, d in enumerate(ds)})
+        c.guard.request_release()
+        for store, delivery in zip(c.stores, ds):
+            store.start_delivery(c.key, delivery.delivery_id)
+            assert delivery.state == DeliveryState.DELIVERED
+            c.receiver.observe(delivery.to_dict()["fanin_proof"])
+            store.ack_delivery(c.key, delivery.delivery_id)
+        expected = torch.cat([r.reshape(8, 4) for r in c.raw], dim=1).reshape(-1)
+        assert c.receiver.ready and torch.equal(c.target.buffer, expected)
+        assert len(engine.batch_calls) == 2
+        c.receiver.close()
 
 
 def test_partial_native_writes_delay_actual_allocator_reuse():
@@ -319,6 +339,11 @@ def test_launcher_requires_both_bounds_before_constructing_store():
         assert store._fanin_max_slices == 64 and store._fanin_max_inflight == 2
     finally:
         store.close()
+    args = parser.parse_args(
+        flags + ["--full-kv-fanin-max-inflight", "2", "--full-kv-fanin-native-batch"]
+    )
+    with pytest.raises(ValueError, match="native fan-in batch requires Mooncake"):
+        _validate_args(args)
 
 
 @pytest.mark.parametrize("cause", ["timeout", "shutdown"])

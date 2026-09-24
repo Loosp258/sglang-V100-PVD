@@ -97,6 +97,23 @@ class DelayedEngine(FakeTransferEngine):
             handle.transport_state = TransportState.TERMINAL_FAILED
 
 
+class BatchEngine(FakeTransferEngine):
+    def __init__(self):
+        super().__init__()
+        self.batch_calls = []
+
+    def submit_batch_put(self, slices, remote, *, remote_offsets):
+        self.batch_calls.append((slices, remote_offsets))
+        handle = TransferHandle(uuid.uuid4().hex)
+        for local, offset in zip(slices, remote_offsets, strict=True):
+            part = super().submit_put(local, remote, remote_offset=offset)
+            assert part.transport_state == TransportState.TERMINAL_SUCCESS
+            handle.transferred_bytes += part.transferred_bytes
+        handle.status = TransferStatus.SUCCESS
+        handle.transport_state = TransportState.TERMINAL_SUCCESS
+        return handle
+
+
 def test_two_writers_reconstruct_bytes_and_feed_receiver_proofs(case):
     c = case
     c.manifest = c.receiver.publish()
@@ -120,6 +137,31 @@ def test_two_writers_reconstruct_bytes_and_feed_receiver_proofs(case):
             assert w.result.start() == result
             assert c.engine.total_put_bytes == count and w.releases == [w.rank]
         assert torch.equal(c.registration.buffer, expected)
+        c.receiver.close()
+        assert c.released == ["MR released"]
+
+
+def test_native_batch_writer_preserves_exact_fanin_proof(case):
+    c = case
+    c.manifest = c.receiver.publish()
+    engine = BatchEngine()
+    with (
+        writer(c, 0, engine=engine, use_native_batch=True) as a,
+        writer(c, 1, engine=engine, use_native_batch=True) as b,
+    ):
+        c.receiver.adopt({0: a.result.identity, 1: b.result.identity})
+        c.guard.request_release()
+        for w in (a, b):
+            proof = w.result.start()
+            assert proof["fenced"]
+            assert proof["transport_state"] == "terminal_success"
+            c.receiver.observe(proof)
+        assert c.receiver.ready
+        assert len(engine.batch_calls) == 2
+        assert [len(slices) for slices, _ in engine.batch_calls] == [
+            len(c.manifest["writers"]["0"]),
+            len(c.manifest["writers"]["1"]),
+        ]
         c.receiver.close()
         assert c.released == ["MR released"]
 
