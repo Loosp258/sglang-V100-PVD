@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager, nullcontext
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +93,10 @@ def _options(target, lock):
 
 
 def _fake_cuda(monkeypatch):
+    # server_args imports FLA code that asks torch.cuda for device properties.
+    # Import it before replacing torch.cuda.device with the context-manager
+    # double; PyTorch itself uses that name as an isinstance type.
+    import_module("sglang.srt.server_args")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "device", lambda _device: nullcontext())
     monkeypatch.setattr(torch.cuda, "synchronize", lambda _device: None)
