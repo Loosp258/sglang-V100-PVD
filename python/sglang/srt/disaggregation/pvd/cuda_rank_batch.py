@@ -124,8 +124,19 @@ class CUDARankBatchExecutor:
                 ticket, readers_drained=True, succeeded=True
             ) as decisions:
                 if not all(d.accepted for d in decisions):
+                    refused = tuple(
+                        (
+                            index,
+                            member.group.runtime.snapshot()["phase"],
+                            member.group.runtime.snapshot()["reason"],
+                        )
+                        for index, (member, decision) in enumerate(
+                            zip(members, decisions, strict=True)
+                        )
+                        if not decision.accepted
+                    )
                     raise InstallProtocolError(
-                        "CUDA batch result refused; commit nothing"
+                        f"CUDA batch result refused; commit nothing; refused={refused}"
                     )
                 # Runtime tickets and outer target lock remain held here.
                 return process_results(result)
