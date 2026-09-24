@@ -3,6 +3,65 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 V 历史容量与 Coordinator 扫描 / V history bounds and coordinator scans
+
+`413f8bf60`、`f76894d61` 分别给 V shard 的历史 Entry、Delivery 与旧版
+缺席 fence 增加每 worker epoch 的容量上限；`e03350501` 使 Coordinator 的
+每 ID 异步锁在最后一个操作结束后回收；`155d7ae4b` 给 Coordinator 的
+历史 Entry、Delivery、Router admission 与未知检索 fence 增加上限。
+默认上限分别为 Entry 8192、Delivery 65536、旧版缺席 fence 4096、
+Router admission 8192、未知检索 fence 4096，均可由启动参数调整。
+达到上限时拒绝**新**身份，保留旧身份的重试与 fence，不按 TTL 删除
+重放证明。V shard 与 Coordinator 的上限各自独立，容量耗尽不是服务成功；
+这只是有限内存内的失效保护，不是无限期持续接纳新请求的方案。
+
+CloudLab V 从独立检出 `f76894d61` 启动后，两条真实 Gateway 请求均为
+HTTP 200：第一条 36-token Prompt / 2-token 输出，第二条 41-token Prompt /
+8-token 输出。第二条触发 **112 次** native CAGRA 索引搜索；两个 V rank
+累计各完成并 ACK 3 次 Delivery，Mooncake 在途/UNKNOWN 均为 0。
+TTL 后两 rank 均恢复 1024 空闲页，`live_entries=0`、
+`pending_release_entries=0`，两个历史 Entry 均为 `released`。
+
+V 随后从新隔离检出 `155d7ae4b` 启动，一条 41-token Prompt / 8-token
+输出请求经 Gateway 返回 HTTP 200（约 39.7 秒），V 日志记录 112 次
+索引搜索，两 rank 各完成并 ACK 2 次 Delivery。TTL 后两 rank 各恢复
+1024 空闲页、无在途/UNKNOWN 传输，Coordinator admission 计数回到 0；
+健康接口报告上限已生效。该在线检出不含随后 `a2c65c46d` 的活动扫描优化。
+本地完整 PVD CPU 回归依次为 **2858、2859、2879、2881 passed**，
+各有 23 skipped、21 subtests passed；最新结果对应 `a2c65c46d`。
+这些少量请求不证明在接近容量上限、连续故障或长期负载下的表现。
+
+`413f8bf60` and `f76894d61` add per-worker-epoch bounds for V-shard
+historical Entry, Delivery and legacy absent-fence records. `e03350501`
+lets per-ID coordinator operation locks die after their last user exits.
+`155d7ae4b` bounds coordinator historical Entry and Delivery records, Router
+admissions, and unknown retrieval fences. Defaults are 8192 Entries, 65536
+Deliveries, 4096 legacy absent fences, 8192 admissions and 4096 unknown
+retrieval fences; launch flags can adjust them. Capacity refuses **new**
+identities while preserving retries and fences for existing identities. No
+TTL eviction of replay proof occurs. Shard and coordinator bounds are
+independent. This is fail-closed memory containment, not unbounded continued
+admission; capacity exhaustion is not a successful-service state.
+
+On an isolated `f76894d61` V checkout, two real Gateway requests returned
+HTTP 200: a 36-token Prompt/two-token output and a 41-token Prompt/eight-token
+output. The second generated **112 native CAGRA index searches**. Each V
+rank cumulatively completed and ACKed three Deliveries, with zero in-flight
+or UNKNOWN Mooncake work. After TTL, both ranks returned to 1024 free pages,
+`live_entries=0` and `pending_release_entries=0`; both historical Entries
+were `released`.
+
+The next isolated V checkout, `155d7ae4b`, served a real 41-token Prompt /
+eight-token output Gateway request with HTTP 200 in about 39.7 seconds.
+V logged 112 index searches; each rank completed and ACKed two Deliveries.
+After TTL both ranks had 1024 free pages and no in-flight/UNKNOWN transfer,
+while coordinator admissions returned to zero. Health exposed the configured
+bounds. This live checkout does not contain the later `a2c65c46d` active-scan
+optimization. Local full PVD CPU regressions across these steps reported
+**2858, 2859, 2879 and 2881 passed**, each with 23 skipped and 21 subtests
+passed; the latest result is for `a2c65c46d`. A few requests do not
+establish near-capacity, repeated-failure or long-run behavior.
+
 ## 2026-09-24 V 释放队列在线验证 / Live V release-queue gate
 
 提交 `93e2d7373` 将 V 分配释放进度限制在待释放集合，不再每个维护周期重扫
@@ -17,7 +76,8 @@ UNKNOWN 为 0。请求后两 rank 各有 989 空闲页，300 秒 TTL 后均恢�
 
 随后提交 `b52e24e5d` 让索引构建与到期扫描只遍历仍有资源活动的 Entry，
 历史记录仍保留以拒绝重放。完整 CPU 回归 **2842 passed / 23 skipped**，
-新增的索引扫描专项测试另通过；这一步尚未部署到 CloudLab。
+新增的索引扫描专项测试另通过；随后包含此提交的 `f76894d61`
+已在上文所述 CloudLab 在线请求中验证。
 两个提交都没有解决历史 Entry/Delivery 元数据永久保留的主机内存上界问题。
 
 Commit `93e2d7373` progresses only pending V allocation releases instead of
@@ -36,8 +96,9 @@ not sustained load, native poll counts or a latency benefit.
 Commit `b52e24e5d` also limits index-build and expiration scans to entries
 whose resources remain active, keeping historical records for replay refusal.
 Its full CPU regression had **2842 passed / 23 skipped**, with the final
-index-scan focused case rerun separately. This second commit has not yet run
-on CloudLab. Neither change bounds the host memory retained by historical
+index-scan focused case rerun separately. The subsequent `f76894d61`
+checkout containing this commit passed the live CloudLab requests above.
+Neither scan change itself bounds the host memory retained by historical
 Entry/Delivery metadata.
 
 ## 2026-09-24 V 终态轮询优化在线验证 / Live V terminal-polling gate
@@ -165,17 +226,19 @@ inflight or UNKNOWN work. The Entry initially remained within its
 **1024 free pages** per shard, and a still-healthy reaper with zero
 failures. This proves one TTL cleanup, not long-run or high-load behavior.
 
-持续服务仍有非硬件缺口：终态 Entry/Delivery 元数据与部分 fence/lock 映射
-永久保留，主机内存和后台扫描量会随累计请求增长。按 TTL 直接删除不安全，
-因为迟到重试可能重用旧身份。下一步需要安全的终态压缩与容量上限；若要求
-无限期持续接纳新 ID，还需要明确的 epoch/序号水位或可强制执行的重试期限。
-Sustained service still has a non-hardware gap: terminal Entry/Delivery
-metadata and some fence/lock maps are retained indefinitely, increasing
-host memory and reaper work with lifetime requests. Blind TTL eviction is
-unsafe because late retries could reuse old identities. Safe terminal
-compaction and a fail-closed capacity are the next containment step;
-unbounded continued admission additionally needs an explicit epoch/sequence
-watermark or enforceable retry horizon.
+上述旧验收时，终态 Entry/Delivery 与 fence 元数据无界保留且每轮重扫。
+后续提交已经增加每 worker epoch 的容量上限、弱生命周期操作锁以及活动
+维护集合；详见本页开头。历史记录仍保留用于拒绝迟到重试，触及上限时拒绝
+新 ID。若要求无需重启地无限期接纳新 ID，仍需明确的 epoch/序号水位或
+可强制执行的重试期限，不能简单按 TTL 删除旧身份。
+At the time of the older acceptance above, terminal Entry/Delivery and fence
+metadata accumulated without a bound and maintenance rescanned history.
+Subsequent commits added per-worker-epoch limits, weak-lifetime operation
+locks and active maintenance sets as described at the top of this page.
+Historical identities remain for late-retry refusal; new IDs are refused at
+capacity. Indefinite admission without restart still needs an explicit
+epoch/sequence watermark or an enforceable retry horizon. Blind TTL eviction
+is unsafe.
 
 ## 2026-09-24 生产请求链路首轮验收 / First live serving acceptance
 
