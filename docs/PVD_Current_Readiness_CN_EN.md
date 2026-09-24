@@ -43,6 +43,20 @@ Prompt 为 26–27 token、每 Q head Top-4；容量不足时拒绝而不截断�
 `mlx5_1` 仍为物理 DOWN，双 rail 未验收。以下旧段落保留历史里程碑，
 其中“生产接线尚未完成”的旧状态已由本节真实请求验收取代。
 
+同日随后完成两次**原生 cuVS CAGRA**的真实 Gateway 8-token 请求：
+26–27-token Prompt 在 `intermediate_degree=16` 下确实触发 224 次原生
+建图与 1568 次 HTTP 索引搜索；两 V rank 的四次 Delivery 均完成/ACK，
+Mooncake 预算排空。详见 [CAGRA 真实请求验收](PVD_CAGRA_Acceptance_CN_EN.md)。
+这取代上文“仅 exact”的功能边界，但不证明检索质量或性能收益。
+
+Later the same day, two more real eight-token Gateway requests passed with
+**native cuVS CAGRA**. Their 26–27-token prompts exceeded the configured
+16-row fallback threshold, triggering 224 native builds and 1568 HTTP
+searches. All four Deliveries per V rank completed/ACKed and Mooncake
+budgets drained. See [native-CAGRA live acceptance](PVD_CAGRA_Acceptance_CN_EN.md).
+This supersedes the exact-only functional boundary above, but does not
+establish retrieval quality or a performance gain.
+
 2026-09-24 CloudLab D 节点（`clgpu019`）使用**新建、干净的隔离检出**验证了本地
 `ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项
 聚焦测试通过；进一步运行 `test_pvd_cuda_*.py`，**445 项通过**。该检出来自

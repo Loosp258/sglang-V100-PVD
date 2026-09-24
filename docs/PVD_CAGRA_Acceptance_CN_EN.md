@@ -1,5 +1,67 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 Gateway 真实请求中的原生 CAGRA / Native CAGRA in live Gateway requests
+
+在用户授权的三机隔离检出中，真实 Qwen2.5-7B-Instruct 请求经 Gateway、P、
+V 两个 GPU rank、D TP1 连续两次生成 8 token，HTTP 200。D 上独立
+Qwen2.5-0.5B-Instruct draft 驱动第 4 token 周期刷新；V 使用
+`--prompt-index-backend cagra-auto`，但将 CAGRA `graph_degree=8`、
+`intermediate_degree=16`，实际 Prompt 为 26、27 token，故这两次**均走
+原生 CAGRA 而非 exact fallback**。V 日志累计 224 次原生建图
+（两 Entry × 两 rank × 28 层 × 每 rank 2 KV heads）、1568 次索引 HTTP 搜索；
+每 rank 有 4 次 Delivery 完成并 ACK，P→V/V→D 字节数均大于零，
+Mooncake 无在途、UNKNOWN 或隔离事务。两次请求耗时约 35.4 和 29.1 秒，
+含建图开销，不是相同索引热态的延迟测量。使用 cuVS `25.02.00`、
+V100S、`mlx5_0` 单 rail。P/V/Gateway 隔离检出为 `fbd77287b`，
+D 为 `2095dd60a`。
+
+In authorized isolated three-node checkouts, two consecutive real
+Qwen2.5-7B-Instruct Gateway requests each generated eight tokens with HTTP
+200. An independent Qwen2.5-0.5B-Instruct draft on TP1 D drove the
+four-token refresh. V ran `cagra-auto` with `graph_degree=8` and
+`intermediate_degree=16`; the 26- and 27-token prompts therefore used
+**native CAGRA, not its exact fallback**. V logged 224 native builds
+(two Entries × two ranks × 28 layers × two local KV heads) and 1568 HTTP
+index searches. Each rank completed and ACKed four Deliveries, transferred
+nonzero P→V/V→D bytes, and had no in-flight, UNKNOWN or quarantined
+Mooncake work afterward. End-to-end request times were about 35.4 and
+29.1 seconds including index builds; they are not hot-index latency
+measurements. The run used cuVS `25.02.00`, V100S and single-rail `mlx5_0`.
+Isolated P/V/Gateway checkouts were `fbd77287b`; D was `2095dd60a`.
+
+V 的关键实验参数：
+
+```text
+--prompt-index-backend cagra-auto
+--prompt-index-vector-space qwen25-7b-pvd
+--prompt-index-budget-bytes 1073741824
+--prompt-index-cagra-native-bytes 536870912
+--prompt-index-cagra-global-native-bytes 671088640
+--prompt-index-cagra-graph-degree 8
+--prompt-index-cagra-intermediate-degree 16
+--prompt-index-cagra-itopk-size 64
+--experimental-cuda-sparse-packing
+```
+
+Candidate cuVS imports only with a **process-local** loader path containing
+the Conda environment's `nvidia/{cublas,cusolver,cusparse,nvjitlink,cuda_runtime}/lib`
+directories and the candidate venv's `libcuvs/lib64` and `libraft/lib64`.
+Without it, the loader either cannot find `libcuvs_c.so` or mixes system
+`cusolver` with an incompatible `cublas`. Do not replace system CUDA libraries.
+
+This validates two short-Prompt native-CAGRA requests and safe sparse
+delivery, **not** recall distribution, long Prompt capacity, a large Entry
+corpus, concurrent clients, dual rail, measured network/GPU overlap, or a
+latency/throughput gain. The exact-index live baseline completed the same
+eight-token output in two requests around 9.9/9.6 seconds, but that is not
+an apples-to-apples benchmark because both configurations built fresh
+per-Entry indexes and only two requests were sampled.
+
+这只验收两个短 Prompt 的原生 CAGRA 请求与安全稀疏交付；尚未证明召回分布、
+长 Prompt/大 Entry 库、并发、双 rail、网络/计算重叠或性能收益。精确索引
+基线两次约 9.9/9.6 秒；两边都为每个新 Entry 建索引且样本量仅为 2，
+不能据此作公平性能结论。
+
 ## 2026-09-24 稀疏交付与真实 Decode 的安全交错 / Safe interleaving of sparse delivery and real Decode
 
 在隔离的三节点 Qwen2.5-7B 实验中，P 提交真实 Prefill first token **198**，
