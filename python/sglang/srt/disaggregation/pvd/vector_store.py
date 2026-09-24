@@ -372,6 +372,10 @@ class VectorKVStore:
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
+        # Historical records remain addressable for replay rejection. Only
+        # allocations that can still expire, build an index or drain a write
+        # belong to the maintenance scan.
+        self._live_entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # Keep replay tombstones in entries, but do not revisit already
         # released allocations on every maintenance tick.
         self._release_pending: Dict[KVEntryKey, EntryShardRecord] = {}
@@ -512,6 +516,7 @@ class VectorKVStore:
                 )
             self._pool_guard.pin(record.pool_owner)
             self.entries[manifest.key] = record
+            self._live_entries[manifest.key] = record
             self.metrics.increment("vector_entries_created")
             self._refresh_metrics()
             return record
@@ -1574,7 +1579,7 @@ class VectorKVStore:
         candidates = []
         skipped = 0
         with self._lock:
-            for entry in self.entries.values():
+            for entry in self._live_entries.values():
                 transfer_id = entry.key.transfer_id
                 if entry.state != EntryShardState.STORED or entry.release_requested:
                     continue
@@ -1663,6 +1668,7 @@ class VectorKVStore:
                 with self._lock:
                     if self._release_pending.get(entry.key) is entry:
                         self._release_pending.pop(entry.key)
+                        self._live_entries.pop(entry.key, None)
             except Exception as exc:
                 logger.warning(
                     "V allocation release retained resources: %s: %s", entry.key, exc
@@ -1679,7 +1685,7 @@ class VectorKVStore:
         now = time.monotonic() if now is None else now
         expired_deliveries = expired_entries = 0
         with self._lock:
-            for entry in self.entries.values():
+            for entry in self._live_entries.values():
                 for delivery in entry.deliveries.values():
                     if (
                         delivery.state not in DELIVERY_TERMINAL_STATES
@@ -1742,6 +1748,7 @@ class VectorKVStore:
                 "absent_write_fences": len(self._absent_write_fences),
                 "max_absent_write_fences": self._max_absent_write_fences,
                 "pending_release_entries": len(self._release_pending),
+                "live_entries": len(self._live_entries),
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],

@@ -623,6 +623,67 @@ def test_released_entry_stays_a_tombstone_without_repeated_release_scans(monkeyp
     store.close()
 
 
+def test_settled_tombstone_is_not_scanned_by_expiry_reaper():
+    _, store, entry = ready_store()
+    store.release_entry(entry.key)
+    assert store.snapshot()["live_entries"] == 0
+    assert entry.key in store.entries
+
+    class UnscannableDeliveries(dict):
+        def values(self):
+            pytest.fail("settled tombstone scanned by expiry reaper")
+
+    original = entry.deliveries
+    entry.deliveries = UnscannableDeliveries()
+    try:
+        assert store.reap_expired(now=float("inf")) == {
+            "entries": 0,
+            "deliveries": 0,
+        }
+    finally:
+        entry.deliveries = original
+    store.close()
+
+
+def test_settled_tombstone_is_not_scanned_by_index_builder():
+    _, store, entry = ready_store()
+    store.release_entry(entry.key)
+
+    class UnscannableState:
+        def __ne__(self, other):
+            pytest.fail("settled tombstone scanned by index builder")
+
+    original = entry.state
+    entry.state = UnscannableState()
+    store.prompt_index = object()
+    try:
+        assert store.progress_prompt_indexes() == {
+            "built": 0,
+            "failed": 0,
+            "deferred": 0,
+            "skipped": 0,
+        }
+    finally:
+        entry.state = original
+        store.prompt_index = None
+    store.close()
+
+
+def test_pending_release_stays_live_until_transport_finishes():
+    engine, store, entry = ready_store()
+    delivery, _ = reserve(engine, store, entry)
+    store.start_delivery(entry.key, delivery.delivery_id)
+    store.cancel_entry(entry.key, "pending transfer")
+    assert store.snapshot()["live_entries"] == 1
+    assert store.snapshot()["pending_release_entries"] == 1
+    engine.finish(delivery.transfer_handle)
+    store.progress_transfers()
+    assert entry.resources_released
+    assert store.snapshot()["live_entries"] == 0
+    assert store.snapshot()["pending_release_entries"] == 0
+    store.close()
+
+
 def test_failed_allocation_release_remains_pending_for_retry(monkeypatch):
     _, store, entry = ready_store()
 
