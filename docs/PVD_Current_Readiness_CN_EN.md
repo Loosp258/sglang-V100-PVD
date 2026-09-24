@@ -59,6 +59,12 @@ Delivery 均从 22 增至 32，正好每请求 5 次，且在途/UNKNOWN/隔离�
 **不证明**服务健康端点在高负载下总能于 5 秒内响应。该瞬时停顿需要单独
 测量，不能被成功响应掩盖。
 
+按同样两个并发 20-token 请求再次同步采样 D `/health`：两请求均
+HTTP 200，实际各生成 20 token（约 61.3、65.8 秒）；71 次健康探针
+全部 HTTP 200，最大约 58 毫秒。V 每 rank completed/ACKed Delivery
+又从 32 增至 42，无在途/UNKNOWN/隔离。先前的单次 5 秒超时本轮未
+复现，尚不能归因于 D 事件循环；需要长时负载才能估计尾部风险。
+
 Two subsequent concurrent 20-token requests on the same D checkout both
 returned HTTP 200 (about 65.8 and 70.4 seconds). The D log explicitly
 recorded `Decode batch, #running-req: 2` while they ran. On each V rank,
@@ -69,6 +75,14 @@ in about 1.7 ms; the process had not exited. Thus this validates two
 successful requests and a two-request Decode batch, **not** a guarantee that
 the health endpoint stays responsive within five seconds under load. The
 transient stall needs separate measurement.
+
+A monitored repeat with the same two concurrent 20-token requests returned
+HTTP 200 for both and actually generated 20 tokens each (about 61.3 and
+65.8 seconds). All 71 simultaneous D `/health` probes returned HTTP 200,
+with a maximum of about 58 ms. Per-rank V completed/ACKed Deliveries rose
+again from 32 to 42, with no in-flight, UNKNOWN or quarantined transfers.
+The earlier isolated five-second timeout was not reproduced and cannot yet
+be attributed to D's event loop; a longer load run is needed for tail risk.
 
 ## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
 
