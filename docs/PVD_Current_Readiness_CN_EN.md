@@ -3,6 +3,68 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
+
+`aa658b08d` 在 V 端加入默认关闭的 `--full-kv-fanin-native-batch`。
+Mooncake 0.3.13 每个完整 Prompt 的原有 2184 个切片现可用每 rank
+**一个**原生异步 batch 提交；只接受 `get_batch_transfer_status` 的整批成功
+作为 terminal proof，失败/超时/异常一律隔离并保留源和 D 目标 MR。
+本地完整 PVD CPU 回归 **2892 passed / 23 skipped**，含真实 V store
+路径的重组、ACK、取消/失败 pin 测试。
+
+CloudLab 先仅更新 V：五次原生 batch 均报告整批成功，单个 writer 的
+fan-in 约 1.1–1.4 秒，相比先前逐片 PUT 的 29–33 秒显著缩短。
+但该请求最终 HTTP 503：更快的 fan-in 暴露了 D 搜索时 CAGRA
+索引尚未构建完成的竞态；Gateway 重试形成五个 Entry。这不是端到端
+成功，也不能据此宣称整体延迟收益。五个 Entry 后续均按 TTL 回收，
+两 rank 回到 1024 空闲页，无 Mooncake 在途/UNKNOWN。
+
+`9b2bd15f4` 随后使 D 的正式请求在 `index_not_ready`/`index_capacity`
+时，用**同一份已捕获的 Q、Entry 和路由**在请求既有超时内有界等待；
+不重新运行 draft/probe，也不推进刷新时钟。致命拒绝或超时仍失败关闭。
+本地完整 PVD CPU 回归 **2895 passed / 23 skipped**。D 从新隔离检出
+启动 Qwen2.5-7B 与独立 Qwen2.5-0.5B draft 后，两条相同的
+39-token Prompt / 8-token 输出请求经 Gateway 均返回 HTTP 200，
+端到端约 54.7 秒和 22.5 秒。每 rank 均用一个 batch 提交 2184
+个切片，后两次 fan-in 分别约 4.47 秒、1.19 秒；V、D 服务仍健康，
+Mooncake 在途/UNKNOWN/隔离为零。两条成功请求随后都按 300 秒 TTL
+回收；V 两 rank 均恢复 1024 空闲页、0 live Entry、0 admission、
+0 maintenance Entry。第一次较慢且后台建索引，并非受控对照；
+长期负载及故障注入仍需验证。
+
+Commit `aa658b08d` adds V's default-off `--full-kv-fanin-native-batch`.
+The previous 2184 slices per full Prompt can be submitted as **one** native
+asynchronous Mooncake batch per V rank. Only aggregate success from
+`get_batch_transfer_status` is terminal proof; failure, timeout or exception
+quarantines and retains source and D destination MRs. The full local PVD CPU
+suite reported **2892 passed / 23 skipped**, including real V-store fan-in
+reconstruction, ACK and failure/cancellation pin tests.
+
+With only V updated on CloudLab, five native batches reported aggregate
+success, and individual fan-in writers took about 1.1–1.4 seconds instead
+of the earlier 29–33 seconds with per-slice PUTs. The request nevertheless
+ended HTTP 503: faster fan-in exposed a race in which D searched before V's
+CAGRA index was ready; Gateway retries created five Entries. This was not
+end-to-end success and does not prove an overall latency gain. All five
+Entries were later TTL-reclaimed; both ranks returned to 1024 free pages,
+with no in-flight or UNKNOWN Mooncake work.
+
+Commit `9b2bd15f4` then makes D's committed request wait within its existing
+timeout for `index_not_ready`/`index_capacity`, reusing the **same captured
+Q, Entry and route** without rerunning draft/probe or advancing the refresh
+clock. Fatal refusals or deadline expiry still fail closed. The full local
+PVD CPU suite reported **2895 passed / 23 skipped**. After D restarted from
+an isolated checkout with Qwen2.5-7B and an independent Qwen2.5-0.5B draft,
+two identical 39-token Prompt/eight-token output Gateway requests returned
+HTTP 200 in about 54.7 and 22.5 seconds. Each V rank submitted its 2184
+slices as one batch; the two fan-ins took about 4.47 and 1.19 seconds.
+V and D remained healthy, with zero in-flight, UNKNOWN or quarantined
+Mooncake work. Both successful requests were subsequently reclaimed by the
+300-second TTL: both V ranks returned to 1024 free pages, with zero live
+Entries, admissions and maintenance Entries. The first request also overlapped
+index construction; these are not controlled latency comparisons. Sustained
+load and fault injection remain to be checked.
+
 ## 2026-09-24 初始 Prompt fan-in 性能诊断 / Initial Prompt fan-in profiling
 
 CloudLab 两张 V100S 上，V 独立检出 `e42d0a825` 与 `bbef59a1b` 分别运行
