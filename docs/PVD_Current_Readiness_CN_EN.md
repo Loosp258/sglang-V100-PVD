@@ -16,8 +16,13 @@ Historical handoffs contain earlier states; this page consolidates the current s
 47.5 秒）。之后仅 D 从新隔离检出 `38a037e3a` 重启，保持 P、V 和
 Gateway 不变；一条真实请求再次 HTTP 200（约 52.1 秒）。P、V、D、
 Gateway 健康检查均为 200，V 两 rank 无在途/UNKNOWN/隔离传输。
-这是一组有界功能复测，不是吞吐或尾延迟基准；重启后该条 Entry 的 TTL
-回收尚待复查。
+V 日志还显示该请求进行了真实索引搜索及两 rank 稀疏 Delivery 的
+start/poll/ACK。随后同一配置的 20-token 请求返回 HTTP 200（约
+34.6 秒，`completion_tokens=20`，`finish_reason=length`）；V 每 rank 的
+completed 与 ACKed Delivery 计数均从 17 增至 22，符合一次初始
+Delivery 加四次 4-token 刷新，且 Mooncake 在途/UNKNOWN/隔离仍为零。
+这是一组有界功能复测，不是吞吐或尾延迟基准。重启后的第一条 Entry
+已在 300 秒后回收；第二条仍在 TTL 窗口内，待复查。
 
 Commit `38a037e3a` makes D's index-readiness deadline bound the **entire
 HTTP search attempt**, not just sleeps between refusals; a late success cannot
@@ -32,9 +37,15 @@ different Prompts (both HTTP 200, about 44.4 and 47.5 seconds). Only D was
 then restarted from a new isolated `38a037e3a` checkout, leaving P, V and the
 Gateway unchanged. A real request again returned HTTP 200 (about 52.1
 seconds). All four health checks returned 200, with zero in-flight, UNKNOWN
-or quarantined transfers on both V ranks. This is a bounded functional retest,
-not a throughput or tail-latency benchmark. TTL reclamation for the request
-after restart remains to be checked.
+or quarantined transfers on both V ranks. V's timestamped log also shows real
+index searches and sparse-Delivery start/poll/ACK on both ranks. A subsequent
+20-token request returned HTTP 200 in about 34.6 seconds with
+`completion_tokens=20` and `finish_reason=length`. Per-rank completed and
+ACKed Delivery counts both rose from 17 to 22, consistent with one initial
+Delivery plus four refreshes at a four-token interval; in-flight, UNKNOWN and
+quarantine states remained zero. This is a bounded functional retest, not a
+throughput or tail-latency benchmark. The first Entry after restart was
+reclaimed after 300 seconds; the second was still inside its TTL window.
 
 ## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
 
