@@ -3,6 +3,43 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 V 释放队列在线验证 / Live V release-queue gate
+
+提交 `93e2d7373` 将 V 分配释放进度限制在待释放集合，不再每个维护周期重扫
+所有历史 Entry；在分配回调真正结束前仍保留 pool/MR pin。V 节点从新的隔离
+worktree 启动两张 V100S 和原生 CAGRA，P、D、Gateway 沿用上一轮服务。
+一个真实 35-token Prompt、8-token 输出请求经 Gateway 返回 HTTP 200，
+耗时约 40.3 秒。两 V rank 各完成并 ACK 两次 Delivery，Mooncake 在途/
+UNKNOWN 为 0。请求后两 rank 各有 989 空闲页，300 秒 TTL 后均恢复
+1024 页；历史 Entry 为 `released`，`pending_release_entries=0`，reaper
+仍健康。完整本地 CPU 回归 **2840 passed / 23 skipped**。这些结果验证
+单请求兼容和一次 TTL 回收，不证明长期负载、原生轮询频率或性能收益。
+
+随后提交 `b52e24e5d` 让索引构建与到期扫描只遍历仍有资源活动的 Entry，
+历史记录仍保留以拒绝重放。完整 CPU 回归 **2842 passed / 23 skipped**，
+新增的索引扫描专项测试另通过；这一步尚未部署到 CloudLab。
+两个提交都没有解决历史 Entry/Delivery 元数据永久保留的主机内存上界问题。
+
+Commit `93e2d7373` progresses only pending V allocation releases instead of
+rescanning every historical Entry on each maintenance tick; the pool/MR pin
+remains until the allocation callback itself finishes. V ran native CAGRA on
+two V100S GPUs from a new isolated worktree while P, D and Gateway retained
+their prior services. One real 35-token Prompt/eight-token output Gateway
+request returned HTTP 200 in about 40.3 seconds. Both V ranks completed and
+ACKed two Deliveries, with zero in-flight or UNKNOWN Mooncake work. Each had
+989 free pages immediately after the request and 1024 after the 300-second
+TTL. The historical Entry was `released`, `pending_release_entries=0`, and
+the reaper remained healthy. The full local CPU suite had **2840 passed / 23
+skipped**. This establishes one-request compatibility and one TTL reclaim,
+not sustained load, native poll counts or a latency benefit.
+
+Commit `b52e24e5d` also limits index-build and expiration scans to entries
+whose resources remain active, keeping historical records for replay refusal.
+Its full CPU regression had **2842 passed / 23 skipped**, with the final
+index-scan focused case rerun separately. This second commit has not yet run
+on CloudLab. Neither change bounds the host memory retained by historical
+Entry/Delivery metadata.
+
 ## 2026-09-24 V 终态轮询优化在线验证 / Live V terminal-polling gate
 
 V 从新隔离检出 `4b12da0c4` 启动两张 V100S 的原生 CAGRA worker group；
