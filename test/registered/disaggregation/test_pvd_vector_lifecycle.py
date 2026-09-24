@@ -602,3 +602,70 @@ def test_adapter_local_rejection_after_gate_begin_is_safe_failed_delivery():
     store.release_entry(entry.key)
     assert entry.resources_released
     store.close()
+
+
+def test_released_entry_stays_a_tombstone_without_repeated_release_scans(monkeypatch):
+    _, store, entry = ready_store()
+    store.release_entry(entry.key)
+    assert entry.resources_released
+    assert store._release_pending == {}
+    assert store.snapshot()["pending_release_entries"] == 0
+    assert entry.key in store.entries
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            entry.allocation_guard,
+            "request_release",
+            lambda: pytest.fail("settled allocation scanned again"),
+        )
+        for _ in range(5):
+            store.progress_transfers()
+    store.close()
+
+
+def test_failed_allocation_release_remains_pending_for_retry(monkeypatch):
+    _, store, entry = ready_store()
+
+    def fail_release():
+        raise RuntimeError("retry release")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(entry.allocation_guard, "request_release", fail_release)
+        store.release_entry(entry.key)
+        assert not entry.resources_released
+        assert store._release_pending[entry.key] is entry
+        assert store.snapshot()["pending_release_entries"] == 1
+    store.progress_transfers()
+    assert entry.resources_released
+    assert store._release_pending == {}
+    store.close()
+
+
+def test_pool_pin_waits_for_allocation_callback_to_finish():
+    _, store, entry = ready_store()
+    entered, finish = threading.Event(), threading.Event()
+    original = entry.allocation_guard._release
+
+    def delayed_release():
+        original()
+        entered.set()
+        assert finish.wait(5)
+
+    entry.allocation_guard._release = delayed_release
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        releasing = executor.submit(store.release_entry, entry.key)
+        assert entered.wait(5)
+        try:
+            assert entry.resources_released
+            assert entry.allocation_guard.value is not None
+            store._progress_releases()
+            assert entry.pool_owner in store._pool_guard._owners
+            assert store._release_pending[entry.key] is entry
+        finally:
+            finish.set()
+        releasing.result(timeout=5)
+    store.progress_transfers()
+    assert entry.allocation_guard.value is None
+    assert entry.pool_owner not in store._pool_guard._owners
+    assert store._release_pending == {}
+    store.close()

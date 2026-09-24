@@ -372,6 +372,9 @@ class VectorKVStore:
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
+        # Keep replay tombstones in entries, but do not revisit already
+        # released allocations on every maintenance tick.
+        self._release_pending: Dict[KVEntryKey, EntryShardRecord] = {}
         # Tombstones stay in entries for replay/fence proof. Only records that
         # can still change transport or cleanup state need background progress.
         self._active_progress: Dict[
@@ -1543,6 +1546,7 @@ class VectorKVStore:
     def _release_resources_locked(self, entry: EntryShardRecord) -> None:
         # Never execute unregister callbacks while holding the store lock.
         entry.release_requested = True
+        self._release_pending[entry.key] = entry
         # Cancel, failure, TTL and close ask the sender to stop and report.
         # They never release a lifecycle upload's hold on the destination.
         if entry.upload_authorization is not None and entry.upload_terminal is None:
@@ -1641,13 +1645,24 @@ class VectorKVStore:
 
     def _progress_releases(self):
         with self._lock:
-            entries = list(self.entries.values())
+            entries = list(self._release_pending.values())
         for entry in entries:
             try:
-                if entry.release_requested:
-                    entry.allocation_guard.request_release()
-                if entry.resources_released:
-                    self._pool_guard.unpin(entry.pool_owner)
+                entry.allocation_guard.request_release()
+                # The allocation callback can mark resources_released before
+                # ResourceGuard has finished it. Do not drop the pool's MR pin
+                # until the callback itself has returned successfully.
+                if (
+                    not entry.resources_released
+                    or entry.allocation_guard.value is not None
+                ):
+                    continue
+                outcome = self._pool_guard.unpin(entry.pool_owner)
+                if outcome == GuardUnpinOutcome.RELEASE_IN_PROGRESS:
+                    continue
+                with self._lock:
+                    if self._release_pending.get(entry.key) is entry:
+                        self._release_pending.pop(entry.key)
             except Exception as exc:
                 logger.warning(
                     "V allocation release retained resources: %s: %s", entry.key, exc
@@ -1726,6 +1741,7 @@ class VectorKVStore:
                 "isolated_reason": self._isolated_reason,
                 "absent_write_fences": len(self._absent_write_fences),
                 "max_absent_write_fences": self._max_absent_write_fences,
+                "pending_release_entries": len(self._release_pending),
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
                 "entries": [entry.to_dict() for entry in self.entries.values()],
