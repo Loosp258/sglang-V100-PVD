@@ -3,6 +3,48 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 分组检索在线验证 / Live grouped-search gate
+
+D 节点从隔离检出 `b91642561` 运行真实 Qwen2.5-7B-Instruct 和独立
+Qwen2.5-0.5B draft；P、V、Gateway 仍在各自隔离检出中运行，V 使用两张
+V100S、原生 cuVS CAGRA、单条 `mlx5_0` rail。一个 27-token Prompt、
+8-token 输出的 Gateway 请求返回 HTTP 200。V 的索引搜索总数由 784 增至
+896，即本次仅 **112 次**；原逐 Q-head 路径同类请求为 784 次。
+两 V rank 的 Delivery 累计各为 6 次完成、6 次 ACK；本次之后 coordinator
+健康，reaper 失败 0，Mooncake 在途和 UNKNOWN 均为 0。Entry 尚在 300 秒
+TTL 内，故当时每 rank 有 997 空闲页而非 1024；页回收须待 TTL 再确认。
+本次端到端约 **71.1 秒**，不能据 HTTP 次数减少推断延迟改善。
+
+第一次使用样例配置中的 15 秒 `request_timeout_seconds` 时，真实请求在
+CUDA 批次结果提交门禁处因 `rank installation round timed out` 被拒绝，
+旧代码把该请求级拒绝上抛导致 D scheduler 退出。诊断提交 `64e62dddd`
+让异常带上拒绝阶段与原因；验证配置提交 `b91642561` 将此样例窗口提高到
+90 秒后上述请求通过。90 秒是此 V100S 验证配置，不是普适超时承诺；
+请求级拒绝不应杀死整个 D 服务，仍需单独修复和验证。
+
+The isolated D checkout `b91642561` ran real Qwen2.5-7B-Instruct with an
+independent Qwen2.5-0.5B draft; P, V and Gateway stayed in their isolated
+checkouts. V used two V100S GPUs, native cuVS CAGRA and the single active
+`mlx5_0` rail. A 27-token Prompt/eight-token output Gateway request returned
+HTTP 200. V's cumulative index searches rose from 784 to 896: **112 searches**
+for this grouped request versus 784 for a comparable per-Q-head request.
+Each V rank reported six completed and six ACKed Deliveries cumulatively;
+the coordinator and reaper were healthy, with zero reaper failures, in-flight
+Mooncake operations or UNKNOWN operations. The Entry was still inside its
+300-second TTL, so each rank had 997 rather than 1024 free pages at that
+snapshot; TTL reclamation needs a later check. The request took about
+**71.1 seconds** end to end, so fewer HTTP calls are not evidence of lower
+latency.
+
+With the earlier 15-second sample `request_timeout_seconds`, a real request
+was rejected at the CUDA batch result gate because the rank-installation
+round timed out; the request-local refusal propagated out of the D scheduler
+and terminated that process. Diagnostic commit `64e62dddd` exposed the phase
+and reason; the V100S validation-profile commit `b91642561` raised the sample
+window to 90 seconds, after which the request above passed. This is an
+experiment-specific bound, not a universal timeout guarantee. Handling a
+request-local refusal without killing D remains separate work.
+
 ## 2026-09-24 V 清理恢复在线验证 / Live V cleanup-recovery gate
 
 在本地提交 `52ed8ebf6`、`97cc2f556`、`8adf2ef2b`、`922de7098`
