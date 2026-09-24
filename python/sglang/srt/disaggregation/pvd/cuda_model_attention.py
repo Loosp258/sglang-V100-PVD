@@ -98,7 +98,9 @@ class CUDAModelSparseConsumer:
             max_batch_size,
         )
         self._owner = "cuda-model-attention:" + uuid.uuid4().hex
+        self._packed_owner = self._owner + ":packed-qkv"
         self._bound, self._outputs, self._pending = None, [], None
+        self._packed_inputs, self._packed_charged = [], False
         self._seen, self._quarantine, self._held = set(), None, None
         self._active = False
 
@@ -126,6 +128,8 @@ class CUDAModelSparseConsumer:
         if not self._lock.acquire(blocking=False):
             raise SparsePayloadError("target execution is busy")
         self._active = True
+        self._packed_inputs.clear()
+        self._packed_charged = False
         stack, pinned, charged = ExitStack(), False, False
         bound, identities = {}, set()
         failure = None
@@ -220,6 +224,10 @@ class CUDAModelSparseConsumer:
                 stack.close()  # Includes Prompt reader completion fences.
                 self._pending = None
                 self._outputs.clear()
+                self._packed_inputs.clear()
+                if self._packed_charged:
+                    self._budget.release(self._packed_owner)
+                    self._packed_charged = False
                 if failure is not None:
                     traceback.clear_frames(failure.__traceback__)
                     failure = None
@@ -300,6 +308,7 @@ class CUDAModelSparseConsumer:
             or len(set(destinations)) != count
         ):
             raise SparsePayloadError("batch does not match bound requests")
+        inputs = []
         for value, heads in (
             (q, self.mapping.num_query_heads),
             (k, self.mapping.total_kv_heads),
@@ -309,10 +318,27 @@ class CUDAModelSparseConsumer:
                 not isinstance(value, torch.Tensor)
                 or value.device != self.device
                 or value.dtype != self.dtype
-                or not value.is_contiguous()
                 or tuple(value.shape) not in ((count, heads * dim), (count, heads, dim))
             ):
                 raise SparsePayloadError("Q/K/V shape, dtype or device mismatch")
+            inputs.append(value.reshape(count, heads, dim))
+        if any(not value.is_contiguous() for value in inputs):
+            if not self._packed_charged:
+                # Qwen's qkv.split is strided across a multi-request batch.
+                # Retain every packed layer input until the whole forward's
+                # CUDA completion fence, charging the worst-case live copies.
+                packed_bytes = (
+                    len(self.layers)
+                    * count
+                    * (self.mapping.num_query_heads + 2 * self.mapping.total_kv_heads)
+                    * dim
+                    * (torch.finfo(self.dtype).bits // 8)
+                )
+                self._budget.reserve(self._packed_owner, packed_bytes, 0)
+                self._packed_charged = True
+            inputs = [value.contiguous() for value in inputs]
+            self._packed_inputs.extend(inputs)
+        q, k, v = inputs
         keys, values = (
             self.kv_pool.get_key_buffer(layer.layer_id),
             self.kv_pool.get_value_buffer(layer.layer_id),
@@ -365,10 +391,9 @@ class CUDAModelSparseConsumer:
         self.kv_pool.set_kv_buffer(
             layer,
             batch.out_cache_loc,
-            k.reshape(count, self.mapping.total_kv_heads, dim),
-            v.reshape(count, self.mapping.total_kv_heads, dim),
+            k,
+            v,
         )
-        q = q.reshape(count, self.mapping.num_query_heads, dim)
         for index, (binding, rows) in enumerate(plans):
             # bind() keeps the actual allocator lease pinned through this entire
             # forward; this nested guard keeps this layer's tensor handles alive.

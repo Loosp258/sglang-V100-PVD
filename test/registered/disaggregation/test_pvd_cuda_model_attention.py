@@ -383,6 +383,28 @@ def test_second_request_cannot_alias_first_requests_generated_rows(monkeypatch):
     assert c.pool.writes == 0
 
 
+def test_two_request_qkv_split_views_are_packed_before_pool_write(monkeypatch):
+    c = fixture(monkeypatch)
+    c2 = fixture(monkeypatch, request_id="other")
+    binding2 = replace(c2.binding, slot=2)
+    c.req.req_to_token[2, 4:6] = torch.tensor([12, 13])
+    c.batch.req_pool_indices = torch.tensor([1, 2])
+    c.batch.positions = torch.tensor([5, 5])
+    c.batch.seq_lens = torch.tensor([6, 6])
+    c.batch.out_cache_loc = torch.tensor([11, 13])
+    qkv = torch.cat((c.q, c.k.reshape(1, 6), c.v.reshape(1, 6)), dim=-1).repeat(2, 1)
+    c.q, c.k, c.v = qkv.split((12, 6, 6), dim=-1)
+    assert all(not tensor.is_contiguous() for tensor in (c.q, c.k, c.v))
+    with c.consumer.bind([c.binding, binding2], pool_owner=c.owner):
+        result = run(c)
+        assert result.shape == (2, 12)
+        assert c.pool.writes == 1
+        assert c.budget.snapshot()["used_staging_bytes"] == 288
+        torch.testing.assert_close(c.pool.k[11], c.k[0].reshape(2, 3))
+        torch.testing.assert_close(c.pool.k[13], c.k[1].reshape(2, 3))
+    assert c.budget.snapshot()["used_staging_bytes"] == 0
+
+
 @pytest.mark.parametrize(
     "fault", [None, "tp", "graph", "weights", "head_dim", "device", "page"]
 )
