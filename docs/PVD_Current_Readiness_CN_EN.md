@@ -12,7 +12,8 @@ V100S、原生 cuVS CAGRA、单条 `mlx5_0` rail。一个 27-token Prompt、
 896，即本次仅 **112 次**；原逐 Q-head 路径同类请求为 784 次。
 两 V rank 的 Delivery 累计各为 6 次完成、6 次 ACK；本次之后 coordinator
 健康，reaper 失败 0，Mooncake 在途和 UNKNOWN 均为 0。Entry 尚在 300 秒
-TTL 内，故当时每 rank 有 997 空闲页而非 1024；页回收须待 TTL 再确认。
+TTL 内，故当时每 rank 有 997 空闲页而非 1024；随后复查两 rank 各恢复
+**1024 空闲页**，reaper 仍 healthy 且失败 0。
 本次端到端约 **71.1 秒**，不能据 HTTP 次数减少推断延迟改善。
 
 第一次使用样例配置中的 15 秒 `request_timeout_seconds` 时，真实请求在
@@ -20,7 +21,8 @@ CUDA 批次结果提交门禁处因 `rank installation round timed out` 被拒�
 旧代码把该请求级拒绝上抛导致 D scheduler 退出。诊断提交 `64e62dddd`
 让异常带上拒绝阶段与原因；验证配置提交 `b91642561` 将此样例窗口提高到
 90 秒后上述请求通过。90 秒是此 V100S 验证配置，不是普适超时承诺；
-请求级拒绝不应杀死整个 D 服务，仍需单独修复和验证。
+请求级拒绝不应杀死整个 D 服务；该边界已在 `6537b8f02` 修复并做了下面的
+受控验证。
 
 The isolated D checkout `b91642561` ran real Qwen2.5-7B-Instruct with an
 independent Qwen2.5-0.5B draft; P, V and Gateway stayed in their isolated
@@ -32,7 +34,8 @@ Each V rank reported six completed and six ACKed Deliveries cumulatively;
 the coordinator and reaper were healthy, with zero reaper failures, in-flight
 Mooncake operations or UNKNOWN operations. The Entry was still inside its
 300-second TTL, so each rank had 997 rather than 1024 free pages at that
-snapshot; TTL reclamation needs a later check. The request took about
+snapshot. A later check found **1024 free pages** on both ranks, with a
+healthy reaper and zero failures. The request took about
 **71.1 seconds** end to end, so fewer HTTP calls are not evidence of lower
 latency.
 
@@ -43,7 +46,33 @@ and terminated that process. Diagnostic commit `64e62dddd` exposed the phase
 and reason; the V100S validation-profile commit `b91642561` raised the sample
 window to 90 seconds, after which the request above passed. This is an
 experiment-specific bound, not a universal timeout guarantee. Handling a
-request-local refusal without killing D remains separate work.
+request-local refusal without killing D was subsequently implemented in
+`6537b8f02` and tested as described below.
+
+## 2026-09-24 请求级超时隔离 / Request-local timeout isolation
+
+提交 `6537b8f02` 只在 CUDA forward 已排空、结果回调尚未开始、所有请求
+已停止且正式 `Req` 输出未改动时，将 rank-installation 结果拒绝转为该 batch
+的请求级终止。隔离/UNKNOWN、部分提交或清理不确定仍上抛，不能静默放行。
+完整 PVD CPU 回归为 **2837 passed、23 skipped、21 subtests passed**。
+CloudLab D 从新隔离检出运行该提交，并故意指向旧检出的 15 秒配置：
+一个真实 Gateway 请求使 D 自身返回 HTTP 503；Gateway 重试后熔断，
+但 D 进程 `409865` 仍在、健康接口 HTTP 200，日志中 scheduler 致命异常
+计数为 0。此实验只证明一次请求级失败不会杀死 D，不证明连续故障、
+资源长期压力或在 15 秒配置下成功生成。
+
+Commit `6537b8f02` converts a rank-installation result refusal to a
+request-local batch abort only after the CUDA forward has drained, result
+processing has not begun, every request has stopped, and authoritative Req
+outputs remain unchanged. UNKNOWN completion, partial commitment and
+uncertain cleanup still fail closed. The full PVD CPU suite reported
+**2837 passed, 23 skipped and 21 subtests passed**. The isolated CloudLab D
+checkout used this commit with the prior 15-second config as deliberate fault
+injection: D itself returned HTTP 503 to a real Gateway request; Gateway then
+opened its circuit on retry, but D PID `409865` remained alive, `/health`
+returned 200 and the D log contained zero fatal Scheduler exceptions. This
+proves one request-local failure did not kill D, not sustained failure
+handling, resource-pressure safety or successful generation at 15 seconds.
 
 ## 2026-09-24 V 清理恢复在线验证 / Live V cleanup-recovery gate
 
