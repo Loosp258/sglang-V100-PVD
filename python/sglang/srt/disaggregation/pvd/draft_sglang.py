@@ -544,9 +544,24 @@ def build_draft_server_args(server_args: Any, placement: DraftPlacement) -> Any:
     if hasattr(private, "tokenizer_path"):
         private.tokenizer_path = model_path
     private.revision = getattr(server_args, "pvd_draft_revision", None)
-    device = getattr(server_args, "pvd_draft_device", None)
-    if device:
-        private.device = device
+    # SGLang's ModelRunner expects a platform type here ("cuda"), while
+    # TpModelWorker selects the actual GPU with gpu_id.  Passing "cuda:0"
+    # through makes get_available_gpu_memory() reject the device at startup.
+    # Keep the indexed PVD request as an assertion about that separate gpu_id.
+    import torch
+
+    requested_device = getattr(server_args, "pvd_draft_device", None)
+    if requested_device is not None:
+        try:
+            parsed_device = torch.device(requested_device)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            raise DraftWorkerError("invalid --pvd-draft-device") from exc
+        if parsed_device.type != "cuda" or parsed_device.index != placement.gpu_id:
+            raise DraftWorkerError(
+                "--pvd-draft-device must be an indexed CUDA device matching "
+                f"the draft worker gpu_id ({placement.gpu_id})"
+            )
+    private.device = "cuda"
     # Belt and braces: the copy is what the draft worker is built from, and it
     # must not carry a speculative configuration into that construction. The
     # target's own configuration is a different object and is not touched.
@@ -563,10 +578,13 @@ def build_draft_server_args(server_args: Any, placement: DraftPlacement) -> Any:
     ):
         if hasattr(private, name):
             setattr(private, name, None)
-    # A draft worker is not a disaggregation role and must not register one.
-    for name in ("disaggregation_mode", "disaggregation_topology"):
-        if hasattr(private, name):
-            setattr(private, name, None)
+    # ModelRunner treats every value except the literal "null" as an active
+    # disaggregation mode when deciding whether to initialise Mooncake.  None
+    # is *not* disabled there; it can try to create a second native engine.
+    if hasattr(private, "disaggregation_mode"):
+        private.disaggregation_mode = "null"
+    if hasattr(private, "disaggregation_topology"):
+        private.disaggregation_topology = "pd"
     return private
 
 
@@ -982,25 +1000,8 @@ def build_prediction_only_worker(
         )
     draft_args = build_draft_server_args(server_args, placement)
 
-    # TpModelWorker places ModelRunner through gpu_id, not through the copied
-    # configuration's `device` string. Refuse a misleading configuration
-    # before it can load weights on a different GPU from the declared one.
-    import torch
-
-    requested_device = getattr(server_args, "pvd_draft_device", None)
-    if requested_device is None:
-        draft_args.device = f"cuda:{placement.gpu_id}"
-    else:
-        try:
-            parsed_device = torch.device(requested_device)
-        except (TypeError, ValueError, RuntimeError) as exc:
-            raise DraftWorkerError("invalid --pvd-draft-device") from exc
-        if parsed_device.type != "cuda" or parsed_device.index != placement.gpu_id:
-            raise DraftWorkerError(
-                "--pvd-draft-device must be an indexed CUDA device matching "
-                f"the draft worker gpu_id ({placement.gpu_id})"
-            )
-        draft_args.device = str(parsed_device)
+    # build_draft_server_args already checked the requested indexed placement.
+    # ModelRunner receives the platform type; TpModelWorker receives gpu_id.
 
     if worker_factory is None:  # pragma: no cover - loads weights
 

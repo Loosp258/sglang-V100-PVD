@@ -25,10 +25,25 @@ prediction-only runner 对 4-token 输入做两步贪心预测，本次得到
 Req/KV 池的可用容量恢复原值，进程退出后 D GPU 无残留计算进程。
 报告的已知常驻张量为 **998041680 字节**，不是峰值显存。
 
-该 smoke 在**单独进程**中运行，目标 7B 未同时驻留，亦未运行目标 Q
-probe、V 检索或生产 Scheduler；不能据此声称 draft 与正式 Decode
-共存、并行或有预测质量/延迟收益。下一硬件门槛需在同一 D 进程同时
-加载两模型，核对私有池与正式 Req/模型池隔离，并执行目标 Q probe。
+上述第一轮 smoke 在**单独进程**中运行。随后新增的
+`run_pvd_qwen_dual_draft_gpu.py` 在同一 D GPU0 进程同时驻留目标 7B 和
+draft 0.5B，执行两步 draft 贪心预测 `[13, 2585]`，并由目标模型在
+28 层各捕获位置 9、10 的 post-RoPE Q（每层形状 `[2, 28, 128]`）。
+目标权重/KV/Req 映射的 canary 与 CPU/CUDA RNG 均未变化，draft 私有
+Req/KV 容量从 `(1, 4096)` 恢复到相同值，scratch 与 probe 预算归还。
+已知常驻 draft 张量为 **1046839328 字节**，同卡峰值 CUDA allocated
+**16629784576 字节**、reserved **16670261248 字节**。这些是一次输入的
+观察值，**不是**生产显存上界或并发/吞吐数据；V 检索、RDMA 和生产
+Scheduler 仍未由该测试执行。测试进程退出后 GPU 无残留计算进程。
+
+真实运行发现并修复两个 draft 启动问题：`ModelRunner` 的设备配置必须是
+平台类型 `cuda`（实际 GPU 仍由 `gpu_id` 指定，显式 `cuda:N` 先校验与之
+一致）；关闭 disaggregation 必须使用字面值 `"null"`，不能用 `None`，
+否则会错误初始化 Mooncake。回归测试覆盖这两个语义。
+
+另一个需要后续修正的边界：`tokenizer.vocab_size=151643` 是基础词表大小，
+但 EOS ID 为 151645；因此不能仅用基础大小判断所有合法 token ID。
+本次实际输出 `[13, 2585]` 位于基础词表内，不代表特殊 token 路径已验收。
 
 On 2026-09-24, the official
 [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
@@ -58,9 +73,26 @@ steps. The private Req/KV pool capacity returned to its starting value, and
 no D GPU compute process remained after exit. Known retained tensors totaled
 **998041680 bytes**; that is **not** a peak-VRAM measurement.
 
-This was a **standalone process**: the target 7B was not resident at the same
-time, and neither target-Q probing, V retrieval nor the production Scheduler
-ran. It does not establish model coexistence, concurrent execution,
-predictive quality or latency benefit. The next gate must load both models in
-one D process, verify private-pool/committed-state isolation and run target-Q
-probing with the draft tokens.
+The first smoke above was a **standalone process**. A subsequent
+`run_pvd_qwen_dual_draft_gpu.py` gate kept the 7B target and 0.5B draft
+resident together on D GPU0. Two greedy draft tokens **[13, 2585]** drove
+target-model post-RoPE Q capture at positions 9 and 10 in all 28 layers
+(shape `[2, 28, 128]` per layer). Target weight/KV/request-map canaries and
+CPU/CUDA RNG were unchanged; the draft's private Req/KV capacity returned
+from `(1, 4096)` to the same value, and scratch/probe budgets were refunded.
+Known draft retained tensors were **1046839328 bytes**. The observed
+same-GPU CUDA peak was **16629784576 allocated** and **16670261248 reserved**
+bytes. This is one input, **not** a production VRAM bound or concurrency/
+throughput result. V retrieval, RDMA and production Scheduler activation did
+not run. The process exited without a residual GPU compute process.
+
+The real run exposed two draft-startup defects that are now fixed: SGLang's
+`ModelRunner` needs the platform type `cuda` in its configuration (the actual
+GPU remains selected by `gpu_id`, after validating an explicit `cuda:N`), and
+disaggregation must be disabled with the literal `"null"`, not `None`, or a
+second Mooncake engine is initialized. Regression tests cover both semantics.
+
+One boundary remains for the next step: `tokenizer.vocab_size=151643` is the
+base vocabulary size, but EOS has ID 151645. A base-size check alone cannot
+classify all valid token IDs. The observed output `[13, 2585]` stayed within
+the base vocabulary and did not exercise special-token handling.

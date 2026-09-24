@@ -18,15 +18,17 @@ KV refresh. Passing argument validation is not predictive activation.
 
 CloudLab D 隔离工作区现备有固定 revision 的独立 Qwen2.5-0.5B-Instruct
 实验 draft，且与目标 Qwen2.5-7B 的实际 `VocabularySignature` 相同。
-其**独立进程**内的两步真实 CUDA draft forward 已通过，私有池容量恢复；
-尚未与目标 7B 同时驻留或运行目标 Q probe。见
+其独立 smoke 已通过；进一步在**同一 D GPU** 同时加载目标 7B 与 draft
+0.5B，两步预测驱动 28 层目标 post-RoPE Q 捕获，私有池和预算归还、目标
+canary/RNG 保持不变。尚未接入生产 Scheduler。见
 [draft 模型记录](PVD_Qwen_Draft_CloudLab_CN_EN.md)。
 
 The isolated CloudLab D worktree now has a pinned independent
 Qwen2.5-0.5B-Instruct experimental draft with an exact target-matching
-`VocabularySignature`. Two real CUDA draft forwards passed in a **standalone
-process**, with private-pool capacity restored; target-7B coexistence and
-target-Q probing remain untested. See the
+`VocabularySignature`. A newer **same-GPU dual-model** gate also passed:
+two draft predictions drove target post-RoPE Q capture in all 28 layers,
+with private pools/budgets refunded and target canaries/RNG unchanged.
+Production Scheduler integration is still missing. See the
 [draft checkpoint record](PVD_Qwen_Draft_CloudLab_CN_EN.md).
 
 最新隔离三节点验收在两路稀疏交付任务 pending 时运行第 4 次真实

@@ -461,9 +461,10 @@ def draft_args(**overrides):
         speculative_num_steps=3,
         disaggregation_mode="decode",
         disaggregation_topology="pvd",
+        disaggregation_transfer_backend="mooncake",
         pvd_draft_model_path="configurable/draft",
         pvd_draft_revision="draft-rev",
-        pvd_draft_device="cuda:1",
+        pvd_draft_device="cuda:0",
         mem_fraction_static=0.78,
         max_running_requests=256,
         pvd_draft_mem_fraction_static=0.08,
@@ -478,14 +479,18 @@ def test_the_draft_settings_are_translated_into_the_fields_the_loader_reads():
     assert private.model_path == "configurable/draft"
     assert private.tokenizer_path == "configurable/draft"
     assert private.revision == "draft-rev"
-    assert private.device == "cuda:1"
+    assert private.device == "cuda"
     assert private.mem_fraction_static == 0.08
     assert private.max_running_requests == 1
     # Speculative and disaggregation settings are off inside the copy.
     assert private.speculative_algorithm is None
     assert private.speculative_num_steps is None
-    assert private.disaggregation_mode is None
-    assert private.disaggregation_topology is None
+    assert private.disaggregation_mode == "null"
+    assert private.disaggregation_topology == "pd"
+    assert not (
+        private.disaggregation_mode != "null"
+        and private.disaggregation_transfer_backend == "mooncake"
+    )
 
 
 def test_translating_leaves_the_target_configuration_untouched():
@@ -546,7 +551,7 @@ def test_the_worker_is_constructed_with_private_pools_and_the_draft_config():
 
     target = FakeWorker(FakePool("target-req"), FakePool("target-kv"))
     worker, ownership = build_prediction_only_worker(
-        draft_args(),
+        draft_args(pvd_draft_device="cuda:1"),
         placement=DraftPlacement(scratch_budget_bytes=4096, gpu_id=1, tp_rank=0),
         nccl_port=1234,
         target_worker=target,
@@ -559,7 +564,7 @@ def test_the_worker_is_constructed_with_private_pools_and_the_draft_config():
     assert captured["server_args"].model_path == "configurable/draft"
     assert captured["server_args"] is not draft_args()
     assert captured["gpu_id"] == 1 and captured["nccl_port"] == 1234
-    assert captured["server_args"].device == "cuda:1"
+    assert captured["server_args"].device == "cuda"
     assert isinstance(worker, DraftWorkerInterface)
     assert ownership.distinct_objects
 
@@ -600,7 +605,20 @@ def test_worker_defaults_to_its_actual_cuda_gpu_id():
         target_worker=FakeWorker(FakePool("target-req"), FakePool("target-kv")),
         worker_factory=fake_factory,
     )
-    assert captured["server_args"].device == "cuda:2"
+    assert captured["server_args"].device == "cuda"
+
+
+def test_draft_config_keeps_gpu_id_separate_from_model_runner_platform_type():
+    private = build_draft_server_args(
+        draft_args(pvd_draft_device="cuda:2"),
+        DraftPlacement(scratch_budget_bytes=4096, gpu_id=2),
+    )
+    assert private.device == "cuda"
+    with pytest.raises(DraftWorkerError, match="pvd-draft-device"):
+        build_draft_server_args(
+            draft_args(pvd_draft_device="cuda:1"),
+            DraftPlacement(scratch_budget_bytes=4096, gpu_id=2),
+        )
 
 
 # --------------------------------------------------------------------------
