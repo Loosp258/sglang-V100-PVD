@@ -3,20 +3,17 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
-生产 CUDA 请求准入现有只读 preflight：核对已完成的初始 Prompt receipt、
-同一 Req 与 Gateway 所选 V 路由、driver 容量和 owner 状态，且不假设固定 V
-分片数。真正的 admission **仍明确拒绝**：driver 当前要求初始 bank 已安装才
-注册，但安全的 Req/KV release owner 必须在安装前挂接；还缺 provisional
-register 与能处理未 claim 接收器的安全 abort/隔离。不能把这个 preflight
-当作生产预测检索开启。
+CUDA 请求准入已有只读 preflight 和显式的预构建资源接管事务：核对完整 Prompt
+receipt、同一 Req 与 Gateway 所选 V 路由；随后按 provisional driver 注册、
+Req/KV 延迟释放绑定、初始 Prompt 导入、receiver claim 的顺序执行。失败走有序
+关闭或 UNKNOWN 隔离。**生产 Scheduler 尚未创建并调用这个事务**，因此
+`--pvd-predictive-retrieval-config` 仍不启用预测检索。
 
-A read-only CUDA request-admission preflight now checks the completed initial
-Prompt receipt, exact Req/Gateway-selected V route and driver ownership/capacity,
-without fixing the V shard count. Actual admission **still fails closed**:
-the driver currently requires an installed initial bank before registration,
-while safe Req/KV release ownership must be attached before installation.
-Provisional registration and abort/quarantine of an unclaimed receiver remain
-required; this preflight does not activate predictive serving.
+CUDA admission now has a read-only preflight and an explicit transaction over
+prepared resources: provisional driver registration, deferred Req/KV release
+attachment, full-Prompt import, then receiver claim. Failure follows ordered
+drain or UNKNOWN quarantine. The production Scheduler **does not yet construct
+or invoke this transaction**, so predictive serving is still inactive.
 
 Decode 侧现在可用 `--pvd-predictive-retrieval-config` **只校验配置**：
 显式指定 V 向量空间、每路 Top-K、同 KV-head 并集上限、工作集与临时字节预算，

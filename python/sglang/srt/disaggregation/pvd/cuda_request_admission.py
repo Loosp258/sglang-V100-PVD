@@ -1,24 +1,30 @@
-"""Read-only admission preflight for a received CUDA Prompt request.
+"""Received CUDA Prompt admission, with a read-only preflight and owned handoff.
 
-This is intentionally not a serving switch. Provisional driver registration
-now exists, but admission still needs a scheduler-owned transaction that
-registers the driver, attaches deferred Req/KV retirement, imports the full
-Prompt, and claims the receiver before making the Req runnable.
+This is intentionally not a serving switch. The caller must prepare the exact
+controller, clients, importer and pool owner, then invoke the transaction on
+the scheduler owner thread while the Req remains in its final waiting queue.
 
-No group, HTTP client, GPU bank, or native destination is allocated here. The
-transaction must use the driver's ordered close/quarantine path on failure;
+The preflight allocates nothing. The transaction does not create a group or
+HTTP client: before registration the caller still owns those resources. After
+registration, it uses the driver's ordered close/quarantine path on failure;
 an unclaimed receiver must never use ordinary scheduler release.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from sglang.srt.disaggregation.pvd.client import PVDSelectedShardRoutes
 from sglang.srt.disaggregation.pvd.conn import PVDSelectedRouteBinding
+from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
+from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
+from sglang.srt.disaggregation.pvd.cuda_prompt_bootstrap import CUDAPromptBootstrap
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_request_release import CUDARequestRelease
 from sglang.srt.disaggregation.pvd.decode_refresh import (
     InitialPromptReceipt,
     PVDDecodeSession,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
 
 
 class CUDAAdmissionBlocked(RuntimeError):
@@ -99,17 +105,85 @@ def preflight_received_cuda_admission(session, binding, driver):
     return CUDAAdmissionPreflight(session, binding, driver, receipt)
 
 
-def admit_received_cuda_request(preflight):
-    """Refuse the currently unsupported transaction before its first mutation.
+def admit_received_cuda_request(
+    preflight,
+    *,
+    controller=None,
+    clients=None,
+    importer=None,
+    pool_owner=None,
+    timeout_seconds=None,
+    release=None,
+):
+    """Claim a prepared CUDA request in one owner-thread transaction.
 
-    The provisional driver seam exists, but this function must not claim to
-    admit a request until the Scheduler constructs all exact CUDA resources
-    and owns the register/retirement/import/claim transaction.
+    The caller owns the controller and its HTTP clients until registration
+    succeeds. After registration, the driver owns them. An import/claim error
+    schedules ordered driver drain; UNKNOWN poisons and retains all owners.
+    The caller must keep the Req in its final waiting queue until this returns.
+    This is not a serving startup factory or an automatic Scheduler switch.
     """
     if not isinstance(preflight, CUDAAdmissionPreflight):
         raise CUDAAdmissionBlocked("validated CUDA admission preflight required")
     preflight.revalidate()
-    raise CUDAAdmissionBlocked(
-        "CUDA admission requires the scheduler-owned provisional transaction: "
-        "register, attach deferred release, import Prompt, then claim receiver"
+    session, driver = preflight.session, preflight.driver
+    cache = session.manager.scheduler.tree_cache
+    if (
+        not isinstance(controller, CUDAPrefetchRequest)
+        or not isinstance(importer, CUDAPromptBootstrap)
+        or not isinstance(pool_owner, ResourceGuard)
+        or controller.group is not importer.group
+        or controller.pipeline._lock is not importer._lock
+        or not isinstance(clients, Mapping)
+        or set(clients) != set(controller._routes)
+        or not isinstance(pool_owner.value, CUDAModelPools)
+        or pool_owner.value.req_pool is not cache.req_to_token_pool
+        or pool_owner.value.kv_pool
+        is not cache.token_to_kv_pool_allocator.get_kvcache()
+        or type(timeout_seconds) not in (int, float)
+        or timeout_seconds <= 0
+    ):
+        raise CUDAAdmissionBlocked(
+            "exact prepared controller, importer, clients and pool owner required"
+        )
+    req = session.req
+    driver.register(
+        req,
+        controller,
+        clients=clients,
+        timeout_seconds=timeout_seconds,
+        initial_import_pending=True,
+        initial_session=session,
+        pool_owner=pool_owner,
     )
+    try:
+        retirement = CUDARequestRelease(
+            req, driver, cache, pool_owner=pool_owner, release=release
+        )
+    except BaseException as exc:
+        # Registration already redirected release_request() to the driver.
+        # Without a deferred allocator owner there is no safe rollback.
+        driver.quarantine_provisional(req, "release attachment failed: " + str(exc))
+        raise
+    try:
+        importer.install_received(
+            session, arbiter=driver.arbiter, pool_owner=pool_owner, cache=cache
+        )
+        driver.claim_received_session(session)
+    except BaseException as exc:
+        if (
+            importer._quarantined
+            or getattr(cache.req_to_token_pool, "pvd_cuda_retirement_error", None)
+            is not None
+            or getattr(
+                cache.token_to_kv_pool_allocator,
+                "pvd_cuda_retirement_error",
+                None,
+            )
+            is not None
+        ):
+            driver.quarantine_provisional(req, "initial import unknown: " + str(exc))
+        else:
+            driver.cancel(req, "initial import or receiver claim failed")
+        raise
+    return retirement

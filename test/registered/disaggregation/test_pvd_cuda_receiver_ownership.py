@@ -11,9 +11,20 @@ from contextlib import contextmanager
 from types import SimpleNamespace as NS
 
 import pytest
-from sglang.srt.disaggregation.pvd.conn import _AsyncControlLoop
+from sglang.srt.disaggregation.pvd.client import (
+    PVDSelectedShardRoute,
+    PVDSelectedShardRoutes,
+)
+from sglang.srt.disaggregation.pvd.conn import (
+    PVDSelectedRouteBinding,
+    _AsyncControlLoop,
+)
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_request_admission import (
+    admit_received_cuda_request,
+    preflight_received_cuda_admission,
+)
 from sglang.srt.disaggregation.pvd.cuda_request_release import CUDARequestRelease
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeRefresher
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
@@ -32,8 +43,17 @@ def pump(driver, until):
 
 
 @contextmanager
-def bound(monkeypatch, *, claim=True, provisional=False, import_prompt=True):
+def bound(
+    monkeypatch,
+    *,
+    claim=True,
+    provisional=False,
+    import_prompt=True,
+    transaction=False,
+    transaction_fault=None,
+):
     c = received(monkeypatch)
+    provisional = provisional or transaction
     if not provisional:
         install(c)
     driver = CUDARefreshDriver(c.arbiter, max_requests=2, max_prefix_tokens=32)
@@ -61,23 +81,61 @@ def bound(monkeypatch, *, claim=True, provisional=False, import_prompt=True):
         events.append("sparse drained")
 
     controller.aclose = close_controller
-    driver.register(
-        c.request,
-        controller,
-        clients={0: object()},
-        timeout_seconds=20,
-        initial_import_pending=provisional,
-        initial_session=c.session if provisional else None,
-        pool_owner=c.c.owner if provisional else None,
-    )
     c.allocator.device = "cpu"
-    retirement = CUDARequestRelease(
-        c.request,
-        driver,
-        c.cache,
-        pool_owner=c.c.owner,
-        release=lambda *a: None,
-    )
+    if transaction:
+        c.manager.vector_group_for = lambda req: "chosen"
+        selected = PVDSelectedShardRoutes(
+            NS(key=c.key),
+            (
+                PVDSelectedShardRoute(0, "http://v0", "epoch0", "mlx5_0"),
+                PVDSelectedShardRoute(1, "http://v1", "epoch1", "mlx5_1"),
+            ),
+        )
+        binding = PVDSelectedRouteBinding(
+            c.manager, c.request, "r", c.key, "chosen", "delivery", selected
+        )
+        preflight = preflight_received_cuda_admission(c.session, binding, driver)
+        if transaction_fault == "capacity":
+            c.budget.reserve("other", 65536, 0)
+        elif transaction_fault == "unknown":
+
+            def unknown_completion():
+                raise RuntimeError("GPU Prompt completion unknown")
+
+            monkeypatch.setattr(c.importer, "_synchronize", unknown_completion)
+        admission_error = None
+        try:
+            retirement = admit_received_cuda_request(
+                preflight,
+                controller=controller,
+                clients={0: object()},
+                importer=c.importer,
+                pool_owner=c.c.owner,
+                timeout_seconds=20,
+                release=lambda *a: None,
+            )
+        except Exception as exc:
+            if transaction_fault is None:
+                raise
+            admission_error = exc
+            retirement = driver._records["r"].retirement
+    else:
+        driver.register(
+            c.request,
+            controller,
+            clients={0: object()},
+            timeout_seconds=20,
+            initial_import_pending=provisional,
+            initial_session=c.session if provisional else None,
+            pool_owner=c.c.owner if provisional else None,
+        )
+        retirement = CUDARequestRelease(
+            c.request,
+            driver,
+            c.cache,
+            pool_owner=c.c.owner,
+            release=lambda *a: None,
+        )
     control = _AsyncControlLoop()
     c.manager.control = control
     c.manager.pending_decode_closes = []
@@ -103,9 +161,9 @@ def bound(monkeypatch, *, claim=True, provisional=False, import_prompt=True):
         retirement.state = "released"
 
     retirement.release_after_controller_close = retire
-    if provisional and import_prompt:
+    if provisional and import_prompt and not transaction:
         install(c)
-    if claim:
+    if claim and not transaction:
         driver.claim_received_session(c.session)
     result = NS(**locals())
     try:
@@ -169,6 +227,48 @@ def test_provisional_registration_is_idle_until_receiver_import(monkeypatch):
         b.driver.claim_received_session(b.c.session)
         assert not record.provisional and record.provisional_source is None
         assert record.full_session is b.c.session
+
+
+def test_prepared_admission_transaction_claims_before_waiting_decode(monkeypatch):
+    with bound(monkeypatch, transaction=True) as b:
+        record = b.driver._records["r"]
+        assert not record.provisional
+        assert record.full_session is b.c.session
+        assert record.retirement is b.retirement
+        assert b.c.group.can_decode(0)
+        assert b.c.session._cuda_refresh_driver is b.driver
+        assert b.c.session._cuda_prompt_importer is b.c.importer
+        assert b.c.request in b.c.manager.scheduler.waiting_queue
+        b.driver.cancel(b.c.request)
+        b.sparse_done.set_result(None)
+        b.lease_done.set_result(None)
+        pump(b.driver, lambda: not b.driver._records)
+        assert b.events[-1] == "request pool returned"
+
+
+def test_prepared_admission_precopy_failure_drains_both_owners(monkeypatch):
+    with bound(monkeypatch, transaction=True, transaction_fault="capacity") as b:
+        assert isinstance(b.admission_error, TransferCapacityError)
+        record = b.driver._records["r"]
+        assert record.provisional and record.stopping and not record.quarantined
+        b.sparse_done.set_result(None)
+        b.lease_done.set_result(None)
+        pump(b.driver, lambda: not b.driver._records)
+        assert b.events[-1] == "request pool returned"
+
+
+def test_prepared_admission_unknown_retains_all_owners(monkeypatch):
+    with bound(monkeypatch, transaction=True, transaction_fault="unknown") as b:
+        assert "initial Prompt completion unknown" in str(b.admission_error)
+        record = b.driver._records["r"]
+        assert record.provisional and record.quarantined
+        assert record.provisional_source is b.c.session
+        assert record.retirement is b.retirement
+        assert b.c.importer._receive_lease is not None
+        assert b.c.session.receive_guard.value is not None
+        assert b.c.c.owner.value is not None
+        assert b.driver.arbiter.busy
+        assert b.c.allocator.pvd_cuda_retirement_error
 
 
 def test_provisional_precopy_capacity_refusal_can_drain(monkeypatch):

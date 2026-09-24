@@ -61,13 +61,11 @@ def test_valid_receiver_and_selected_routes_produce_read_only_preflight(monkeypa
         context.group.close()
 
 
-def test_unsupported_order_refuses_before_mutation_or_import(monkeypatch):
+def test_missing_prepared_resources_refused_before_mutation_or_import(monkeypatch):
     context, binding, driver = setup_admission(monkeypatch)
     try:
         plan = preflight_received_cuda_admission(context.session, binding, driver)
-        with pytest.raises(
-            CUDAAdmissionBlocked, match="scheduler-owned provisional transaction"
-        ):
+        with pytest.raises(CUDAAdmissionBlocked, match="exact prepared controller"):
             admit_received_cuda_request(plan)
         assert not driver._records and not driver.arbiter.busy
         assert getattr(context.session, "_cuda_prompt_importer", None) is None
