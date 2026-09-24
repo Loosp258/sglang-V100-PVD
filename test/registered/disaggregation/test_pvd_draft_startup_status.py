@@ -116,6 +116,8 @@ def _retrieval_config_args(**overrides):
         attention_backend="torch_native",
         disable_cuda_graph=True,
     )
+    if overrides.get("pvd_cuda_predictive_serving"):
+        values["pvd_d_receive_rails"] = "mlx5_0"
     values.update(overrides)
     return pvd_args(**values)
 
@@ -262,6 +264,17 @@ def test_cuda_serving_opt_in_passes_static_preflight_and_disables_overlap(caplog
     assert "production predictive retrieval is not active" not in caplog.text
     assert args.pvd_cuda_predictive_serving
     assert args.speculative_algorithm is None
+
+
+def test_cuda_serving_refuses_missing_sparse_receive_registry_config():
+    with pytest.raises(ValueError, match="initialize the D sparse receive registry"):
+        handle_pvd_disaggregation(
+            _retrieval_config_args(
+                pvd_cuda_predictive_serving=True,
+                pvd_cuda_serving_config="bounds.json",
+                pvd_d_receive_rails=None,
+            )
+        )
 
 
 @pytest.mark.parametrize(

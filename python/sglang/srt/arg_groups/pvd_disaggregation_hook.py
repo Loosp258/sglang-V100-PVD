@@ -233,6 +233,11 @@ def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
     # The serving opt-in is narrower than the existing configuration-only
     # surface. These conditions are consumed by the CUDA Scheduler binding and
     # must be proven before startup is allowed to construct it.
+    if not getattr(server_args, "pvd_d_receive_rails", None):
+        raise ValueError(
+            "--pvd-cuda-predictive-serving requires --pvd-d-receive-rails "
+            "to initialize the D sparse receive registry"
+        )
     if server_args.speculative_algorithm is not None:
         raise ValueError(
             "--pvd-cuda-predictive-serving requires native speculative decoding off"
@@ -405,10 +410,16 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
                 "--pvd-d-receive-rails needs distinct HCAs including the D rank rail"
             )
         server_args.pvd_d_receive_rails = ",".join(selected)
-        logger.warning(
-            "PVD D multi-HCA receive sessions will be preflighted; this does "
-            "not enable predictive retrieval in the serving Scheduler"
-        )
+        if getattr(server_args, "pvd_cuda_predictive_serving", False):
+            logger.info(
+                "PVD D receive HCA sessions will be preflighted for CUDA "
+                "predictive serving"
+            )
+        else:
+            logger.warning(
+                "PVD D multi-HCA receive sessions will be preflighted; this does "
+                "not enable predictive retrieval in the serving Scheduler"
+            )
     if rail_mode == "single-rail-debug":
         logger.warning(
             "PVD single-rail debug mode is active: all TP ranks use %s; "
