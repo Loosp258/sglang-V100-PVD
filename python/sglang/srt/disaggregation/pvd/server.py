@@ -14,10 +14,11 @@ import contextlib
 import logging
 import os
 import signal
-from typing import List, Sequence
+import time
+from collections.abc import Awaitable, Callable, Sequence
+from typing import List
 
 from aiohttp import web
-
 from sglang.srt.disaggregation.pvd.control_server import (
     HttpShardClient,
     create_coordinator_app,
@@ -36,6 +37,103 @@ from sglang.srt.disaggregation.pvd.transfer_engine import FakeTransferEngine
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
 
 logger = logging.getLogger(__name__)
+
+
+class _MaintenanceReaperHealth:
+    """Small event-loop-owned status record for the V maintenance task."""
+
+    def __init__(self) -> None:
+        self.rounds = 0
+        self.successful_rounds = 0
+        self.failed_rounds = 0
+        self.consecutive_failures = 0
+        self.last_round_started_unix: float | None = None
+        self.last_round_completed_unix: float | None = None
+        self.last_success_unix: float | None = None
+        self.last_failure_unix: float | None = None
+        self.last_error: str | None = None
+
+    def record_round(self, errors: Sequence[str]) -> None:
+        now = time.time()
+        self.rounds += 1
+        self.last_round_completed_unix = now
+        if errors:
+            self.failed_rounds += 1
+            self.consecutive_failures += 1
+            self.last_failure_unix = now
+            self.last_error = "; ".join(errors)[:512]
+        else:
+            self.successful_rounds += 1
+            self.consecutive_failures = 0
+            self.last_success_unix = now
+
+    def snapshot(self) -> dict:
+        if self.rounds == 0:
+            status = "starting"
+            healthy = None
+        elif self.consecutive_failures:
+            status = "degraded"
+            healthy = False
+        else:
+            status = "healthy"
+            healthy = True
+        return {
+            "status": status,
+            "healthy": healthy,
+            "rounds": self.rounds,
+            "successful_rounds": self.successful_rounds,
+            "failed_rounds": self.failed_rounds,
+            "consecutive_failures": self.consecutive_failures,
+            "last_round_started_unix": self.last_round_started_unix,
+            "last_round_completed_unix": self.last_round_completed_unix,
+            "last_success_unix": self.last_success_unix,
+            "last_failure_unix": self.last_failure_unix,
+            "last_error": self.last_error,
+        }
+
+
+class _CoordinatorHealthView:
+    """Add maintenance-task status to the existing coordinator health API."""
+
+    def __init__(self, coordinator, reaper_health: _MaintenanceReaperHealth):
+        self._coordinator = coordinator
+        self._reaper_health = reaper_health
+
+    def __getattr__(self, name):
+        return getattr(self._coordinator, name)
+
+    async def health(self):
+        snapshot = dict(await self._coordinator.health())
+        reaper = self._reaper_health.snapshot()
+        snapshot["maintenance_reaper"] = reaper
+        # A failed maintenance round is surfaced to health checks. Startup is
+        # reported separately until the first round completes.
+        if reaper["healthy"] is False:
+            snapshot["healthy"] = False
+        return snapshot
+
+
+async def _run_reaper_round(
+    health: _MaintenanceReaperHealth,
+    steps: Sequence[tuple[str, Callable[[], Awaitable[object]]]],
+) -> None:
+    """Run all maintenance steps, recording failures without killing retries."""
+    health.last_round_started_unix = time.time()
+    errors = []
+    for name, step in steps:
+        try:
+            await step()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("PVD maintenance reaper step %s failed", name)
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+    health.record_round(errors)
+    if errors:
+        logger.error(
+            "PVD maintenance reaper round failed; the next round will retry: %s",
+            "; ".join(errors),
+        )
 
 
 def _positive_int(value: str) -> int:
@@ -157,7 +255,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--entry-ttl-secs", type=float, default=300.0)
     parser.add_argument(
-        "--prompt-index-backend", choices=("exact", "cagra", "cagra-auto"),
+        "--prompt-index-backend",
+        choices=("exact", "cagra", "cagra-auto"),
         default="exact",
     )
     parser.add_argument(
@@ -378,7 +477,9 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
         if shared_native is not None:
             native_kwargs["global_native_cap_bytes"] = shared_native
         native = CagraIndexBackend(**native_kwargs)
-        backend = CagraAutoIndexBackend(native) if index_mode == "cagra-auto" else native
+        backend = (
+            CagraAutoIndexBackend(native) if index_mode == "cagra-auto" else native
+        )
     elif shared_native is not None:
         raise ValueError("shared CAGRA native cap requires a CAGRA backend")
     return PromptIndexManager(
@@ -393,33 +494,60 @@ async def _reaper(
     store: VectorKVStore,
     interval: float,
     coordinator: VectorCoordinator | None = None,
+    health: _MaintenanceReaperHealth | None = None,
 ) -> None:
+    health = health or _MaintenanceReaperHealth()
+
+    async def reap_local_entries():
+        store.reap_expired(reap_entries=False)
+
+    async def progress_indexes():
+        # Run outside the event loop so index construction cannot block HTTP.
+        await asyncio.to_thread(store.progress_prompt_indexes)
+
     while True:
         await asyncio.sleep(interval)
         # The coordinator is the authority for Entry TTL so its STORED view can
         # never outlive the two shard allocations. Shards still reap timed-out
         # Delivery resources locally.
-        store.reap_expired(reap_entries=False)
-        # Drive one bounded round of index builds. A no-op unless a prompt
-        # index is configured, and it never blocks or fails delivery: a build
-        # error is recorded on the Entry's gate, which stays deliverable.
-        await asyncio.to_thread(store.progress_prompt_indexes)
+        steps = [
+            ("shard_expired_delivery", reap_local_entries),
+            # Drive one bounded round of index builds. A no-op unless a prompt
+            # index is configured; per-entry build failures stay in its gate.
+            ("prompt_index_progress", progress_indexes),
+        ]
         if coordinator is not None:
-            await coordinator.reap_expired()
+            steps.append(("coordinator_expiration", coordinator.reap_expired))
+        await _run_reaper_round(health, steps)
 
 
 async def _group_reaper(
     stores: Sequence[VectorKVStore],
     interval: float,
     coordinator: VectorCoordinator,
+    health: _MaintenanceReaperHealth | None = None,
 ) -> None:
     """Reap all local shards, then update the group-level lifecycle once."""
+    health = health or _MaintenanceReaperHealth()
     while True:
         await asyncio.sleep(interval)
+        steps = []
         for store in stores:
-            store.reap_expired(reap_entries=False)
-            await asyncio.to_thread(store.progress_prompt_indexes)
-        await coordinator.reap_expired()
+
+            async def reap_local_entries(store=store):
+                store.reap_expired(reap_entries=False)
+
+            async def progress_indexes(store=store):
+                await asyncio.to_thread(store.progress_prompt_indexes)
+
+            steps.extend(
+                [
+                    (f"shard_{store.rank}_expired_delivery", reap_local_entries),
+                    (f"shard_{store.rank}_prompt_index_progress", progress_indexes),
+                ]
+            )
+        steps.append(("coordinator_expiration", coordinator.reap_expired))
+        await _run_reaper_round(health, steps)
 
 
 async def _wait_for_rank1(
@@ -463,7 +591,9 @@ def _fanin_coordinator_args(args):
     return {
         "full_kv_fanin_max_records": records,
         "full_kv_fanin_max_slices": (
-            getattr(args, "full_kv_fanin_max_slices", None) if records is not None else None
+            getattr(args, "full_kv_fanin_max_slices", None)
+            if records is not None
+            else None
         ),
     }
 
@@ -560,6 +690,7 @@ async def _serve_rank(args: argparse.Namespace) -> None:
     runners = []
     remote_client = None
     coordinator = None
+    reaper_health = _MaintenanceReaperHealth()
     shard_runner = web.AppRunner(create_shard_app(store, preflight=preflight))
     await shard_runner.setup()
     await web.TCPSite(shard_runner, args.host, shard_port).start()
@@ -586,7 +717,9 @@ async def _serve_rank(args: argparse.Namespace) -> None:
             delivery_timeout_secs=args.delivery_timeout_secs,
             **_fanin_coordinator_args(args),
         )
-        coordinator_runner = web.AppRunner(create_coordinator_app(coordinator))
+        coordinator_runner = web.AppRunner(
+            create_coordinator_app(_CoordinatorHealthView(coordinator, reaper_health))
+        )
         await coordinator_runner.setup()
         await web.TCPSite(coordinator_runner, args.host, args.coordinator_port).start()
         runners.append(coordinator_runner)
@@ -595,7 +728,7 @@ async def _serve_rank(args: argparse.Namespace) -> None:
     _install_signal_handlers(stop)
 
     reaper_task = asyncio.create_task(
-        _reaper(store, args.reaper_interval_secs, coordinator),
+        _reaper(store, args.reaper_interval_secs, coordinator, reaper_health),
         name=f"pvd-v{args.rank}-reaper",
     )
     try:
@@ -619,6 +752,7 @@ async def _serve_group(args: argparse.Namespace) -> None:
     preflights: List[dict] = []
     runners: List[web.AppRunner] = []
     reaper_task = None
+    reaper_health = _MaintenanceReaperHealth()
     try:
         for rank, local_rank in enumerate(device_ids):
             store, preflight = _create_store(
@@ -651,7 +785,9 @@ async def _serve_group(args: argparse.Namespace) -> None:
             delivery_timeout_secs=args.delivery_timeout_secs,
             **_fanin_coordinator_args(args),
         )
-        coordinator_runner = web.AppRunner(create_coordinator_app(coordinator))
+        coordinator_runner = web.AppRunner(
+            create_coordinator_app(_CoordinatorHealthView(coordinator, reaper_health))
+        )
         await coordinator_runner.setup()
         await web.TCPSite(coordinator_runner, args.host, args.coordinator_port).start()
         runners.append(coordinator_runner)
@@ -669,7 +805,9 @@ async def _serve_group(args: argparse.Namespace) -> None:
         stop = asyncio.Event()
         _install_signal_handlers(stop)
         reaper_task = asyncio.create_task(
-            _group_reaper(stores, args.reaper_interval_secs, coordinator),
+            _group_reaper(
+                stores, args.reaper_interval_secs, coordinator, reaper_health
+            ),
             name="pvd-v-group-reaper",
         )
         await stop.wait()
