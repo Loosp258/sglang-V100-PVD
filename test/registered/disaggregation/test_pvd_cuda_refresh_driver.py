@@ -30,6 +30,16 @@ def req():
     )
 
 
+def test_receiver_quarantine_reports_its_original_reason(monkeypatch):
+    with synchronous(monkeypatch) as (driver, *_):
+        driver._source_quarantine = "initial import mapping mismatch"
+        try:
+            with pytest.raises(LifecycleError, match="initial import mapping mismatch"):
+                driver.poll()
+        finally:
+            driver._source_quarantine = None
+
+
 def finish_writes(c):
     for delivery in tuple(c.store.entries[c.entry.key].deliveries.values()):
         handle = delivery.transfer_handle

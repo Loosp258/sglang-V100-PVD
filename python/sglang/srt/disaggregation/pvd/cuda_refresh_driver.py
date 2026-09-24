@@ -581,7 +581,10 @@ class CUDARefreshDriver:
     def poll(self):
         self._owner()
         if self._source_quarantine is not None:
-            raise LifecycleError("CUDA receiver close uncertain; driver quarantined")
+            raise LifecycleError(
+                "CUDA receiver close uncertain; driver quarantined: "
+                + self._source_quarantine
+            )
         if self._pumping or self._loop.is_closed():
             raise LifecycleError("CUDA refresh loop is closed or reentered")
         if self.arbiter.busy and not any(
