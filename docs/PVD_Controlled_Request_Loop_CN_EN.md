@@ -95,7 +95,7 @@ PYTHONPATH=python /home/loosp/torch311-env/bin/python \
 
 No production flags/backend registration were added. The original full-Prompt
 serving path is unchanged. The controller requires a positive configured lead
-window, has at most 64 aggregate routes and 64 positions per query, runs CPU
+window, has at most 4096 route-position rows and 64 positions per query, runs CPU
 prediction/probing synchronously and uses an in-process bank group. Two V shards
 are local HTTP fixtures, not two GPU workers. GPU fences, distributed TP safety,
 KV memory savings and network-latency hiding are **not established**.

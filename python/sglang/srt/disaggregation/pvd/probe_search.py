@@ -31,6 +31,11 @@ class StaleProbeSearch(ValueError):
     """The operation no longer belongs to a live request/window."""
 
 
+# Bound materialized query rows rather than route count alone. A real model can
+# have hundreds of layer/Q-head routes even when it probes only one position.
+MAX_PREPARED_QUERY_ROWS = 4096
+
+
 def _text(name, value):
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
@@ -300,8 +305,14 @@ class ProbeSearchSession:
             ):
                 raise TypeError("explicit pipeline and query-head mapping required")
             self._validate_pipeline(pipeline)
-            if not isinstance(routes, tuple) or not 1 <= len(routes) <= 64:
-                raise ValueError("provide 1..64 explicit single-shard routes")
+            if (
+                not isinstance(routes, tuple)
+                or not routes
+                or len(routes) * len(window.query_positions) > MAX_PREPARED_QUERY_ROWS
+            ):
+                raise ValueError(
+                    "explicit single-shard routes exceed the prepared-query row bound"
+                )
             keys = set()
             for route in routes:
                 if not isinstance(route, ProbeSearchRoute):
@@ -366,9 +377,7 @@ class ProbeSearchSession:
                         local_head,
                         pipeline,
                     )
-                    prepared.append(
-                        PreparedProbeQuery(route, query.version, rows)
-                    )
+                    prepared.append(PreparedProbeQuery(route, query.version, rows))
             self._match(window)
             result = PreparedProbeSearch(window, tuple(prepared))
             self._prepared = result
@@ -456,7 +465,7 @@ class ProbeSearchSession:
         exact same immutable window, but pins its own shard's index version.
         Parent invalidation closes every child, including in-flight searches.
         Partition values are indices into prepared.queries, covering each once.
-        Aggregate routes remain limited to 64 by prepare(); not a serving API.
+        Aggregate route-position rows remain bounded by prepare(); not a serving API.
         """
         self._match(prepared.window)
         if (

@@ -103,6 +103,29 @@ def prepare(session, window, pipeline, route, heads=1):
     )
 
 
+def test_full_model_route_count_is_bounded_by_rows_not_sixty_four():
+    _, _, session, window, pipeline, probe, route = setup(heads=784)
+    probe.budget = TransferBudget(131072, 1)
+    routes = tuple(replace(route, query_head=head) for head in range(784))
+    prepared = session.prepare(
+        window, pipeline, routes=routes, head_mapping=QueryHeadMapping(784, 1)
+    )
+    assert len(prepared.queries) == 784
+    assert probe.closed == 1
+
+
+def test_route_position_product_is_refused_before_probe_allocation():
+    _, _, session, window, pipeline, probe, route = setup(heads=2049)
+    session.invalidate()
+    window = session.begin(window.prefix, target_tokens=4, query_positions=(4, 5))
+    routes = tuple(replace(route, query_head=head) for head in range(2049))
+    with pytest.raises(ValueError, match="prepared-query row bound"):
+        session.prepare(
+            window, pipeline, routes=routes, head_mapping=QueryHeadMapping(2049, 1)
+        )
+    assert probe.closed == 0
+
+
 def test_probe_http_roundtrip_isolated_owned_and_consumed_once():
     async def run():
         _, store, session, window, pipeline, probe, route = setup()

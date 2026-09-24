@@ -129,8 +129,9 @@ class CUDAProbeSearchSession(ProbeSearchSession):
     """CPU session identity/version checks plus explicitly owned CUDA copies.
 
     Budget covers explicit host tensors, not Python/HTTP allocator internals.
-    Protocol rows are additionally bounded by routes/positions <=64 and an
-    explicit head-dimension bound. Source Q is owned/charged by the probe.
+    Prepared route-position rows are bounded by ProbeSearchSession; positions
+    remain <=64 and head dimension has an explicit bound. Source Q is owned
+    and charged by the probe.
     """
 
     def __init__(self, *args, device, copy_budget, max_head_dim, **kwargs):

@@ -15,13 +15,13 @@ TP1/PP1 Llama/torch_native capability restrictions remain.
 
 `CUDAProbeSearchSession` 复用既有 Entry/请求/窗口/position/head/version 检查，
 只复制所需 Q 行到 CPU，再发送既有 HTTP 检索协议。预留独立 copy budget 后才
-启动预测，显式限制 head_dim，routes 和 positions 各不超过 64。逐路复制，
+启动预测，显式限制 head_dim、positions 不超过 64，且 routes × positions 不超过 4096。逐路复制，
 不建立整个层或所有 heads 的 GPU gather buffer。
 
 The CUDA session reuses Entry/request/window/position/head/version validation.
 It copies only requested Q rows to host and uses the existing HTTP search wire
 format. An independent copy budget is reserved before prediction, with an explicit
-head-dimension bound and at most 64 routes/positions each. Routes are copied in
+head-dimension bound, at most 64 positions, and at most 4096 route-position rows. Routes are copied in
 sequence without a full-layer/all-head GPU gather buffer.
 
 预算覆盖显式的 native-dtype host tensor 与 FP32 转换/有限值检查临时空间；
