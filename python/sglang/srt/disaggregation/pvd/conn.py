@@ -424,7 +424,12 @@ class PVDKVManager:
         # one ordered set BEFORE entering any per-wave collective; a local
         # early return here would deadlock another rank preparing a pull.
         ranks = self.gather_rank_objects(
-            {"candidates": candidates, "headroom": headroom, "errors": local_errors}
+            {
+                "rank": self.tp_rank,
+                "candidates": candidates,
+                "headroom": headroom,
+                "errors": local_errors,
+            }
         )
         errors = {key: error for rank in ranks for key, error in rank["errors"].items()}
         failures.extend(

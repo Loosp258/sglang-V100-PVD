@@ -57,6 +57,7 @@ def make_manager(enabled=True, failures=None, staging_bytes=None, used=0, per_re
     mgr.waiting_queue_bootstrap = enabled
     mgr.bootstrap_gates = {}
     mgr.worker_epoch = "d-epoch"
+    mgr.tp_rank = 0
     mgr.decode_refresher = FakeRefresher(failures)
     mgr.key_for = lambda req: EntryKey(f"entry-{req.rid}")
     mgr.gather_rank_objects = lambda value: [value]
@@ -68,6 +69,20 @@ def make_manager(enabled=True, failures=None, staging_bytes=None, used=0, per_re
             mgr.transfer_budget.reserve("someone-else", used, 0)
     mgr.local_shard_manifest = lambda tokens: SimpleNamespace(expected_bytes=per_req)
     return mgr
+
+
+def test_waiting_queue_exchange_includes_rank_for_real_gather(monkeypatch):
+    mgr = make_manager()
+    mgr.tp_size = 1
+    mgr.gloo_group = None
+    mgr.gather_rank_objects = PVDKVManager.gather_rank_objects.__get__(mgr)
+
+    def gather(out, local, *, group):
+        assert group is None
+        out[0] = local
+
+    monkeypatch.setattr("torch.distributed.all_gather_object", gather)
+    assert enter(mgr, []) == []
 
 
 def open_gate(mgr, req):
@@ -352,12 +367,14 @@ def test_tp_ranks_agree_before_starting_a_wave_and_retry(blocked_by):
     barrier = threading.Barrier(2, timeout=5)
     slots = [None, None]
     for rank, (mgr, req) in enumerate(zip(managers, reqs)):
+
         def gather(value, rank=rank):
             slots[rank] = value
             barrier.wait()
             result = list(slots)
             barrier.wait()
             return result
+
         mgr.gather_rank_objects = gather
         gate = open_gate(mgr, req)
         if blocked_by != "source" or rank == 0:
@@ -366,9 +383,11 @@ def test_tp_ranks_agree_before_starting_a_wave_and_retry(blocked_by):
         managers[1].transfer_budget.reserve("occupied", 128, 0)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
+
         def step():
             futures = [pool.submit(enter, m, [r]) for m, r in zip(managers, reqs)]
             return [f.result(timeout=10) for f in futures]
+
         assert step() == [[], []]
         assert all(not m.decode_refresher.calls for m in managers)
         assert all(not runnable(m, r) for m, r in zip(managers, reqs))
