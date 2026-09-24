@@ -94,6 +94,24 @@ def test_pvd_rejects_invalid_refresh_interval(interval):
         handle_pvd_disaggregation(args)
 
 
+def test_pvd_decode_rejects_token_reservation_larger_than_pool():
+    from sglang.srt.arg_groups.pvd_disaggregation_hook import (
+        _validate_decode_token_reservation,
+        handle_pvd_disaggregation,
+    )
+
+    args = SimpleNamespace(
+        disaggregation_topology="pvd",
+        disaggregation_mode="decode",
+        max_total_tokens=128,
+        num_reserved_decode_tokens=512,
+    )
+    with pytest.raises(ValueError, match="every request waits forever"):
+        handle_pvd_disaggregation(args)
+    args.num_reserved_decode_tokens = 16
+    _validate_decode_token_reservation(args)
+
+
 def test_pd_config_is_unchanged_and_pvd_decode_disables_overlap():
     from sglang.srt.arg_groups.pvd_disaggregation_hook import handle_pvd_disaggregation
 
@@ -911,13 +929,16 @@ def test_two_rank_batch_refresh_periodicity_and_rank0_lease_failure(
                 if identity_fault == "regression":
                     sessions[-1].clock.last_tokens = 4
                 elif identity_fault == "prepare":
+
                     def refuse_prepare(pages):
                         raise RuntimeError("rank-local preparation failure")
+
                     sessions[-1].prepare = refuse_prepare
                 else:
                     sessions[-1].clock.round = 3
                 errors = (
-                    step() if bootstrap_case == "off"
+                    step()
+                    if bootstrap_case == "off"
                     else [errors for _, errors in bootstrap_step("start_bootstrap")]
                 )
                 assert all(len(items) == 1 for items in errors)

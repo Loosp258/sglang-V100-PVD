@@ -59,6 +59,17 @@ def _require_positive_int(name: str, value: object) -> int:
     return value
 
 
+def _validate_decode_token_reservation(server_args: "ServerArgs") -> None:
+    """Reject a Decode pool that cannot admit even an empty new request."""
+    capacity = getattr(server_args, "max_total_tokens", None)
+    reserved = getattr(server_args, "num_reserved_decode_tokens", None)
+    if capacity is not None and reserved is not None and reserved >= capacity:
+        raise ValueError(
+            "PVD Decode --num-reserved-decode-tokens must be smaller than "
+            "--max-total-tokens; otherwise every request waits forever for KV"
+        )
+
+
 def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
     """Validate retrieval settings and the optional CUDA-serving preflight."""
     enabled = getattr(server_args, "pvd_predictive_retrieval_config", False)
@@ -284,6 +295,7 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     # already satisfies the CUDA binding's runtime precondition.
     if getattr(server_args, "disaggregation_mode", None) == "decode":
         server_args.disable_overlap_schedule = True
+        _validate_decode_token_reservation(server_args)
     _validate_predictive_retrieval_config(server_args)
     # The generic PD HTTP warmup posts a synthetic /generate without the
     # Gateway-selected PVD transfer/delivery/vector IDs. PVD must reject that
