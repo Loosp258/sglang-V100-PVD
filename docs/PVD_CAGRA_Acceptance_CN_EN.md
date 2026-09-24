@@ -1,5 +1,36 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 真实 Qwen Decode 消费远端 Prompt bank / Real Qwen Decode consumes remote Prompt bank
+
+在上一节完整工作集安装测试上增加 `--model-forward`，D 用同一真实 FP16
+Qwen2.5-7B checkpoint、同一 1024-token Prompt 和位置 1024 的输入 token，
+先执行原生 dense Decode 作为对照；然后在远端完整 Prompt 工作集安装后，
+通过 PVD CUDA sparse attention 后端执行**真实目标模型 Decode 前向**。
+这条路径实际读取 D CUDA bank 的全部 28 层、4 KV heads，并把新生成的
+K/V 保存在 D 模型池。两种注意力的 FP16 求和顺序不同，因此不要求
+新生成 K/V 位级相等；实测最大 logits 绝对误差 **0.01611328125**、
+新 K/V 最大绝对误差 **0.0234375**，贪心 top-1 token 相同，均小于脚本的
+0.15 上限。之后的边界 4 稀疏刷新仍是模拟边界，尚未由真实 token
+序列推进，也未在稀疏刷新后的 bank 上再执行模型前向。
+
+With `--model-forward`, D first ran the real Qwen2.5-7B native dense Decode
+as an oracle, then ran a real target-model Decode at position 1024 through
+the PVD CUDA sparse-attention backend over the remotely installed complete
+Prompt bank. All 28 layers and four KV heads were consumed and generated KV
+remained in D's model pool. FP16 reductions need not be bit-identical across
+these backends: the measured maximum absolute logit difference was
+**0.01611328125**, maximum generated-KV difference **0.0234375**, and the
+greedy top-1 token matched (the gate bounds each error by 0.15). The later
+sparse refresh at boundary four remains synthetic and has **not** been
+consumed by a subsequent target-model forward. No production Scheduler,
+draft overlap, multi-request serving, throughput or broad quality claim follows.
+
+Run the full-bank command below with `--model-forward` and a **fresh** retained
+P Entry; a failed Delivery can close its V index even while the Entry allocation
+remains, so do not reuse an unsearchable transfer ID. After success, both V
+index snapshots had empty `entries`, D budgets drained, and the bounded V
+service released ports and GPU memory.
+
 ## 2026-09-24 真实 Qwen 全层 D 工作集安装 / Real Qwen full-layer D bank installation
 
 在 CloudLab 三节点隔离验证目录中，P GPU0 对现有 FP16

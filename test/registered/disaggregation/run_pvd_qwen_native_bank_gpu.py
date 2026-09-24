@@ -22,7 +22,14 @@ def _validate(runner, args, *, checkpoint=False):
     import torch
     from sglang.srt.disaggregation.pvd.client import PVDCoordinatorClient
     from sglang.srt.disaggregation.pvd.control_server import HttpShardClient
+    from sglang.srt.disaggregation.pvd.cuda_model_attention import (
+        CUDAModelPools,
+        make_cuda_sparse_backend,
+    )
     from sglang.srt.disaggregation.pvd.cuda_runtime_group import CUDARuntimeInstallGroup
+    from sglang.srt.disaggregation.pvd.cuda_sparse_attention import (
+        CUDASparseAttentionWorkspace,
+    )
     from sglang.srt.disaggregation.pvd.cuda_sparse_delivery import (
         CUDAReceiveRoute,
         CUDASparseFanInDelivery,
@@ -54,7 +61,10 @@ def _validate(runner, args, *, checkpoint=False):
     from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
     from sglang.srt.disaggregation.pvd.search_routing import RoutedShardSearchClient
     from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
-    from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+    from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+        ResourceGuard,
+        TransferBudget,
+    )
 
     config = runner.model.config
     if (
@@ -71,7 +81,8 @@ def _validate(runner, args, *, checkpoint=False):
     allocator = PrivatePoolAllocator(
         runner.req_to_token_pool, runner.token_to_kv_pool_allocator
     )
-    slot, rows = allocator.alloc_request(), []
+    slot, rows, native_row = allocator.alloc_request(), [], []
+    baseline_logits, baseline_generated = None, None
     try:
         rows = allocator.alloc_kv(token_count)
         allocator.write_mapping(slot, 0, rows)
@@ -107,10 +118,32 @@ def _validate(runner, args, *, checkpoint=False):
                 for layer in range(28)
             ],
         )
+        if args.model_forward:
+            native_row = allocator.alloc_kv(1)
+            allocator.write_mapping(slot, token_count, native_row)
+            baseline_logits = adapter.forward(
+                DraftForwardInputs(
+                    "decode",
+                    (42,),
+                    (token_count,),
+                    (token_count + 1,),
+                    (slot,),
+                    tuple(native_row),
+                )
+            ).detach().clone()
+            torch.cuda.synchronize("cuda:0")
+            baseline_generated = tuple(
+                (
+                    runner.token_to_kv_pool.get_key_buffer(layer)[native_row].clone(),
+                    runner.token_to_kv_pool.get_value_buffer(layer)[native_row].clone(),
+                )
+                for layer in range(28)
+            )
     finally:
         if rows:
             torch.cuda.synchronize("cuda:0")
             allocator.clear_mapping(slot)
+            allocator.free_kv(native_row)
             allocator.free_kv(rows)
         allocator.free_request(slot)
 
@@ -178,6 +211,121 @@ def _validate(runner, args, *, checkpoint=False):
             raise AssertionError("D target probe produced foreign Q")
     if probe_budget.snapshot()["used_staging_bytes"] or lock.locked():
         raise AssertionError("D target probe retained resources")
+
+    def verify_model_forward(group):
+        """One real target-model Decode forward against the installed Prompt bank."""
+        workspace_budget = TransferBudget(1 << 20, 1)
+        output_budget = TransferBudget(1 << 20, 1)
+        workspace = CUDASparseAttentionWorkspace(
+            device="cuda:0",
+            dtype=torch.float16,
+            head_dim=128,
+            chunk_tokens=64,
+            budget=workspace_budget,
+        )
+        original_backend = runner.attn_backend
+        decoder = PrivatePoolAllocator(
+            runner.req_to_token_pool, runner.token_to_kv_pool_allocator
+        )
+        slot = decoder.alloc_request()
+        row = []
+        guard = backend = None
+        try:
+            row = decoder.alloc_kv(1)
+            decoder.write_mapping(slot, token_count, row)
+
+            def retire_rows():
+                torch.cuda.synchronize("cuda:0")
+                decoder.clear_mapping(slot)
+                decoder.free_kv(row)
+                decoder.free_request(slot)
+
+            guard = ResourceGuard(
+                CUDAModelPools(runner.req_to_token_pool, runner.token_to_kv_pool),
+                retire_rows,
+            )
+            backend = make_cuda_sparse_backend(
+                runner,
+                workspace=workspace,
+                execution_lock=lock,
+                output_budget=output_budget,
+                max_batch_size=1,
+            )
+            runner.attn_backend = backend
+            sparse_adapter = DraftForwardAdapter(
+                runner,
+                architecture="Qwen2ForCausalLM",
+                attention_backend="torch_native",
+                bytes_per_token=28 * 4 * 128 * 2 * 2,
+                device="cuda:0",
+            )
+            with group.model_forward(
+                backend.consumer, slot=slot, decode_tokens=0, pool_owner=guard
+            ):
+                sparse_logits = sparse_adapter.forward(
+                    DraftForwardInputs(
+                        "decode",
+                        (42,),
+                        (token_count,),
+                        (token_count + 1,),
+                        (slot,),
+                        tuple(row),
+                    )
+                ).detach().clone()
+            torch.cuda.synchronize("cuda:0")
+            kv_max_error = 0.0
+            for layer, (native_k, native_v) in enumerate(baseline_generated):
+                for actual, expected in (
+                    (runner.token_to_kv_pool.get_key_buffer(layer)[row], native_k),
+                    (runner.token_to_kv_pool.get_value_buffer(layer)[row], native_v),
+                ):
+                    delta = (actual.float() - expected.float()).abs()
+                    if not torch.isfinite(delta).all():
+                        raise AssertionError(
+                            "Qwen generated K/V contain nonfinite error"
+                        )
+                    kv_max_error = max(kv_max_error, float(delta.max()))
+            max_error = float((sparse_logits - baseline_logits).abs().max())
+            same_top_token = bool(
+                torch.equal(sparse_logits.argmax(-1), baseline_logits.argmax(-1))
+            )
+            if (
+                not torch.isfinite(sparse_logits).all()
+                or not same_top_token
+                or max_error > 0.15
+                or kv_max_error > 0.15
+            ):
+                raise AssertionError(
+                    "sparse Qwen forward differs from dense baseline: "
+                    f"logits={max_error}, generated_kv={kv_max_error}, "
+                    f"same_top_token={same_top_token}"
+                )
+            guard.request_release()
+            if guard.value is not None:
+                raise AssertionError("sparse model pool rows were not retired")
+            return {
+                "max_logit_abs_error": max_error,
+                "max_generated_kv_abs_error": kv_max_error,
+                "same_top_token": True,
+            }
+        finally:
+            runner.attn_backend = original_backend
+            if guard is None or backend is None:
+                # No native forward started; this row can be retired locally.
+                if guard is not None:
+                    guard.request_release()
+                elif row:
+                    decoder.clear_mapping(slot)
+                    decoder.free_kv(row)
+                if guard is None:
+                    decoder.free_request(slot)
+            if backend is None or backend.consumer.snapshot()["quarantine"] is None:
+                workspace.close()
+            if (
+                workspace_budget.snapshot()["used_staging_bytes"]
+                or output_budget.snapshot()["used_staging_bytes"]
+            ):
+                raise AssertionError("sparse attention budgets were not refunded")
 
     async def install():
         key = KVEntryKey(space, "real-qwen-prompt", args.transfer_id)
@@ -326,6 +474,8 @@ def _validate(runner, args, *, checkpoint=False):
                             raise AssertionError("D bank installed a foreign spec")
                         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
                 report["installed_boundaries"].append(epoch.target_tokens)
+                if decode_tokens == 0 and args.model_forward:
+                    report["real_model_forward"] = verify_model_forward(group)
             if await delivery.close() or registry.snapshot():
                 raise RuntimeError("D retained sparse receive registrations")
             group.close()
@@ -364,6 +514,7 @@ def main(argv=None):
     parser.add_argument("--layout-fingerprint", required=True)
     parser.add_argument("--rail", required=True)
     parser.add_argument("--expected-gpu", required=True)
+    parser.add_argument("--model-forward", action="store_true")
     args, model_args = parser.parse_known_args(argv)
     from run_pvd_cuda_probe_smoke import main as run_model
 

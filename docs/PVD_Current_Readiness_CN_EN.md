@@ -3,6 +3,19 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+真实 Qwen2.5-7B 的 D GPU0 现已完成一次**目标模型 Decode 前向**，实际消费
+从两个 V 分片 RDMA 安装的 28 层完整 Prompt 工作集；相对原生 dense 前向
+最大 logits 绝对误差 0.01611328125，贪心输出 token 相同。详见
+[CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。这不包括真实 token
+驱动的边界 4 稀疏刷新后续前向，也不意味着生产 Scheduler 已启用。
+
+A real Qwen2.5-7B target Decode forward on D GPU0 now consumed the full
+28-layer Prompt bank installed by RDMA from two V shards. Its maximum logit
+difference from native dense Decode was 0.01611328125 and greedy top-1 token
+matched. See the [CAGRA acceptance gate](PVD_CAGRA_Acceptance_CN_EN.md).
+The boundary-four sparse refresh has not been driven by generated tokens or
+consumed by a later forward; production Scheduler activation remains open.
+
 2026-09-24 新增 CloudLab 真实 Qwen2.5-7B 三节点离线验收：P 实际 Prefill
 上传完整 1024-token Prompt KV；V 两 GPU 各建 56 个原生 CAGRA 索引；
 D 对全部 112 层/head 组接收并安装完整初始工作集及一次模拟边界 4 的
