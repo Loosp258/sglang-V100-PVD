@@ -1319,8 +1319,10 @@ class VectorCoordinator:
                 for key, entry in self.entries.items()
                 if entry.active_delivery_count == 0
                 and not entry.consumer_leases
-                and entry.expires_at <= now
-                and entry.state in (EntryState.STORED, EntryState.RELEASING)
+                and (
+                    entry.state == EntryState.RELEASING
+                    or (entry.state == EntryState.STORED and entry.expires_at <= now)
+                )
             ]
             cancellable_keys = [
                 key

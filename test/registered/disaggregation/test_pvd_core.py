@@ -655,9 +655,7 @@ def test_coordinator_retries_partially_confirmed_shard_release():
     async def scenario():
         engine = FakeTransferEngine()
         stores = [make_store(rank, engine) for rank in (0, 1)]
-        coordinator = VectorCoordinator(
-            [LocalShardClient(store) for store in stores], entry_ttl_secs=0.01
-        )
+        coordinator = VectorCoordinator([LocalShardClient(store) for store in stores])
         manifest = make_manifest("release-retry")
         key = manifest.key
         try:
@@ -686,7 +684,8 @@ def test_coordinator_retries_partially_confirmed_shard_release():
             assert stores[0].entries[key].resources_released
             assert not stores[1].entries[key].resources_released
 
-            result = await coordinator.reap_expired(time.monotonic() + 1000)
+            assert coordinator.entries[key].expires_at > time.monotonic()
+            result = await coordinator.reap_expired()
             assert result["entries"] == 1
             assert coordinator.entries[key].state == EntryState.RELEASED
             assert all(store.entries[key].resources_released for store in stores)
