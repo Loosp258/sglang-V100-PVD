@@ -21,8 +21,9 @@ start/poll/ACK。随后同一配置的 20-token 请求返回 HTTP 200（约
 34.6 秒，`completion_tokens=20`，`finish_reason=length`）；V 每 rank 的
 completed 与 ACKed Delivery 计数均从 17 增至 22，符合一次初始
 Delivery 加四次 4-token 刷新，且 Mooncake 在途/UNKNOWN/隔离仍为零。
-这是一组有界功能复测，不是吞吐或尾延迟基准。重启后的第一条 Entry
-已在 300 秒后回收；第二条仍在 TTL 窗口内，待复查。
+这是一组有界功能复测，不是吞吐或尾延迟基准。重启后的两条 Entry
+均在 300 秒 TTL 后回收：V 两 rank 恢复 1024 空闲页、0 live Entry、
+0 admission、0 maintenance Entry；reaper 2499 轮中失败 0 次。
 
 Commit `38a037e3a` makes D's index-readiness deadline bound the **entire
 HTTP search attempt**, not just sleeps between refusals; a late success cannot
@@ -44,8 +45,10 @@ index searches and sparse-Delivery start/poll/ACK on both ranks. A subsequent
 ACKed Delivery counts both rose from 17 to 22, consistent with one initial
 Delivery plus four refreshes at a four-token interval; in-flight, UNKNOWN and
 quarantine states remained zero. This is a bounded functional retest, not a
-throughput or tail-latency benchmark. The first Entry after restart was
-reclaimed after 300 seconds; the second was still inside its TTL window.
+throughput or tail-latency benchmark. Both Entries after restart were
+reclaimed after the 300-second TTL: both V ranks returned to 1024 free
+pages, with zero live Entries, admissions and maintenance Entries. The
+maintenance reaper had zero failures in 2499 rounds.
 
 ## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
 
