@@ -57,7 +57,11 @@ def _validate(runner, args, *, checkpoint=False):
         ProbeConfig,
     )
     from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
-    from sglang.srt.disaggregation.pvd.protocol import KVEntryKey, KVLayoutSignature
+    from sglang.srt.disaggregation.pvd.protocol import (
+        FirstTokenMetadata,
+        KVEntryKey,
+        KVLayoutSignature,
+    )
     from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
     from sglang.srt.disaggregation.pvd.search_routing import RoutedShardSearchClient
     from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
@@ -75,6 +79,32 @@ def _validate(runner, args, *, checkpoint=False):
         or args.expected_gpu not in torch.cuda.get_device_name(0)
     ):
         raise RuntimeError("this bounded bank gate expects Qwen2.5-7B on V100S")
+    space = "qwen2.5-7b-real-target"
+    key = KVEntryKey(space, "real-qwen-prompt", args.transfer_id)
+
+    async def selected_first_token():
+        coordinator = PVDCoordinatorClient(args.coordinator_url)
+        try:
+            reply = await coordinator.select([key])
+            records = reply.get("results")
+            if not isinstance(records, list) or len(records) != 1:
+                raise RuntimeError("exactly one selected stored Qwen Entry required")
+            entry = records[0].get("entry")
+            if (
+                not isinstance(entry, dict)
+                or entry.get("state") != "stored"
+                or KVEntryKey.from_dict(entry["manifest"]["key"]) != key
+                or not isinstance(entry.get("first_token"), dict)
+            ):
+                raise RuntimeError("selected Entry lacks its own first-token metadata")
+            raw = entry["first_token"].get("output_token_id")
+            if type(raw) is not int or not 0 <= raw < config.vocab_size:
+                raise RuntimeError("selected Entry first token is not a Qwen token")
+            return FirstTokenMetadata.from_dict(entry["first_token"]).output_token_id
+        finally:
+            await coordinator.close()
+
+    first_token_id = asyncio.run(selected_first_token())
     token_count = 1024
     generator = torch.Generator().manual_seed(20260924)
     tokens = tuple(torch.randint(3, 1000, (token_count,), generator=generator).tolist())
@@ -124,7 +154,7 @@ def _validate(runner, args, *, checkpoint=False):
             baseline_logits = adapter.forward(
                 DraftForwardInputs(
                     "decode",
-                    (42,),
+                    (first_token_id,),
                     (token_count,),
                     (token_count + 1,),
                     (slot,),
@@ -155,7 +185,6 @@ def _validate(runner, args, *, checkpoint=False):
     storage_extra["component_bytes_per_token"] = [
         value // 2 for value in compute_extra["component_bytes_per_token"]
     ]
-    space = "qwen2.5-7b-real-target"
     storage = KVLayoutSignature(
         model_id=space,
         model_revision="cloudlab-local-checkpoint",
@@ -195,7 +224,8 @@ def _validate(runner, args, *, checkpoint=False):
     prefix = CommittedPrefix("real-qwen-prompt", tokens, 0, "prompt")
     with probe.branch():
         queries = probe.capture(
-            prefix, DraftPrediction(prefix.request_id, prefix.version, (42,))
+            prefix,
+            DraftPrediction(prefix.request_id, prefix.version, (first_token_id,)),
         )
         q = {
             (query.layer, head): [
@@ -268,7 +298,7 @@ def _validate(runner, args, *, checkpoint=False):
                 sparse_logits = sparse_adapter.forward(
                     DraftForwardInputs(
                         "decode",
-                        (42,),
+                        (first_token_id,),
                         (token_count,),
                         (token_count + 1,),
                         (slot,),
@@ -427,7 +457,6 @@ def _validate(runner, args, *, checkpoint=False):
             self.closed = True
 
     async def install():
-        key = KVEntryKey(space, "real-qwen-prompt", args.transfer_id)
         engine = MooncakePVDTransferEngine(
             hostname=args.decode_host,
             gpu_id=0,
@@ -493,6 +522,7 @@ def _validate(runner, args, *, checkpoint=False):
             "groups_per_round": 112,
             "q_heads_per_kv_head": 7,
             "union_limit_per_group": 70,
+            "p_first_token_id": first_token_id,
         }
         try:
             routes, results = {}, {}
@@ -630,7 +660,7 @@ def _validate(runner, args, *, checkpoint=False):
                     report["real_model_forward"] = verify_model_forward(group)
                 if decode_tokens == 0 and args.generated_refresh:
                     generated = GeneratedDecode(group)
-                    next_token = 42
+                    next_token = first_token_id
                     for count in range(3):
                         next_token = generated.forward(count, next_token)
                 if decode_tokens == 3 and args.generated_refresh:

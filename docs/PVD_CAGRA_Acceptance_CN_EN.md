@@ -1,5 +1,35 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 P 真实 first token 到 D / Real P first token reaches D
+
+最新三节点验收取消了测试种子 `42` 和协议占位 first token。P 对真实
+Qwen2.5-7B 1024-token Prefill logits 贪心取样，本次输出 token ID **198**；
+随 rank0 的 Prompt KV commit 将其作为 `FirstTokenMetadata` 保存于选定
+Entry。D 根据明确的 Entry key 调用 Coordinator `select`，逐项核对
+STORED 状态、Entry key、first-token 类型及词表范围，再使用从该 Entry
+读取的 **198** 执行自身原生对照、目标 Q 捕获、完整 bank Decode 和后续
+4-token 稀疏刷新。D 报告 `p_first_token_id: 198`；首次完整 bank 前向
+相对原生 dense 对照的最大 logits 绝对误差 **0.01171875**，生成 K/V
+最大误差 **0.03125**，贪心输出相同；正式计数 4 的稀疏 bank 被下一次
+目标前向消费。P/V/D 资源正常回收。这里使用的是确定性人工 Prompt token
+序列和贪心采样，不代表面向用户的生产请求链路已启用。
+
+The latest three-node gate removed both the test seed `42` and placeholder
+first-token metadata. P greedily sampled token ID **198** from actual
+Qwen2.5-7B Prefill logits and committed it with the selected Entry's Prompt
+KV. D used the explicit Entry key to call Coordinator `select`, validated
+the stored Entry identity and first-token type/range, and then used that same
+**198** for its dense oracle, target-Q probe, full-bank Decode and subsequent
+four-token sparse refresh. D reported `p_first_token_id: 198`; the initial
+full-bank forward differed from native dense Decode by at most
+**0.01171875** in logits and **0.03125** in generated KV, with the same
+greedy output. A later real forward consumed the sparse bank after count
+four. P/V/D owners drained. The prompt token sequence remains a deterministic
+test input, and this does not activate a production user-request path.
+
+The following older 2026-09-24 sections record earlier, narrower gates;
+their `42` seed and one-Q-head limitations are superseded by this result.
+
 ## 2026-09-24 真实 Decode 计数驱动的稀疏刷新 / Generated-token-driven sparse refresh
 
 `run_pvd_qwen_native_bank_gpu.py --model-forward --generated-refresh` 在

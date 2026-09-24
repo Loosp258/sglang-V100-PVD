@@ -3,6 +3,21 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+最新 CloudLab 真实 Qwen2.5-7B 验证已经移除 first-token 测试种子：P
+对真实 Prefill logits 贪心取样，作为选定 Entry 元数据提交；D 从 Coordinator
+查询该 Entry 并核对身份，本次使用同一 token ID **198** 完成完整 Prompt
+bank 前向、正式计数 4 的稀疏刷新及其后续前向。旧版文档中 token `42`
+仅描述此前离线验证。见 [CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。
+独立 draft 预测、流水线重叠和生产 Scheduler 自动装配仍未验收。
+
+The latest real-Qwen2.5-7B CloudLab gate no longer seeds D with a synthetic
+first token. P greedily sampled real Prefill logits and stored the token in
+the selected Entry; D validated that Entry through Coordinator `select` and
+used the same token ID **198** for the full Prompt-bank forward and generated-
+token sparse refresh. Earlier references to seed `42` are historical.
+Independent draft prediction, pipeline overlap and production Scheduler
+activation remain unvalidated.
+
 2026-09-24 CloudLab 新增真实 token 驱动刷新验收：D 在完整 bank 上连续执行
 4 次 Qwen2.5-7B 目标前向并保留生成 K/V；位置 1027 的正式前缀目标 Q
 用于补查 V，正式计数 4 安装稀疏 bank，第 5 次前向已实际消费它。初始

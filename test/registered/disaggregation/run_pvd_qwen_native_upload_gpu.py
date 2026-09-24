@@ -1,7 +1,8 @@
 """Upload real Qwen2.5 Prompt KV from P to two native V CAGRA ranks.
 
-Uses the local checkpoint and deterministic token IDs. Leaves the Entry on V
-for the next D-side real-query gate. No generated Decode token is claimed.
+Uses the local checkpoint and deterministic prompt token IDs. Samples the
+first token greedily from the actual Prefill logits and leaves the Entry on V
+for the next D-side real-query gate.
 """
 
 import argparse
@@ -67,7 +68,7 @@ def _validate(runner, args, *, checkpoint=False):
             bytes_per_token=28 * 4 * 128 * 2 * 2,
             device="cuda:0",
         )
-        adapter.forward(
+        first_logits = adapter.forward(
             DraftForwardInputs(
                 "extend",
                 tokens,
@@ -79,6 +80,9 @@ def _validate(runner, args, *, checkpoint=False):
                 (token_count,),
             )
         )
+        first_token_id = int(first_logits.argmax(-1).item())
+        if not 0 <= first_token_id < config.vocab_size:
+            raise AssertionError("Prefill sampled a token outside Qwen vocabulary")
         torch.cuda.synchronize("cuda:0")
         pool = SimpleNamespace(
             start_layer=0,
@@ -187,7 +191,7 @@ def _validate(runner, args, *, checkpoint=False):
                         endpoint="real-qwen-p",
                         rail=args.rail,
                         first_token=(
-                            FirstTokenMetadata(output_token_id=1)
+                            FirstTokenMetadata(output_token_id=first_token_id)
                             if rank == 0 else None
                         ),
                         deadline=time.monotonic() + 90,
@@ -231,6 +235,7 @@ def _validate(runner, args, *, checkpoint=False):
                 ],
                 "retained_entry": True,
                 "real_checkpoint_kv": True,
+                "prefill_first_token_id": first_token_id,
             }
         except BaseException:
             if lease is not None:
