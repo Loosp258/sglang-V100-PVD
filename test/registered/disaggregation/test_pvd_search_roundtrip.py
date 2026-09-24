@@ -44,5 +44,5 @@ def test_two_shard_http_gqa_mapping_padding_versions_and_score_oracle():
     result = asyncio.run(verify_exact_roundtrip(pool, prefix, pipeline))
     assert result["layer_head_results_checked"] == 8
     assert result["negative_checks"] == 14
-    assert result["sparse_kv_payloads_checked"] == 8
+    assert result["sparse_kv_payloads_checked"] == 4
     assert result["cpu_union_groups_installed"] == 4

@@ -188,12 +188,20 @@ async def verify_exact_roundtrip(pool, prefix, pipeline, *, page_size=2, top_k=2
                     assert store.progress_prompt_indexes()["built"] == 1
                     await session.search(prepared, client)
                     selection = session.take_selection(window)
-                    for query, result in zip(
-                        selection.queries, selection.selections, strict=True
+                    query_groups = selection.query_groups or tuple(
+                        (index,) for index in range(len(selection.queries))
+                    )
+                    for members, result in zip(
+                        query_groups, selection.selections, strict=True
                     ):
+                        rows = tuple(
+                            row
+                            for index in members
+                            for row in selection.queries[index].rows
+                        )
                         expected_ids, expected_scores = independent_topk(
                             pool.k_buffer[result.identity.layer][:prompt_tokens, rank],
-                            query.rows,
+                            rows,
                             top_k,
                         )
                         assert result.token_ids == expected_ids
@@ -218,9 +226,10 @@ async def verify_exact_roundtrip(pool, prefix, pipeline, *, page_size=2, top_k=2
                         assert all(t < prompt_tokens for t in result.token_ids), (
                             "padding selected"
                         )
-                        checked += 1
-                        # Step 2: the exact selected K/V bytes, with no D install
-                        # or cross-head merge. Current index identity comes from
+                        checked += len(members)
+                        # Step 2: the exact selected K/V bytes for this
+                        # same-KV-head response, with no D install. The index
+                        # identity comes from
                         # V's gate, independently of the returned selection.
                         current = index.gate_for(manifest.key.transfer_id).descriptor
                         spec = SparseKVSpec(
