@@ -334,6 +334,10 @@ class VectorCoordinator:
         self.delivery_timeout_secs = delivery_timeout_secs
         self.entries: Dict[KVEntryKey, EntryRecord] = {}
         self.deliveries: Dict[str, DeliveryRecord] = {}
+        # Replay records remain in entries/deliveries for the worker epoch;
+        # only unsettled records need the once-per-second maintenance scan.
+        self._maintenance_entries: Dict[KVEntryKey, EntryRecord] = {}
+        self._maintenance_deliveries: Dict[str, DeliveryRecord] = {}
         self._max_entry_records = max_entry_records
         self._max_delivery_records = max_delivery_records
         self._max_admissions = max_admissions
@@ -610,6 +614,7 @@ class VectorCoordinator:
             )
             record.state = transition(record.state, EntryState.ALLOCATING)
             self.entries[manifest.key] = record
+            self._maintenance_entries[manifest.key] = record
 
         try:
             created = await asyncio.gather(
@@ -928,6 +933,7 @@ class VectorCoordinator:
                 deadline=now + self.delivery_timeout_secs,
             )
             self.deliveries[delivery_id] = record
+            self._maintenance_deliveries[delivery_id] = record
             entry.active_delivery_count += 1
 
         try:
@@ -1336,6 +1342,8 @@ class VectorCoordinator:
                 "max_admissions": self._max_admissions,
                 "unknown_retrieval_fences": len(self._unknown_retrieval_fences),
                 "max_unknown_retrieval_fences": self._max_unknown_retrieval_fences,
+                "maintenance_entries": len(self._maintenance_entries),
+                "maintenance_deliveries": len(self._maintenance_deliveries),
             },
             "shards": [
                 {"error": str(item)} if isinstance(item, Exception) else item
@@ -1353,25 +1361,32 @@ class VectorCoordinator:
             self.admissions = {
                 key: value for key, value in self.admissions.items() if value[1] > now
             }
-            for entry in self.entries.values():
+            for key, entry in list(self._maintenance_entries.items()):
+                if (
+                    entry.state in ENTRY_TERMINAL_STATES
+                    and entry.active_delivery_count == 0
+                    and key not in self._pending_entry_cancellations
+                ):
+                    self._maintenance_entries.pop(key)
+                    continue
                 entry.consumer_leases = {
                     key: deadline
                     for key, deadline in entry.consumer_leases.items()
                     if deadline > now
                 }
-            delivery_ids = [
-                delivery_id
-                for delivery_id, delivery in self.deliveries.items()
-                if delivery.state not in DELIVERY_TERMINAL_STATES
-                and delivery.deadline <= now
-            ]
+            delivery_ids = []
+            for delivery_id, delivery in list(self._maintenance_deliveries.items()):
+                if delivery.state in DELIVERY_TERMINAL_STATES:
+                    self._maintenance_deliveries.pop(delivery_id)
+                elif delivery.deadline <= now:
+                    delivery_ids.append(delivery_id)
         for delivery_id in delivery_ids:
             await self.cancel_delivery(delivery_id, "delivery timeout")
 
         async with self._lock:
             releasable_keys = [
                 key
-                for key, entry in self.entries.items()
+                for key, entry in self._maintenance_entries.items()
                 if entry.active_delivery_count == 0
                 and not entry.consumer_leases
                 and (
@@ -1381,7 +1396,7 @@ class VectorCoordinator:
             ]
             cancellable_keys = [
                 key
-                for key, entry in self.entries.items()
+                for key, entry in self._maintenance_entries.items()
                 if entry.active_delivery_count == 0
                 and entry.expires_at <= now
                 and entry.state
