@@ -57,6 +57,14 @@ budgets drained. See [native-CAGRA live acceptance](PVD_CAGRA_Acceptance_CN_EN.m
 This supersedes the exact-only functional boundary above, but does not
 establish retrieval quality or a performance gain.
 
+另有两个同时入 batch 的真实 CAGRA 请求各生成 8 token；并发暴露并修复
+Qwen QKV 非连续视图的 CUDA 打包问题（D `e197e928c`）。
+这只证明两请求功能正确；更高并发、吞吐、尾延迟与资源长期压力尚未验收。
+Two simultaneous native-CAGRA requests also generated eight tokens each
+after the batched-QKV packing fix in D `e197e928c`. This establishes only
+two-request functional correctness; higher concurrency, throughput, tail
+latency and sustained resource pressure remain unverified.
+
 2026-09-24 CloudLab D 节点（`clgpu019`）使用**新建、干净的隔离检出**验证了本地
 `ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项
 聚焦测试通过；进一步运行 `test_pvd_cuda_*.py`，**445 项通过**。该检出来自

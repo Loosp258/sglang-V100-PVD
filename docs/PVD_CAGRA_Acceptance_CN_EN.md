@@ -62,6 +62,29 @@ per-Entry indexes and only two requests were sampled.
 基线两次约 9.9/9.6 秒；两边都为每个新 Entry 建索引且样本量仅为 2，
 不能据此作公平性能结论。
 
+### 两请求同时入 batch / Two requests entering one Decode batch
+
+随后并发两条 8-token Gateway 请求时，首次试验使 D 崩溃：Qwen 的
+`qkv.split` 在 batch size 2 时返回跨行非连续视图，而 CUDA 稀疏注意力
+错误地要求整个 Q/K/V tensor 连续。先写的回归测试复现该拒绝，
+`e197e928c` 再按已预留的上界将跨 batch 输入打包为连续 GPU tensor，
+保持到 forward 完成栅栏并退还预算。隔离 D 检出更新后，同样两条并发
+请求均 HTTP 200、各 8 token，D 保持健康；V 两 rank 的新增稀疏交付
+均完成并 ACK，Mooncake staging/inflight/UNKNOWN 均为零。
+两个请求耗时约 51.2/54.8 秒；这只是**并发正确性门槛**，不是吞吐收益。
+
+Two simultaneous eight-token Gateway requests initially crashed D:
+Qwen's `qkv.split` returns cross-row non-contiguous views at batch size two,
+while the sparse adapter incorrectly demanded whole-tensor contiguity.
+A new regression first reproduced the refusal. Commit `e197e928c` packs
+such inputs into budgeted contiguous GPU tensors, retains them until the
+whole-forward completion fence, then refunds their reservation. With the
+isolated D checkout updated, both simultaneous requests returned HTTP 200
+and eight tokens, D stayed healthy, the new sparse Deliveries on both V
+ranks completed/ACKed, and Mooncake staging/inflight/UNKNOWN were zero.
+Their roughly 51.2/54.8-second latencies are a **concurrency correctness
+gate**, not evidence of throughput improvement.
+
 ## 2026-09-24 稀疏交付与真实 Decode 的安全交错 / Safe interleaving of sparse delivery and real Decode
 
 在隔离的三节点 Qwen2.5-7B 实验中，P 提交真实 Prefill first token **198**，
