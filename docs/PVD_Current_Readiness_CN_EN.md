@@ -50,6 +50,26 @@ reclaimed after the 300-second TTL: both V ranks returned to 1024 free
 pages, with zero live Entries, admissions and maintenance Entries. The
 maintenance reaper had zero failures in 2499 rounds.
 
+同一 D 检出上的两条并发 20-token 请求随后均返回 HTTP 200（约
+65.8、70.4 秒）。D 日志在请求期间明确记录
+`Decode batch, #running-req: 2`；V 每 rank 的 completed/ACKed
+Delivery 均从 22 增至 32，正好每请求 5 次，且在途/UNKNOWN/隔离为零。
+紧随请求的单次 5 秒 D `/health` 探针超时，但再次直接探针为 HTTP 200、
+约 1.7 毫秒，进程未退出；因此此轮证明两个请求成功和双请求 Decode batch，
+**不证明**服务健康端点在高负载下总能于 5 秒内响应。该瞬时停顿需要单独
+测量，不能被成功响应掩盖。
+
+Two subsequent concurrent 20-token requests on the same D checkout both
+returned HTTP 200 (about 65.8 and 70.4 seconds). The D log explicitly
+recorded `Decode batch, #running-req: 2` while they ran. On each V rank,
+completed and ACKed Deliveries both rose from 22 to 32, exactly five per
+request, with zero in-flight, UNKNOWN or quarantined transfers. An immediate
+five-second D `/health` probe timed out, but a direct retry returned HTTP 200
+in about 1.7 ms; the process had not exited. Thus this validates two
+successful requests and a two-request Decode batch, **not** a guarantee that
+the health endpoint stays responsive within five seconds under load. The
+transient stall needs separate measurement.
+
 ## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
 
 `aa658b08d` 在 V 端加入默认关闭的 `--full-kv-fanin-native-batch`。
