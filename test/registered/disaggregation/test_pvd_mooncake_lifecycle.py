@@ -108,6 +108,26 @@ def test_native_terminal_is_polled_only_once(transport):
     assert adapter.lifecycle_manager.snapshot()["used_staging_bytes"] == 0
 
 
+def test_submit_timing_counts_cuda_sync_and_native_submission(transport):
+    native = NativeStub(statuses=[1])
+    adapter, local, remote = make_adapter_with_source(transport, native)
+    before = adapter.health()["submit_timing"]
+    assert before == {
+        "cuda_sync_calls": 0,
+        "cuda_sync_seconds": 0.0,
+        "native_submit_calls": 0,
+        "native_submit_seconds": 0.0,
+    }
+    handle = adapter.submit_put(local, remote)
+    adapter.poll(handle)
+    after = adapter.health()["submit_timing"]
+    assert after["cuda_sync_calls"] == 1
+    assert after["native_submit_calls"] == 1
+    assert after["cuda_sync_seconds"] >= 0
+    assert after["native_submit_seconds"] >= 0
+    assert native.submit_calls == [("d:2", 4096, 8192, 16)]
+
+
 @pytest.mark.parametrize("result", [0, RuntimeError("partial submit")])
 def test_untrackable_submit_quarantines_source_and_capacity(transport, result):
     native = NativeStub(submit_result=result)

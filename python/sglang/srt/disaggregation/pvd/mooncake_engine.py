@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from typing import Any, Dict, Mapping, Optional
 
@@ -81,7 +82,20 @@ class MooncakePVDTransferEngine(TransferEngine):
         self._registrations: Dict[str, RegisteredMemory] = {}
         self._guards: Dict[str, ResourceGuard] = {}
         self._lock = threading.Lock()
+        self._timing_lock = threading.Lock()
+        self._submit_timing = {
+            "cuda_sync_calls": 0,
+            "cuda_sync_seconds": 0.0,
+            "native_submit_calls": 0,
+            "native_submit_seconds": 0.0,
+        }
         self._registration_unknown_reason: Optional[str] = None
+
+    def _record_submit_timing(self, kind: str, elapsed: float) -> None:
+        # Bounded process-local counters; no per-handle state or wire change.
+        with self._timing_lock:
+            self._submit_timing[f"{kind}_calls"] += 1
+            self._submit_timing[f"{kind}_seconds"] += elapsed
 
     def _quarantine_registration(
         self, buffer: torch.Tensor, ptr: int, reason: str
@@ -309,7 +323,13 @@ class MooncakePVDTransferEngine(TransferEngine):
                 raise ValueError("PUT exceeds bounded source region")
             self._engine.require_pvd_metadata_policy()
             # GPUDirect reads are not ordered behind PyTorch packing kernels.
-            torch.cuda.synchronize(local.registration.buffer.device)
+            sync_started = time.perf_counter()
+            try:
+                torch.cuda.synchronize(local.registration.buffer.device)
+            finally:
+                self._record_submit_timing(
+                    "cuda_sync", time.perf_counter() - sync_started
+                )
             self.lifecycle_manager.attach(handle, guard, local.length)
         except Exception as exc:
             handle.status = TransferStatus.FAILED
@@ -331,12 +351,18 @@ class MooncakePVDTransferEngine(TransferEngine):
             remote_address,
             local.length,
         )
-        self.lifecycle_manager.submit_native(
-            handle,
-            lambda: self._engine.engine.transfer_submit_write(
-                remote.endpoint, local_address, remote_address, local.length
-            ),
-        )
+        def native_submit():
+            submit_started = time.perf_counter()
+            try:
+                return self._engine.engine.transfer_submit_write(
+                    remote.endpoint, local_address, remote_address, local.length
+                )
+            finally:
+                self._record_submit_timing(
+                    "native_submit", time.perf_counter() - submit_started
+                )
+
+        self.lifecycle_manager.submit_native(handle, native_submit)
         return handle
 
     def poll(self, handle: TransferHandle) -> TransferStatus:
@@ -386,6 +412,8 @@ class MooncakePVDTransferEngine(TransferEngine):
 
     def health(self) -> Dict[str, Any]:
         lifecycle = self.lifecycle_manager.snapshot()
+        with self._timing_lock:
+            submit_timing = dict(self._submit_timing)
         with self._lock:
             registrations = len(self._registrations)
             unknown_reason = getattr(
@@ -407,4 +435,5 @@ class MooncakePVDTransferEngine(TransferEngine):
             "metadata_policy_verification": "version-pinned-pre-init",
             "mooncake_version": self._engine.pvd_metadata_version,
             "lifecycle": lifecycle,
+            "submit_timing": submit_timing,
         }
