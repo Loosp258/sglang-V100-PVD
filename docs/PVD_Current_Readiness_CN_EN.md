@@ -4,13 +4,15 @@ Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
 2026-09-24 CloudLab D 节点（`clgpu019`）使用**新建、干净的隔离检出**验证了本地
-`ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项测试
-通过。该检出来自经用户授权传输的增量 Git bundle；原有实验工作区未被覆盖。
+`ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项
+聚焦测试通过；进一步运行 `test_pvd_cuda_*.py`，**445 项通过**。该检出来自
+经用户授权传输的增量 Git bundle；原有实验工作区未被覆盖。
 这些测试未执行真实模型 forward、Mooncake WRITE 或生产 Scheduler 自动准入。
 
 On 2026-09-24, a **new clean isolated checkout** on CloudLab D (`clgpu019`)
-validated local commit `ecf94fb07`: 38 CUDA routed-assembly, received-Prompt
-admission and refresh-driver tests passed. The checkout used a user-authorized
+validated local commit `ecf94fb07`: 38 focused CUDA routed-assembly,
+received-Prompt admission and refresh-driver tests passed; the broader
+`test_pvd_cuda_*.py` run passed **445 tests**. The checkout used a user-authorized
 incremental Git bundle; the existing experimental workspace was untouched.
 These tests did not exercise real model forwards, Mooncake WRITE or automatic
 production Scheduler admission.
