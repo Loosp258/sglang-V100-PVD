@@ -212,6 +212,88 @@ def test_index_ready_wait_never_retries_fatal_or_expired_refusal(code):
     asyncio.run(run())
 
 
+def test_index_ready_wait_bounds_a_slow_successful_http_attempt():
+    class SlowSuccess(PVDShardSearchClient):
+        calls = 0
+
+        async def search(self, identity, *, queries, top_k, scope):
+            self.calls += 1
+            await asyncio.sleep(0.1)
+            return await super().search(
+                identity, queries=queries, top_k=top_k, scope=scope
+            )
+
+    async def run():
+        _, store, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        async with shard_client(store) as http:
+            client = SlowSuccess(str(http.make_url("")))
+            try:
+                with pytest.raises(TimeoutError, match="index readiness deadline"):
+                    await session.search(
+                        prepared, client, index_ready_wait_seconds=0.01
+                    )
+                assert client.calls == 1
+                with pytest.raises(StaleProbeSearch):
+                    session.take_selection(window)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_index_ready_wait_expires_after_retryable_capacity_refusal():
+    class AtCapacity(PVDShardSearchClient):
+        calls = 0
+
+        async def search(self, *args, **kwargs):
+            self.calls += 1
+            raise SearchRefused(507, "index_capacity", "index budget full")
+
+    async def run():
+        _, _, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        client = AtCapacity("http://127.0.0.1:1")
+        try:
+            with pytest.raises(TimeoutError, match="index readiness deadline"):
+                await session.search(prepared, client, index_ready_wait_seconds=0.01)
+            assert client.calls == 1
+            with pytest.raises(StaleProbeSearch):
+                session.take_selection(window)
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_index_ready_wait_cancel_does_not_publish_selection():
+    class Waiting(PVDShardSearchClient):
+        def __init__(self):
+            super().__init__("http://127.0.0.1:1")
+            self.entered = asyncio.Event()
+
+        async def search(self, *args, **kwargs):
+            self.entered.set()
+            await asyncio.Event().wait()
+
+    async def run():
+        _, _, session, window, pipeline, _, route = setup()
+        prepared = prepare(session, window, pipeline, route)
+        client = Waiting()
+        task = asyncio.create_task(
+            session.search(prepared, client, index_ready_wait_seconds=1.0)
+        )
+        await client.entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        with pytest.raises(StaleProbeSearch):
+            session.take_selection(window)
+        await client.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "changes,error",
     [

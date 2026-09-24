@@ -490,12 +490,29 @@ class ProbeSearchSession:
                 while True:
                     self._match(window)
                     try:
-                        reply = await client.search(
+                        # A readiness wait bounds the whole HTTP attempt, not
+                        # only the sleeps between retryable refusals. Otherwise
+                        # a slow reply can publish a selection after expiry.
+                        remaining = ready_deadline - time.monotonic()
+                        if index_ready_wait_seconds and remaining <= 0:
+                            raise TimeoutError("V index readiness deadline expired")
+                        search = client.search(
                             identity,
                             queries=query_rows,
                             top_k=query.route.top_k,
                             scope=query.route.scope,
                         )
+                        if index_ready_wait_seconds:
+                            try:
+                                reply = await asyncio.wait_for(
+                                    search, timeout=remaining
+                                )
+                            except asyncio.TimeoutError as exc:
+                                raise TimeoutError(
+                                    "V index readiness deadline expired"
+                                ) from exc
+                        else:
+                            reply = await search
                     except SearchRefused as exc:
                         remaining = ready_deadline - time.monotonic()
                         if not exc.retryable or remaining <= 0:
@@ -503,6 +520,11 @@ class ProbeSearchSession:
                         # Same immutable Q/Entry/route; no new draft or probe.
                         await asyncio.sleep(min(0.2, remaining))
                     else:
+                        if (
+                            index_ready_wait_seconds
+                            and time.monotonic() >= ready_deadline
+                        ):
+                            raise TimeoutError("V index readiness deadline expired")
                         break
                 self._match(window)
                 if reply.identity != identity:
