@@ -3,6 +3,18 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+GQA 硬件验证已从单一代表 Q head 扩展为每个 KV head 对应的全部 7 个
+Q heads：每路 Top-10、同组去重并集、每组最多 70 token；真实
+Qwen2.5-7B 的 112 组并集实测 17–65 token，模拟边界 4 的远端 K/V
+已安装并逐字节核对。刷新后模型前向仍未执行。详见
+[CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+The hardware gate now uses all seven GQA query heads per KV head: Top-10
+per query, deduplicated within-group union, maximum 70 tokens per group.
+Across real Qwen2.5-7B's 112 groups the observed unions held 17–65 tokens;
+D installed their remote K/V at synthetic boundary four and checked every
+value. A subsequent model forward over this sparse bank remains untested.
+
 真实 Qwen2.5-7B 的 D GPU0 现已完成一次**目标模型 Decode 前向**，实际消费
 从两个 V 分片 RDMA 安装的 28 层完整 Prompt 工作集；相对原生 dense 前向
 最大 logits 绝对误差 0.01611328125，贪心输出 token 相同。详见

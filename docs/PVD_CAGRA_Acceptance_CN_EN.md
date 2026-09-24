@@ -1,5 +1,26 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 完整 GQA Q-head 并集 / Full GQA Q-head union
+
+真实 Qwen2.5-7B 三节点测试现对每个 KV head 使用对应的 **7 个**目标模型
+post-RoPE Q heads，而不再只选一个代表 head。V 对每路 Q 各取 Top-10，
+在同一层/KV head 内合并 token、去重，并限制为最多 **70 token/组**；
+不跨层或 KV heads 合并分数。全部 112 组的实际并集大小为 **17–65**。
+D 在模拟边界 4 从两个 V rank 接收并安装这些并集的 K/V，值与独立
+目标模型 Prompt KV 逐字节相同；初始完整 bank 仍完成真实模型 Decode
+前向，输出 token 与 dense 对照相同。V 的 Entry/索引记录与 D 的接收、
+聚合、工作集预算均回收。模拟边界 4 的稀疏 bank 尚未运行后续模型前向。
+
+The real three-node Qwen2.5-7B gate now searches all **seven** target-model
+post-RoPE Q heads mapped to each KV head. V takes Top-10 per query and
+deduplicates the token union **within** each layer/KV-head group, bounded by
+**70 tokens per group**; no cross-layer/head score merge occurs. The observed
+union sizes across all 112 groups were **17–65**. D received and installed
+these K/V unions at synthetic boundary four; all values matched its
+independent target-model Prompt KV bit-for-bit. A real Qwen Decode forward
+still consumed the complete initial bank with matching greedy output.
+The sparse bank has not yet been consumed by a subsequent model forward.
+
 ## 2026-09-24 真实 Qwen Decode 消费远端 Prompt bank / Real Qwen Decode consumes remote Prompt bank
 
 在上一节完整工作集安装测试上增加 `--model-forward`，D 用同一真实 FP16

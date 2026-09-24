@@ -183,7 +183,7 @@ def _validate(runner, args, *, checkpoint=False):
     lock = threading.Lock()
     probe = CUDAQwen2TargetProbe(
         runner,
-        ProbeConfig(space, tuple(range(28)), head_start=0, head_count=22),
+        ProbeConfig(space, tuple(range(28)), head_start=0, head_count=28),
         device="cuda:0",
         execution_lock=lock,
         target_model_id=space,
@@ -198,7 +198,10 @@ def _validate(runner, args, *, checkpoint=False):
             prefix, DraftPrediction(prefix.request_id, prefix.version, (42,))
         )
         q = {
-            (query.layer, head): query.vectors[0, head * 7].float().tolist()
+            (query.layer, head): [
+                query.vectors[0, head * 7 + member].float().tolist()
+                for member in range(7)
+            ]
             for query in queries
             for head in range(4)
         }
@@ -376,7 +379,7 @@ def _validate(runner, args, *, checkpoint=False):
             expected_groups=tuple(routing.groups),
             prompt_tokens=token_count,
             head_dim=128,
-            max_union_tokens=token_count,
+            max_union_tokens=70,
         )
         group = CUDARuntimeInstallGroup(
             {0: bank},
@@ -389,7 +392,12 @@ def _validate(runner, args, *, checkpoint=False):
         )
         coordinator = PVDCoordinatorClient(args.coordinator_url)
         delivery = None
-        report = {"installed_boundaries": [], "groups_per_round": 112}
+        report = {
+            "installed_boundaries": [],
+            "groups_per_round": 112,
+            "q_heads_per_kv_head": 7,
+            "union_limit_per_group": 70,
+        }
         try:
             routes, results = {}, {}
             for rank in (0, 1):
@@ -412,10 +420,14 @@ def _validate(runner, args, *, checkpoint=False):
                         SearchRequestIdentity(
                             space, "rope_applied", key.transfer_id, layer, head
                         ),
-                        queries=[q[layer, head]],
+                        queries=q[layer, head],
                         top_k=10,
                         scope=routing.scope,
                     )
+                    if not 0 < len(results[layer, head].token_ids) <= 70:
+                        raise AssertionError("GQA token union exceeded its bound")
+            sizes = [len(result.token_ids) for result in results.values()]
+            report["gqa_union_size_range"] = [min(sizes), max(sizes)]
             delivery = CUDASparseFanInDelivery(
                 group,
                 registry,
