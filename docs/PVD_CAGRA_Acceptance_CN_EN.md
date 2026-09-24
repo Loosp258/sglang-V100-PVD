@@ -1,5 +1,50 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 真实 Qwen 全层 D 工作集安装 / Real Qwen full-layer D bank installation
+
+在 CloudLab 三节点隔离验证目录中，P GPU0 对现有 FP16
+`Qwen2.5-7B-Instruct` 执行真实 1024-token Prefill，经单 rail `mlx5_0`
+上传全部 Prompt K/V 到 V 的两个 GPU 分片。D GPU0 独立加载同一模型，
+为全部 **28 层 × 4 KV heads = 112 组**生成目标模型 post-RoPE Q，
+各组从其所属 V rank 的原生 CAGRA 索引检索。D 在边界 0 从两个 V rank
+接收并安装完整 Prompt 工作集；在**模拟**的边界 4 再接收并安装每组
+Top-10 的稀疏工作集。两轮均走 Mooncake/RDMA、远端完成及本地 CUDA
+排序、PREPARED→PARKED→APPLIED→RESUMED 和每源 ACK；安装的所有
+K/V 值与 D 独立目标模型前向产生的值逐组逐字节相同。接收、聚合、
+工作集预算回零；V 两 rank 的 Entry/索引记录为空，只保留各自的
+671088640 字节共享 CAGRA 根预留。验证程序输出 `passed`。
+
+The isolated three-node CloudLab gate loaded the existing FP16
+Qwen2.5-7B-Instruct checkpoint on P and D. P uploaded all 1024-token Prompt
+KV to two V GPUs over single-rail `mlx5_0` RDMA. D generated real post-RoPE
+target Q for all **28 layers × 4 KV heads = 112 groups** and searched each
+group's native CAGRA index on its selected V shard. At boundary zero it
+received and installed the complete Prompt bank; at a **synthetic** boundary
+four it installed a Top-10 sparse bank for every group. Both rounds exercised
+Mooncake/RDMA completion, CUDA ordering, the
+PREPARED→PARKED→APPLIED→RESUMED install protocol and per-source ACK.
+All installed K/V values matched an independent D target-model forward
+bit-for-bit. D budgets were refunded and V Entry/index records were empty,
+leaving only each rank's 671088640-byte shared CAGRA root reservation.
+
+This is an offline protocol/byte-correctness gate. The boundary-four counter
+does **not** represent four real generated tokens. It uses one representative
+Q head per KV head, not the final GQA union of all seven Q heads. No Decode
+attention consumed this remotely installed bank, and no draft/Scheduler
+overlap, quality distribution, throughput or production path was validated.
+
+```bash
+# After run_pvd_qwen_native_upload_gpu.py retains the new Entry, on D/node-2:
+python test/registered/disaggregation/run_pvd_qwen_native_bank_gpu.py \
+  --decode-host 10.0.1.3 --coordinator-url http://10.0.1.2:19100 \
+  --vector-base-url http://10.0.1.2 --shard-port-base 19200 \
+  --transfer-id <P-output-transfer-id> \
+  --layout-fingerprint <P-output-layout-fingerprint> \
+  --rail mlx5_0 --expected-gpu V100S --architecture qwen2 \
+  --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
+  --dtype float16 --context-length 1056 --max-total-tokens 4096
+```
+
 ## 2026-09-24 真实 Qwen 三节点检索与稀疏回写 / Real Qwen three-node search and sparse WRITE
 
 沿用真实 Qwen2.5-7B P→V Entry，node-2 D GPU0 加载同一 FP16 checkpoint，

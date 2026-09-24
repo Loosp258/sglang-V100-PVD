@@ -3,6 +3,23 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+2026-09-24 新增 CloudLab 真实 Qwen2.5-7B 三节点离线验收：P 实际 Prefill
+上传完整 1024-token Prompt KV；V 两 GPU 各建 56 个原生 CAGRA 索引；
+D 对全部 112 层/head 组接收并安装完整初始工作集及一次模拟边界 4 的
+Top-10 稀疏工作集。全部安装值与 D 独立模型前向逐字节相同，资源归还。
+详见 [CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。这尚未执行
+真实 token 生成、目标模型 attention 消费该远端 bank、完整 GQA Q-head
+并集或生产 Scheduler 流水线。
+
+On 2026-09-24 an isolated three-node CloudLab real-Qwen2.5-7B gate passed:
+P uploaded actual 1024-token Prompt KV, two V GPUs built 56 native CAGRA
+indexes each, and D received and installed both a complete initial bank and
+a Top-10 sparse bank at synthetic boundary four across all 112 layer/head
+groups. Installed values matched an independent D model forward bit-for-bit;
+owners and budgets drained. See the [CAGRA acceptance gate](PVD_CAGRA_Acceptance_CN_EN.md).
+Real generated-token attention over this remote bank, full GQA Q-head union
+and production Scheduler/pipeline integration remain unvalidated.
+
 ## 结论 / Bottom line
 
 CPU 参考路径已实际跑通独立小模型 → 目标模型 post-RoPE Q → V 精确检索 →
