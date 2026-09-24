@@ -3,6 +3,46 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 生产请求链路首轮验收 / First live serving acceptance
+
+在授权的 CloudLab 隔离检出中，P=`clgpu020`/TP1、V=`clgpu021`/两张
+V100S、D=`clgpu019`/TP1，使用 `mlx5_0` 单 rail 和真实
+Qwen2.5-7B-Instruct（D 独立 draft 为 Qwen2.5-0.5B-Instruct）。
+Gateway `/generate` 连续两次返回 HTTP 200，各生成 8 token；
+`--pvd-kv-refresh-interval 4` 的预测检索和稀疏交付路径已实际执行。
+V 日志记录了每次 784 次索引搜索；两次请求后，V 每 rank 的
+P→V 字节数大于零、4 次 Delivery 均完成并 ACK，V→D 字节数大于零，
+Mooncake 未留在途事务或隔离状态。D 本地验证提交为 `2095dd60a`；
+P/V/Gateway 使用隔离检出的 `fbd77287b`（本轮修复只涉及 D）。
+本地 PVD CPU 回归为 **2797 passed、23 skipped、21 subtests passed**。
+
+On authorized isolated CloudLab checkouts, P=`clgpu020`/TP1,
+V=`clgpu021`/two V100S ranks and D=`clgpu019`/TP1 ran on the single
+active `mlx5_0` rail with real Qwen2.5-7B-Instruct and an independent
+Qwen2.5-0.5B-Instruct draft on D. Two consecutive Gateway `/generate`
+requests returned HTTP 200 and eight tokens each; the four-token predictive
+refresh and sparse-delivery path executed. V logged 784 index searches per
+request; after both requests, each rank had nonzero P→V and V→D bytes,
+four completed/ACKed Deliveries, and no in-flight or quarantined Mooncake
+transfers. D ran local commit `2095dd60a`; the isolated P/V/Gateway checkouts
+ran `fbd77287b` because this round's fixes affected D only. Local PVD CPU
+regression: **2797 passed, 23 skipped, 21 subtests passed**.
+
+This is an **exact-index, synchronous CUDA-packing baseline**, not native
+CAGRA, a recall/quality distribution, proof of RDMA/GPU overlap, or a
+throughput/latency improvement claim. The tested D union cap was 32 for a
+26–27-token prompt with per-Q-head Top-4; smaller caps fail closed rather
+than truncate. `mlx5_1` remains physically DOWN, so dual-rail has not been
+validated. Earlier paragraphs below describe historical milestones and may
+say that production integration was not yet installed; this newer live test
+supersedes those historical status statements.
+
+这是**精确索引、同步 CUDA 打包**基线，不是原生 CAGRA、召回/质量分布、
+RDMA 与 GPU 重叠证明或性能提升证明。实际 D 并集上限为 32，
+Prompt 为 26–27 token、每 Q head Top-4；容量不足时拒绝而不截断。
+`mlx5_1` 仍为物理 DOWN，双 rail 未验收。以下旧段落保留历史里程碑，
+其中“生产接线尚未完成”的旧状态已由本节真实请求验收取代。
+
 2026-09-24 CloudLab D 节点（`clgpu019`）使用**新建、干净的隔离检出**验证了本地
 `ecf94fb07`：CUDA 路由组装、收到 Prompt 后准入、refresh driver 的 38 项
 聚焦测试通过；进一步运行 `test_pvd_cuda_*.py`，**445 项通过**。该检出来自
