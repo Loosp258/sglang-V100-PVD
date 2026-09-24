@@ -32,6 +32,12 @@ class CUDAAdmissionBlocked(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CUDAReceivedRetrievalBounds:
+    top_k: int
+    max_union_tokens: int
+
+
+@dataclass(frozen=True)
 class CUDAAdmissionPreflight:
     session: PVDDecodeSession
     binding: PVDSelectedRouteBinding
@@ -103,6 +109,29 @@ def preflight_received_cuda_admission(session, binding, driver):
     ):
         raise CUDAAdmissionBlocked("CUDA admission owner is busy, duplicate or closing")
     return CUDAAdmissionPreflight(session, binding, driver, receipt)
+
+
+def bounds_for_received_cuda_prompt(preflight, *, top_k, max_union_tokens):
+    """Clamp configured search/workset limits to the actual Prompt length.
+
+    The two explicit settings remain hard upper bounds. A one-token Prompt is
+    legal: it gets Top-1 and a one-token bank rather than failing construction
+    of the V search request or D initial bank.
+    """
+    if not isinstance(preflight, CUDAAdmissionPreflight):
+        raise CUDAAdmissionBlocked("validated CUDA admission preflight required")
+    receipt = preflight.revalidate().receipt
+    if (
+        type(top_k) is not int
+        or not 1 <= top_k <= 512
+        or type(max_union_tokens) is not int
+        or max_union_tokens < top_k
+    ):
+        raise CUDAAdmissionBlocked("positive ordered retrieval limits required")
+    count = len(receipt.prompt)
+    if count <= 0:
+        raise CUDAAdmissionBlocked("nonempty completed Prompt required")
+    return CUDAReceivedRetrievalBounds(min(top_k, count), min(max_union_tokens, count))
 
 
 def admit_received_cuda_request(
