@@ -10,6 +10,7 @@ import asyncio
 import copy
 import sys
 import threading
+import time
 import uuid
 from dataclasses import replace
 from types import SimpleNamespace
@@ -537,7 +538,7 @@ def _validate(runner, args, *, checkpoint=False):
             max_pending_bytes=131072,
         )
         coordinator = PVDCoordinatorClient(args.coordinator_url)
-        delivery = generated = None
+        delivery = generated = pending_stage = None
         report = {
             "installed_boundaries": [],
             "groups_per_round": 112,
@@ -668,10 +669,43 @@ def _validate(runner, args, *, checkpoint=False):
                     for layer in range(28)
                     for head in range(4)
                 )
-                receipt = await delivery.stage(epoch, 0, specs)
-                delivery.require_installable(epoch)
-                if decode_tokens == 3 and args.generated_refresh:
+                if decode_tokens == 3 and args.overlap_delivery:
+                    pending_stage = asyncio.create_task(delivery.stage(epoch, 0, specs))
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline:
+                        records = delivery._rounds.get(epoch, {})
+                        if len(records) == 2 and all(
+                            record._published for record in records.values()
+                        ):
+                            break
+                        if pending_stage.done():
+                            await pending_stage
+                            raise AssertionError(
+                                "sparse delivery ended before both publications"
+                            )
+                        await asyncio.sleep(0.01)
+                    else:
+                        raise TimeoutError(
+                            "D destinations did not start local publication before forward"
+                        )
+                    if pending_stage.done():
+                        pending_stage.result()  # Surface a failed native publication.
+                        raise AssertionError(
+                            "delivery completed before overlapping Decode forward"
+                        )
                     next_token = generated.forward(3, next_token)
+                    receipt = await pending_stage
+                    pending_stage = None
+                    report["delivery_overlap_attempt"] = {
+                        "both_local_publications_started_before_forward": True,
+                        "stage_pending_at_forward_start": True,
+                        "remote_terminal_proof_awaited_after_forward": True,
+                    }
+                else:
+                    receipt = await delivery.stage(epoch, 0, specs)
+                    if decode_tokens == 3 and args.generated_refresh:
+                        next_token = generated.forward(3, next_token)
+                delivery.require_installable(epoch)
                 if not group.try_install(epoch, {0: epoch.target_tokens}):
                     raise RuntimeError("D CUDA bank did not complete install")
                 if receipt.epoch != epoch or not group.can_decode(epoch.target_tokens):
@@ -724,6 +758,12 @@ def _validate(runner, args, *, checkpoint=False):
             report["released_entry"] = True
             return report
         finally:
+            # A failed forward/timeout must not leave a source coroutine racing
+            # registry.close(); cancellation precedes the receiver's remote fence.
+            if pending_stage is not None:
+                if not pending_stage.done():
+                    pending_stage.cancel()
+                await asyncio.gather(pending_stage, return_exceptions=True)
             if generated is not None:
                 generated.close()
             if delivery is not None:
@@ -754,9 +794,12 @@ def main(argv=None):
     parser.add_argument("--expected-gpu", required=True)
     parser.add_argument("--model-forward", action="store_true")
     parser.add_argument("--generated-refresh", action="store_true")
+    parser.add_argument("--overlap-delivery", action="store_true")
     args, model_args = parser.parse_known_args(argv)
     if args.generated_refresh and not args.model_forward:
         parser.error("--generated-refresh requires --model-forward")
+    if args.overlap_delivery and not args.generated_refresh:
+        parser.error("--overlap-delivery requires --generated-refresh")
     from run_pvd_cuda_probe_smoke import main as run_model
 
     return run_model(

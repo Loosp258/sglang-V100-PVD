@@ -1,5 +1,36 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 稀疏交付与真实 Decode 的安全交错 / Safe interleaving of sparse delivery and real Decode
+
+在隔离的三节点 Qwen2.5-7B 实验中，P 提交真实 Prefill first token **198**，
+V 两 rank 建立原生 CAGRA 索引，D 在正式生成计数 3 发起两路稀疏交付。
+验证程序确认两个**本地**接收记录已开始发布且交付任务仍未完成，随后执行
+第 4 次目标模型 Decode 前向；前向结束后等待两路 Mooncake/RDMA 终态及
+写入 fence，才在计数 4 安装工作集。第 5 次目标前向消费新稀疏 KV；
+112 组安装值与独立 Prompt KV 逐字节一致，Entry 和预算均回收。
+初始/刷新查询的最小并集召回分别为 **0.9772727273/0.98**。
+
+这里的本地 `published` 标志在首次 HTTP await **之前**设置，不能证明
+V 已接收请求或 RDMA WRITE 已与 GPU 前向同时进行。交付任务在前向开始时
+pending 也不是网络/计算重叠的时间测量；本门槛仅证明该执行顺序的安全性，
+**不证明延迟隐藏、吞吐收益或生产 Scheduler 自动调度**。
+
+In the isolated three-node real-Qwen2.5-7B gate, P committed Prefill token
+**198**, V built native CAGRA indexes on both ranks, and D started two sparse
+deliveries after three committed target Decode forwards. Both **local**
+receiver publications had started and the delivery task was pending when D
+ran its fourth target forward. Only afterward did D await both terminal
+Mooncake/RDMA write proofs and install the new bank at count four. The fifth
+forward consumed that sparse KV; all 112 installed groups matched independent
+Prompt KV byte-for-byte, and Entry/budgets were retired. Initial/refresh
+minimum union recalls were **0.9772727273/0.98** in this run.
+
+The local `published` flag is set **before** the first HTTP await, so it does
+not establish V acceptance or that RDMA WRITE overlapped GPU computation.
+A pending task at forward start is not a latency measurement. This gate
+establishes safe ordering only, **not latency hiding, throughput gain, or
+automatic production Scheduler integration**.
+
 ## 2026-09-24 全 112 组 GQA 并集召回 / All-112-group GQA union recall
 
 对上述真实 Qwen2.5-7B 的确定性 1024-token Prompt，D 使用独立模型
