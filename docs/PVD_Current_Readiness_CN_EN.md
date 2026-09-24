@@ -64,6 +64,9 @@ HTTP 200，实际各生成 20 token（约 61.3、65.8 秒）；71 次健康探�
 全部 HTTP 200，最大约 58 毫秒。V 每 rank completed/ACKed Delivery
 又从 32 增至 42，无在途/UNKNOWN/隔离。先前的单次 5 秒超时本轮未
 复现，尚不能归因于 D 事件循环；需要长时负载才能估计尾部风险。
+本轮两条 Entry 随后也按 TTL 回收，V 两 rank 恢复 1024 空闲页、
+0 live Entry、0 admission、0 maintenance Entry；reaper 仍 healthy、
+累计失败 0 次。
 
 Two subsequent concurrent 20-token requests on the same D checkout both
 returned HTTP 200 (about 65.8 and 70.4 seconds). The D log explicitly
@@ -83,6 +86,9 @@ with a maximum of about 58 ms. Per-rank V completed/ACKed Deliveries rose
 again from 32 to 42, with no in-flight, UNKNOWN or quarantined transfers.
 The earlier isolated five-second timeout was not reproduced and cannot yet
 be attributed to D's event loop; a longer load run is needed for tail risk.
+Both Entries from this repeat were also reclaimed by TTL. Both V ranks
+returned to 1024 free pages, with zero live Entries, admissions and
+maintenance Entries; the reaper remained healthy with zero failed rounds.
 
 ## 2026-09-24 批量 fan-in 与索引就绪等待 / Batched fan-in and index readiness
 
