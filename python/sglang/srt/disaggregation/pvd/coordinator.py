@@ -6,6 +6,7 @@ import abc
 import asyncio
 import copy
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional
 
@@ -319,14 +320,16 @@ class VectorCoordinator:
         self.entries: Dict[KVEntryKey, EntryRecord] = {}
         self.deliveries: Dict[str, DeliveryRecord] = {}
         self._lock = asyncio.Lock()
-        self._entry_create_locks: Dict[KVEntryKey, asyncio.Lock] = {}
-        self._entry_cleanup_locks: Dict[KVEntryKey, asyncio.Lock] = {}
+        # Each operation keeps a strong local reference while active. A lock
+        # must not remain in a permanent registry after the last waiter exits.
+        self._entry_create_locks = weakref.WeakValueDictionary()
+        self._entry_cleanup_locks = weakref.WeakValueDictionary()
         self._pending_entry_cancellations: Dict[KVEntryKey, str] = {}
-        self._delivery_reserve_locks: Dict[str, asyncio.Lock] = {}
-        self._delivery_start_locks: Dict[str, asyncio.Lock] = {}
+        self._delivery_reserve_locks = weakref.WeakValueDictionary()
+        self._delivery_start_locks = weakref.WeakValueDictionary()
         self.selector = PassThroughSelector(self.entry_state)
         self.admissions = {}
-        self._retrieval_locks = {}
+        self._retrieval_locks = weakref.WeakValueDictionary()
         self._fenced_retrievals = set()
         self.fanin = None
         if (full_kv_fanin_max_slices, full_kv_fanin_max_records) != (None, None):
