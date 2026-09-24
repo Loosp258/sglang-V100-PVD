@@ -33,6 +33,9 @@ from sglang.srt.disaggregation.pvd.search_routing import RoutedShardSearchClient
 from sglang.srt.disaggregation.pvd.sparse_install import InstallProtocolError
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
+_PARTIAL_ASSEMBLY_QUARANTINE = []
+_UNSTARTED_ASSEMBLY_QUARANTINE = []
+
 
 class CUDARoutedPrefetchRequest(CUDAPrefetchRequest):
     """The request owns both HTTP client sets after native owners have drained."""
@@ -57,6 +60,42 @@ class CUDARoutedPrefetchRequest(CUDAPrefetchRequest):
 class CUDARoutedRequestAssembly:
     controller: CUDARoutedPrefetchRequest
     clients: object  # {D compute rank: routed V search client}, for the driver
+
+    async def discard_unstarted(self):
+        """Retire an assembly that the refresh driver never claimed.
+
+        A registered request must instead use the driver's ordered retirement;
+        in particular this path must never close a published destination.
+        """
+        controller = self.controller
+        delivery = controller.delivery
+        state = delivery.snapshot()
+        coordinator = controller.group.coordinator.snapshot()
+        if (
+            getattr(controller, "_refresh_driver_claimed", False)
+            or controller._closed
+            or controller._active is not None
+            or controller._ready is not None
+            or controller._tasks
+            or controller._session._pending is not None
+            or controller._session._prepared is not None
+            or controller._session._ready is not None
+            or coordinator["state"] != "idle"
+            or state["pending_rounds"]
+            or state["retained_destinations"]
+            or state["ack_tasks"]
+            or any(client._session is not None for client in controller._owned_clients)
+        ):
+            raise InstallProtocolError(
+                "only an unclaimed, idle CUDA assembly can be discarded"
+            )
+        try:
+            await controller.aclose()
+        except BaseException:
+            # A failed close cannot prove that readers, native registrations or
+            # HTTP owners were retired. Retain every owner for explicit recovery.
+            _UNSTARTED_ASSEMBLY_QUARANTINE.append(self)
+            raise
 
 
 def assemble_routed_cuda_request(
@@ -194,70 +233,94 @@ def assemble_routed_cuda_request(
     ):
         raise ValueError("one explicit D endpoint per selected V source required")
 
-    search_clients = {
-        route.rank: PVDShardSearchClient(route.url) for route in selected.shards
-    }
-    control_clients = {
-        route.rank: HttpShardClient(route.rank, route.url) for route in selected.shards
-    }
-    routing = RoutedShardSearchClient(
-        storage_layout=selected.manifest.layout,
-        compute_layout=compute_layout,
-        compute_rank=compute_rank,
-        entry_transfer_id=selected.manifest.key.transfer_id,
-        prompt_tokens=selected.manifest.prompt_token_count,
-        vector_space=vector_space,
-        metric=metric,
-        clients=search_clients,
-        layers=tuple(range(compute_layout.num_layers)),
-    )
-    routes = {
-        route.rank: CUDAReceiveRoute(
-            control_clients[route.rank],
-            route.sender_epoch,
-            receive_endpoints[route.rank],
-            receive_rails[route.rank],
+    search_clients, control_clients = {}, {}
+    routing = delivery = None
+    try:
+        for route in selected.shards:
+            search_clients[route.rank] = PVDShardSearchClient(route.url)
+            control_clients[route.rank] = HttpShardClient(route.rank, route.url)
+        routing = RoutedShardSearchClient(
+            storage_layout=selected.manifest.layout,
+            compute_layout=compute_layout,
+            compute_rank=compute_rank,
+            entry_transfer_id=selected.manifest.key.transfer_id,
+            prompt_tokens=selected.manifest.prompt_token_count,
+            vector_space=vector_space,
+            metric=metric,
+            clients=search_clients,
+            layers=tuple(range(compute_layout.num_layers)),
         )
-        for route in selected.shards
-        if route.rank in routing.clients
-    }
-    delivery = CUDASparseFanInDelivery(
-        group,
-        registry,
-        routing,
-        key=selected.manifest.key,
-        routes=routes,
-        aggregate_budget=aggregate_budget,
-        poll_interval_seconds=poll_interval_seconds,
-    )
-    rank_routes = tuple(
-        ProbeSearchRoute(
-            query_head,
-            SearchRequestIdentity(
-                vector_space,
-                ROPE_APPLIED,
-                selected.manifest.key.transfer_id,
-                layer,
-                kv_head,
-            ),
-            routing.scope,
-            top_k,
+        routes = {
+            route.rank: CUDAReceiveRoute(
+                control_clients[route.rank],
+                route.sender_epoch,
+                receive_endpoints[route.rank],
+                receive_rails[route.rank],
+            )
+            for route in selected.shards
+            if route.rank in routing.clients
+        }
+        delivery = CUDASparseFanInDelivery(
+            group,
+            registry,
+            routing,
+            key=selected.manifest.key,
+            routes=routes,
+            aggregate_budget=aggregate_budget,
+            poll_interval_seconds=poll_interval_seconds,
         )
-        for layer, kv_head in sorted(routing.groups)
-        for query_head in head_mapping.query_heads_for(kv_head)
-    )
-    controller = CUDARoutedPrefetchRequest(
-        group,
-        pipeline,
-        copy_budget=copy_budget,
-        max_head_dim=max_head_dim,
-        head_mapping=head_mapping,
-        rank_routes={compute_rank: rank_routes},
-        max_union_tokens=max_union_tokens,
-        initial_import_pending=initial_import_pending,
-        delivery=delivery,
-        owned_clients=tuple(search_clients.values()) + tuple(control_clients.values()),
-    )
-    return CUDARoutedRequestAssembly(
-        controller, MappingProxyType({compute_rank: routing})
-    )
+        rank_routes = tuple(
+            ProbeSearchRoute(
+                query_head,
+                SearchRequestIdentity(
+                    vector_space,
+                    ROPE_APPLIED,
+                    selected.manifest.key.transfer_id,
+                    layer,
+                    kv_head,
+                ),
+                routing.scope,
+                top_k,
+            )
+            for layer, kv_head in sorted(routing.groups)
+            for query_head in head_mapping.query_heads_for(kv_head)
+        )
+        controller = CUDARoutedPrefetchRequest(
+            group,
+            pipeline,
+            copy_budget=copy_budget,
+            max_head_dim=max_head_dim,
+            head_mapping=head_mapping,
+            rank_routes={compute_rank: rank_routes},
+            max_union_tokens=max_union_tokens,
+            initial_import_pending=initial_import_pending,
+            delivery=delivery,
+            owned_clients=tuple(search_clients.values())
+            + tuple(control_clients.values()),
+        )
+        return CUDARoutedRequestAssembly(
+            controller, MappingProxyType({compute_rank: routing})
+        )
+    except BaseException:
+        # Nothing in this constructor publishes a destination or starts an
+        # HTTP request. All clients are therefore lazy and have no session.
+        # The caller still owns the bank/group and closes it separately.
+        clients = tuple(search_clients.values()) + tuple(control_clients.values())
+        try:
+            if delivery is not None:
+                state = delivery.snapshot()
+                if state["pending_rounds"] or state["retained_destinations"]:
+                    raise RuntimeError("partial CUDA assembly has live destinations")
+                delivery.cancel()
+            if routing is not None:
+                routing._closed = True
+            if any(client._session is not None for client in clients):
+                raise RuntimeError("partial CUDA assembly unexpectedly opened HTTP")
+            for client in clients:
+                client._closed = True
+        except BaseException:
+            _PARTIAL_ASSEMBLY_QUARANTINE.append(
+                (group, registry, routing, delivery, clients)
+            )
+            raise
+        raise

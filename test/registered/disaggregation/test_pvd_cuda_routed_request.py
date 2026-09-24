@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+from sglang.srt.disaggregation.pvd import cuda_routed_request as routed_module
 from sglang.srt.disaggregation.pvd.client import (
     PVDSelectedShardRoute,
     PVDSelectedShardRoutes,
@@ -90,6 +91,38 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
                 "d_rail": "mlx5_0",
                 "poll_interval_seconds": 0.001,
             }
+            for failed_stage in ("routing", "delivery", "controller"):
+                constructed = []
+                real_search = routed_module.PVDShardSearchClient
+                real_control = routed_module.HttpShardClient
+
+                def search_client(url, original=real_search, owned=constructed):
+                    result = original(url)
+                    owned.append(result)
+                    return result
+
+                def control_client(rank, url, original=real_control, owned=constructed):
+                    result = original(rank, url)
+                    owned.append(result)
+                    return result
+
+                def fail(*args, **kwargs):
+                    raise RuntimeError("injected partial assembly failure")
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(routed_module, "PVDShardSearchClient", search_client)
+                    patch.setattr(routed_module, "HttpShardClient", control_client)
+                    name = {
+                        "routing": "RoutedShardSearchClient",
+                        "delivery": "CUDASparseFanInDelivery",
+                        "controller": "CUDARoutedPrefetchRequest",
+                    }[failed_stage]
+                    patch.setattr(routed_module, name, fail)
+                    with pytest.raises(RuntimeError, match="partial assembly failure"):
+                        assemble_routed_cuda_request(selected, **kwargs)
+                assert constructed and all(client._closed for client in constructed)
+                assert all(client._session is None for client in constructed)
+                assert not c.registry.snapshot()
             with pytest.raises(ValueError, match="exact selected Entry"):
                 assemble_routed_cuda_request(
                     PVDSelectedShardRoutes(
@@ -161,8 +194,14 @@ def test_discovered_shards_assemble_exact_request_and_own_clients(monkeypatch):
             )
             with pytest.raises(InstallProtocolError, match="aclose"):
                 controller.close()
-            await controller.aclose()
+            controller._refresh_driver_claimed = True
+            with pytest.raises(InstallProtocolError, match="unclaimed, idle"):
+                await assembly.discard_unstarted()
+            controller._refresh_driver_claimed = False
+            await assembly.discard_unstarted()
             assert all(client._closed for client in controller._owned_clients)
+            with pytest.raises(InstallProtocolError, match="unclaimed, idle"):
+                await assembly.discard_unstarted()
             with pytest.raises(CoordinatorError, match="closed"):
                 await controller.delivery._routes[0].client.health()
             assert not c.registry.snapshot()
