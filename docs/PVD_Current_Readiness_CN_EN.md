@@ -14,7 +14,9 @@ V 节点从新的隔离 worktree `922de7098` 重启；旧检出保留。
 HTTP 200，两个 V rank 各完成并 ACK 两次 Delivery；健康接口显示
 `maintenance_reaper=healthy`、66 轮中 0 失败，待确认取消数为 0，
 Mooncake staging/inflight/UNKNOWN 为 0。请求结束时 Entry 仍在 300 秒
-TTL 内，故占页未立即归还；这不是长期回收或高负载验收。
+TTL 内；随后再次查询，两个 shard 的 Entry 均为 `released`、各恢复
+**1024 空闲页**，reaper 仍 healthy 且累计失败 0。这只证明一次 TTL
+回收，不是长期或高负载验收。
 
 After local commits `52ed8ebf6`, `97cc2f556`, `8adf2ef2b` and
 `922de7098`, the complete CPU PVD suite reported **2806 passed,
@@ -26,9 +28,10 @@ services then sent a real Qwen2.5-7B 29-token Prompt/eight-token output
 request through the new V: HTTP 200, two Deliveries completed and ACKed
 per V rank. Health reported `maintenance_reaper=healthy`, zero failures
 in 66 rounds, zero pending cancellations, and zero Mooncake staging,
-inflight or UNKNOWN work. The Entry was still within its 300-second TTL,
-so pages were not yet returned at this observation. This is not a
-long-run cleanup or high-load acceptance test.
+inflight or UNKNOWN work. The Entry initially remained within its
+300-second TTL; a later health check showed `released` on both shards,
+**1024 free pages** per shard, and a still-healthy reaper with zero
+failures. This proves one TTL cleanup, not long-run or high-load behavior.
 
 持续服务仍有非硬件缺口：终态 Entry/Delivery 元数据与部分 fence/lock 映射
 永久保留，主机内存和后台扫描量会随累计请求增长。按 TTL 直接删除不安全，
