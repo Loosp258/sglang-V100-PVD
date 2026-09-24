@@ -27,6 +27,12 @@ V 随后从新隔离检出 `155d7ae4b` 启动，一条 41-token Prompt / 8-token
 索引搜索，两 rank 各完成并 ACK 2 次 Delivery。TTL 后两 rank 各恢复
 1024 空闲页、无在途/UNKNOWN 传输，Coordinator admission 计数回到 0；
 健康接口报告上限已生效。该在线检出不含随后 `a2c65c46d` 的活动扫描优化。
+包含该优化的 `dc77fd605` 隔离检出随后也经 Gateway 完成一条 41-token
+Prompt / 8-token 输出请求（HTTP 200，约 35.4 秒），记录 112 次索引搜索，
+两 rank 各完成并 ACK 2 次 Delivery。300 秒 TTL 后，两 rank 各恢复
+1024 空闲页，`live_entries=0`、`pending_release_entries=0`、Mooncake
+在途/UNKNOWN 为 0；Coordinator 的 admission 与活动维护集合均归零。
+这只验证该请求的功能及回收，不构成延迟改善的对照证据。
 本地完整 PVD CPU 回归依次为 **2858、2859、2879、2881 passed**，
 各有 23 skipped、21 subtests passed；最新结果对应 `a2c65c46d`。
 这些少量请求不证明在接近容量上限、连续故障或长期负载下的表现。
@@ -57,7 +63,15 @@ V logged 112 index searches; each rank completed and ACKed two Deliveries.
 After TTL both ranks had 1024 free pages and no in-flight/UNKNOWN transfer,
 while coordinator admissions returned to zero. Health exposed the configured
 bounds. This live checkout does not contain the later `a2c65c46d` active-scan
-optimization. Local full PVD CPU regressions across these steps reported
+optimization.
+An isolated `dc77fd605` checkout including that optimization subsequently
+completed a 41-token Prompt/eight-token output Gateway request (HTTP 200,
+about 35.4 seconds), with 112 index searches and two completed, ACKed
+Deliveries per rank. After the 300-second TTL, both ranks returned to 1024
+free pages, with no live Entry, pending release, in-flight or UNKNOWN
+Mooncake work. Coordinator admissions and active maintenance sets returned
+to zero. This verifies one request and its reclamation, not a controlled
+latency improvement. Local full PVD CPU regressions across these steps reported
 **2858, 2859, 2879 and 2881 passed**, each with 23 skipped and 21 subtests
 passed; the latest result is for `a2c65c46d`. A few requests do not
 establish near-capacity, repeated-failure or long-run behavior.
