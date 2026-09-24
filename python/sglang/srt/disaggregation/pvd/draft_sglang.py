@@ -704,7 +704,13 @@ class SGLangDraftProvider(DraftProvider):
                 "supply both the draft and target vocabulary signatures, or "
                 "neither; a one-sided check establishes nothing"
             )
-        for name in ("size", "bos_token_id", "eos_token_id", "fingerprint"):
+        for name in (
+            "size",
+            "bos_token_id",
+            "eos_token_id",
+            "fingerprint",
+            "mapping_fingerprint",
+        ):
             mine, theirs = getattr(draft, name), getattr(target, name)
             if mine != theirs:
                 raise PredictionConfigError(
@@ -712,6 +718,11 @@ class SGLangDraftProvider(DraftProvider):
                     f"({mine!r} vs {theirs!r}); predicted ids would mean "
                     "different text to the probe than to the draft model"
                 )
+        if draft.allowed_ids != target.allowed_ids:
+            raise PredictionConfigError(
+                "draft and target tokenizers disagree on allowed token IDs; "
+                "predicted ids could name different or padded tokens"
+            )
         return draft
 
     # -- description --------------------------------------------------------
@@ -949,10 +960,10 @@ class SGLangDraftProvider(DraftProvider):
         if self.vocabulary is None:
             return
         for token in tokens:
-            if not 0 <= token < self.vocabulary.size:
+            if not self.vocabulary.contains(token):
                 raise PredictionConfigError(
-                    f"{what} token {token} is outside the draft vocabulary of "
-                    f"{self.vocabulary.size}"
+                    f"{what} token {token} is outside the shared tokenizer's "
+                    "declared token IDs"
                 )
 
     def _validate(self, produced: Any, budgeted: int) -> Tuple[int, ...]:

@@ -670,9 +670,16 @@ def test_branch_scratch_is_bounded_by_the_handles_declared_worst_case():
 # --------------------------------------------------------------------------
 
 
-def signature(size=64, bos=1, eos=2, fingerprint="abc"):
+def signature(
+    size=64, bos=1, eos=2, fingerprint="abc", allowed_ids=None, mapping_fingerprint=None
+):
     return VocabularySignature(
-        size=size, bos_token_id=bos, eos_token_id=eos, fingerprint=fingerprint
+        size=size,
+        bos_token_id=bos,
+        eos_token_id=eos,
+        fingerprint=fingerprint,
+        allowed_ids=allowed_ids,
+        mapping_fingerprint=mapping_fingerprint,
     )
 
 
@@ -725,6 +732,51 @@ def test_both_the_prefix_and_the_returned_tokens_are_checked():
     with made2.branch():
         with pytest.raises(PredictionConfigError, match="predicted token 2000"):
             made2.predict(prefix(tokens=(1, 2)), 2)
+
+
+def test_added_eos_is_accepted_but_a_padded_id_is_refused():
+    allowed = frozenset(range(64)) | {66}
+    vocabulary = signature(size=64, eos=66, allowed_ids=allowed)
+    made = provider(
+        factory(executor=FakeExecutor(vocab=128, sequence=[66, 67])),
+        draft_vocabulary=vocabulary,
+        target_vocabulary=vocabulary,
+    )
+    with made.branch():
+        with pytest.raises(PredictionConfigError, match="predicted token 67"):
+            made.predict(prefix(tokens=(1, 66)), 2)
+    accepted = provider(
+        factory(executor=FakeExecutor(vocab=128, sequence=[66])),
+        draft_vocabulary=vocabulary,
+        target_vocabulary=vocabulary,
+    )
+    with accepted.branch():
+        assert accepted.predict(prefix(tokens=(1, 66)), 1).tokens == (66,)
+
+
+def test_same_base_vocab_and_probe_but_different_added_ids_are_refused():
+    with pytest.raises(PredictionConfigError, match="allowed token IDs"):
+        provider(
+            draft_vocabulary=signature(
+                size=64, eos=66, allowed_ids=frozenset(range(64)) | {66}
+            ),
+            target_vocabulary=signature(
+                size=64, eos=66, allowed_ids=frozenset(range(64)) | {66, 67}
+            ),
+        )
+
+
+def test_same_ids_and_probe_but_different_full_mapping_are_refused():
+    valid = frozenset(range(64))
+    with pytest.raises(PredictionConfigError, match="mapping_fingerprint"):
+        provider(
+            draft_vocabulary=signature(
+                allowed_ids=valid, mapping_fingerprint="full-map-a"
+            ),
+            target_vocabulary=signature(
+                allowed_ids=valid, mapping_fingerprint="full-map-b"
+            ),
+        )
 
 
 # --------------------------------------------------------------------------

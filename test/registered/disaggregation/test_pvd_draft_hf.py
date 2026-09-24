@@ -108,6 +108,91 @@ def test_an_incompatible_vocabulary_is_refused(tokenizer):
         make_provider(tokenizer=tokenizer)
 
 
+def test_added_special_id_is_valid_but_a_padding_hole_is_not():
+    class AddedTokenTokenizer(FakeTokenizer):
+        def __init__(self):
+            super().__init__(vocab_size=10, eos=12)
+
+        def encode(self, text):
+            return [1, 2, 3]
+
+        def get_vocab(self):
+            return {str(token_id): token_id for token_id in range(10)} | {"eos": 12}
+
+    tokenizer = AddedTokenTokenizer()
+    vocabulary = VocabularySignature.from_tokenizer(tokenizer)
+    assert vocabulary.size == 10
+    assert vocabulary.exact_mapping_available
+    assert vocabulary.contains(12)
+    assert not vocabulary.contains(11)
+    assert not vocabulary.contains(13)
+
+    accepted = make_provider(
+        tokenizer=tokenizer,
+        model=FakeModel(new_tokens=[12]),
+        target=vocabulary,
+    )
+    assert accepted.predict(make_prefix(tokens=(1, 12)), 1).tokens == (12,)
+
+    refused = make_provider(
+        tokenizer=tokenizer,
+        model=FakeModel(new_tokens=[11]),
+        target=vocabulary,
+    )
+    with pytest.raises(PredictionConfigError, match="outside the shared vocabulary"):
+        refused.predict(make_prefix(tokens=(1, 12)), 1)
+
+
+def test_full_mapping_fingerprint_catches_unprobed_token_swap():
+    class MappedTokenizer(FakeTokenizer):
+        def __init__(self, swapped):
+            super().__init__(vocab_size=6)
+            self.swapped = swapped
+
+        def encode(self, text):
+            return [1, 2, 3]
+
+        def get_vocab(self):
+            return {
+                "one": 1,
+                "two": 2,
+                "three": 3,
+                "alpha": 5 if self.swapped else 4,
+                "beta": 4 if self.swapped else 5,
+                "zero": 0,
+            }
+
+    first = VocabularySignature.from_tokenizer(MappedTokenizer(False))
+    second = VocabularySignature.from_tokenizer(MappedTokenizer(True))
+    assert first.allowed_ids == second.allowed_ids
+    assert first.fingerprint == second.fingerprint
+    assert first.mapping_fingerprint != second.mapping_fingerprint
+    with pytest.raises(PredictionConfigError, match="incompatible"):
+        make_provider(tokenizer=MappedTokenizer(True), target=first)
+
+
+def test_tokenizer_without_mapping_is_marked_non_exact():
+    signature = VocabularySignature.from_tokenizer(FakeTokenizer())
+    assert not signature.exact_mapping_available
+
+
+def test_exact_mapping_refuses_a_special_id_missing_from_get_vocab():
+    class MissingSpecial(FakeTokenizer):
+        all_special_ids = [12]
+
+        def __init__(self):
+            super().__init__(vocab_size=10, eos=12)
+
+        def encode(self, text):
+            return [1]
+
+        def get_vocab(self):
+            return {str(token_id): token_id for token_id in range(10)}
+
+    with pytest.raises(PredictionConfigError, match="special ID absent"):
+        VocabularySignature.from_tokenizer(MissingSpecial())
+
+
 def test_a_target_signature_is_mandatory():
     with pytest.raises(PredictionConfigError, match="vocabulary signature"):
         HuggingFaceDraftProvider(DraftConfig(DRAFT), None, loader=make_loader())

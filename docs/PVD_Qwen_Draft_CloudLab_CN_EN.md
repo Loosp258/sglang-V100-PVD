@@ -15,7 +15,7 @@
 `acfab8ea50c649a2ee8dd929c4099117870bb53dd4a5589476460d34ce4b7f73`。
 两侧均为 `Qwen2ForCausalLM`。模型配置中的 `vocab_size` 却不同：
 目标 **152064**、draft **151936**；这不是 tokenizer 签名差异。
-预测入口仍必须逐次检查实际 token ID 是否落在共享 tokenizer 范围，
+预测入口仍必须逐次检查实际 token ID 是否属于共享 tokenizer 的精确 ID 集，
 超出时拒绝该分支，不能截断、重映射或假定嵌入矩阵尺寸相同。
 
 随后在 D GPU0 用现有 `run_pvd_cuda_draft_smoke.py` 加载该真实 checkpoint：
@@ -41,9 +41,14 @@ Scheduler 仍未由该测试执行。测试进程退出后 GPU 无残留计算�
 一致）；关闭 disaggregation 必须使用字面值 `"null"`，不能用 `None`，
 否则会错误初始化 Mooncake。回归测试覆盖这两个语义。
 
-另一个需要后续修正的边界：`tokenizer.vocab_size=151643` 是基础词表大小，
-但 EOS ID 为 151645；因此不能仅用基础大小判断所有合法 token ID。
-本次实际输出 `[13, 2585]` 位于基础词表内，不代表特殊 token 路径已验收。
+后续复测已修正 token 边界：`tokenizer.vocab_size=151643` 是基础词表大小，
+EOS ID 为 151645；真实 tokenizer 的 `get_vocab()` 给出 **151665 个**
+有效 ID。两侧完整 token→ID 映射 SHA-256 均为
+`a6edb125c5dc615dad0179399ac171ea6315addbe5607c72e19097fcb8fc3597`。
+draft 前缀/输出、目标 probe 均按精确 ID 集检查，模型 padding 行不因此
+视为合法。回归测试覆盖 added EOS、ID 空洞和未探测 token 的映射差异。
+同卡真实 gate 在此修复后再次通过；它实际生成的仍是 `[13, 2585]`，
+并未通过真实模型输出路径触发 EOS。
 
 On 2026-09-24, the official
 [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
@@ -62,7 +67,7 @@ size **151643**, EOS **151645**, and encoded-probe fingerprint
 Both architectures are `Qwen2ForCausalLM`. Their model-config `vocab_size`
 values differ (**152064** target, **151936** draft), so every actual token
 crossing the model boundary must still be checked against the shared
-tokenizer range; no truncation, remapping, or equal embedding-size assumption
+tokenizer's exact ID set; no truncation, remapping, or equal embedding-size assumption
 is justified.
 
 The existing `run_pvd_cuda_draft_smoke.py` subsequently loaded this real
@@ -92,7 +97,11 @@ GPU remains selected by `gpu_id`, after validating an explicit `cuda:N`), and
 disaggregation must be disabled with the literal `"null"`, not `None`, or a
 second Mooncake engine is initialized. Regression tests cover both semantics.
 
-One boundary remains for the next step: `tokenizer.vocab_size=151643` is the
-base vocabulary size, but EOS has ID 151645. A base-size check alone cannot
-classify all valid token IDs. The observed output `[13, 2585]` stayed within
-the base vocabulary and did not exercise special-token handling.
+A later rerun corrected token-ID validation: `tokenizer.vocab_size=151643` is
+the base vocabulary, while EOS has ID 151645; the real `get_vocab()` mapping
+contains **151665 valid IDs**. Both complete token→ID maps have SHA-256
+`a6edb125c5dc615dad0179399ac171ea6315addbe5607c72e19097fcb8fc3597`.
+Draft prefix/output and target probe now check exact ID membership, not an
+embedding/padding bound. Regressions cover added EOS, ID holes and changed
+unprobed token mappings. The same-GPU real gate passed again, though its
+actual generated IDs remained `[13, 2585]`; it did not emit EOS.

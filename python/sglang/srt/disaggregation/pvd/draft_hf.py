@@ -22,7 +22,8 @@ revision is invented and no weights are downloaded or hashed to produce one.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
 import torch
@@ -49,6 +50,25 @@ class VocabularySignature:
     bos_token_id: Optional[int]
     eos_token_id: Optional[int]
     fingerprint: str
+    allowed_ids: Optional[frozenset[int]] = field(default=None, repr=False)
+    mapping_fingerprint: Optional[str] = None
+
+    @property
+    def exact_mapping_available(self) -> bool:
+        return self.allowed_ids is not None and self.mapping_fingerprint is not None
+
+    def contains(self, token_id: int) -> bool:
+        if type(token_id) is not int or token_id < 0:
+            return False
+        if self.allowed_ids is not None:
+            return token_id in self.allowed_ids
+        # Hand-built test signatures do not have a tokenizer mapping.  Keep
+        # their legacy contiguous base vocabulary, but include declared
+        # special ids that legitimately live above tokenizer.vocab_size.
+        return token_id < self.size or token_id in (
+            self.bos_token_id,
+            self.eos_token_id,
+        )
 
     @classmethod
     def from_tokenizer(cls, tokenizer: Any) -> "VocabularySignature":
@@ -64,11 +84,77 @@ class VocabularySignature:
         digest = hashlib.sha256(
             ",".join(str(int(i)) for i in probe_ids).encode("utf-8")
         ).hexdigest()
+        try:
+            vocabulary = tokenizer.get_vocab()
+        except AttributeError:
+            vocabulary = None
+        except Exception as exc:
+            raise PredictionConfigError(
+                f"tokenizer could not expose its token IDs: {exc}"
+            ) from exc
+        if vocabulary is not None:
+            if not isinstance(vocabulary, dict) or not vocabulary:
+                raise PredictionConfigError("tokenizer has no usable token-ID mapping")
+            if any(type(token) is not str for token in vocabulary):
+                raise PredictionConfigError(
+                    "tokenizer mapping contains a non-string token"
+                )
+            if any(
+                type(token_id) is not int or token_id < 0
+                for token_id in vocabulary.values()
+            ):
+                raise PredictionConfigError("tokenizer contains an invalid token ID")
+            valid_ids = frozenset(vocabulary.values())
+            if len(valid_ids) != len(vocabulary):
+                raise PredictionConfigError("tokenizer maps multiple tokens to one ID")
+            canonical = sorted(vocabulary.items(), key=lambda pair: (pair[1], pair[0]))
+            mapping_fingerprint = hashlib.sha256(
+                json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            special_ids = getattr(tokenizer, "all_special_ids", ()) or ()
+            special_ids = (
+                *special_ids,
+                getattr(tokenizer, "bos_token_id", None),
+                getattr(tokenizer, "eos_token_id", None),
+            )
+            if any(
+                type(token_id) is not int or token_id not in valid_ids
+                for token_id in special_ids
+                if token_id is not None
+            ):
+                raise PredictionConfigError(
+                    "tokenizer declares a special ID absent from its token mapping"
+                )
+        else:
+            # Minimal tokenizer doubles may expose only vocab_size and special
+            # IDs.  Real HF tokenizers expose get_vocab(), which is required
+            # for exact membership of added tokens and holes.
+            specials = (
+                getattr(tokenizer, "bos_token_id", None),
+                getattr(tokenizer, "eos_token_id", None),
+            )
+            valid_ids = frozenset(range(size)).union(
+                token_id
+                for token_id in specials
+                if type(token_id) is int and token_id >= 0
+            )
+            mapping_fingerprint = None
+        if any(
+            type(token_id) is not int or token_id not in valid_ids
+            for token_id in probe_ids
+        ):
+            raise PredictionConfigError(
+                "tokenizer probe produced an undeclared token ID"
+            )
         return cls(
             size=size,
             bos_token_id=getattr(tokenizer, "bos_token_id", None),
             eos_token_id=getattr(tokenizer, "eos_token_id", None),
             fingerprint=digest,
+            allowed_ids=valid_ids,
+            mapping_fingerprint=mapping_fingerprint,
         )
 
 
@@ -175,7 +261,7 @@ class HuggingFaceDraftProvider(DraftProvider):
             )
         if not prefix.tokens:
             raise PredictionConfigError("cannot predict from an empty prefix")
-        if max(prefix.tokens) >= self.vocab.size:
+        if any(not self.vocab.contains(token) for token in prefix.tokens):
             raise PredictionConfigError(
                 "committed prefix contains an id outside the shared vocabulary"
             )
@@ -191,6 +277,10 @@ class HuggingFaceDraftProvider(DraftProvider):
         produced = [int(t) for t in generated[0][len(prefix.tokens) :]]
         if not produced:
             raise PredictionConfigError("draft model produced no continuation")
+        if any(not self.vocab.contains(token) for token in produced):
+            raise PredictionConfigError(
+                "draft model produced an id outside the shared vocabulary"
+            )
         return DraftPrediction(
             request_id=prefix.request_id,
             prefix_version=prefix.version,

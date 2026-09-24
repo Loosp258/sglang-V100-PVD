@@ -45,6 +45,15 @@ class CUDAPredictionPipeline(PredictionPipeline):
             raise PredictionConfigError(
                 "concrete prediction-only draft adapter required"
             )
+        vocabulary = provider.vocabulary
+        if vocabulary is not None and (
+            not vocabulary.exact_mapping_available
+            or getattr(probe, "vocabulary", None) != vocabulary
+        ):
+            raise PredictionConfigError(
+                "CUDA prediction requires the same exact tokenizer mapping "
+                "on draft and target probe"
+            )
         target = torch.device(probe.device)
         draft = torch.device(draft_config.device)
         if draft != provider.factory._executor._device or draft.type not in (

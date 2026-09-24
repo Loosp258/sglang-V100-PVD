@@ -12,6 +12,7 @@ from sglang.srt.disaggregation.pvd.cuda_probe_search import (
     CUDAProbeSearchSession,
 )
 from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
+from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prediction import PredictionConfigError
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
@@ -73,6 +74,35 @@ def bridge(monkeypatch):
 def prepare(session, window, pipeline, route):
     return session.prepare(
         window, pipeline, routes=(route,), head_mapping=QueryHeadMapping(1, 1)
+    )
+
+
+def test_cuda_pipeline_requires_same_exact_draft_and_target_tokenizer(monkeypatch):
+    _, _, _, pipeline, _, _, _ = bridge(monkeypatch)
+    vocabulary = VocabularySignature(
+        size=8,
+        bos_token_id=1,
+        eos_token_id=9,
+        fingerprint="probe",
+        allowed_ids=frozenset(range(8)) | {9},
+        mapping_fingerprint="full-map",
+    )
+    pipeline.provider.vocabulary = vocabulary
+    with pytest.raises(PredictionConfigError, match="same exact tokenizer mapping"):
+        CUDAPredictionPipeline(
+            pipeline.provider,
+            pipeline.probe,
+            pipeline.draft_config,
+            pipeline.probe_config,
+            execution_lock=pipeline._lock,
+        )
+    pipeline.probe.vocabulary = vocabulary
+    CUDAPredictionPipeline(
+        pipeline.provider,
+        pipeline.probe,
+        pipeline.draft_config,
+        pipeline.probe_config,
+        execution_lock=pipeline._lock,
     )
 
 

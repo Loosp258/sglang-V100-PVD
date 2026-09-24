@@ -23,6 +23,7 @@ from sglang.srt.disaggregation.pvd.prediction import (
     QueryVectors,
     TargetProbe,
 )
+from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
@@ -150,6 +151,7 @@ class _LlamaTargetProbeCore(TargetProbe):
         max_predict_tokens: int,
         transient_bytes_bound: int,
         budget: TransferBudget,
+        vocabulary: VocabularySignature | None = None,
     ):
         if self._model_architecture == "Qwen2ForCausalLM":
             from sglang.srt.models.qwen2 import Qwen2ForCausalLM
@@ -213,6 +215,15 @@ class _LlamaTargetProbeCore(TargetProbe):
         self.kv_heads = hf.num_key_value_heads
         self.layers = hf.num_hidden_layers
         self.vocab_size = hf.vocab_size
+        if vocabulary is not None and (
+            not isinstance(vocabulary, VocabularySignature)
+            or not vocabulary.exact_mapping_available
+            or max(vocabulary.allowed_ids) >= self.vocab_size
+        ):
+            raise PredictionConfigError(
+                "probe needs an exact tokenizer mapping within the target embedding"
+            )
+        self.vocabulary = vocabulary
         kv = (max_tokens + 1) * self.layers * self.kv_heads * self.head_dim * 2 * 4
         mapping = 2 * max_tokens * 4
         queries = (
@@ -290,7 +301,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             raise PredictionConfigError(
                 "probe input exceeds admitted bounds or has no prefix"
             )
-        if any(t < 0 or t >= self.vocab_size for t in tokens):
+        if not self._tokens_valid(tokens):
             raise PredictionConfigError("probe token is outside the target vocabulary")
         self._used = True
         self._state = PostRopeQueryCapture(
@@ -321,7 +332,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             raise PredictionConfigError(
                 "committed Q copies exceed the reserved query bound"
             )
-        if any(t < 0 or t >= self.vocab_size for t in prefix.tokens):
+        if not self._tokens_valid(prefix.tokens):
             raise PredictionConfigError("probe token is outside the target vocabulary")
         self._state = PostRopeQueryCapture(
             self.config,
@@ -333,6 +344,15 @@ class _LlamaTargetProbeCore(TargetProbe):
         )
         self._used = True
         return self._forward(prefix.tokens, self._state)
+
+    def _tokens_valid(self, tokens):
+        if self.vocabulary is not None:
+            return all(self.vocabulary.contains(token) for token in tokens)
+        # Legacy CPU fixture probes have no tokenizer.  Their physical model
+        # embedding check is not a claim that padded logits are valid tokens.
+        return all(
+            type(token) is int and 0 <= token < self.vocab_size for token in tokens
+        )
 
     def _forward(self, tokens, capture):
         from sglang.srt.compilation.piecewise_context_manager import get_forward_context

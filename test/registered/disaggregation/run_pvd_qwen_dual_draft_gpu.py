@@ -197,8 +197,10 @@ def validate_dual_model(
     if draft_vocabulary != target_vocabulary:
         raise ValueError(
             "draft and target VocabularySignature differ: "
-            f"target={target_vocabulary!r}, draft={draft_vocabulary!r}"
+            "compare tokenizer mappings, special IDs and probe fingerprints"
         )
+    if not target_vocabulary.exact_mapping_available:
+        raise ValueError("real-model gate requires an exact tokenizer ID mapping")
 
     prefix_tokens = tuple(
         int(token)
@@ -206,6 +208,8 @@ def validate_dual_model(
     )
     if not prefix_tokens:
         raise ValueError("--prefix-text must encode to at least one token")
+    if any(not target_vocabulary.contains(token) for token in prefix_tokens):
+        raise ValueError("encoded prefix contains an undeclared tokenizer ID")
     if len(prefix_tokens) + 2 > target_runner.model_config.context_len:
         raise ValueError("prefix plus two predictions exceeds target context length")
     if len(prefix_tokens) + 2 > target_runner.server_args.max_total_tokens:
@@ -293,15 +297,16 @@ def validate_dual_model(
         raise ValueError("draft parameters must be FP16/FP32 on cuda:0")
     draft_vocab_size = int(draft_runner.model.config.vocab_size)
     target_vocab_size = int(target_runner.model.config.vocab_size)
-    if draft_vocab_size < draft_vocabulary.size:
+    required_vocab_size = max(target_vocabulary.allowed_ids) + 1
+    if draft_vocab_size < required_vocab_size:
         raise ValueError(
             "draft model output vocabulary is smaller than its tokenizer: "
-            f"{draft_vocab_size} < {draft_vocabulary.size}"
+            f"{draft_vocab_size} < {required_vocab_size}"
         )
-    if target_vocab_size < target_vocabulary.size:
+    if target_vocab_size < required_vocab_size:
         raise ValueError(
             "target model output vocabulary is smaller than its tokenizer: "
-            f"{target_vocab_size} < {target_vocabulary.size}"
+            f"{target_vocab_size} < {required_vocab_size}"
         )
     draft_parameter_count = sum(
         parameter.numel() for parameter in draft_runner.model.parameters()
@@ -330,6 +335,7 @@ def validate_dual_model(
         max_predict_tokens=2,
         transient_bytes_bound=probe_transient_bytes_bound,
         budget=probe_budget,
+        vocabulary=target_vocabulary,
     )
 
     kv_pool = draft_runner.token_to_kv_pool
@@ -440,9 +446,7 @@ def validate_dual_model(
         prediction = provider.last_prediction
         if prediction is None or len(prediction.tokens) != 2:
             raise AssertionError("draft provider did not produce exactly two tokens")
-        if any(
-            token < 0 or token >= target_vocabulary.size for token in prediction.tokens
-        ):
+        if any(not target_vocabulary.contains(token) for token in prediction.tokens):
             raise AssertionError(
                 "draft emitted a padded/out-of-range id outside the shared tokenizer vocabulary"
             )
@@ -532,6 +536,8 @@ def validate_dual_model(
             "bos_token_id": target_vocabulary.bos_token_id,
             "eos_token_id": target_vocabulary.eos_token_id,
             "fingerprint": target_vocabulary.fingerprint,
+            "mapping_fingerprint": target_vocabulary.mapping_fingerprint,
+            "valid_token_id_count": len(target_vocabulary.allowed_ids),
         },
         "draft_prediction_tokens": prediction_tokens,
         "draft_forward_count": draft_adapter.forward_count,

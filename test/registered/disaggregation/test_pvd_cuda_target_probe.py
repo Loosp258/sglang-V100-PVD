@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd import draft_forward_adapter
+from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.cuda_target_probe import (
     CUDALlamaTargetProbe,
     CUDAQwen2TargetProbe,
@@ -31,7 +32,12 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 
 
 def environment(
-    monkeypatch, *, fail=None, dtype=torch.float16, architecture="LlamaForCausalLM"
+    monkeypatch,
+    *,
+    fail=None,
+    dtype=torch.float16,
+    architecture="LlamaForCausalLM",
+    vocabulary=None,
 ):
     events, tensors, holders = [], [], {}
     lock = threading.Lock()
@@ -208,6 +214,7 @@ def environment(
         max_predict_tokens=2,
         transient_bytes_bound=1024,
         budget=budget,
+        vocabulary=vocabulary,
     )
     holders["probe"] = probe
     drains = []
@@ -232,6 +239,32 @@ def environment(
         prefix=prefix,
         prediction=prediction,
     )
+
+
+def test_exact_tokenizer_mapping_accepts_added_eos_but_rejects_padding_hole(
+    monkeypatch,
+):
+    vocabulary = VocabularySignature(
+        size=10,
+        bos_token_id=1,
+        eos_token_id=12,
+        fingerprint="probe",
+        allowed_ids=frozenset(range(10)) | {12},
+        mapping_fingerprint="full-map",
+    )
+    c = environment(monkeypatch, vocabulary=vocabulary)
+    with c.probe.branch():
+        with pytest.raises(
+            PredictionConfigError, match="outside the target vocabulary"
+        ):
+            c.probe.capture(c.prefix, DraftPrediction("r", "version", (11,)))
+    assert "forward" not in c.events
+    with c.probe.branch():
+        c.probe.capture(
+            CommittedPrefix("r", (1, 12, 3), 0, "version"),
+            DraftPrediction("r", "version", (4, 5)),
+        )
+    assert "forward" in c.events
 
 
 def test_probe_reuses_weights_but_fences_before_cleanup_and_refund(monkeypatch):
