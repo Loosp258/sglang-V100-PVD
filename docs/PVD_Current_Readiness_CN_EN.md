@@ -3,6 +3,16 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+最新 112 组真实 Qwen GQA 原生 CAGRA 对精确并集的召回：初始查询最低
+0.97727、平均 0.99943；位置 1027 的正式前缀刷新查询最低 0.98、
+平均 0.99982。仅一个 Prompt/一次刷新，不能外推到其他负载；见
+[CAGRA 验收边界](PVD_CAGRA_Acceptance_CN_EN.md)。
+
+The latest native-CAGRA versus exact-union result covers all 112 real Qwen
+groups: initial minimum/mean recall 0.97727/0.99943, actual-prefix refresh
+minimum/mean 0.98/0.99982. This is one prompt and one refresh only; see the
+[CAGRA acceptance gate](PVD_CAGRA_Acceptance_CN_EN.md).
+
 最新 CloudLab 真实 Qwen2.5-7B 验证已经移除 first-token 测试种子：P
 对真实 Prefill logits 贪心取样，作为选定 Entry 元数据提交；D 从 Coordinator
 查询该 Entry 并核对身份，本次使用同一 token ID **198** 完成完整 Prompt
@@ -17,6 +27,8 @@ used the same token ID **198** for the full Prompt-bank forward and generated-
 token sparse refresh. Earlier references to seed `42` are historical.
 Independent draft prediction, pipeline overlap and production Scheduler
 activation remain unvalidated.
+
+## 先前验收阶段 / Earlier acceptance stages
 
 2026-09-24 CloudLab 新增真实 token 驱动刷新验收：D 在完整 bank 上连续执行
 4 次 Qwen2.5-7B 目标前向并保留生成 K/V；位置 1027 的正式前缀目标 Q

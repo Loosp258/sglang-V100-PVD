@@ -245,6 +245,27 @@ def _validate(runner, args, *, checkpoint=False):
     if probe_budget.snapshot()["used_staging_bytes"] or lock.locked():
         raise AssertionError("D target probe retained resources")
 
+    def exact_union_recall(query_rows, selection, layer, head):
+        """Exact D Prompt-K oracle for one seven-Q-head GQA union."""
+        keys = pool.k_buffer[layer][:, head].float()
+        queries = torch.tensor(query_rows, dtype=torch.float32, device="cuda:0")
+        scores = queries @ keys.T
+        exact = set(torch.topk(scores, 10, dim=1).indices.flatten().tolist())
+        selected = set(selection.token_ids)
+        if not exact or len(selected) > 70:
+            raise AssertionError("invalid CAGRA union or exact oracle")
+        return len(exact & selected) / len(exact)
+
+    def recall_summary(values):
+        if len(values) != 112 or not all(0 <= value <= 1 for value in values):
+            raise AssertionError("incomplete real Qwen retrieval recall cohort")
+        return {
+            "groups": len(values),
+            "minimum": min(values),
+            "mean": sum(values) / len(values),
+            "perfect_groups": sum(value == 1 for value in values),
+        }
+
     def verify_model_forward(group):
         """One real target-model Decode forward against the installed Prompt bank."""
         workspace_budget = TransferBudget(1 << 20, 1)
@@ -539,6 +560,7 @@ def _validate(runner, args, *, checkpoint=False):
                 routes[rank] = CUDAReceiveRoute(
                     controls[rank], health["worker_epoch"], "real-qwen-bank", args.rail
                 )
+            initial_recall = []
             for layer in range(28):
                 for head in range(4):
                     rank = head // 2
@@ -552,8 +574,14 @@ def _validate(runner, args, *, checkpoint=False):
                     )
                     if not 0 < len(results[layer, head].token_ids) <= 70:
                         raise AssertionError("GQA token union exceeded its bound")
+                    initial_recall.append(
+                        exact_union_recall(
+                            q[layer, head], results[layer, head], layer, head
+                        )
+                    )
             sizes = [len(result.token_ids) for result in results.values()]
             report["gqa_union_size_range"] = [min(sizes), max(sizes)]
+            report["initial_cagra_union_recall"] = recall_summary(initial_recall)
             delivery = CUDASparseFanInDelivery(
                 group,
                 registry,
@@ -591,6 +619,7 @@ def _validate(runner, args, *, checkpoint=False):
                         for item in actual_queries
                         for head in range(4)
                     }
+                    refresh_recall = []
                     for layer in range(28):
                         for head in range(4):
                             results[layer, head] = await routing.search(
@@ -605,7 +634,18 @@ def _validate(runner, args, *, checkpoint=False):
                                 top_k=10,
                                 scope=routing.scope,
                             )
+                            refresh_recall.append(
+                                exact_union_recall(
+                                    actual_q[layer, head],
+                                    results[layer, head],
+                                    layer,
+                                    head,
+                                )
+                            )
                     report["refresh_q_position"] = token_count + 3
+                    report["refresh_cagra_union_recall"] = recall_summary(
+                        refresh_recall
+                    )
                 epoch = group.begin(decode_tokens)
                 specs = tuple(
                     SparseKVSpec(

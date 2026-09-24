@@ -1,5 +1,28 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-24 全 112 组 GQA 并集召回 / All-112-group GQA union recall
+
+对上述真实 Qwen2.5-7B 的确定性 1024-token Prompt，D 使用独立模型
+Prompt K 和每组 7 个目标 Q 计算精确 Top-10 并集，作为 V 原生 CAGRA
+并集的对照。全部 **28 层 × 4 KV heads = 112 组**都参与测量；召回定义
+为“CAGRA 并集与精确并集交集大小 / 精确并集大小”。首次查询最低召回
+**0.9772727273**、平均 **0.9994345149**，112 组中 109 组完全一致；
+正式前缀位置 1027 的刷新查询最低 **0.98**、平均 **0.9998214286**，
+111 组完全一致。随后同一次运行仍完成 RDMA 稀疏安装、第 5 次模型
+前向以及 Entry/预算回收。这是**一个 Prompt、一次刷新**的经验值，
+不是跨请求/长度/随机种子的召回保证，也不是延迟或吞吐测试。
+
+For the deterministic 1024-token real-Qwen2.5-7B Prompt, D computed an
+exact Top-10 token union from its independently generated Prompt K and all
+seven target Q heads per group. All **112 layer/KV-head groups** were compared
+with V native CAGRA, using intersection-over-exact-union as recall. Initial
+queries had minimum **0.9772727273**, mean **0.9994345149** and 109 perfect
+groups; actual-prefix refresh queries at position 1027 had minimum **0.98**,
+mean **0.9998214286** and 111 perfect groups. The same run completed RDMA
+sparse installation, a fifth target forward and resource retirement. These
+figures cover **one prompt and one refresh**, not a quality distribution or
+a latency/throughput guarantee.
+
 ## 2026-09-24 P 真实 first token 到 D / Real P first token reaches D
 
 最新三节点验收取消了测试种子 `42` 和协议占位 first token。P 对真实
