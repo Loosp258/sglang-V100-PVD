@@ -3,6 +3,45 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-24 V 清理恢复在线验证 / Live V cleanup-recovery gate
+
+在本地提交 `52ed8ebf6`、`97cc2f556`、`8adf2ef2b`、`922de7098`
+后，完整 PVD CPU 回归为 **2806 passed、23 skipped、21 subtests passed**。
+V 节点从新的隔离 worktree `922de7098` 重启；旧检出保留。
+在该节点原有 conda 环境中（未安装 pytest），直接执行三个 Entry
+生命周期故障注入函数和五个后台清理函数，均通过。随后原 Gateway/P/D 服务
+向新 V 发出一个真实 Qwen2.5-7B 29-token Prompt/8-token 输出请求：
+HTTP 200，两个 V rank 各完成并 ACK 两次 Delivery；健康接口显示
+`maintenance_reaper=healthy`、66 轮中 0 失败，待确认取消数为 0，
+Mooncake staging/inflight/UNKNOWN 为 0。请求结束时 Entry 仍在 300 秒
+TTL 内，故占页未立即归还；这不是长期回收或高负载验收。
+
+After local commits `52ed8ebf6`, `97cc2f556`, `8adf2ef2b` and
+`922de7098`, the complete CPU PVD suite reported **2806 passed,
+23 skipped and 21 subtests passed**. V was restarted from a new isolated
+`922de7098` worktree; the old checkout remains intact. Its conda environment
+lacks pytest, so three Entry lifecycle and five reaper fault-injection test
+functions were executed directly and passed. The existing Gateway/P/D
+services then sent a real Qwen2.5-7B 29-token Prompt/eight-token output
+request through the new V: HTTP 200, two Deliveries completed and ACKed
+per V rank. Health reported `maintenance_reaper=healthy`, zero failures
+in 66 rounds, zero pending cancellations, and zero Mooncake staging,
+inflight or UNKNOWN work. The Entry was still within its 300-second TTL,
+so pages were not yet returned at this observation. This is not a
+long-run cleanup or high-load acceptance test.
+
+持续服务仍有非硬件缺口：终态 Entry/Delivery 元数据与部分 fence/lock 映射
+永久保留，主机内存和后台扫描量会随累计请求增长。按 TTL 直接删除不安全，
+因为迟到重试可能重用旧身份。下一步需要安全的终态压缩与容量上限；若要求
+无限期持续接纳新 ID，还需要明确的 epoch/序号水位或可强制执行的重试期限。
+Sustained service still has a non-hardware gap: terminal Entry/Delivery
+metadata and some fence/lock maps are retained indefinitely, increasing
+host memory and reaper work with lifetime requests. Blind TTL eviction is
+unsafe because late retries could reuse old identities. Safe terminal
+compaction and a fail-closed capacity are the next containment step;
+unbounded continued admission additionally needs an explicit epoch/sequence
+watermark or enforceable retry horizon.
+
 ## 2026-09-24 生产请求链路首轮验收 / First live serving acceptance
 
 在授权的 CloudLab 隔离检出中，P=`clgpu020`/TP1、V=`clgpu021`/两张
