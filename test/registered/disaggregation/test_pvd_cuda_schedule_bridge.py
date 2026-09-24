@@ -12,9 +12,19 @@ import torch
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
-from sglang.srt.disaggregation.pvd.cuda_schedule_bridge import CUDAScheduleBridge
+from sglang.srt.disaggregation.pvd.cuda_schedule_bridge import (
+    CUDAScheduleBridge,
+    _declared_device_matches_materialized,
+)
 from test_pvd_cuda_model_attention import run
 from test_pvd_cuda_rank_batch import setup as rank_setup
+
+
+def test_generic_cuda_batch_declaration_matches_verified_physical_pool():
+    assert _declared_device_matches_materialized("cuda", torch.device("cuda:0"))
+    assert _declared_device_matches_materialized("cuda:1", torch.device("cuda:1"))
+    assert not _declared_device_matches_materialized("cuda:1", torch.device("cuda:0"))
+    assert not _declared_device_matches_materialized("cpu", torch.device("cuda:0"))
 
 
 def source_entrypoint():

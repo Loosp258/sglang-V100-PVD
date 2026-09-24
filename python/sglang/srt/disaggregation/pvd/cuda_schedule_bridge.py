@@ -29,6 +29,14 @@ class _Dispatch:
     committed_tokens: int
 
 
+def _declared_device_matches_materialized(declared, materialized):
+    """SGLang stores `cuda`, while its verified pool tensor is on `cuda:N`."""
+    device = torch.device(declared)
+    return device.type == materialized.type and (
+        device.index is None or device.index == materialized.index
+    )
+
+
 class CUDAScheduleBridge:
     def __init__(self, executor, driver, batch, *, pool_owner):
         if not isinstance(executor, CUDARankBatchExecutor) or not isinstance(
@@ -101,8 +109,10 @@ class CUDAScheduleBridge:
     def _check_batch(self):
         batch = self.batch
         if (
-            torch.device(batch.device) != self.executor.consumer.device
-            or batch.req_to_token_pool is not self.executor.consumer.req_pool
+            batch.req_to_token_pool is not self.executor.consumer.req_pool
+            or not _declared_device_matches_materialized(
+                batch.device, self.executor.consumer.device
+            )
             or batch.enable_overlap
             or not batch.forward_mode.is_decode()
             or not batch.spec_algorithm.is_none()
