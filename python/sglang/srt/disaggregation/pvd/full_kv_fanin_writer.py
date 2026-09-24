@@ -138,6 +138,17 @@ class FullKVFanInWriter:
                 "transferred_bytes": self._bytes,
             }
 
+    def cleanup_complete(self) -> bool:
+        with self._lock:
+            terminal = self._terminal
+            pending = bool(self._pending)
+        return (
+            terminal is not None
+            and terminal.is_locally_safe_to_release
+            and not pending
+            and self._authorization.cleanup_complete
+        )
+
     def start(self):
         with self._lock:
             if not self._cancelled and self._terminal is None:

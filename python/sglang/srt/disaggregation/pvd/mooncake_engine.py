@@ -378,6 +378,12 @@ class MooncakePVDTransferEngine(TransferEngine):
     def abort(self, handle: TransferHandle) -> None:
         self.lifecycle_manager.request_cancel(handle)
 
+    def cleanup_complete(self, handle: TransferHandle) -> bool:
+        return (
+            handle.transport_state.is_locally_safe_to_release
+            and self.lifecycle_manager.cleanup_complete(handle)
+        )
+
     def health(self) -> Dict[str, Any]:
         lifecycle = self.lifecycle_manager.snapshot()
         with self._lock:

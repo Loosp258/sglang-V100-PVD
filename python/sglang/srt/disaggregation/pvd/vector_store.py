@@ -56,6 +56,7 @@ from sglang.srt.disaggregation.pvd.transfer_engine import (
     descriptor_with_slice,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    GuardUnpinOutcome,
     ResourceGuard,
     TransportState,
     budget_of,
@@ -179,6 +180,7 @@ class DeliveryShardRecord:
     submitting: bool = False
     authorization_begun: bool = False
     local_terminal: Optional[TransportState] = None
+    progress_settled: bool = field(default=False, repr=False)
     progress_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     sparse_manifest: Optional[SparseDeliveryManifest] = None
     # Retained on unknown CUDA completion; cancellation must not drop the lease.
@@ -370,6 +372,11 @@ class VectorKVStore:
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
+        # Tombstones stay in entries for replay/fence proof. Only records that
+        # can still change transport or cleanup state need background progress.
+        self._active_progress: Dict[
+            Tuple[KVEntryKey, str], Tuple[EntryShardRecord, DeliveryShardRecord]
+        ] = {}
         self.worker_epoch = uuid.uuid4().hex
         self._closed = False
         self._isolated_reason = None
@@ -769,6 +776,7 @@ class VectorKVStore:
                 fanin_writer=writer,
             )
             entry.deliveries[delivery_id] = delivery
+            self._active_progress[(entry.key, delivery_id)] = (entry, delivery)
             entry.active_delivery_count += 1
             self.metrics.increment("vector_deliveries_created")
             return delivery
@@ -900,6 +908,7 @@ class VectorKVStore:
                 # Staged legacy callers receive no lifecycle-v1 fence proof.
                 entry.allocation_guard.pin(delivery.owner)
             entry.deliveries[delivery_id] = delivery
+            self._active_progress[(entry.key, delivery_id)] = (entry, delivery)
             entry.active_delivery_count += 1
             self.metrics.increment("vector_deliveries_created")
             return delivery
@@ -1211,8 +1220,16 @@ class VectorKVStore:
         if not delivery.progress_lock.acquire(blocking=False):
             return
         try:
+            if delivery.progress_settled:
+                return
             if delivery.fanin_writer is not None:
                 self._progress_fanin_delivery(entry, delivery)
+                if (
+                    delivery.state
+                    in (DeliveryState.DELIVERED, *DELIVERY_TERMINAL_STATES)
+                    and delivery.fanin_writer.cleanup_complete()
+                ):
+                    self._settle_delivery_progress(entry, delivery)
                 return
             with self._lock:
                 if delivery.submitting:
@@ -1223,9 +1240,16 @@ class VectorKVStore:
             if handle is not None:
                 if handle.transport_state != TransportState.UNKNOWN:
                     try:
-                        if cancelled:
+                        if (
+                            cancelled
+                            and not handle.transport_state.is_locally_safe_to_release
+                        ):
                             self.transfer_engine.abort(handle)
-                        self.transfer_engine.poll(handle)
+                        if not (
+                            handle.transport_state.is_locally_safe_to_release
+                            and self.transfer_engine.cleanup_complete(handle)
+                        ):
+                            self.transfer_engine.poll(handle)
                     except Exception as exc:
                         # A lost native status/handle is not terminal evidence.
                         # Do not repeatedly touch a handle whose safety is lost.
@@ -1274,6 +1298,7 @@ class VectorKVStore:
                 safe = terminal is not None and terminal.is_locally_safe_to_release
                 if safe and delivery.authorization:
                     delivery.authorization.close()
+            source_done = staging_done = False
             if safe:
                 if delivery.authorization:
                     # begin consumed the sender gate, but the adapter may have
@@ -1288,10 +1313,30 @@ class VectorKVStore:
                     delivery.authorization.observe_terminal(
                         delivery.authorization.identity, auth_terminal
                     )
+                    source_done = delivery.authorization.cleanup_complete
                 else:
-                    delivery.source_guard.unpin(delivery.owner)
+                    source_done = (
+                        delivery.source_guard.unpin(delivery.owner)
+                        != GuardUnpinOutcome.RELEASE_IN_PROGRESS
+                    )
                 if delivery.staging_guard is not None:
-                    delivery.staging_guard.unpin(delivery.owner)
+                    staging_done = (
+                        delivery.staging_guard.unpin(delivery.owner)
+                        != GuardUnpinOutcome.RELEASE_IN_PROGRESS
+                    )
+                else:
+                    staging_done = True
+            if (
+                safe
+                and source_done
+                and staging_done
+                and (
+                    handle is None or self.transfer_engine.cleanup_complete(handle)
+                )
+                and delivery.state
+                in (DeliveryState.DELIVERED, *DELIVERY_TERMINAL_STATES)
+            ):
+                self._settle_delivery_progress(entry, delivery)
         except Exception as exc:
             # Native adapter exceptions are normally mapped to UNKNOWN there.
             # Preserve all ownership here, including failed cleanup callbacks.
@@ -1302,6 +1347,11 @@ class VectorKVStore:
             )
         finally:
             delivery.progress_lock.release()
+
+    def _settle_delivery_progress(self, entry, delivery) -> None:
+        with self._lock:
+            delivery.progress_settled = True
+            self._active_progress.pop((entry.key, delivery.delivery_id), None)
 
     def _progress_fanin_delivery(self, entry, delivery):
         with self._lock:
@@ -1339,11 +1389,7 @@ class VectorKVStore:
 
     def progress_transfers(self) -> None:
         with self._lock:
-            records = [
-                (entry, delivery)
-                for entry in self.entries.values()
-                for delivery in entry.deliveries.values()
-            ]
+            records = list(self._active_progress.values())
         for entry, delivery in records:
             self._progress_delivery(entry, delivery)
         self._progress_releases()

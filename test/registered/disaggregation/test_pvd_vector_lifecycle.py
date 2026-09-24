@@ -279,10 +279,91 @@ def test_cleanup_failure_is_retried_without_double_freeing_pages():
     engine.finish(delivery.transfer_handle)
     store.progress_transfers()
     assert source.descriptor.region_id in engine._regions
+    assert (entry.key, delivery.delivery_id) in store._active_progress
     store.progress_transfers()
     assert source.descriptor.region_id not in engine._regions
+    assert (entry.key, delivery.delivery_id) not in store._active_progress
     assert store.allocator.allocated_pages == 0
     store.close()
+
+
+def test_terminal_delivery_keeps_replay_but_stops_background_and_direct_poll():
+    class CountingEngine(DelayedTransferEngine):
+        def __init__(self):
+            super().__init__()
+            self.poll_count = 0
+
+        def poll(self, handle):
+            self.poll_count += 1
+            return super().poll(handle)
+
+    engine, store, entry = ready_store(CountingEngine())
+    delivery, _ = reserve(engine, store, entry)
+    store.start_delivery(entry.key, delivery.delivery_id)
+    assert (entry.key, delivery.delivery_id) in store._active_progress
+    engine.finish(delivery.transfer_handle)
+    store.progress_transfers()
+    assert delivery.state == DeliveryState.DELIVERED
+    assert (entry.key, delivery.delivery_id) not in store._active_progress
+    settled_polls = engine.poll_count
+    for _ in range(20):
+        store.progress_transfers()
+        assert (
+            store.poll_delivery(entry.key, delivery.delivery_id).state
+            == DeliveryState.DELIVERED
+        )
+    assert engine.poll_count == settled_polls
+    store.ack_delivery(entry.key, delivery.delivery_id)
+    assert (
+        store.poll_delivery(entry.key, delivery.delivery_id).state
+        == DeliveryState.RELEASED
+    )
+    store.close()
+
+
+def test_unsettled_native_cleanup_keeps_terminal_delivery_pollable():
+    class CleanupEngine(DelayedTransferEngine):
+        def __init__(self):
+            super().__init__()
+            self.cleanup_ready = False
+            self.poll_count = 0
+
+        def poll(self, handle):
+            self.poll_count += 1
+            return super().poll(handle)
+
+        def cleanup_complete(self, handle):
+            return (
+                self.cleanup_ready
+                and handle.transport_state.is_locally_safe_to_release
+            )
+
+    engine, store, entry = ready_store(CleanupEngine())
+    delivery, _ = reserve(engine, store, entry)
+    store.start_delivery(entry.key, delivery.delivery_id)
+    engine.finish(delivery.transfer_handle)
+    store.progress_transfers()
+    assert delivery.state == DeliveryState.DELIVERED
+    assert (entry.key, delivery.delivery_id) in store._active_progress
+    previous_polls = engine.poll_count
+    store.progress_transfers()
+    assert engine.poll_count > previous_polls
+    engine.cleanup_ready = True
+    store.progress_transfers()
+    assert (entry.key, delivery.delivery_id) not in store._active_progress
+    store.close()
+
+
+def test_unknown_delivery_remains_active_and_unfenced():
+    engine, store, entry = ready_store()
+    delivery, _ = reserve(engine, store, entry)
+    store.start_delivery(entry.key, delivery.delivery_id)
+    delivery.transfer_handle.transport_state = TransportState.UNKNOWN
+    store.cancel_delivery(entry.key, delivery.delivery_id, "unknown native outcome")
+    store.progress_transfers()
+    assert (entry.key, delivery.delivery_id) in store._active_progress
+    assert store.fence_write(delivery.authorization.identity)["fenced"] is False
+    assert not delivery.progress_settled
 
 
 @pytest.mark.parametrize("cancelled", [True, False])

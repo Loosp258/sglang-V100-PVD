@@ -141,6 +141,7 @@ def test_real_store_two_source_delivery_reuses_entry_after_ack():
                     break
                 store.poll_delivery(c.key, d.delivery_id)
             assert d.state == DeliveryState.DELIVERED
+            assert (c.key, d.delivery_id) not in store._active_progress
             c.receiver.observe(d.to_dict()["fanin_proof"])
             assert store.reserve_fanin_delivery(c.wire) is d
             store.ack_delivery(c.key, d.delivery_id)

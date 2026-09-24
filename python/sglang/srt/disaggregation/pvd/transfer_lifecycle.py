@@ -333,6 +333,10 @@ class TransferLifecycleManager:
             if handle.status == TransferStatus.PENDING:
                 handle.status = TransferStatus.CANCELLED
 
+    def cleanup_complete(self, handle) -> bool:
+        with self._lock:
+            return handle.transfer_id not in self._transfers
+
     def snapshot(self) -> dict:
         result = self.budget.snapshot()
         with self._lock:

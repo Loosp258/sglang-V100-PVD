@@ -256,6 +256,7 @@ def test_unregister_failure_retains_tensor_and_can_retry_without_native_poll(tra
     gc.collect()
     assert source_collected == []
     assert handle.transport_state == TransportState.TERMINAL_SUCCESS
+    assert not adapter.cleanup_complete(handle)
     assert adapter.health()["registered_regions"] == 1
     native.unregister_result = 0
     adapter.poll(handle)
@@ -263,6 +264,7 @@ def test_unregister_failure_retains_tensor_and_can_retry_without_native_poll(tra
     assert source_collected == [True]
     assert native.check_calls == [7]
     assert adapter.health()["registered_regions"] == 0
+    assert adapter.cleanup_complete(handle)
 
 
 def test_terminal_poll_retains_capacity_while_release_retry_is_running(transport):
@@ -302,6 +304,7 @@ def test_terminal_poll_retains_capacity_while_release_retry_is_running(transport
     snapshot = adapter.lifecycle_manager.snapshot()
     assert snapshot["used_inflight"] == 1
     assert snapshot["tracked_transfers"] == 1
+    assert not adapter.cleanup_complete(handle)
 
     native.allow_retry_to_fail.set()
     retry_thread.join(timeout=5)
@@ -312,6 +315,7 @@ def test_terminal_poll_retains_capacity_while_release_retry_is_running(transport
     assert native.check_calls == [7]
     assert native.unregister_calls == [4096, 4096, 4096]
     assert adapter.lifecycle_manager.snapshot()["used_inflight"] == 0
+    assert adapter.cleanup_complete(handle)
 
 
 def test_terminal_owner_releases_its_slot_while_another_owner_remains(transport):

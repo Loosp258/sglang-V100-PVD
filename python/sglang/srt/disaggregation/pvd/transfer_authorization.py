@@ -70,6 +70,14 @@ class WriteAuthorization:
         with self._lock:
             self._closed = True
 
+    @property
+    def cleanup_complete(self) -> bool:
+        with self._lock:
+            if self._terminal_state is None:
+                return False
+        with self._cleanup_lock:
+            return self._unpinned
+
     def observe_terminal(self, identity: WriteIdentity, state: TransportState) -> None:
         with self._lock:
             self._require_identity(identity)

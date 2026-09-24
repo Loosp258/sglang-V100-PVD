@@ -92,6 +92,14 @@ class TransferEngine(abc.ABC):
     @abc.abstractmethod
     def abort(self, handle: TransferHandle) -> None: ...
 
+    def cleanup_complete(self, handle: TransferHandle) -> bool:
+        """Whether terminal polling has finished all engine-owned cleanup.
+
+        Unknown adapters remain pollable; a terminal transport state alone is
+        not proof that source deregistration or capacity refund succeeded.
+        """
+        return False
+
     def health(self) -> Dict[str, Any]:
         return {"backend": self.name, "healthy": True}
 
@@ -189,6 +197,9 @@ class FakeTransferEngine(TransferEngine):
     def abort(self, handle: TransferHandle) -> None:
         if handle.status == TransferStatus.PENDING:
             handle.status = TransferStatus.CANCELLED
+
+    def cleanup_complete(self, handle: TransferHandle) -> bool:
+        return handle.transport_state.is_locally_safe_to_release
 
     def health(self) -> Dict[str, Any]:
         with self._regions_lock:
