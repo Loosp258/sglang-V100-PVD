@@ -17,6 +17,29 @@ allocated and **16435380224** reserved bytes; both GPUs reported 0 MiB used
 after exit. This does not validate production serving, RDMA, retrieval or
 latency hiding.
 
+复测命令（仅 D 节点的隔离 smoke，非生产启动）：
+
+```bash
+cd /mnt/sglang-data/yiliu124-node-2-sglang-pvd/src/sglang-PVD-validate-ecf94fb07
+PYTHONPATH=python \
+  /mnt/sglang-data/yiliu124-node-2-sglang-pvd/conda-envs/sglang-v100/bin/python \
+  test/registered/disaggregation/run_pvd_qwen_dual_draft_gpu.py \
+  --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
+  --draft-model-path /mnt/sglang-data/yiliu124-node-2-sglang-pvd/models/Qwen2.5-0.5B-Instruct \
+  --draft-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
+  --draft-mem-fraction-static 0.1 \
+  --draft-scratch-budget-bytes 268435456 \
+  --draft-persistent-budget-bytes 2147483648 \
+  --draft-transient-bytes-bound 134217728 \
+  --probe-budget-bytes 268435456 \
+  --probe-transient-bytes-bound 134217728 \
+  --dtype float16 --context-length 64 --max-total-tokens 128
+```
+
+The command above is an isolated D-node smoke, not a production launch. It
+uses explicit checkpoint paths and budgets; adjust them after rechecking
+available GPU memory and target/draft compatibility.
+
 2026-09-24 在隔离的 D 节点工作区下载官方
 [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)，
 固定 revision `7ae557604adf67be50417f59c2c2f167def9a775`，位置为
