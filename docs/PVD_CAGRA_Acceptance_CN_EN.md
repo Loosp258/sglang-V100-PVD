@@ -15,6 +15,22 @@ Gateway=`10.0.1.2:8001`；原 P/D GPU0、V 9000 和 Gateway 8000 服务未停。
 
 ### 2026-09-25 后续复测 / Follow-up with background search I/O
 
+同日对修复提交 `bb06e4383` 再做一次独立验证：D 进程环境中确实**未设置**
+`PVD_SEARCH_BACKGROUND_IO`（而非显式设为 `1`），实际 1939-token Prompt
+返回完整 8/8 token，`all_complete=true`，TTFT 97.66 s、总耗时
+285.69 s（`run_id=058049b80a34`）。V 两 rank 的传输状态均为
+`used_inflight=0`、`unknown_transfers=0`、`quarantined=false`。
+因此验证了新默认路径在这一规模下功能可用；单次运行与下面 242.79 s
+的显式开启运行不能据此推断性能差异，且仍未达到性能验收。
+
+An independent run on commit `bb06e4383`, with
+`PVD_SEARCH_BACKGROUND_IO` genuinely absent from D's process environment,
+completed all 8 tokens for a 1,939-token prompt (`run_id=058049b80a34`):
+TTFT 97.66 s and total 285.69 s. Both V ranks ended with zero in-flight
+and UNKNOWN transfers and no quarantine. This validates the new default
+path's functionality at this scale, not its performance; the single run
+cannot establish a speed difference from the 242.79 s explicit-on run.
+
 隔离 D 使用 `PVD_REFRESH_POLL_TURNS=8`、`request_timeout_seconds=300`。
 首次约 1935-token 长 Prompt 虽由 V 两 rank 各完成 14 个原生 Mooncake
 batch（约 55.5 MB/rank），最终 SSE 仅返回 4/8 token，
