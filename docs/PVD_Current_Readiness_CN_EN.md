@@ -3134,3 +3134,23 @@ It retains aiohttp `Request.json` and substitutes installed
 `PVD_PROFILE_V_SEARCH=1` logs. Tests compare normal/fast results and
 verify malformed JSON still returns 400. Three-node benefit is not yet
 measured.
+
+CloudLab V 在 `91c284b12` 独立 worktree 开启 fast JSON、grouped
+exact 与计时，D 保持 `f231a797c`。三次固定请求均返回 20/20 SSE，
+耗时约 3.54/3.40/3.37 秒、最大可观测间隔约
+0.354/0.245/0.247 秒。V `json_parse` 多数为约 1.2–1.6 ms，
+少数并发批次约 12 ms；D 后续稳态 search 大约 0.16–0.18 秒。
+样本量与运行时竞争不足以断言 fast JSON 带来稳定的端到端收益；
+它至少没有在这些样本中破坏搜索路径或流式输出。刷新仍约
+0.38–0.40 秒，下一项需考察预取窗口和边界等待，而不只是 V
+单批 kernel。
+
+With V fast JSON enabled on isolated `91c284b12` and D still on
+`f231a797c`, three fixed requests returned all 20 SSE events in about
+3.54/3.40/3.37 s. Maximum observed gaps were 0.354/0.245/0.247 s.
+Most V `json_parse` intervals were 1.2–1.6 ms, while a few concurrent
+batches took around 12 ms. D's later steady search intervals stayed
+around 0.16–0.18 s. These small, contended samples do not establish a
+stable end-to-end gain from fast JSON. Warm refresh still takes roughly
+0.38–0.40 s; the next question is prefetch timing and boundary wait,
+not only V batch kernel time.
