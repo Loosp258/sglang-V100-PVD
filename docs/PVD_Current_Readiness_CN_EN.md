@@ -3,6 +3,57 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 短 Prompt 阈值及固定输入对照 / Short-Prompt cutoff and fixed-input comparison
+
+`0693d2806` 为 V `cagra-auto` 新增可选
+`--prompt-index-exact-max-rows`：阈值不再被 CAGRA 的
+`intermediate_degree` 强制决定；默认仍保留旧行为，阈值不得小于该图参数。
+V 节点的独立验证进程保持原有 `intermediate_degree=16` 与预算，显式设
+`exact_max_rows=128`；D、P、Gateway 的模型和参数未因这一改动改变。
+完整 PVD CPU 套件为 **2902 passed / 23 skipped**。一条 47-token
+Prompt 的 20-token 现场请求 HTTP 200、约 20.5 秒；V 索引搜索 HTTP 400
+重试为 0，D 四轮检索约 2.65、1.49、1.83、1.96 秒，稀疏交付每轮约
+0.08–0.10 秒。此前旧阈值配置的一次首轮检索等待约 15.73 秒，但
+Prompt 和进程热度不完全相同，不能据此计算严格加速比。
+
+随后使用新增的固定 marker 烟测参数，保持 P/V/Gateway 与 V 的 128 行
+阈值不变，仅临时切换 D 的预测稀疏/完整 Prompt KV 周期刷新模式。
+相同 36-token Prompt、20 个生成 token、`temperature=0`、刷新间隔 4：
+
+| 模式 / Mode | 两次客户端耗时 / Client latency (s) | 输出 |
+|---|---:|---|
+| 预测稀疏 / Predictive sparse | 19.419, 19.433 | 两次 token ID 相同 |
+| 完整 KV / Full Prompt KV | 7.410, 7.256 | 两次 token ID 相同；与稀疏模式从第 9 个 token 分歧 |
+
+这组小样本证明：缩短短 Prompt 的建图等待后，预测路径仍明显慢于当前
+完整 KV 基线，且输出不同；**最终性能和质量目标尚未达成**。后续需固定
+更长 Prompt 与数据集，分别量化 draft/probe、按层/head 搜索、边界等待、
+输出质量和显存峰值。D 对照后已恢复预测配置；不把这两次重复当作
+吞吐、p95 或检索召回率评估。
+
+Commit `0693d2806` adds the optional V `cagra-auto` flag
+`--prompt-index-exact-max-rows`, decoupling the exact-search cutoff from
+CAGRA's intermediate graph degree. The default preserves the previous
+cutoff, and the explicit value cannot be below the intermediate degree.
+The isolated V process retained `intermediate_degree=16` and the same
+budgets, but set `exact_max_rows=128`. The full PVD CPU suite reported
+**2902 passed / 23 skipped**. A 47-token/20-output live request succeeded
+in about 20.5 seconds with zero index-search HTTP 400 retries; D's four
+search phases took about 2.65, 1.49, 1.83 and 1.96 seconds, versus roughly
+0.08–0.10 seconds for sparse delivery in each round. An earlier old-cutoff
+first search waited about 15.73 seconds, but the prompts and process warmth
+were not identical, so this is not a strict speedup measurement.
+
+With the same fixed 36-token input and unchanged P/V/Gateway, D was
+temporarily switched between predictive sparse and periodic full-Prompt-KV
+refresh. Both returned 20 tokens at temperature zero and interval four;
+the paired client latencies and output relationship are in the table above.
+The predictive mode remains substantially slower and diverges in output at
+generated token nine. This small comparison establishes neither throughput,
+p95, retrieval recall nor a quality score. Longer fixed datasets, detailed
+draft/probe and per-head search timing, boundary-wait measurement and peak
+GPU-memory accounting remain required. D was restored to predictive mode.
+
 ## 2026-09-25 首轮配对性能/输出对照 / First paired latency and output comparison
 
 三机 Qwen2.5-7B-Instruct、相同 P/V/Gateway、单 rail、D TP1、
