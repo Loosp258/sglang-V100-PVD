@@ -147,6 +147,56 @@ def test_missed_window_probes_current_committed_prefix_without_draft(monkeypatch
         assert len(request.output_ids) == 5
 
 
+def test_observed_boundary_wait_is_reported_only_after_safe_install(
+    monkeypatch, caplog
+):
+    with synchronous(monkeypatch) as (driver, c, control, request, _):
+        now = [100.0]
+        driver._clock = lambda: now[0]
+        request.output_ids.extend([3] * 4)
+        with caplog.at_level(
+            "INFO", logger="sglang.srt.disaggregation.pvd.cuda_refresh_driver"
+        ):
+            driver.poll()
+            record = driver._records[request.rid]
+            assert record.boundary_observed_at == 100.0
+            assert not any(
+                "PVD boundary installed:" in r.message for r in caplog.records
+            )
+            now[0] = 100.5
+            pump(
+                driver,
+                c,
+                lambda: control.group.coordinator.snapshot()["installed_tokens"] == 4,
+            )
+        assert record.boundary_observed_at is None
+        messages = [
+            r.message for r in caplog.records if "PVD boundary installed:" in r.message
+        ]
+        assert len(messages) == 1
+        assert "boundary=4 observed_to_install_seconds=0.500000" in messages[0]
+
+
+def test_boundary_diagnostic_failure_cannot_undo_safe_install(monkeypatch):
+    from sglang.srt.disaggregation.pvd import cuda_refresh_driver
+
+    with synchronous(monkeypatch) as (driver, c, control, request, _):
+
+        def broken_log(*_args, **_kwargs):
+            raise RuntimeError("diagnostic handler failed")
+
+        monkeypatch.setattr(cuda_refresh_driver.logger, "info", broken_log)
+        request.output_ids.extend([3] * 4)
+        driver.poll()
+        pump(
+            driver,
+            c,
+            lambda: control.group.coordinator.snapshot()["installed_tokens"] == 4,
+        )
+        assert control.can_decode(4)
+        assert not driver._records[request.rid].stopping
+
+
 @pytest.mark.parametrize("change", ["prefix", "slot", "output", "cross_boundary"])
 def test_mutated_req_cannot_start_refresh_or_advance_clock(monkeypatch, change):
     with synchronous(monkeypatch) as (driver, c, control, request, captures):

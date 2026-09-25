@@ -7,6 +7,7 @@ a registration drains its controller, not the caller's Req/KV allocator rows.
 """
 
 import asyncio
+import logging
 import math
 import time
 from array import array
@@ -20,6 +21,8 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
 )
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,6 +48,7 @@ class _Request:
     provisional: bool = False
     provisional_source: object = None
     provisional_pool_owner: object = None
+    boundary_observed_at: float | None = None
 
 
 class CUDARefreshDriver:
@@ -527,6 +531,12 @@ class CUDARefreshDriver:
                             raise LifecycleError(
                                 "Decode crossed an uninstalled refresh boundary"
                             )
+                        if n == boundary and record.boundary_observed_at is None:
+                            # Scheduler polling may observe the boundary after
+                            # the token was committed. This is an observed
+                            # lower bound, not the exact token timestamp or
+                            # network-only wait.
+                            record.boundary_observed_at = self._clock()
                         if (
                             record.deadline is not None
                             and self._clock() >= record.deadline
@@ -536,8 +546,22 @@ class CUDARefreshDriver:
                             if controller.try_install(
                                 {rank: n for rank in controller._routes}
                             ):
+                                observed_at = record.boundary_observed_at
+                                record.boundary_observed_at = None
                                 record.refresh = record.deadline = None
                                 record.ready = False
+                                # Optional diagnostics cannot turn an already
+                                # committed bank switch into a failed refresh.
+                                try:
+                                    logger.info(
+                                        "PVD boundary installed: request_id=%s "
+                                        "boundary=%d observed_to_install_seconds=%.6f",
+                                        record.req.rid,
+                                        boundary,
+                                        max(0.0, self._clock() - observed_at),
+                                    )
+                                except Exception:
+                                    pass
                         elif (
                             record.refresh is None
                             and n >= boundary - state["lead_tokens"]

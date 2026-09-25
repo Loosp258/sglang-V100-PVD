@@ -56,7 +56,21 @@ the D startup command and logs as independent evidence.
 TPOT/吞吐/刷新边界等待、GPU 显存峰值和 RDMA/生命周期检查。顺序客户端耗时
 不等于服务器吞吐，也不能证明网络等待已经隐藏。
 
+D 的 CUDA 刷新驱动还会在安全安装时记录
+`PVD boundary installed: ... observed_to_install_seconds=...`。
+该值从 Scheduler **首次观察到** committed 计数抵达边界开始，至安装
+成功为止；包含轮询和安装开销，是观测到的边界等待，**不是** token
+真实生成时刻到安装的精确延迟，也不能单独归因于网络。若请求失败或
+取消而没有安全安装，不产生“成功安装”日志。
+
 Final acceptance additionally requires task/semantic quality, actual-Q CAGRA
 Top-K recall, longer contexts and concurrent load, TPOT/throughput/boundary
 wait, peak GPU memory and RDMA/lifecycle evidence. Sequential client latency
 is not server throughput and does not prove that network waits are hidden.
+
+On safe installation, D's CUDA refresh driver also logs
+`PVD boundary installed: ... observed_to_install_seconds=...`. It measures
+from the Scheduler's **first observation** of the committed boundary until
+successful installation. It includes polling and installation overhead: it
+is neither the exact interval since token generation nor network-only time.
+A failed or cancelled refresh emits no successful-install log.
