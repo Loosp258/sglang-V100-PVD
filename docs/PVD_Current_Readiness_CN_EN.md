@@ -3346,3 +3346,23 @@ for network I/O or make model forwards asynchronous. Invalid values are
 refused at startup. More turns can also execute more synchronous Python
 or probe work inside one scheduler poll; compare TPOT, boundary waits and
 failure cleanup under the same M=4/lead=2 workload before changing defaults.
+
+CloudLab D 独立 `3e0069af8`、M=4/lead=2、后台 HTTP 与时间线均开启，
+设 `PVD_REFRESH_POLL_TURNS=4` 的三次固定请求均返回 20/20 SSE。
+总耗时约 3.77/3.47/3.46 秒，最大可观测间隔约
+0.274/0.255/0.269 秒；热态边界等待约 0.076–0.094 秒，
+首次边界约 0.176–0.202 秒，均与 poll=1 小样本范围重叠。
+热态 capture/search/delivery 仍约 0.15/0.165/0.07–0.09 秒。
+这不支持把轮数 4 作为默认，也说明“只多推进私有 loop”
+并未消除目标 probe/capture 和交付所占用的前瞻窗口。
+在线 D 恢复默认 poll=1。
+
+On isolated CloudLab D `3e0069af8`, with unchanged M=4/lead=2 and
+background HTTP, `PVD_REFRESH_POLL_TURNS=4` returned 20/20 SSE in
+three fixed requests. End-to-end times were about 3.77/3.47/3.46 s;
+maximum observed gaps were 0.274/0.255/0.269 s. Warm boundary waits
+were 0.076–0.094 s and first-boundary waits 0.176–0.202 s, overlapping
+the small poll=1 sample. Warm capture/search/delivery remained roughly
+0.15/0.165/0.07–0.09 s. Do not make four turns the default: extra owner
+loop turns alone do not hide target capture/probe and delivery. Restore
+live D to the default single-turn poll.
