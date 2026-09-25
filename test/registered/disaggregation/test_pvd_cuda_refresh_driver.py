@@ -46,6 +46,7 @@ def test_refresh_task_site_reports_code_location_without_payload():
         site = _task_site(task)
         assert "test_pvd_cuda_refresh_driver.py" in site
         assert "pending_refresh" in site
+        assert "wait" in site
         assert _task_site(object()) == "unavailable"
         task.cancel()
         loop.run_until_complete(asyncio.gather(task, return_exceptions=True))

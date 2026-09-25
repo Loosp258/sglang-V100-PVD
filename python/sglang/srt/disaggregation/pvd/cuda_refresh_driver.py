@@ -35,13 +35,26 @@ def _timeline(message, *args):
 
 
 def _task_site(task):
-    """Code location only; never log Prompt tokens or query tensors."""
+    """Bounded await chain of code locations, never Prompt or Q contents."""
     try:
-        frames = task.get_stack(limit=1)
-        if not frames:
-            return "no-python-frame"
-        frame = frames[-1]
-        return f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}:{frame.f_code.co_name}"
+        awaited = task.get_coro()
+        locations = []
+        for _ in range(8):
+            frame = getattr(awaited, "cr_frame", None) or getattr(
+                awaited, "gi_frame", None
+            )
+            if frame is not None:
+                locations.append(
+                    f"{os.path.basename(frame.f_code.co_filename)}:"
+                    f"{frame.f_lineno}:{frame.f_code.co_name}"
+                )
+            next_awaited = getattr(awaited, "cr_await", None) or getattr(
+                awaited, "gi_yieldfrom", None
+            )
+            if next_awaited is None:
+                break
+            awaited = next_awaited
+        return " > ".join(locations) if locations else "no-python-frame"
     except Exception:
         return "unavailable"
 
