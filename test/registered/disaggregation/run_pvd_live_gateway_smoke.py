@@ -1,12 +1,14 @@
 """Send one bounded live PVD Gateway request and print its full response.
 
 Run only against an intentionally started three-node experiment. This script
-does not start servers, infer transport success from HTTP alone, or benchmark.
+does not start servers or infer transport success from HTTP alone. A fixed
+marker permits paired timing probes, but one probe is not a benchmark.
 """
 
 import argparse
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -18,6 +20,12 @@ def main(argv=None):
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument("--min-completion-tokens", type=int, default=1)
     parser.add_argument("--prompt-repetitions", type=int, default=1)
+    parser.add_argument(
+        "--marker",
+        default=None,
+        help="Optional fixed ASCII marker for identical paired requests; "
+        "otherwise a unique marker avoids accidental prefix reuse.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=120)
     args = parser.parse_args(argv)
     if not (
@@ -26,7 +34,15 @@ def main(argv=None):
         and 0 < args.timeout_seconds <= 600
     ):
         parser.error("smoke bounds exceeded")
-    marker = f"PVD_NATIVE_SMOKE_{uuid.uuid4().hex[:12]}"
+    if args.marker is not None and (
+        not 1 <= len(args.marker) <= 80
+        or any(
+            c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for c in args.marker
+        )
+    ):
+        parser.error("marker must be 1..80 ASCII letters, digits, '_' or '-'")
+    marker = args.marker or f"PVD_NATIVE_SMOKE_{uuid.uuid4().hex[:12]}"
     sentence = "Explain GPU RDMA in one short sentence."
     body = {
         "text": f"{marker}: {sentence}"
@@ -43,6 +59,7 @@ def main(argv=None):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=args.timeout_seconds) as response:
             status = response.status
@@ -53,6 +70,7 @@ def main(argv=None):
     except Exception as exc:  # noqa: BLE001 -- transport failure is a failed smoke
         print(json.dumps({"marker": marker, "status": "failed", "reason": str(exc)}))
         return 1
+    elapsed_seconds = time.perf_counter() - started
     try:
         result = json.loads(payload)
     except json.JSONDecodeError:
@@ -75,6 +93,7 @@ def main(argv=None):
                 "prompt_repetitions": args.prompt_repetitions,
                 "status": "passed" if ok else "failed",
                 "http_status": status,
+                "elapsed_seconds": elapsed_seconds,
                 "completion_tokens": completion_tokens,
                 "response": result,
                 "transport_validated_by_http_alone": False,
