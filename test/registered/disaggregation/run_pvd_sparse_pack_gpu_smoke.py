@@ -1,7 +1,7 @@
 """Standalone real-CUDA byte check for V sparse gather/pack (no pytest needed).
 
 This is a kernel correctness smoke, not an end-to-end performance benchmark.
-It allocates only small synthetic tensors and does not contact a serving V.
+It allocates bounded synthetic tensors and does not contact a serving V.
 """
 
 import argparse
@@ -17,10 +17,17 @@ from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
-def check(device, rank, dtype):
+def check(device, rank, dtype, *, multiblock):
     from sglang.srt.disaggregation.pvd.triton_sparse_pack import SparsePackWorkspace
 
-    layers, rows, heads, head_dim = 2, 12, 2, 8
+    layers, rows, heads, head_dim = (
+        2,
+        128 if multiblock else 12,
+        2,
+        128 if multiblock else 8,
+    )
+    selected_a = tuple(range(64, 0, -1)) if multiblock else (7, 0, 9)
+    selected_b = tuple(range(65, 1, -1)) if multiblock else (8, 1)
     element_bytes = torch.empty((), dtype=dtype).element_size()
     per_token = heads * head_dim * element_bytes
     source_bytes = 2 * layers * rows * per_token
@@ -47,7 +54,7 @@ def check(device, rank, dtype):
         rank=rank,
         rail="mlx5_0",
         expected_bytes=source_bytes,
-        page_count=3,
+        page_count=rows // 4,
         last_page_valid_tokens=2,
         layer_start=0,
         layer_end=layers,
@@ -64,7 +71,7 @@ def check(device, rank, dtype):
             layout.fingerprint,
             0,
             rank * heads + 1,
-            (7, 0, 9),
+            selected_a,
         ),
         SparseKVSpec(
             "req",
@@ -77,7 +84,7 @@ def check(device, rank, dtype):
             layout.fingerprint,
             1,
             rank * heads,
-            (8, 1),
+            selected_b,
         ),
     )
     manifest = SparseDeliveryManifest(specs, str(dtype), head_dim)
@@ -113,7 +120,8 @@ def check(device, rank, dtype):
         if not torch.equal(actual, reference):
             difference = torch.nonzero(actual != reference).flatten()[0].item()
             raise AssertionError(
-                f"rank {rank} {dtype}: byte mismatch at offset {difference}"
+                f"rank {rank} {dtype} multiblock={multiblock}: "
+                f"byte mismatch at offset {difference}"
             )
     finally:
         if not completed:
@@ -121,7 +129,12 @@ def check(device, rank, dtype):
         workspace.release_after_fence()
     if budget.snapshot()["used_staging_bytes"] != 0:
         raise AssertionError("metadata budget was not refunded after CUDA fence")
-    return {"rank": rank, "dtype": str(dtype), "compared_bytes": manifest.nbytes}
+    return {
+        "rank": rank,
+        "dtype": str(dtype),
+        "multiblock": multiblock,
+        "compared_bytes": manifest.nbytes,
+    }
 
 
 def main(argv=None):
@@ -132,9 +145,10 @@ def main(argv=None):
     if device.type != "cuda" or device.index is None or not torch.cuda.is_available():
         parser.error("a real indexed CUDA device is required")
     results = [
-        check(device, rank, dtype)
+        check(device, rank, dtype, multiblock=multiblock)
         for rank in (0, 1)
         for dtype in (torch.float16, torch.bfloat16, torch.float32)
+        for multiblock in (False, True)
     ]
     print(json.dumps({"device": str(device), "checks": results}, indent=2))
 
