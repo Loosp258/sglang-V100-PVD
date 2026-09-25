@@ -4,7 +4,9 @@ No serving activation or compute-overlap claim. All callers of target/draft
 execution and RNG must honor the shared lock; scopes must never span an await.
 """
 
+import logging
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 
@@ -19,6 +21,8 @@ from sglang.srt.disaggregation.pvd.prediction import (
 )
 from sglang.srt.disaggregation.pvd.probe_search import ProbeSearchSession
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+
+logger = logging.getLogger(__name__)
 
 
 class CUDAPredictionPipeline(PredictionPipeline):
@@ -111,17 +115,34 @@ class CUDAPredictionPipeline(PredictionPipeline):
             raise PredictionConfigError("CUDA prediction requires its branch scope")
         return super().run(prefix)
 
+    def _record_run_timing(self, *, draft_seconds, probe_seconds):
+        logger.info(
+            "PVD CUDA prediction stages: draft_seconds=%.6f probe_seconds=%.6f",
+            draft_seconds,
+            probe_seconds,
+        )
+
     @contextmanager
     def query_branch(self, prefix):
+        started = time.perf_counter()
         with self._scope(), super().query_branch(prefix) as queries:
+            logger.info(
+                "PVD CUDA prediction scope entered: enter_seconds=%.6f",
+                time.perf_counter() - started,
+            )
             yield queries
 
     @contextmanager
     def committed_query_branch(self, prefix, positions):
+        started = time.perf_counter()
         with (
             self._scope(),
             super().committed_query_branch(prefix, positions) as queries,
         ):
+            logger.info(
+                "PVD CUDA committed probe scope entered: enter_seconds=%.6f",
+                time.perf_counter() - started,
+            )
             yield queries
 
 

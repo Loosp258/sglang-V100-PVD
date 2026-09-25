@@ -34,6 +34,7 @@ machinery can be developed and tested without weights.
 from __future__ import annotations
 
 import abc
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
@@ -400,6 +401,7 @@ class PredictionPipeline:
     def run(self, prefix: CommittedPrefix) -> Tuple[QueryVectors, ...]:
         if not isinstance(prefix, CommittedPrefix):
             raise PredictionConfigError("prediction requires a committed snapshot")
+        draft_started = time.perf_counter()
         prediction = run_isolated(
             self.provider.predict, prefix, self.draft_config.predict_tokens
         )
@@ -412,12 +414,21 @@ class PredictionPipeline:
         if len(prediction.tokens) > self.draft_config.predict_tokens:
             raise PredictionConfigError("draft provider exceeded its token budget")
 
+        draft_done = time.perf_counter()
         queries = run_isolated(self.probe.capture, prefix, prediction)
-        return self._validate_queries(
+        validated = self._validate_queries(
             prefix,
             queries,
             range(len(prefix.tokens), len(prefix.tokens) + len(prediction.tokens)),
         )
+        self._record_run_timing(
+            draft_seconds=draft_done - draft_started,
+            probe_seconds=time.perf_counter() - draft_done,
+        )
+        return validated
+
+    def _record_run_timing(self, *, draft_seconds, probe_seconds):
+        """No-op foundation hook; CUDA serving records stage wall time."""
 
     @contextmanager
     def committed_query_branch(self, prefix, positions):

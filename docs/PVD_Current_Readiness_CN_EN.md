@@ -2805,3 +2805,29 @@ The long request includes first CAGRA-build variance, so its difference
 cannot all be attributed to pin caching. This sample cannot establish tail
 latency or throughput benefit. Raw results are on D in
 `pvd-eval-pin-cache-da46ed429.json`.
+
+### 冷态请求分阶段计时 / Cold-request stage timing
+
+新版 D 的首次固定请求仍需 46.09 秒，单次最大 token 间隔约
+28.10 秒；首次预测式捕获日志约 14.69 秒，之后同请求的捕获仅
+约 0.15 秒。现有 `capture_seconds` 包含 draft branch 建立、独立
+draft 前向、目标 Q probe、校验和 Q 拷贝，不能仅凭它判断哪个阶段
+导致首次开销。新增 CUDA 预测日志将同步墙钟时间拆成 draft、
+target probe 和整个 branch 进入时间，并区分正式前缀补查。
+这些日志不记录 token 或 Q 数值，也不改变生成、缓存或网络协议。
+CUDA 操作可能异步，因此墙钟阶段值不能单独充当 kernel 时间；
+新日志尚未在 CloudLab 运行。WSL 定向预测测试 79 passed；
+完整回归和真实冷态复测是本提交后续门槛。
+
+The first fixed request on the new D still took 46.09 s, with a 28.10 s
+maximum token gap. Its first predictive capture logged about 14.69 s,
+versus about 0.15 s for later captures in the same request. The existing
+`capture_seconds` lumps branch setup, the independent draft forward,
+target-Q probe, validation and Q copying, so it does not localize that
+cost. New CUDA prediction logs split synchronous wall time into draft,
+target probe and overall branch entry, with a separate committed-prefix
+probe event. They log neither token nor Q values and change no model, cache
+or wire behavior. CUDA work may be asynchronous, so these wall times are
+not standalone kernel timings. The new logs have not yet run on CloudLab;
+targeted WSL prediction tests passed 79, with full regression and a real
+cold rerun still required.

@@ -1,6 +1,8 @@
 """CUDA bridge policies using CPU tensors and substituted driver/RNG calls."""
 
 import asyncio
+import logging
+import re
 import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -75,6 +77,34 @@ def prepare(session, window, pipeline, route):
     return session.prepare(
         window, pipeline, routes=(route,), head_mapping=QueryHeadMapping(1, 1)
     )
+
+
+def test_cuda_prediction_logs_draft_probe_and_scope_entry_costs(monkeypatch, caplog):
+    _, session, window, pipeline, route, _, _ = bridge(monkeypatch)
+    with caplog.at_level(
+        logging.INFO, logger="sglang.srt.disaggregation.pvd.cuda_probe_search"
+    ):
+        prepared = prepare(session, window, pipeline, route)
+    assert prepared.queries
+    messages = [
+        record.message
+        for record in caplog.records
+        if record.name == "sglang.srt.disaggregation.pvd.cuda_probe_search"
+    ]
+    assert len(messages) == 2
+    assert "PVD CUDA prediction stages:" in messages[0]
+    assert "PVD CUDA prediction scope entered:" in messages[1]
+    for field in ("draft_seconds", "probe_seconds", "enter_seconds"):
+        match = next(
+            (
+                re.search(rf"\b{field}=([0-9]+\.[0-9]+)\b", message)
+                for message in messages
+                if field in message
+            ),
+            None,
+        )
+        assert match is not None
+        assert float(match.group(1)) >= 0
 
 
 def test_cuda_pipeline_requires_same_exact_draft_and_target_tokenizer(monkeypatch):
