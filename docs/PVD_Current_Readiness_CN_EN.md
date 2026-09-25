@@ -3096,3 +3096,28 @@ bound and the HTTP body, preserving the JSON protocol and per-item reply
 checks. `PVD_PROFILE_D_SEARCH_BATCH=1` optionally logs prepare, encode,
 HTTP and validation intervals. The microbenchmark is not an end-to-end
 latency claim; D deployment comparison is still pending.
+
+CloudLab D 已在 `f231a797c` 独立 worktree 运行 Qwen2.5-7B target
+与 Qwen2.5-0.5B draft，V 为 `e88b7d268` grouped-exact；P 未变。
+三次固定 20-token 请求均有 20/20 SSE 事件，总耗时约
+3.74/3.41/3.42 秒、最大可观测 token 间隔约
+0.283/0.258/0.259 秒。后两次稳态 D search 约 0.164–0.169 秒，
+而此前相同配置约 0.24 秒；首次刷新仍约 0.249 秒。
+D 分批日志显示 24/32-head 请求约 310–424 KiB，准备约
+3.3–4.8 ms、一次 `orjson` 编码约 0.7–1.0 ms、HTTP 约
+67–84 ms、回复校验约 0.2–0.4 ms。流式结果完整，V/D 日志未见
+相关错误。这里是三个小样本，不是吞吐、长期并发或质量结论；
+刷新总耗时热态仍约 0.38–0.41 秒，未完全被 Decode 隐藏。
+
+CloudLab D now runs `f231a797c` with the Qwen2.5-7B target and
+Qwen2.5-0.5B draft; V runs grouped exact at `e88b7d268`, while P is
+unchanged. Three fixed 20-token requests produced 20/20 SSE events in
+about 3.74/3.41/3.42 s, with maximum observed gaps of
+0.283/0.258/0.259 s. Later steady D search intervals were about
+0.164–0.169 s, versus roughly 0.24 s before single encoding; the first
+refresh still took around 0.249 s for search. D's 24/32-head request
+bodies were roughly 310–424 KiB: preparation 3.3–4.8 ms, one `orjson`
+encode 0.7–1.0 ms, HTTP 67–84 ms and reply validation 0.2–0.4 ms.
+These are three small samples, not a throughput, concurrency, or quality
+claim. Warm total refresh remains about 0.38–0.41 s and is not fully
+hidden by Decode.
