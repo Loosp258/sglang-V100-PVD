@@ -2904,3 +2904,53 @@ rather than steady RDMA or sparse-attention execution as the cause, but do
 not distinguish JIT compilation from library initialization or another
 internal mechanism. The opt-in synchronization also perturbs cold timing.
 D remains on diagnostic worktree `5071826b2`; P/V are unchanged.
+
+`88f1445c5` 提供默认关闭的 `PVD_PRECOMPILE_QWEN_KERNELS=1`：在 D
+发布 CUDA PVD 服务绑定前，对已加载的 Qwen2 target 与独立 Qwen2
+draft 预编译其布局对应的 RoPE、SiLU 激活、KV-store JIT，不运行模型
+forward、不分配请求槽或写入 KV。完整回归 2944 passed / 24 skipped、
+21 subtests。CloudLab 首次启动日志确认 target 三项分别耗时约
+7.62/7.04/6.92 秒，draft 的 RoPE/KV-store 各约 7.61/6.89 秒，
+激活命中缓存。首请求从未预编译的 46.52 秒降至 10.54 秒，
+最大 token 间隔从 28.12 秒降至 6.59 秒；剩余停顿发生在
+target 首层前，不能把 10.54 秒误称为最终冷态目标。
+
+`9d062add1` 又预编译目标 Decode `ForwardBatch.init_new` 所用的
+int64 `clamp_position` JIT（其 dtype 来自当前
+`ScheduleBatch.prepare_for_extend` 的 `seq_lens`）。完整回归仍为
+2944 passed / 24 skipped、21 subtests。新 D 独立 worktree 冷启动
+记录该模块编译约 6.38 秒，与先前残留的 6.59 秒间隔接近；
+再次固定 20-token 首请求为 **4.20 秒**、最大间隔 **0.416 秒**、
+20/20 SSE 事件，首层 RoPE、attention 和 MLP 均为毫秒级，
+首次 draft 约 0.091 秒。启动期编译成本合计约 50 秒，
+从请求关键路径转移到服务就绪之前；这不是总资源消耗降低。
+首个刷新约 0.681 秒、首次边界等待约 0.348 秒，后续刷新约
+0.49–0.51 秒、边界等待约 0.11 秒，隐藏网络/检索等待的最终
+目标仍未实现。该开关只支持 Qwen2 target/draft，其他模型
+默认不触发；生产启用前仍需其自身模型验收。
+当前 D 为 `9d062add1` 独立 worktree，P/V 未改。
+
+`88f1445c5` adds opt-in `PVD_PRECOMPILE_QWEN_KERNELS=1`. Before publishing
+D's CUDA PVD binding it compiles the loaded Qwen2 target and independent
+Qwen2 draft specializations for RoPE, SiLU activation and KV-store, without
+model forward, request-slot allocation or KV writes. The full suite passed
+2944/24 plus 21 subtests. CloudLab startup confirmed target compilation
+times of about 7.62/7.04/6.92 s and draft RoPE/KV-store times of about
+7.61/6.89 s; the draft activation reused the cache. The first request
+dropped from 46.52 s without precompile to 10.54 s, while its largest token
+gap fell from 28.12 to 6.59 s. The remaining gap preceded target layer 0.
+
+`9d062add1` additionally precompiles the int64 `clamp_position` JIT used by
+target Decode's `ForwardBatch.init_new`; that dtype comes from this checkout's
+`ScheduleBatch.prepare_for_extend` sequence lengths. The full suite again
+passed 2944/24 plus 21 subtests. On a new isolated D cold start, the module
+compiled in about 6.38 s, close to the prior 6.59 s residual gap. The
+first fixed 20-token request then took **4.20 s**, with a **0.416 s**
+maximum gap and 20/20 SSE events; target layer-0 stages were millisecond
+scale and first draft took about 0.091 s. Roughly 50 seconds of compilation
+now occur before service readiness; this moves cost off the request path,
+not out of the system. First refresh was about 0.681 s with a 0.348 s
+observed boundary wait; later refreshes were roughly 0.49–0.51 s with
+about 0.11 s wait. The final goal of hiding search/network waits remains
+unmet. The opt-in applies only to Qwen2 target/draft. D is on isolated
+`9d062add1`; P/V are unchanged.
