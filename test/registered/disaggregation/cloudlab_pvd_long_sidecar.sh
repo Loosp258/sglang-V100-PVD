@@ -50,6 +50,11 @@ case "$role" in
     root=/mnt/sglang-data/yiliu124-node-2-sglang-pvd
     work="$root/pvd-long-acceptance-20260925"
     checkout="${PVD_D_CHECKOUT:-$root/src/sglang-PVD-validate-8a96123b0-long}"
+    serving_config="${PVD_LONG_LIMITS_PATH:-$work/limits.json}"
+    if [[ "$serving_config" != /* || ! -f "$serving_config" ]]; then
+      echo 'PVD_LONG_LIMITS_PATH must name an existing absolute config file' >&2
+      exit 2
+    fi
     # Long online target forwards can exceed the search client's HTTP timeout.
     # Keep V search I/O advancing while the scheduler executes that forward.
     export PVD_SEARCH_BACKGROUND_IO="${PVD_SEARCH_BACKGROUND_IO:-1}"
@@ -88,7 +93,7 @@ case "$role" in
       --pvd-draft-persistent-budget-bytes 2147483648 \
       --pvd-draft-predict-tokens 2 --pvd-predictive-retrieval-config \
       --pvd-cuda-predictive-serving \
-      --pvd-cuda-serving-config "$work/limits.json" \
+      --pvd-cuda-serving-config "$serving_config" \
       --pvd-retrieval-vector-space qwen25-7b-pvd \
       --pvd-retrieval-top-k 4 --pvd-retrieval-max-union-tokens 32 \
       --pvd-retrieval-bank-budget-bytes 268435456 \
