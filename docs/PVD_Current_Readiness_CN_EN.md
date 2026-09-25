@@ -3262,3 +3262,25 @@ scheduling, and a diagnostic logging failure cannot invalidate a committed
 Decode token. Compare identical requests with background I/O off/on to
 establish actual interval overlap; never subtract monotonic timestamps
 across separate D processes.
+
+CloudLab 时间线 `6357dd340` 的一次固定 20-token 请求返回 20/20 SSE。
+热态 boundary 8 中，D forward（committed 7）区间为
+`489667.699731–489667.765947`，四个 V search HTTP 区间约
+`489667.698662–489667.773763`，**实际重叠约 66 ms**。
+最后一个搜索返回后到 `refresh_ready=489667.851211` 仍约
+77 ms；该轮目标 batch 结束到安装 `489667.852044` 约 86 ms。
+因此后台 I/O 已实现搜索/forward 重叠，但现有 lead=2
+不足以覆盖搜索之后的交付/安装阶段。首次 boundary 4 还存在
+每个 V source 的未 pin 版本查询，不能把其较长等待全归因于网络。
+这些时间戳来自同一个 D 进程，不能外推为多请求负载性能。
+
+In one 20-token CloudLab trace on `6357dd340`, the boundary-8 target
+forward for committed token 7 occupied `489667.699731–489667.765947`,
+while four V search HTTP intervals spanned roughly
+`489667.698662–489667.773763`: about **66 ms of real overlap**.
+The final search reply preceded `refresh_ready=489667.851211` by about
+77 ms, and install at `489667.852044` followed target-batch completion
+by about 86 ms. Thus background I/O overlaps search with a forward, but
+lead=2 does not also hide delivery/install. The first boundary has extra
+unversioned source-discovery searches. This single-request trace is not
+a concurrency or latency-distribution result.
