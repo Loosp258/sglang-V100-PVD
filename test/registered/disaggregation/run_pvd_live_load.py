@@ -61,7 +61,11 @@ def _observe(response, started, expected_tokens):
             coalesced += max(0, step - 1)
         previous = count
     if not done or len(times) != expected_tokens:
-        raise ValueError("SSE stream ended without every requested token and DONE")
+        raise ValueError(
+            "SSE stream ended without every requested token and DONE: "
+            f"done={done} received={len(times)}/{expected_tokens} "
+            f"events={events} elapsed_seconds={time.perf_counter() - started:.3f}"
+        )
     gaps = [b - a for a, b in itertools.pairwise(times)]
     return {
         "prompt_tokens": prompt_tokens,

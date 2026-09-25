@@ -61,8 +61,10 @@ def test_observe_does_not_call_coalesced_events_true_tpot(monkeypatch):
     ],
 )
 def test_observe_rejects_incomplete_or_inconsistent_stream(response, reason):
-    with pytest.raises(ValueError, match=reason):
+    with pytest.raises(ValueError, match=reason) as exc:
         live_load._observe(response, 0.0, 2)
+    if reason == "DONE":
+        assert "received=1/2 events=1" in str(exc.value)
 
 
 def test_collect_bounds_actual_gateway_prompt_and_summarizes_concurrency(monkeypatch):
