@@ -3,6 +3,41 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 流式逐 token 对照 / Streaming token-timing comparison
+
+`e8fdc4178` 增加严格 SSE 计时工具；CPU 全量回归 **2916 passed /
+23 skipped**。在相同固定 `PVD_TPOT_001` 输入、20 个输出 token、
+V/P/Gateway 不变时，仅切换 D 的预测 Top-4 与完整 KV 模式；每次请求
+Gateway 都返回 20 个 SSE 事件、每事件恰一个 token，无合并。
+
+| 模式 / Mode | TTFT 两次 (s) | 客户端总耗时两次 (s) | token 间隔中位数两次 (s) |
+|---|---:|---:|---:|
+| 预测 Top-4 / Predictive Top-4 | 0.541, 0.461 | 14.248, 14.185 | 0.720, 0.723 |
+| 完整 KV / Full KV | 0.557, 0.431 | 2.628, 2.338 | 0.034, 0.033 |
+
+这个样例的 TTFT 相近，而后续 token 持续变慢约一个数量级以上；
+故当前主要性能缺口不只是 V 索引等待或刷新边界。D 现有
+`_stream_attention` 在每层每 Q head 的 Python 循环中按 8-token tile
+发出许多小型 Torch GPU 操作，并在每层同步设备；这与持续开销吻合，
+但目前只是**代码与现象支持的瓶颈假设**，未经 CUDA profiler 逐项归因。
+流式计时是客户端可见间隔，包含 Gateway/网络，不等于纯 GPU kernel
+TPOT。D 对照后已恢复预测模式，服务健康。
+
+The strict SSE probe added by `e8fdc4178` passed the full CPU suite
+(**2916 passed / 23 skipped**). For the identical `PVD_TPOT_001` input and
+20 generated tokens, only D changed between predictive Top-4 and full KV;
+P/V/Gateway remained fixed. Every request produced 20 SSE events for 20
+tokens, with no coalescing. The table shows two observations per mode.
+TTFT was similar, while subsequent token intervals were more than an order
+of magnitude slower in the predictive path. Thus V index readiness and
+boundary wait alone do not explain the current performance gap. D's current
+`_stream_attention` loops in Python over every layer/Q head and eight-token
+tile, launching many small Torch GPU operations and synchronizing the device
+per layer. That is a **plausible bottleneck hypothesis from code and symptoms**,
+not a CUDA-profiler attribution. SSE intervals include client/router/network
+effects, not pure GPU kernel TPOT. D was restored to predictive mode and is
+healthy.
+
 ## 2026-09-25 真实边界观测 / Live boundary observation
 
 `e5d2bf248` 的 D CUDA 驱动记录“Scheduler 首次观察到 committed
