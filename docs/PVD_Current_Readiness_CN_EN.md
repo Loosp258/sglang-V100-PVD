@@ -3,6 +3,38 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 配对评估工具现场验收 / Paired-evaluation tool live check
+
+新增 `run_pvd_paired_eval.py` 与 3 条固定烟测数据；CPU 全量回归
+**2908 passed / 23 skipped**。在相同 P/V/Gateway、模型、数据集和 20-token
+输出约束下，先用 D 预测 Top-4，再只切换 D 到完整 KV，工具成功采集
+两份同哈希报告并比较（每种模式各 3 个顺序请求）：
+
+| 指标 / Metric | 完整 KV / Full KV | 预测 / Predictive |
+|---|---:|---:|
+| 客户端延迟中位数 / Median client latency | 7.272 s | 18.943 s |
+| nearest-rank p95（n=3，不稳定） | 26.548 s | 35.322 s |
+
+输出 token 完全一致 **1/3**，平均共同前缀 **11.33 token**。三个 Prompt
+只覆盖短/中长度，不是正式质量集；p95 也不能作尾延迟结论。长重复 Prompt
+的完整 KV 约 26.55 秒，说明仍需拆分 P/初始交付成本。采集工具不会核验
+操作者声明的 D 模式，真实启动配置另由进程命令和日志确认。D 已恢复
+Top-4 预测模式，P/V/D/Gateway 健康。
+
+The new paired-evaluation tool and three fixed smoke Prompts passed the full
+CPU suite (**2908 passed / 23 skipped**) and a live three-node check. With
+P/V/Gateway, model, dataset and 20-token output bound held fixed, D first
+served predictive Top-4 and was then temporarily switched to full KV. The
+two reports had the same dataset hash and request order; the three sequential
+requests per mode produced the statistics above. Exactly **1/3** output-ID
+sequences matched; mean common prefix was **11.33 tokens**. These three
+short/mid-length Prompts are not a quality dataset, and nearest-rank p95 for
+three samples is not tail-latency evidence. The long repeated Prompt took
+about 26.55 seconds even in full-KV mode, warranting separate P/initial-
+delivery timing. The tool cannot verify the operator-declared D mode; launch
+commands/logs were checked separately. D was restored to predictive Top-4,
+and P/V/D/Gateway are healthy.
+
 ## 2026-09-25 99-token 原生 CAGRA 对照 / 99-token native CAGRA comparison
 
 使用同一固定 99-token Prompt、20 个输出 token、`temperature=0`，
