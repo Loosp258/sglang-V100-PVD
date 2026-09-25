@@ -254,6 +254,7 @@ def assemble_routed_cuda_request(
             metric=metric,
             clients=search_clients,
             layers=tuple(range(compute_layout.num_layers)),
+            enable_batch_search=True,
         )
         routes = {
             route.rank: CUDAReceiveRoute(

@@ -2538,3 +2538,29 @@ At M=4, lead=2 and about 0.07 s per token, the current prefetch window
 cannot hide all this work. The earlier full-KV control was 2.3–2.6 s, so
 the final latency target remains unmet. Reducing per-head HTTP search
 round-trips is the next measurable code target.
+
+### 有界批量检索协议 / Bounded search batching
+
+新增的 V `/internal/v1/indexes/search-batch` 仅承载控制面 query 和逻辑
+token/page 选择，不传 KV 字节。D 对每个选中的 V source 仍先单查一次取得
+index/mapping 版本，再提交携带同一双版本 pin 的批量请求；不同 V source
+的版本绝不混用。单批至多 32 个 layer/KV-head 组、512 条 query row、
+16,384 个理论结果 token，D 另限制 100,000 个 query 元素；请求上限
+3 MiB、响应上限 2 MiB。每个子结果仍经过原单查的 identity、版本、
+token/page/score 校验；任一错误使整轮 selection 不发布。
+旧单查端点不变，非生产显式路由默认不启用批量。部署顺序必须 V 先于 D；
+若 D 启用但 V 尚无该端点，会明确失败，不回退到未验证的结果。
+本段只是协议与 CPU HTTP 测试，尚未测出三机搜索延迟收益。
+
+The new V `/internal/v1/indexes/search-batch` transports control-plane
+queries and logical token/page selections, not KV bytes. D still establishes
+one index/mapping version pair with a single search per selected V source,
+then pins every item in that source's batch to that pair. Different V sources
+never share a version namespace. Each batch allows at most 32 layer/KV-head
+groups, 512 query rows and 16,384 theoretical result tokens; D additionally
+caps 100,000 query cells. Request and response bounds are 3 MiB and 2 MiB.
+Each item uses the existing reply validator, and any failure prevents the
+entire probe selection from being published. The legacy single route remains;
+non-serving routes do not opt in by default. Deploy V before enabling D; an
+older V fails explicitly, never supplies an unchecked fallback. Only CPU HTTP
+protocol evidence exists so far; live latency benefit is unmeasured.

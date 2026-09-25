@@ -57,6 +57,7 @@ class RoutedShardSearchClient:
         metric,
         clients,
         layers=None,
+        enable_batch_search=False,
     ):
         if not isinstance(storage_layout, KVLayoutSignature) or not isinstance(
             compute_layout, KVLayoutSignature
@@ -114,6 +115,11 @@ class RoutedShardSearchClient:
                     groups[layer, head] = part.storage_rank
         self.groups = MappingProxyType(groups)
         self.clients = MappingProxyType(dict(clients))
+        if type(enable_batch_search) is not bool:
+            raise ValueError("enable_batch_search must be a boolean")
+        self.supports_batch = enable_batch_search and all(
+            type(client) is PVDShardSearchClient for client in clients.values()
+        )
         self._endpoints = {rank: client.base_url for rank, client in clients.items()}
         self._closed = False
 
@@ -145,6 +151,19 @@ class RoutedShardSearchClient:
         return await self.clients[rank].search(
             identity, queries=queries, top_k=top_k, scope=scope
         )
+
+    async def search_many(self, requests):
+        if not self.supports_batch:
+            raise ShardSearchError("routed batch search is not enabled")
+        if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 32:
+            raise ValueError("routed batch requires 1..32 requests")
+        rank = None
+        for identity, _, _, scope in requests:
+            source = self.version_scope(identity)
+            if scope != self.scope or (rank is not None and source != rank):
+                raise ValueError("routed batch must stay on one selected V source")
+            rank = source
+        return await self.clients[rank].search_many(requests)
 
     def partition_specs(self, specs):
         """Split a complete D-bank selection into independently versioned V PUTs."""

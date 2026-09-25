@@ -41,6 +41,10 @@ MAX_PREPARED_QUERY_ROWS = 4096
 # Search RPCs are per layer/KV head. Keep network overlap bounded; the V
 # backend may still serialize GPU work, and its scratch budget remains binding.
 MAX_CONCURRENT_SHARD_SEARCHES = 8
+MAX_BATCH_SHARD_SEARCHES = 32
+MAX_BATCH_QUERY_ROWS = 512
+MAX_BATCH_QUERY_CELLS = 100_000
+MAX_BATCH_RESULT_TOKENS = 16_384
 
 
 def _text(name, value):
@@ -467,7 +471,7 @@ class ProbeSearchSession:
             query_groups = _group_search_queries(prepared.queries, source_scopes)
             source_versions = {}
 
-            async def search_group(group_index, versions):
+            def group_request(group_index, versions):
                 members = query_groups[group_index]
                 query = prepared.queries[members[0]]
                 self._match(window)
@@ -489,6 +493,12 @@ class ProbeSearchSession:
                 query_rows = tuple(
                     row for index in members for row in prepared.queries[index].rows
                 )
+                return identity, query_rows, query.route.top_k, query.route.scope
+
+            async def search_group(group_index, versions):
+                identity, query_rows, top_k, scope = group_request(
+                    group_index, versions
+                )
                 while True:
                     self._match(window)
                     try:
@@ -501,8 +511,8 @@ class ProbeSearchSession:
                         search = client.search(
                             identity,
                             queries=query_rows,
-                            top_k=query.route.top_k,
-                            scope=query.route.scope,
+                            top_k=top_k,
+                            scope=scope,
                         )
                         if index_ready_wait_seconds:
                             try:
@@ -559,18 +569,121 @@ class ProbeSearchSession:
                 async with semaphore:
                     return await search_group(index, versions)
 
+            jobs = []
+            if isinstance(client, RoutedShardSearchClient) and client.supports_batch:
+                pending = {}
+                for index, members in enumerate(query_groups):
+                    if results[index] is None:
+                        pending.setdefault(source_scopes[members[0]], []).append(index)
+
+                async def search_batch(indices, versions):
+                    requests = tuple(
+                        group_request(index, versions) for index in indices
+                    )
+                    while True:
+                        self._match(window)
+                        try:
+                            remaining = ready_deadline - time.monotonic()
+                            if index_ready_wait_seconds and remaining <= 0:
+                                raise TimeoutError("V index readiness deadline expired")
+                            call = client.search_many(requests)
+                            if index_ready_wait_seconds:
+                                try:
+                                    replies = await asyncio.wait_for(
+                                        call, timeout=remaining
+                                    )
+                                except asyncio.TimeoutError as exc:
+                                    raise TimeoutError(
+                                        "V index readiness deadline expired"
+                                    ) from exc
+                            else:
+                                replies = await call
+                        except SearchRefused as exc:
+                            remaining = ready_deadline - time.monotonic()
+                            if not exc.retryable or remaining <= 0:
+                                raise
+                            await asyncio.sleep(min(0.2, remaining))
+                        else:
+                            if (
+                                index_ready_wait_seconds
+                                and time.monotonic() >= ready_deadline
+                            ):
+                                raise TimeoutError("V index readiness deadline expired")
+                            break
+                    self._match(window)
+                    if len(replies) != len(requests):
+                        raise ValueError("V batch response count changed")
+                    for reply, request in zip(replies, requests, strict=True):
+                        if (
+                            reply.identity != request[0]
+                            or (reply.index_version, reply.id_mapping_version)
+                            != versions
+                        ):
+                            raise ValueError(
+                                "V batch reply identity or version changed"
+                            )
+                    return tuple(zip(indices, replies, strict=True))
+
+                for source, indices in pending.items():
+                    batch, rows, cells, results_bound = [], 0, 0, 0
+
+                    def submit_batch(batch_indices):
+                        if batch_indices:
+                            key = tuple(batch_indices)
+                            jobs.append((key, source, True))
+
+                    for index in indices:
+                        _, query_rows, top_k, scope = group_request(
+                            index, source_versions[source]
+                        )
+                        row_count = len(query_rows)
+                        cell_count = row_count * scope.head_dim
+                        result_count = row_count * top_k
+                        if cell_count > MAX_BATCH_QUERY_CELLS:
+                            submit_batch(batch)
+                            batch, rows, cells, results_bound = [], 0, 0, 0
+                            jobs.append(((index,), source, False))
+                            continue
+                        if batch and (
+                            len(batch) >= MAX_BATCH_SHARD_SEARCHES
+                            or rows + row_count > MAX_BATCH_QUERY_ROWS
+                            or cells + cell_count > MAX_BATCH_QUERY_CELLS
+                            or results_bound + result_count > MAX_BATCH_RESULT_TOKENS
+                        ):
+                            submit_batch(batch)
+                            batch, rows, cells, results_bound = [], 0, 0, 0
+                        batch.append(index)
+                        rows += row_count
+                        cells += cell_count
+                        results_bound += result_count
+                    submit_batch(batch)
+
+                async def search_batch_pinned(indices, versions):
+                    async with semaphore:
+                        return await search_batch(indices, versions)
+            else:
+                jobs = [
+                    ((index,), source_scopes[members[0]], False)
+                    for index, members in enumerate(query_groups)
+                    if results[index] is None
+                ]
             tasks = {
-                index: asyncio.create_task(
-                    search_pinned(index, source_versions[source_scopes[members[0]]])
+                indices: asyncio.create_task(
+                    search_batch_pinned(indices, source_versions[source])
+                    if batched
+                    else search_pinned(indices[0], source_versions[source])
                 )
-                for index, members in enumerate(query_groups)
-                if results[index] is None
+                for indices, source, batched in jobs
             }
             try:
                 if tasks:
                     replies = await asyncio.gather(*tasks.values())
-                    for index, reply in zip(tasks, replies, strict=True):
-                        results[index] = reply
+                    for indices, answer in zip(tasks, replies, strict=True):
+                        if len(indices) == 1 and not isinstance(answer, tuple):
+                            results[indices[0]] = answer
+                        else:
+                            for index, reply in answer:
+                                results[index] = reply
             finally:
                 for task in tasks.values():
                     if not task.done():

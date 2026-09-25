@@ -283,6 +283,7 @@ def test_actual_http_two_source_versions_and_gqa_union(corrupt):
                 .tolist()
             )
             config = DraftConfig("configurable/draft", predict_tokens=2)
+
             pipeline = PredictionPipeline(
                 FakeDraftProvider(config, tokens=(31, 32)),
                 ScratchProbe(vector, head_count=8),
@@ -333,5 +334,129 @@ def test_actual_http_two_source_versions_and_gqa_union(corrupt):
             )  # Borrowed, not destroyed.
             with pytest.raises(ShardSearchError, match="closed"):
                 r.version_scope(ident(manifest.key.transfer_id))
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode", ["ok", "corrupt", "cancel"])
+def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode):
+    async def run():
+        pool, storage, manifest, _, _ = build_entry()
+        indexes, stores = {}, {}
+        for rank in (0, 1):
+            index = indexes[rank] = manager()
+            store = stores[rank] = make_store(manifest, index=index, rank=rank)
+            packed, shard, _ = pack_shard(pool, storage, rank=rank, prompt_tokens=8)
+            entry = store.create_entry(manifest)
+            store.begin_p_write(manifest.key)
+            offset = entry.allocation.start_page * store.page_bytes
+            store.pool[offset : offset + shard.expected_bytes] = packed.tensor
+            store.commit_p_write(manifest.key, shard.expected_bytes)
+            assert store.progress_prompt_indexes()["built"] == 1
+        async with AsyncExitStack() as stack:
+            http = {
+                rank: await stack.enter_async_context(shard_client(store))
+                for rank, store in stores.items()
+            }
+            clients = {
+                rank: PVDShardSearchClient(str(server.make_url("")))
+                for rank, server in http.items()
+            }
+            singles, batches = [], []
+            entered = asyncio.Event()
+            for rank, client in clients.items():
+                stack.push_async_callback(client.close)
+                original_single, original_batch = client.search, client.search_many
+
+                async def one(identity, *, _rank=rank, _original=original_single, **kw):
+                    singles.append((_rank, identity))
+                    return await _original(identity, **kw)
+
+                async def many(requests, *, _rank=rank, _original=original_batch):
+                    batches.append((_rank, tuple(item[0] for item in requests)))
+                    if mode == "cancel" and _rank == 1:
+                        entered.set()
+                        await asyncio.Future()
+                    replies = await _original(requests)
+                    if mode == "corrupt" and _rank == 1:
+                        return (
+                            replace(replies[0], index_version="foreign"),
+                            *replies[1:],
+                        )
+                    return replies
+
+                client.search, client.search_many = one, many
+            routing = router(
+                storage,
+                layout(storage, 1),
+                clients,
+                entry_transfer_id=manifest.key.transfer_id,
+                enable_batch_search=True,
+            )
+            assert routing.supports_batch
+            vector = (
+                indexes[0]
+                ._entries[manifest.key.transfer_id]
+                .vectors[0, 0]
+                .vectors[3]
+                .tolist()
+            )
+            config = DraftConfig("configurable/draft", predict_tokens=2)
+
+            class TwoLayerProbe(ScratchProbe):
+                def capture(self, prefix, prediction):
+                    (first,) = super().capture(prefix, prediction)
+                    return first, replace(first, layer=1)
+
+            pipeline = PredictionPipeline(
+                FakeDraftProvider(config, tokens=(31, 32)),
+                TwoLayerProbe(vector, head_count=8),
+                config,
+                ProbeConfig(SPACE, (0, 1), head_count=8),
+            )
+            session = ProbeSearchSession("request", manifest.key.transfer_id)
+            prefix = snapshot_committed("request", [10, 11, 12, 13], 2, "prefix")
+            window = session.begin(prefix, target_tokens=4, query_positions=(5,))
+            routes = tuple(
+                ProbeSearchRoute(
+                    q, ident(manifest.key.transfer_id, layer, q // 2), routing.scope, 1
+                )
+                for layer in (0, 1)
+                for q in range(8)
+            )
+            prepared = session.prepare(
+                window, pipeline, routes=routes, head_mapping=QueryHeadMapping(8, 4)
+            )
+            if mode == "cancel":
+                task = asyncio.create_task(session.search(prepared, routing))
+                await asyncio.wait_for(entered.wait(), 3)
+                assert session._ready is None
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert session._ready is None
+                with pytest.raises(ValueError):
+                    session.take_selection(window)
+                return
+            if mode == "corrupt":
+                with pytest.raises(ValueError, match="identity or version changed"):
+                    await session.search(prepared, routing)
+                assert session._ready is None
+                with pytest.raises(ValueError):
+                    session.take_selection(window)
+                return
+            await session.search(prepared, routing)
+            selection = session.take_selection(window)
+            assert len(selection.selections) == 8
+            assert {rank for rank, _ in singles} == {0, 1}
+            assert len(singles) == 2
+            assert len(batches) == 2
+            for rank, identities in batches:
+                assert len(identities) == 3
+                assert all(identity.kv_head // 2 == rank for identity in identities)
+                assert all(identity.expected_index_version for identity in identities)
+                assert all(
+                    identity.expected_id_mapping_version for identity in identities
+                )
 
     asyncio.run(run())
