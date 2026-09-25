@@ -25,6 +25,31 @@ class PackedTransferSlice:
 
 
 @dataclass(frozen=True)
+class RankPackedScatter:
+    """Compact local copy rule, repeated once for each token in one component."""
+
+    source_offset: int
+    destination_offset: int
+    source_stride: int
+    destination_stride: int
+    width: int
+    token_count: int
+
+
+@dataclass(frozen=True)
+class RankPackedFullShardPlan:
+    """Contiguous wire writes and the corresponding D-local reorder rules.
+
+    This is a byte-only planner. It does not publish an MR, negotiate a wire
+    protocol, or permit a receiver to install data before writer fences.
+    """
+
+    staging_bytes: int
+    transfers: Tuple[Tuple[int, PackedTransferSlice], ...]
+    scatters: Tuple[RankPackedScatter, ...]
+
+
+@dataclass(frozen=True)
 class HeadShardIntersection:
     storage_rank: int
     storage_head_offset: int
@@ -222,3 +247,76 @@ def packed_fanin_transfer_slices(
         source_component_base += token_count * source_bpt
         destination_component_base += token_count * destination_bpt
     return by_rank
+
+
+def rank_packed_full_shard_fanin_plan(
+    storage: KVLayoutSignature,
+    compute: KVLayoutSignature,
+    *,
+    compute_rank: int,
+    token_count: int,
+) -> RankPackedFullShardPlan:
+    """Plan one bulk write per *whole* V shard and a D-local canonical reorder.
+
+    The fast path deliberately refuses a partial V shard: its source is not
+    contiguous in the current component-major packed buffer. A later pack
+    kernel and separately budgeted source staging are required for that case.
+    """
+    if type(token_count) is not int or token_count <= 0:
+        raise ProtocolValidationError("packed transfer token count must be positive")
+    parts = source_shard_intersections(storage, compute, compute_rank)
+    if any(
+        part.storage_head_offset != 0 or part.head_count != storage.kv_heads_per_rank
+        for part in parts
+    ):
+        raise ProtocolValidationError(
+            "rank-packed fast path requires complete V source shards"
+        )
+
+    source_components = _component_bytes(storage)
+    destination_components = _component_bytes(compute)
+    source_bytes = token_count * sum(source_components)
+    destination_bytes = token_count * sum(destination_components)
+    transfers = []
+    scatter = []
+    source_component_base = 0
+    destination_component_base = 0
+    for part_index, part in enumerate(parts):
+        transfers.append(
+            (
+                part.storage_rank,
+                PackedTransferSlice(
+                    local_offset=0,
+                    remote_offset=part_index * source_bytes,
+                    length=source_bytes,
+                ),
+            )
+        )
+    if len(parts) * source_bytes != destination_bytes:
+        raise ProtocolValidationError("rank-packed staging coverage differs from D")
+
+    for source_bpt, destination_bpt in zip(
+        source_components, destination_components, strict=True
+    ):
+        bytes_per_head = source_bpt // storage.kv_heads_per_rank
+        for part_index, part in enumerate(parts):
+            scatter.append(
+                RankPackedScatter(
+                    source_offset=part_index * source_bytes + source_component_base,
+                    destination_offset=(
+                        destination_component_base
+                        + part.compute_head_offset * bytes_per_head
+                    ),
+                    source_stride=source_bpt,
+                    destination_stride=destination_bpt,
+                    width=source_bpt,
+                    token_count=token_count,
+                )
+            )
+        source_component_base += token_count * source_bpt
+        destination_component_base += token_count * destination_bpt
+    return RankPackedFullShardPlan(
+        staging_bytes=destination_bytes,
+        transfers=tuple(transfers),
+        scatters=tuple(scatter),
+    )

@@ -16,6 +16,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
 from sglang.srt.disaggregation.pvd.sharding import (
     packed_fanin_transfer_slices,
     packed_transfer_slices,
+    rank_packed_full_shard_fanin_plan,
     source_rank_and_head_offset,
     source_shard_intersections,
 )
@@ -102,6 +103,76 @@ def test_non_aligned_shards_have_both_source_and_destination_offsets():
         (p.storage_rank, p.storage_head_offset, p.compute_head_offset, p.head_count)
         for p in parts
     ] == [(1, 2, 0, 2), (2, 0, 2, 4)]
+
+
+@pytest.mark.parametrize("v_tp,d_tp", [(2, 1), (3, 1), (4, 1), (4, 2), (3, 3)])
+@pytest.mark.parametrize("page_size", [1, 2])
+def test_rank_packed_whole_shard_plan_reconstructs_canonical_bytes(
+    v_tp, d_tp, page_size
+):
+    components = [
+        (torch.arange(8 * 12 * 3).reshape(8, 12, 3) + 300 * component).to(torch.float16)
+        for component in range(4)
+    ]
+    pages = torch.tensor([2, 0, 3])
+
+    def packed(tp, rank):
+        heads = 12 // tp
+        parts = [t[:, rank * heads : (rank + 1) * heads, :].clone() for t in components]
+        return pack_full_prompt_kv(
+            NS(k_buffer=parts[:2], v_buffer=parts[2:]), pages, page_size=page_size
+        ).tensor
+
+    sources = {rank: packed(v_tp, rank) for rank in range(v_tp)}
+    for compute_rank in range(d_tp):
+        expected = packed(d_tp, compute_rank)
+        plan = rank_packed_full_shard_fanin_plan(
+            layout(v_tp, page_size=page_size),
+            layout(d_tp, page_size=page_size),
+            compute_rank=compute_rank,
+            token_count=len(pages) * page_size,
+        )
+        assert plan.staging_bytes == expected.numel()
+        assert len(plan.transfers) == v_tp // d_tp
+        staging = torch.zeros(plan.staging_bytes, dtype=torch.uint8)
+        wire_writes = torch.zeros_like(staging, dtype=torch.int32)
+        for source_rank, transfer in plan.transfers:
+            assert transfer.local_offset == 0
+            assert transfer.length == sources[source_rank].numel()
+            start = transfer.remote_offset
+            stop = start + transfer.length
+            staging[start:stop] = sources[source_rank]
+            wire_writes[start:stop] += 1
+        assert torch.all(wire_writes == 1)
+
+        canonical = torch.zeros_like(expected)
+        local_writes = torch.zeros_like(expected, dtype=torch.int32)
+        for rule in plan.scatters:
+            for token in range(rule.token_count):
+                source = rule.source_offset + token * rule.source_stride
+                destination = rule.destination_offset + token * rule.destination_stride
+                canonical[destination : destination + rule.width] = staging[
+                    source : source + rule.width
+                ]
+                local_writes[destination : destination + rule.width] += 1
+        assert torch.equal(canonical, expected)
+        assert torch.all(local_writes == 1)
+
+
+@pytest.mark.parametrize("v_tp,d_tp,rank", [(2, 4, 0), (3, 2, 1), (4, 3, 1)])
+def test_rank_packed_plan_refuses_partial_v_shard(v_tp, d_tp, rank):
+    with pytest.raises(ProtocolValidationError, match="complete V source shards"):
+        rank_packed_full_shard_fanin_plan(
+            layout(v_tp), layout(d_tp), compute_rank=rank, token_count=4
+        )
+
+
+@pytest.mark.parametrize("tokens", [0, -1, True, 1.0, "1"])
+def test_rank_packed_plan_refuses_invalid_token_count(tokens):
+    with pytest.raises(ProtocolValidationError, match="token count"):
+        rank_packed_full_shard_fanin_plan(
+            layout(2), layout(1), compute_rank=0, token_count=tokens
+        )
 
 
 @pytest.mark.parametrize("rank", [-1, 1, True, 0.0, "0"])
