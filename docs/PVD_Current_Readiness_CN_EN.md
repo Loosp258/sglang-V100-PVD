@@ -3,6 +3,51 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 首轮配对性能/输出对照 / First paired latency and output comparison
+
+三机 Qwen2.5-7B-Instruct、相同 P/V/Gateway、单 rail、D TP1、
+单请求 32-token Prompt / 20-token 输出、`temperature=0`、4-token 刷新间隔：
+仅切换 D 的独立验证进程，在完整 Prompt KV 周期刷新基线与预测检索稀疏
+刷新之间运行**完全相同**的请求。每种配置重复两次单请求，再同时运行
+两条不同但固定的并发 Prompt；全部 HTTP 200 且生成 20 token。
+
+| 模式 / Mode | 单请求 / Sequential (s) | 两并发 / Concurrent (s) |
+|---|---:|---:|
+| 完整 KV / Full Prompt KV | 12.492, 12.300 | 19.122, 23.968 |
+| 预测稀疏 / Predictive sparse | 34.597, 34.656 | 67.103, 71.718 |
+
+相同单请求的两个模式各自重复得到相同 20 个 token ID，但模式之间从第
+8 个 token 起分歧；这是一次**输出差异**，不是质量退化的统计评估。
+当前短 Prompt/Top-4/并集上限 32 配置下，预测路径显著慢于完整 KV
+基线，因此尚未满足隐藏刷新等待的性能目标；不能以功能成功替代性能
+验收。样本过小、Prompt 短、启动轮次与 CAGRA 构建成本混在总时延中，
+不能外推至长上下文或给出单一组件归因。D 已恢复预测配置；P/V/Gateway
+未切换，四服务健康，V Delivery 全部完成/ACK 且无在途/UNKNOWN。
+下一步必须拆分 draft/probe、索引等待/搜索、稀疏交付和边界安装耗时，
+再优化主要瓶颈，并用长 Prompt、固定数据集比较质量与端到端指标。
+
+On three CloudLab nodes with Qwen2.5-7B-Instruct, the same P/V/Gateway,
+single rail, D TP1, a 32-token sequential Prompt, 20 output tokens, `temperature=0`
+and a four-token refresh interval, only D's isolated validation process was
+switched between periodic full-Prompt-KV refresh and predictive sparse
+refresh. The **identical** requests were run twice sequentially and then as
+two other concurrent fixed prompts in each mode. All returned HTTP 200 and 20
+tokens; timings are in the table above.
+
+Repeated runs within each mode produced identical token IDs for the single
+Prompt, but the modes diverged at generated token eight. This establishes an
+**output difference**, not a statistical quality-degradation estimate. For
+this short-Prompt/Top-4/union-cap-32 setup, predictive sparse refresh is
+substantially slower than the full-KV baseline and does not yet meet the
+latency-hiding goal. The sample is too small, its Prompt too short, and total
+latency includes startup and CAGRA-index work; it does not identify a single
+bottleneck or predict long-context results. D has been restored to predictive
+mode, while P/V/Gateway were unchanged. All services are healthy; V Deliveries
+were completed/ACKed with no in-flight or UNKNOWN transfer. Next, separate
+draft/probe, index wait/search, sparse delivery and installation timings,
+then optimize the dominant phase and compare quality and end-to-end metrics
+on fixed longer-Prompt datasets.
+
 ## 2026-09-24 索引等待截止及并发复测 / Readiness deadline and concurrent retest
 
 `38a037e3a` 修复 D 的索引就绪等待：截止现在约束**整个 HTTP 搜索尝试**，
