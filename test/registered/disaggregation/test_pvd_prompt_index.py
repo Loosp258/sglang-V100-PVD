@@ -740,6 +740,7 @@ def test_search_batch_profiling_preserves_results_and_reports_stages(
             assert ordinary.status == 200
             ordinary_body = await ordinary.json()
             monkeypatch.setenv("PVD_PROFILE_V_SEARCH", "1")
+            monkeypatch.setenv("PVD_FAST_BATCH_JSON", "1")
             with caplog.at_level(
                 logging.INFO, logger="sglang.srt.disaggregation.pvd.control_server"
             ):
@@ -763,9 +764,16 @@ def test_search_batch_profiling_preserves_results_and_reports_stages(
                 "backend_enqueue",
                 "host_materialize",
                 "completion_fence",
+                "json_parse",
                 "batch_total",
             ):
                 assert f"'{stage}':" in message
+            malformed = await http.post(
+                "/internal/v1/indexes/search-batch",
+                data=b"{",
+                headers={"Content-Type": "application/json"},
+            )
+            assert malformed.status == 400
 
     asyncio.run(scenario())
 

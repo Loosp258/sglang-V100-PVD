@@ -3121,3 +3121,16 @@ encode 0.7–1.0 ms, HTTP 67–84 ms and reply validation 0.2–0.4 ms.
 These are three small samples, not a throughput, concurrency, or quality
 claim. Warm total refresh remains about 0.38–0.41 s and is not fully
 hidden by Decode.
+
+V 批量入口另提供默认关闭的 `PVD_FAST_BATCH_JSON=1`：保持
+aiohttp `Request.json` 及其原有 HTTP 行为，仅将解析函数替换为
+已安装的 `orjson.loads`，并在 `PVD_PROFILE_V_SEARCH=1` 日志新增
+`json_parse`。测试对照了默认/快速路径响应相同，非法 JSON 仍返回
+400；该项的三机实测和收益尚未完成。
+
+The V batch endpoint additionally offers opt-in `PVD_FAST_BATCH_JSON=1`.
+It retains aiohttp `Request.json` and substitutes installed
+`orjson.loads`, with a `json_parse` interval added to
+`PVD_PROFILE_V_SEARCH=1` logs. Tests compare normal/fast results and
+verify malformed JSON still returns 400. Three-node benefit is not yet
+measured.

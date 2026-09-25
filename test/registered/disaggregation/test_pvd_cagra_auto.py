@@ -249,6 +249,7 @@ def test_http_batch_opt_in_uses_grouped_exact_and_preserves_identity(
         before = budget.snapshot()["used_staging_bytes"]
         monkeypatch.setenv("PVD_GROUPED_EXACT_SEARCH", "1")
         monkeypatch.setenv("PVD_PROFILE_V_SEARCH", "1")
+        monkeypatch.setenv("PVD_FAST_BATCH_JSON", "1")
         with caplog.at_level(
             logging.INFO, logger="sglang.srt.disaggregation.pvd.control_server"
         ):

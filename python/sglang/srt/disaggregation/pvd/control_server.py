@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
+import orjson
 import torch
 from aiohttp import web
 from sglang.srt.disaggregation.pvd.coordinator import (
@@ -78,8 +79,8 @@ async def pvd_error_middleware(request: web.Request, handler):
         return _json_error(str(exc), 409)
 
 
-async def _payload(request: web.Request) -> Dict[str, Any]:
-    value = await request.json()
+async def _payload(request: web.Request, *, loads=json.loads) -> Dict[str, Any]:
+    value = await request.json(loads=loads)
     if not isinstance(value, dict):
         raise TypeError("JSON body must be an object")
     return value
@@ -594,7 +595,13 @@ def create_shard_app(
     async def search_index_batch(request):
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_BATCH_PROTOCOL
 
-        data = await _payload(request)
+        profile = os.environ.get("PVD_PROFILE_V_SEARCH") == "1"
+        parse_started = time.perf_counter() if profile else 0.0
+        decoder = (
+            orjson.loads if os.environ.get("PVD_FAST_BATCH_JSON") == "1" else json.loads
+        )
+        data = await _payload(request, loads=decoder)
+        json_parse = time.perf_counter() - parse_started if profile else 0.0
         if data.get("batch_protocol") != SEARCH_BATCH_PROTOCOL:
             raise ValueError("unsupported search batch protocol")
         batch_id = data.get("batch_id")
@@ -639,7 +646,6 @@ def create_shard_app(
         first = tuple(items[0].get(name) for name in shared)
         if any(tuple(item.get(name) for name in shared) != first for item in items[1:]):
             raise ValueError("batch items must share Entry, space and version pins")
-        profile = os.environ.get("PVD_PROFILE_V_SEARCH") == "1"
         batch_started = time.perf_counter() if profile else 0.0
         if os.environ.get("PVD_GROUPED_EXACT_SEARCH") == "1":
             prepared = [_parse_search_data(item) for item in items]
@@ -666,6 +672,7 @@ def create_shard_app(
             ]
             if timings is not None:
                 path = timings.pop("path")
+                timings["json_parse"] = json_parse
                 timings["batch_total"] = time.perf_counter() - batch_started
                 logger.info(
                     "PVD V search-batch path=%s items=%d query_rows=%d stage_ms=%s",
@@ -687,6 +694,7 @@ def create_shard_app(
                     name: sum(item.get(name, 0.0) for item in stages)
                     for name in stages[0]
                 }
+                totals["json_parse"] = json_parse
                 totals["batch_total"] = time.perf_counter() - batch_started
                 logger.info(
                     "PVD V search-batch items=%d query_rows=%d stage_ms=%s",
