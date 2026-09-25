@@ -57,6 +57,141 @@ def test_roundtrip_pins_bounds_and_session_ownership():
     asyncio.run(run())
 
 
+def test_pinned_batch_roundtrip_preserves_each_head_identity_and_order():
+    async def run():
+        index, store, identity, query, scope = fixture()
+        other = replace(identity, kv_head=1)
+        record = index._entries[identity.entry_transfer_id]
+        other_query = record.vectors[(0, 1)].vectors[3:4].tolist()
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                first = await client.search(
+                    identity, queries=query, top_k=1, scope=scope
+                )
+                pins = dict(
+                    expected_index_version=first.index_version,
+                    expected_id_mapping_version=first.id_mapping_version,
+                )
+                results = await client.search_many(
+                    (
+                        (replace(identity, **pins), query, 1, scope),
+                        (replace(other, **pins), other_query, 1, scope),
+                    )
+                )
+                assert tuple(result.identity.kv_head for result in results) == (0, 1)
+                assert all(result.token_ids == (3,) for result in results)
+                assert all("index_version" in result.validated for result in results)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_batch_refuses_unpinned_request_before_network():
+    async def run():
+        _, _, identity, query, scope = fixture()
+        client = PVDShardSearchClient("http://127.0.0.1:1")
+        with pytest.raises(ValueError, match="both version pins"):
+            await client.search_many(((identity, query, 1, scope),))
+        assert client._session is None
+        await client.close()
+
+    asyncio.run(run())
+
+
+def test_batch_rejects_one_swapped_result_without_returning_partial_selection():
+    async def run():
+        _, _, identity, query, scope = fixture()
+        pinned = replace(
+            identity, expected_index_version="v1", expected_id_mapping_version="m1"
+        )
+
+        async def answer(request):
+            payload = await request.json()
+            replies = []
+            for item in payload["items"]:
+                reply = valid_body(item)
+                reply["validated"] += ["index_version", "id_mapping_version"]
+                replies.append(reply)
+            replies[1]["search_id"] = replies[0]["search_id"]
+            return web.json_response(
+                {
+                    "batch_protocol": payload["batch_protocol"],
+                    "batch_id": payload["batch_id"],
+                    "results": replies,
+                }
+            )
+
+        app = web.Application()
+        app.router.add_post("/internal/v1/indexes/search-batch", answer)
+        async with TestServer(app) as server:
+            client = PVDShardSearchClient(str(server.make_url("")))
+            try:
+                with pytest.raises(SearchReplyError, match="search_id"):
+                    await client.search_many(
+                        ((pinned, query, 1, scope), (pinned, query, 1, scope))
+                    )
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["mixed_pin", "too_many_items", "too_many_rows"])
+def test_batch_server_rejects_unbounded_or_mixed_work_before_index_search(
+    monkeypatch, failure
+):
+    async def run():
+        index, store, identity, query, _ = fixture()
+        calls = []
+
+        def forbidden_search(*args, **kwargs):
+            calls.append(True)
+            raise AssertionError("invalid batch reached the index")
+
+        monkeypatch.setattr(index, "search", forbidden_search)
+        item = {
+            "search_protocol": "pvd.search.v1",
+            "search_id": "item-0",
+            "transfer_id": identity.entry_transfer_id,
+            "vector_space": identity.vector_space,
+            "positional_encoding": identity.positional_encoding,
+            "layer": 0,
+            "kv_head": 0,
+            "expected_index_version": "version-1",
+            "expected_id_mapping_version": "mapping-1",
+            "queries": query,
+            "top_k": 1,
+        }
+        if failure == "mixed_pin":
+            items = [
+                item,
+                {**item, "search_id": "item-1", "expected_index_version": "other"},
+            ]
+        elif failure == "too_many_items":
+            items = [{**item, "search_id": f"item-{i}"} for i in range(33)]
+        else:
+            items = [
+                {**item, "search_id": f"item-{i}", "queries": query * 64}
+                for i in range(9)
+            ]
+        async with shard_client(store) as http:
+            response = await http.post(
+                "/internal/v1/indexes/search-batch",
+                json={
+                    "batch_protocol": "pvd.search.batch.v1",
+                    "batch_id": "batch",
+                    "items": items,
+                },
+            )
+            assert response.status == 400
+            assert (await response.json())["error"].startswith("invalid request:")
+        assert not calls
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("condition", ["not_ready", "capacity", "stale", "failed"])
 def test_refusals_are_explicit_and_not_retried(condition):
     async def run():

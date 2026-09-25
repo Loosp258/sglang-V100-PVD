@@ -18,6 +18,7 @@ import aiohttp
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 
 SEARCH_PROTOCOL = "pvd.search.v1"
+SEARCH_BATCH_PROTOCOL = "pvd.search.batch.v1"
 
 
 class ShardSearchError(RuntimeError):
@@ -112,14 +113,14 @@ class PVDShardSearchClient:
             await self._session.close()
         self._session = None
 
-    async def search(
+    def _prepare_search(
         self,
         identity: SearchRequestIdentity,
         *,
         queries: Sequence[Sequence[float]],
         top_k: int,
         scope: SearchScope,
-    ) -> ShardSearchResult:
+    ):
         if self._closed:
             raise ShardSearchError("search client is closed")
         if not isinstance(identity, SearchRequestIdentity) or not isinstance(
@@ -156,11 +157,14 @@ class PVDShardSearchClient:
             value = getattr(identity, name)
             if value is not None:
                 payload[name] = value
+        return payload, search_id, len(snapshot)
+
+    async def _post_json(self, path, payload):
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         try:
             async with self._session.post(
-                f"{self.base_url}/internal/v1/indexes/search",
+                f"{self.base_url}{path}",
                 json=payload,
                 timeout=self._timeout,
                 allow_redirects=False,
@@ -192,12 +196,96 @@ class PVDShardSearchClient:
             raise SearchTransportError(
                 f"V shard search transport failed: {exc}"
             ) from exc
+        return body
+
+    async def search(
+        self,
+        identity: SearchRequestIdentity,
+        *,
+        queries: Sequence[Sequence[float]],
+        top_k: int,
+        scope: SearchScope,
+    ) -> ShardSearchResult:
+        payload, search_id, query_count = self._prepare_search(
+            identity, queries=queries, top_k=top_k, scope=scope
+        )
+        body = await self._post_json("/internal/v1/indexes/search", payload)
         return self._validate_reply(
-            body, identity, scope, search_id, len(snapshot), top_k
+            body, identity, scope, search_id, query_count, top_k
+        )
+
+    async def search_many(self, requests):
+        """One bounded pinned RPC; each result remains independently checked."""
+        if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 32:
+            raise ValueError("search batch requires 1..32 requests")
+        prepared = []
+        for request in requests:
+            if not isinstance(request, (list, tuple)) or len(request) != 4:
+                raise TypeError(
+                    "batch request must carry identity, queries, top_k, scope"
+                )
+            identity, queries, top_k, scope = request
+            payload, search_id, count = self._prepare_search(
+                identity, queries=queries, top_k=top_k, scope=scope
+            )
+            if (
+                identity.expected_index_version is None
+                or identity.expected_id_mapping_version is None
+            ):
+                raise ValueError("batch search requires both version pins")
+            prepared.append((identity, scope, top_k, payload, search_id, count))
+        first = prepared[0][0]
+        if any(
+            (
+                identity.entry_transfer_id,
+                identity.vector_space,
+                identity.positional_encoding,
+                identity.expected_index_version,
+                identity.expected_id_mapping_version,
+            )
+            != (
+                first.entry_transfer_id,
+                first.vector_space,
+                first.positional_encoding,
+                first.expected_index_version,
+                first.expected_id_mapping_version,
+            )
+            for identity, *_ in prepared[1:]
+        ):
+            raise ValueError("batch searches require one pinned Entry/space/version")
+        if (
+            sum(item[5] for item in prepared) > 512
+            or sum(item[5] * item[2] for item in prepared) > 16384
+        ):
+            raise ValueError("search batch row or result bound exceeded")
+        batch_id = uuid.uuid4().hex
+        payload = {
+            "batch_protocol": SEARCH_BATCH_PROTOCOL,
+            "batch_id": batch_id,
+            "items": [item[3] for item in prepared],
+        }
+        if len(json.dumps(payload, separators=(",", ":")).encode()) > 3 * 1024 * 1024:
+            raise ValueError("search batch request exceeds 3 MiB")
+        body = await self._post_json("/internal/v1/indexes/search-batch", payload)
+        results = body.get("results")
+        if (
+            body.get("batch_protocol") != SEARCH_BATCH_PROTOCOL
+            or body.get("batch_id") != batch_id
+            or not isinstance(results, list)
+            or len(results) != len(prepared)
+        ):
+            raise SearchReplyError("search batch envelope mismatch")
+        return tuple(
+            self._validate_reply(reply, identity, scope, search_id, count, top_k)
+            for reply, (identity, scope, top_k, _, search_id, count) in zip(
+                results, prepared, strict=True
+            )
         )
 
     @staticmethod
     def _validate_reply(body, identity, scope, search_id, query_count, top_k):
+        if not isinstance(body, dict):
+            raise SearchReplyError("search reply must be an object")
         expected = {
             "search_protocol": SEARCH_PROTOCOL,
             "search_id": search_id,

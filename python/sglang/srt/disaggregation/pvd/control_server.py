@@ -301,7 +301,11 @@ def _run_search(index, identity, queries, top_k: int):
 def create_shard_app(
     store: VectorKVStore, *, preflight: Optional[Mapping[str, Any]] = None
 ) -> web.Application:
-    app = web.Application(middlewares=[pvd_error_middleware])
+    # Batched per-head queries can exceed aiohttp's 1 MiB default. The batch
+    # endpoint enforces its own item/row/response limits before indexing.
+    app = web.Application(
+        middlewares=[pvd_error_middleware], client_max_size=4 * 1024 * 1024
+    )
 
     async def create_entry(request):
         data = await _payload(request)
@@ -445,7 +449,7 @@ def create_shard_app(
             {"enabled": True, **(await asyncio.to_thread(store.prompt_index.snapshot))}
         )
 
-    async def search_index(request):
+    async def _search_data(data):
         """Search one (layer, KV head) and return logical token/page ids.
 
         The request carries its own identity: which model's vector space the
@@ -460,7 +464,6 @@ def create_shard_app(
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_PROTOCOL
 
         index = _require_prompt_index()
-        data = await _payload(request)
         search_id = data.get("search_id")
         if "search_id" in data or "search_protocol" in data:
             if data.get("search_protocol") != SEARCH_PROTOCOL:
@@ -513,27 +516,89 @@ def create_shard_app(
         # tensor build and the search run off the event loop.
         result = await asyncio.to_thread(_run_search, index, identity, queries, top_k)
         selection = result.selection
-        return web.json_response(
-            {
-                "search_protocol": SEARCH_PROTOCOL,
-                "search_id": search_id,
-                "transfer_id": str(data["transfer_id"]),
-                "vector_space": identity.vector_space,
-                "positional_encoding": identity.positional_encoding,
-                "layer": selection.layer,
-                "kv_head": selection.kv_head,
-                "token_ids": list(selection.token_ids),
-                "page_ids": list(selection.page_ids),
-                "scores": [float(score) for score in selection.scores],
-                "metric": selection.metric,
-                "id_mapping_version": result.id_mapping_version,
-                "index_version": result.index_version,
-                # Exactly which identity comparisons were made. A caller that
-                # pinned no version will not see one named here, rather than
-                # being told its request was "validated".
-                "validated": list(result.validated),
-            }
+        return {
+            "search_protocol": SEARCH_PROTOCOL,
+            "search_id": search_id,
+            "transfer_id": str(data["transfer_id"]),
+            "vector_space": identity.vector_space,
+            "positional_encoding": identity.positional_encoding,
+            "layer": selection.layer,
+            "kv_head": selection.kv_head,
+            "token_ids": list(selection.token_ids),
+            "page_ids": list(selection.page_ids),
+            "scores": [float(score) for score in selection.scores],
+            "metric": selection.metric,
+            "id_mapping_version": result.id_mapping_version,
+            "index_version": result.index_version,
+            # Exactly which identity comparisons were made. A caller that
+            # pinned no version will not see one named here, rather than
+            # being told its request was "validated".
+            "validated": list(result.validated),
+        }
+
+    async def search_index(request):
+        return web.json_response(await _search_data(await _payload(request)))
+
+    async def search_index_batch(request):
+        from sglang.srt.disaggregation.pvd.search_client import SEARCH_BATCH_PROTOCOL
+
+        data = await _payload(request)
+        if data.get("batch_protocol") != SEARCH_BATCH_PROTOCOL:
+            raise ValueError("unsupported search batch protocol")
+        batch_id = data.get("batch_id")
+        if not isinstance(batch_id, str) or not 1 <= len(batch_id) <= 128:
+            raise ValueError("batch_id must be a non-empty bounded string")
+        items = data.get("items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 32:
+            raise ValueError("search batch requires 1..32 items")
+        if any(not isinstance(item, dict) for item in items):
+            raise ValueError("search batch items must be objects")
+        if any(
+            item.get("search_protocol") != "pvd.search.v1"
+            or not isinstance(item.get("search_id"), str)
+            or not 1 <= len(item["search_id"]) <= 128
+            or type(item.get("top_k")) is not int
+            or not 1 <= item["top_k"] <= 512
+            or not isinstance(item.get("queries"), list)
+            or not 1 <= len(item["queries"]) <= 64
+            or any(
+                not isinstance(item.get(name), str) or not item[name].strip()
+                for name in ("expected_index_version", "expected_id_mapping_version")
+            )
+            for item in items
+        ):
+            raise ValueError("batch items require bounded pinned search identities")
+        if sum(len(item["queries"]) for item in items) > 512:
+            raise ValueError("search batch exceeds 512 query rows")
+        if sum(len(item["queries"]) * item["top_k"] for item in items) > 16384:
+            raise ValueError("search batch exceeds result-token bound")
+        search_ids = [item.get("search_id") for item in items]
+        if len(set(search_ids)) != len(items):
+            raise ValueError("duplicate search_id in batch")
+        # One Entry, vector space and version namespace per batch; otherwise a
+        # caller could disguise unrelated work under one admission bound.
+        shared = (
+            "transfer_id",
+            "vector_space",
+            "positional_encoding",
+            "expected_index_version",
+            "expected_id_mapping_version",
         )
+        first = tuple(items[0].get(name) for name in shared)
+        if any(tuple(item.get(name) for name in shared) != first for item in items[1:]):
+            raise ValueError("batch items must share Entry, space and version pins")
+        results = [await _search_data(item) for item in items]
+        reply = {
+            "batch_protocol": SEARCH_BATCH_PROTOCOL,
+            "batch_id": batch_id,
+            "results": results,
+        }
+        if (
+            len(json.dumps(reply, separators=(",", ":")).encode("utf-8"))
+            > 2 * 1024 * 1024
+        ):
+            raise ValueError("search batch response exceeds 2 MiB")
+        return web.json_response(reply)
 
     async def health(_request):
         snapshot = await asyncio.to_thread(store.snapshot)
@@ -558,6 +623,7 @@ def create_shard_app(
             web.post("/internal/v1/entries/release", release_entry),
             web.post("/internal/v1/indexes/progress", progress_indexes),
             web.post("/internal/v1/indexes/search", search_index),
+            web.post("/internal/v1/indexes/search-batch", search_index_batch),
             web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/health", health),
         ]
