@@ -89,6 +89,42 @@ v2 运行 ID `7c46db11d88d`，v1 运行 ID `e1c023d6ec34`。
 长上下文生成的 D target forward/稀疏刷新前注意力是下一瓶颈。
 更大的 Prompt、并发、重复轮次、数值一致性和故障恢复仍须验收。
 
+### 2026-09-25 D online attention tile=64 实验
+
+在上述 rank-packed v2 通信模式保持不变时，仅将 D 的
+`attention_chunk_tokens` 从 8 改为 64；仍使用 `online` 算法、
+相同 2304-token 上限、目标/草稿模型、刷新间隔和单 rail。
+实验配置是
+`test/registered/disaggregation/pvd_qwen_v100s_serving_limits_online_long_chunk64.json`，
+通过隔离启动脚本的 `PVD_LONG_LIMITS_PATH` 指定；原默认配置不变。
+配置合同与 attention CPU 测试为 96 passed、4 个无本地 CUDA 而 skipped。
+
+为排除每次 run ID 造成的不同输入，客户端新增仅限单请求的
+`--fixed-prefix` 和输入/最终 SSE 文本 SHA-256。两种 tile 均以相同
+1,923-token Prompt、温度 0、8-token 输出重复两次；四次输入哈希
+均为 `5aa7f0a7…e1fd35e2d73e01f3`，最终文本哈希均为
+`7f520dac…d8155ceb3c3d1fe04941cc150`，均完整返回 8/8：
+
+| 同一固定 Prompt 的总耗时 | 第 1 次 | 第 2 次 |
+| --- | ---: | ---: |
+| tile=8 | 157.39 s | 157.18 s |
+| tile=64 | 30.87 s | 30.86 s |
+
+这表明在该单请求长上下文负载中，增大 online tile 后端到端耗时
+约降为原来的五分之一；TTFT 两组均约 8 s，差异主要发生在后续
+Decode 前向。相同最终文本哈希证明该固定 Prompt 的贪心输出一致，
+**不**证明所有层的浮点结果逐位相同，也不是其他长度或并发规模的
+性能保证。tile=64 刚启动后的首个不同 Prompt 请求耗时 73.49 s，
+因此不能混用冷启动与稳定运行数据。
+
+恢复 tile=64 后的另一次 4 客户端测试（每请求 517-token Prompt）
+完整返回 4×8 token，总墙钟 73.39 s、合计 0.436 token/s；两 V rank
+随后均为零 in-flight、零 UNKNOWN、未隔离。此前 tile=8 的四客户端
+单轮为每请求 513 tokens、181.17 s、0.177 token/s；输入不完全
+相同、均仅一轮，所以这里只记录趋势，不给出严格并发加速比。
+下一步应测多轮、更多上下文长度、目标输出质量，以及 V100S 上
+真正融合的 sparse attention kernel；tile 调整本身不是融合 kernel。
+
 恢复 v2 后另做了单轮 4 客户端、各 55 次句子重复的排队测试
 （`run_id=e6509bfc8daf`）：实际每请求 513-token Prompt，4×8 token
 全部完成，总墙钟 181.17 s、合计 0.177 token/s、p95 TTFT 47.23 s。
@@ -137,9 +173,9 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
   和 K/V gather+pack，避免每个 Q head 的 GPU→CPU 往返及
   大量小地址列表。先保持 exact backend 作召回基准。
 * D：把 rank-packed staging 的本地重排、稀疏 bank 构建和
-  一 token GQA attention 尽量批量化/融合。当前 `online`
-  基线是逐 Q head、逐 chunk 的 Python/Torch 循环，长 Prompt
-  的第一次 target forward 约 35.6 s；不能把 Mooncake 优化
+  一 token GQA attention 尽量批量化/融合。`online` 基线仍是逐
+  Q head、逐 chunk 的 Python/Torch 循环；tile 8→64 在上述固定
+  Prompt 上大幅降低耗时，但未消除该循环。不能把 Mooncake 优化
   误当作消除此计算瓶颈。内核必须保持 post-RoPE Q/K、共享
   KV-head 工作集、生成 token 的 D 本地 KV、数值精度和
   bank read lease/CUDA fence。
