@@ -74,7 +74,11 @@ def validate_dual_rail_names(rails: Iterable[str]) -> None:
 
 
 def resolve_rank_rails(
-    rank_rails: str | None, ib_device: str | None, world_size: int
+    rank_rails: str | None,
+    ib_device: str | None,
+    world_size: int,
+    *,
+    gpu_ids: tuple[int, ...] | None = None,
 ) -> list[str]:
     """Resolve PVD rank order without passing a shared HCA list to Mooncake.
 
@@ -90,13 +94,21 @@ def resolve_rank_rails(
             if value.endswith(".json"):
                 value = Path(value).read_text(encoding="utf-8")
             mapping = json.loads(value)
-            if not isinstance(mapping, dict) or set(mapping) != {
-                str(rank) for rank in range(world_size)
-            }:
+            rank_keys = {str(rank) for rank in range(world_size)}
+            valid_keysets = [rank_keys]
+            if gpu_ids is not None:
+                valid_keysets.append({str(gpu_id) for gpu_id in gpu_ids})
+            if not isinstance(mapping, dict) or set(mapping) not in valid_keysets:
                 raise ValueError(
                     f"{flag} JSON requires exactly ranks 0..{world_size - 1}"
+                    + (" or the configured physical GPU IDs" if gpu_ids else "")
                 )
-            rails = [mapping[str(rank)] for rank in range(world_size)]
+            keys = (
+                [str(rank) for rank in range(world_size)]
+                if set(mapping) == rank_keys
+                else [str(gpu_id) for gpu_id in gpu_ids]
+            )
+            rails = [mapping[key] for key in keys]
             rails = [rail.strip() if isinstance(rail, str) else rail for rail in rails]
         else:
             rails = [item.strip() for item in value.split(",")]

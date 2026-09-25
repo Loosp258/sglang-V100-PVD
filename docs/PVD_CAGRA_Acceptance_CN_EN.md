@@ -32,6 +32,25 @@ other a 32.87 s maximum gap. V indexes were searchable and not quarantined.
 These cold-build observations establish native execution and bounded
 concurrency correctness, **not** throughput or tail-latency improvement.
 
+### 隔离长上下文服务的 GPU1 启动缺口 / GPU1 isolation startup defect
+
+为不打断原 GPU0 服务，在 P、D 空闲 GPU1 对 `mlx5_0` 分别执行原生
+Mooncake 本机 GPUDirect 预检；两者都通过 GPU MR 注册和本机传输。
+随后以 `--base-gpu-id 1` 启动隔离 P/D，服务在 Mooncake 初始化时报
+`No IB devices configured for GPU 1. Available GPUs: [0]`。
+原因是 PVD 把 TP rank 0 写成 Mooncake 的 GPU→HCA JSON 键，
+但 Mooncake 按物理 GPU ID 1 查找。修复将 rank 的 rail 映射至
+`base_gpu_id + rank * gpu_id_step`，保留默认 GPU0 行为，且二次参数校验
+仍可识别规范化的物理 GPU JSON。GPU1 跨节点服务尚待重新启动验证；
+本机 loopback 成功不能代替跨节点验收。
+
+To keep the original GPU0 services untouched, local Mooncake GPUDirect
+loopback preflight on idle GPU1 passed on P and D. Isolated P/D startup then
+failed because PVD keyed the HCA JSON by TP rank 0 while Mooncake looked up
+physical GPU 1. The model-server hook now maps each rail to
+`base_gpu_id + rank * gpu_id_step`, retaining default-GPU behavior and
+idempotent argument validation. Cross-node GPU1 serving remains to be tested.
+
 ## 2026-09-24 91-token Gateway Prompt / Bounded longer-Prompt gate
 
 在同一组三机隔离服务上，D 检出更新至 `b9ba454e6` 的测试工具，以

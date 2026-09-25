@@ -383,10 +383,23 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         validate_rank_rail_names,
     )
 
+    base_gpu_id = getattr(server_args, "base_gpu_id", 0)
+    gpu_id_step = getattr(server_args, "gpu_id_step", 1)
+    if (
+        type(base_gpu_id) is not int
+        or base_gpu_id < 0
+        or type(gpu_id_step) is not int
+        or gpu_id_step <= 0
+    ):
+        raise ValueError("PVD requires a nonnegative base GPU ID and positive GPU step")
+    gpu_ids = tuple(
+        base_gpu_id + rank * gpu_id_step for rank in range(server_args.tp_size)
+    )
     rails = resolve_rank_rails(
         server_args.pvd_rank_rails,
         getattr(server_args, "disaggregation_ib_device", None),
         server_args.tp_size,
+        gpu_ids=gpu_ids,
     )
     rail_mode = validate_rank_rail_names(rails)
     server_args.pvd_rank_rails = ",".join(rails)
@@ -507,9 +520,11 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     if server_args.disaggregation_decode_enable_radix_cache:
         raise ValueError("PVD requires decode radix cache to remain disabled")
 
-    # Feed the existing Mooncake GPU->HCA selector an explicit per-GPU map.
+    # Mooncake selects by physical GPU ID, not TP rank. The two are equal only
+    # for the default base=0, step=1 placement.
     server_args.disaggregation_ib_device = json.dumps(
-        {str(rank): rail for rank, rail in enumerate(rails)}, separators=(",", ":")
+        {str(gpu_id): rail for gpu_id, rail in zip(gpu_ids, rails, strict=True)},
+        separators=(",", ":"),
     )
     # Every Entry owns a complete prompt KV allocation. Prefix reuse on P would
     # make the exported allocation partial and violate the Entry manifest.

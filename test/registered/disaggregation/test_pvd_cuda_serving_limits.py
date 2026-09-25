@@ -111,6 +111,18 @@ def test_v100s_sdpa_m8_lead6_experiment_extends_only_prefetch_window():
     assert limits.lead_tokens == 6
 
 
+def test_v100s_long_context_fixture_uses_online_attention_and_longer_timeout():
+    directory = Path(__file__).parent
+    candidate_path = directory / "pvd_qwen_v100s_serving_limits_online_long.json"
+    limits = load_cuda_serving_limits(
+        candidate_path, refresh_interval=4, predict_tokens=2
+    )
+    assert limits.max_sequence_tokens == 2304
+    assert limits.attention_impl == "online"
+    assert limits.request_timeout_seconds == 300.0
+    assert limits.lead_tokens == 2
+
+
 def test_bounded_sdpa_requires_opt_in_and_short_context(tmp_path):
     config = valid_config()
     config["max_sequence_tokens"] = 128

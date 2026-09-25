@@ -7,6 +7,7 @@ import pytest
 from sglang.srt.arg_groups.pvd_disaggregation_hook import handle_pvd_disaggregation
 from sglang.srt.disaggregation.pvd.preflight import (
     PVDPreflightError,
+    resolve_rank_rails,
     validate_dual_rail_names,
     validate_rank_rail_names,
 )
@@ -67,6 +68,61 @@ def test_model_ib_device_becomes_rank_local_mooncake_mapping(
     assert json.loads(args.disaggregation_ib_device) == expected
     assert args.pvd_rank_rails == ",".join(expected.values())
     assert args.pvd_strict_rdma_preflight
+
+
+@pytest.mark.parametrize(
+    "base,step,tp,mode,rails,expected",
+    [
+        (1, 1, 1, "prefill", "mlx5_0", {"1": "mlx5_0"}),
+        (1, 1, 1, "decode", "mlx5_0", {"1": "mlx5_0"}),
+        (2, 2, 2, "prefill", "mlx5_2,mlx5_3", {"2": "mlx5_2", "4": "mlx5_3"}),
+    ],
+)
+def test_mooncake_mapping_uses_physical_gpu_ids(base, step, tp, mode, rails, expected):
+    overrides = {
+        "base_gpu_id": base,
+        "gpu_id_step": step,
+        "tp_size": tp,
+        "disaggregation_mode": mode,
+        "pvd_rank_rails": rails,
+    }
+    if mode == "decode":
+        overrides.update(
+            pvd_waiting_queue_bootstrap=True,
+            pvd_full_kv_fanin_max_slices=4,
+            pvd_full_kv_fanin_response_bytes=4096,
+        )
+    args = model_args(**overrides)
+    handle_pvd_disaggregation(args)
+    assert json.loads(args.disaggregation_ib_device) == expected
+    handle_pvd_disaggregation(args)
+    assert json.loads(args.disaggregation_ib_device) == expected
+
+
+def test_nondefault_gpu_mapping_accepts_physical_json_and_rejects_missing_gpu():
+    args = model_args(
+        base_gpu_id=1,
+        tp_size=1,
+        disaggregation_mode="prefill",
+        disaggregation_ib_device='{"1":"mlx5_0"}',
+    )
+    handle_pvd_disaggregation(args)
+    assert args.pvd_rank_rails == "mlx5_0"
+    assert json.loads(args.disaggregation_ib_device) == {"1": "mlx5_0"}
+    with pytest.raises(ValueError, match="physical GPU IDs"):
+        handle_pvd_disaggregation(
+            model_args(
+                base_gpu_id=1,
+                tp_size=1,
+                disaggregation_mode="prefill",
+                disaggregation_ib_device='{"2":"mlx5_0"}',
+            )
+        )
+
+
+def test_empty_gpu_json_remains_invalid_for_v_without_physical_mapping():
+    with pytest.raises(ValueError, match="exactly ranks"):
+        resolve_rank_rails(None, "{}", 2)
 
 
 def test_model_preserves_legacy_default_and_custom_rank_rails():
