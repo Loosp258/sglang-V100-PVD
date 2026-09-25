@@ -2602,3 +2602,37 @@ were 0.34–0.35 s; the earlier long request also had a roughly 15.95 s
 first wait. CAGRA Entry-index readiness/build is a hypothesis, not yet
 isolated proof. V and D stayed healthy; no new RDMA errors were observed.
 The final latency goal remains unmet.
+
+### 刷新间隔 M=8/16 的实机对照 / Live refresh-interval comparison
+
+保持三机 Qwen2.5-7B、SDPA、批量 V 检索、top-k=4、lead=2 和 20-token
+输出不变，仅在 D 将 `--pvd-kv-refresh-interval` 从 M=4 分别改为
+M=8 和 M=16。固定 SSE 请求的热态耗时约为 M=4 的 3.48 秒、M=8 的
+2.61 秒、M=16 的 2.20 秒；M=16 的观测中位 token 间隔约 65 毫秒，
+但刷新附近最大间隔仍约 380 毫秒。M=16 的三条固定请求耗时为
+3.41/3.12/21.13 秒，M=8 为 3.83/3.52/22.38 秒，M=4 为
+4.82/4.46/27.68 秒。这些是极小样本，不代表吞吐或尾延迟。
+
+与 M=4 对照，M=8、M=16 的三条输出 token ID **均发生变化**；
+M=4→M=16 的相同前缀长度分别为 8、18、6 个 token。近似输出的变化
+不等于质量退化结论，但目前没有标注数据、质量指标或可接受阈值，
+因此不能仅凭速度将默认 M 调大。实验结束后，D 已恢复 M=4，
+新进程健康检查为 200。原始结果保存在 D 节点的
+`pvd-eval-sdpa-batch-{,m8-,m16-}67c0bb375.json`。
+
+The three-node Qwen2.5-7B setup, SDPA, batched V search, top-k=4, lead=2,
+and 20-token outputs were held constant; only D's refresh interval changed
+from M=4 to M=8 or M=16. A warm fixed SSE request took about 3.48, 2.61,
+and 2.20 seconds respectively. M=16 had about a 65 ms median observed token
+gap but a roughly 380 ms maximum gap near refresh. The three fixed prompts
+took 3.41/3.12/21.13 s at M=16, 3.83/3.52/22.38 s at M=8, and
+4.82/4.46/27.68 s at M=4. These tiny samples are not throughput or tail
+latency evidence.
+
+All three output-token sequences changed at both M=8 and M=16 compared
+with M=4; M=4 to M=16 shared prefix lengths were 8, 18, and 6 tokens.
+Output divergence does not itself prove quality regression, but without
+labeled data, a quality metric, or an acceptance threshold it does not
+justify increasing the default M. D was restored to M=4 and returned
+health 200 after the experiment. Raw observations are on the D node in
+`pvd-eval-sdpa-batch-{,m8-,m16-}67c0bb375.json`.
