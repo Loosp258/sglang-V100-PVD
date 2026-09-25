@@ -3041,3 +3041,19 @@ layer/head, version pins and logical token/page IDs. Batched GEMM can
 change floating-point scores at roughly the 1e-6 scale; compare selected
 IDs and recall, not bitwise score equality. GPU peak-memory and three-node
 performance are still unverified, so this is not yet enabled by default.
+
+启用前的 V100S 峰值检查发现预算低报：32-head、17-row、7-query
+的 GPU grouped sort 实际 PyTorch 临时峰值约 **9,007,104 B**，原声明
+仅 **2,605,056 B**。因此候选 grouped 路径未部署到在线 V；后续
+修正为 CUDA 在形状预算之外额外预留 64 MiB，并加入 CUDA 峰值断言。
+该上界仍须在目标模型、最大请求尺寸与并发负载下复验；
+`torch.cuda.memory_allocated` 也不代表所有外部库内存。
+
+A pre-deployment V100S peak check caught an undercharge: the 32-head,
+17-row, 7-query grouped GPU sort allocated about **9,007,104 B** of
+temporary PyTorch memory, while the original declaration reserved only
+**2,605,056 B**. The grouped candidate was therefore **not deployed** to
+the live V service. The next correction adds a 64 MiB CUDA workspace
+allowance to the shape-based charge and a CUDA peak assertion. That bound
+still needs validation at maximum supported shapes and concurrency;
+`torch.cuda.memory_allocated` does not include every external allocation.

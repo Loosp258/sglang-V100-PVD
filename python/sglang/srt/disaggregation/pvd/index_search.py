@@ -532,7 +532,15 @@ class BruteForceIndexBackend(IndexBackend):
         query_bytes = heads * num_queries * dim * self._F32
         score_bytes = heads * num_queries * count * self._F32
         result_bytes = heads * num_queries * top_k * (self._F32 + self._I64)
-        return 4 * key_bytes + 8 * query_bytes + 32 * score_bytes + 8 * result_bytes
+        declared = 4 * key_bytes + 8 * query_bytes + 32 * score_bytes + 8 * result_bytes
+        # CUDA stable sort uses a device workspace that is much larger than
+        # its result tensors for tiny batches. V100S measured 9,007,104
+        # allocated bytes on a 32-head/17-row/7-query group while the tensor
+        # formula above accounted for only 2,605,056. Keep a separate fixed
+        # allowance; this is a conservative admission bound, not retained KV.
+        if self.device.type == "cuda":
+            declared += 64 * 1024 * 1024
+        return declared
 
     def _group_shape(
         self, indexes: Sequence[BuiltIndex], num_queries: int, top_k: int

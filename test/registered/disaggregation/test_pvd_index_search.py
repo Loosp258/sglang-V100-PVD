@@ -71,12 +71,21 @@ def test_grouped_small_ip_search_matches_individual_cuda():
             vector_space=SPACE,
             metric="ip",
         )
-        for _ in range(24)
+        for _ in range(32)
     )
     queries = tuple(
         torch.randn(7, 128, generator=rng).to("cuda:0") for _ in indexes
     )
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
     grouped = candidate.search_grouped(indexes, queries, top_k=4)
+    torch.cuda.synchronize()
+    assert torch.cuda.max_memory_allocated() - before <= (
+        candidate.grouped_search_footprint(
+            indexes=indexes, num_queries=7, top_k=4
+        )
+    )
     for index, query, (rows, scores) in zip(indexes, queries, grouped):
         expected_rows, expected_scores = candidate.search(index, query, top_k=4)
         assert torch.equal(rows, expected_rows)
