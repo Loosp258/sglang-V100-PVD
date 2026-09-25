@@ -8,6 +8,8 @@ source for the scope. Only the Delivery sink publishes write destinations.
 """
 
 import asyncio
+import logging
+import time
 from contextlib import nullcontext
 
 from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
@@ -20,6 +22,8 @@ from sglang.srt.disaggregation.pvd.sparse_install import (
     InstallProtocolError,
 )
 from sglang.srt.disaggregation.pvd.sparse_union import union_query_head_selections
+
+logger = logging.getLogger(__name__)
 
 
 class LatePrefetchStart(ValueError):
@@ -137,6 +141,7 @@ class _PrefetchRequestCore:
         query_source = (
             "committed" if prefix.committed_position == boundary else "predicted"
         )
+        refresh_started = time.perf_counter()
         epoch = self.group.begin(prefix.committed_position)
         self._active = epoch
         try:
@@ -161,6 +166,8 @@ class _PrefetchRequestCore:
                     routes=tuple(routes),
                     head_mapping=self.mapping,
                 )
+            capture_seconds = time.perf_counter() - refresh_started
+            search_started = time.perf_counter()
             children = self._session.fork_prepared(prepared, partitions)
             self._tasks = tuple(
                 asyncio.create_task(
@@ -173,6 +180,8 @@ class _PrefetchRequestCore:
                 for rank, (child, part) in children.items()
             )
             await asyncio.gather(*self._tasks)
+            search_seconds = time.perf_counter() - search_started
+            union_started = time.perf_counter()
             self._live()
             self.group.coordinator._match(epoch)
             if self._active is not epoch:
@@ -187,6 +196,8 @@ class _PrefetchRequestCore:
                     max_union_tokens=self._limit,
                 )
                 selections[rank] = specs
+            union_seconds = time.perf_counter() - union_started
+            delivery_started = time.perf_counter()
             if self.delivery is None:
                 for rank, specs in selections.items():
                     # Local reference source remains independently version checked.
@@ -200,8 +211,22 @@ class _PrefetchRequestCore:
                 await asyncio.gather(*self._tasks)
                 self._live()
                 self.group.coordinator._match(epoch)
+            delivery_seconds = time.perf_counter() - delivery_started
             self._session.invalidate()
             self._ready = epoch
+            logger.info(
+                "PVD refresh ready: query_source=%s ranks=%d "
+                "capture_seconds=%.6f search_seconds=%.6f "
+                "union_seconds=%.6f delivery_seconds=%.6f "
+                "total_seconds=%.6f",
+                query_source,
+                len(self._routes),
+                capture_seconds,
+                search_seconds,
+                union_seconds,
+                delivery_seconds,
+                time.perf_counter() - refresh_started,
+            )
             return epoch  # ready-to-install only; clock has NOT advanced
         except BaseException:
             self.cancel("probe/search/packing failed or was cancelled")

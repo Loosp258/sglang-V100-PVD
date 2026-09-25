@@ -1,6 +1,8 @@
 """Controlled request epochs over real local HTTP, no Scheduler/RDMA claim."""
 
 import asyncio
+import logging
+import re
 from dataclasses import replace
 
 import pytest
@@ -56,6 +58,33 @@ def test_http_loop_uses_one_capture_and_one_epoch_for_both_shards():
     assert result["shared_epoch"] and result["installed_boundary"] == 4
     assert result["kv_groups"] == 4
     assert len(pipeline.provider.calls) == len(pipeline.probe.calls) == 1
+
+
+def test_refresh_phase_diagnostics_follow_actual_success(caplog):
+    pool, prefix, pipeline = components()
+    with caplog.at_level(
+        logging.INFO, logger="sglang.srt.disaggregation.pvd.cpu_prefetch_request"
+    ):
+        asyncio.run(verify_controlled_roundtrip(pool, prefix, pipeline))
+    messages = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith("PVD refresh ready:")
+    ]
+    assert len(messages) == 1
+    assert "query_source=predicted ranks=2" in messages[0]
+    timings = dict(re.findall(r"(\w+_seconds)=([0-9.]+)", messages[0]))
+    assert set(timings) == {
+        "capture_seconds",
+        "search_seconds",
+        "union_seconds",
+        "delivery_seconds",
+        "total_seconds",
+    }
+    assert all(float(value) >= 0 for value in timings.values())
+    assert float(timings["total_seconds"]) >= max(
+        float(timings[name]) for name in timings if name != "total_seconds"
+    )
 
 
 class DelayedClient:
