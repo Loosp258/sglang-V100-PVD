@@ -84,6 +84,14 @@ class CUDARefreshDriver:
         self._execution_lock = None
         self._closing = self._pumping = False
         self._source_quarantine = None
+        poll_turns = os.environ.get("PVD_REFRESH_POLL_TURNS", "1")
+        if (
+            not poll_turns.isascii()
+            or not poll_turns.isdecimal()
+            or not 1 <= int(poll_turns) <= 8
+        ):
+            raise LifecycleError("PVD_REFRESH_POLL_TURNS must be an integer in [1, 8]")
+        self._poll_turns = int(poll_turns)
         try:
             self._loop = asyncio.get_running_loop()
             self._owns_loop = False
@@ -665,9 +673,15 @@ class CUDARefreshDriver:
 
         self._pumping = True
         try:
-            self._loop.call_soon(advance)
-            self._loop.call_soon(self._loop.stop)
-            self._loop.run_forever()
+            # Each turn is nonblocking: stop is already scheduled before
+            # run_forever. Extra bounded turns let callbacks completed on the
+            # control I/O loop be consumed before another target forward.
+            for _ in range(self._poll_turns):
+                self._loop.call_soon(advance)
+                self._loop.call_soon(self._loop.stop)
+                self._loop.run_forever()
+                if failures:
+                    break
         finally:
             self._pumping = False
         if failures:

@@ -3327,3 +3327,22 @@ several target forwards. Fewer refresh rounds plausibly explain the
 shorter total time; token smoothness worsened, and retrieval recall and
 generation quality remain unverified. Do not make this the default;
 restore live D to M=4/lead=2.
+
+另一个独立、默认关闭的调度实验为 `PVD_REFRESH_POLL_TURNS=N`，
+仅允许整数 1–8，默认 1。同步 CUDA Scheduler 每次 `poll()`
+可无阻塞推进最多 N 轮私有 asyncio loop，尝试更早消费已完成的
+后台 HTTP、推进后续交付；每轮会先排定 stop，不等待网络或
+让模型 forward 异步化。非法值启动前拒绝。轮数增加也可能使
+单次 scheduler poll 执行更多同步 Python/probe 工作，必须在
+同一 M=4/lead=2 负载下比较 TPOT、边界等待和失败回收，
+未经实测不作为默认。
+
+Another independent, default-off scheduler experiment is
+`PVD_REFRESH_POLL_TURNS=N` (integer 1–8, default 1). Each synchronous
+CUDA Scheduler poll advances at most N nonblocking turns of its private
+asyncio loop, potentially consuming completed background HTTP and starting
+delivery sooner. Each turn schedules stop before running; it does not wait
+for network I/O or make model forwards asynchronous. Invalid values are
+refused at startup. More turns can also execute more synchronous Python
+or probe work inside one scheduler poll; compare TPOT, boundary waits and
+failure cleanup under the same M=4/lead=2 workload before changing defaults.

@@ -129,6 +129,26 @@ def test_sync_owner_loop_runs_two_http_rounds_from_actual_req_counts(monkeypatch
         assert capture_threads == [owner, owner]
 
 
+def test_opt_in_bounded_poll_turns_run_capture_before_next_scheduler_poll(
+    monkeypatch,
+):
+    monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", "2")
+    with synchronous(monkeypatch) as (driver, _, _, request, captures):
+        assert driver._poll_turns == 2
+        request.output_ids.extend([3] * 3)
+        driver.poll()
+        assert captures == [(12, 13)]
+
+
+@pytest.mark.parametrize("value", ["0", "9", "-1", "2.0", "two", " 2", "２"])
+def test_invalid_poll_turn_bound_is_refused_before_loop_creation(monkeypatch, value):
+    monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", value)
+    with pytest.raises(LifecycleError, match="PVD_REFRESH_POLL_TURNS"):
+        CUDARefreshDriver(
+            TargetExecutionArbiter(), max_requests=2, max_prefix_tokens=64
+        )
+
+
 def test_missed_window_probes_current_committed_prefix_without_draft(monkeypatch):
     with synchronous(monkeypatch) as (driver, c, control, request, captures):
 
