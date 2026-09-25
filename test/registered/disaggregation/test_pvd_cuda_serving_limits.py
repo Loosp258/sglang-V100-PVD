@@ -71,6 +71,23 @@ def test_v100s_chunk64_experiment_only_changes_attention_tile():
     assert limits.attention_chunk_tokens == 64
 
 
+def test_v100s_sdpa_lead3_experiment_keeps_four_token_cadence():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_sdpa.json").read_text()
+    )
+    alternative = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_sdpa_lead3.json").read_text()
+    )
+    assert alternative == {**baseline, "lead_tokens": 3}
+    limits = load_cuda_serving_limits(
+        directory / "pvd_qwen_v100s_serving_limits_sdpa_lead3.json",
+        refresh_interval=4,
+        predict_tokens=3,
+    )
+    assert limits.lead_tokens == 3
+
+
 def test_bounded_sdpa_requires_opt_in_and_short_context(tmp_path):
     config = valid_config()
     config["max_sequence_tokens"] = 128
