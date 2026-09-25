@@ -1,5 +1,6 @@
 """Existing async bootstrap and full Prompt unpack with real V HTTP/fake KV."""
 
+import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -30,6 +31,53 @@ def test_rank_packed_bootstrap_admission_counts_both_gpu_buffers():
     assert PVDKVManager.bootstrap_staging_bytes(manager, req) == 256
     manager.full_kv_fanin_rank_packed = False
     assert PVDKVManager.bootstrap_staging_bytes(manager, req) == 128
+
+
+def test_uncertain_local_scatter_completion_retains_both_buffers(monkeypatch):
+    from sglang.srt.disaggregation.pvd import decode_fanin
+
+    session = PVDDecodeFanInSession.__new__(PVDDecodeFanInSession)
+    receipt = {"delivered": True}
+    session._network_receipt = receipt
+    session._rank_packed_plan = object()
+    session._canonical_staging = object()
+    session.staging = object()
+    session.manager = NS(full_kv_fanin_triton_scatter=True)
+    session._scatter_completion_unknown = False
+    calls = []
+
+    def synchronize():
+        calls.append("sync")
+        if calls.count("sync") == 2:
+            raise RuntimeError("CUDA completion unknown")
+
+    def launch(*args, **kwargs):
+        calls.append("launch")
+        raise RuntimeError("launch failed after earlier work was queued")
+
+    session.synchronize = synchronize
+    monkeypatch.setattr(decode_fanin, "scatter_rank_packed_bytes", launch)
+    with pytest.raises(RuntimeError, match="completion unknown"):
+        session.unpack(receipt)
+    assert calls == ["sync", "launch", "sync"]
+    assert session._scatter_completion_unknown
+
+    session._fanin_lock = asyncio.Lock()
+    session._fanin = None
+    session._closed = True
+    session._refresh_owner = "still pinned"
+    assert asyncio.run(session.progress_close()) is False
+    assert session._refresh_owner == "still pinned"
+
+
+def test_triton_scatter_flag_does_not_silently_activate_on_pd():
+    from sglang.srt.arg_groups.pvd_disaggregation_hook import handle_pvd_disaggregation
+
+    args = base_args(tp_size=1, pvd_rank_rails="mlx5_7")
+    args.disaggregation_topology = "pd"
+    args.pvd_full_kv_fanin_triton_scatter = True
+    with pytest.raises(ValueError, match="requires PVD Decode"):
+        handle_pvd_disaggregation(args)
 
 
 @pytest.mark.parametrize(
@@ -293,6 +341,8 @@ def test_real_decode_bootstrap_fanin_rank_agreement_and_reuse(
     [
         "enabled",
         "rank_packed_enabled",
+        "triton_scatter_enabled",
+        "triton_scatter_missing",
         "rank_packed_missing",
         "legacy_tp1",
         "missing_bound",
@@ -310,12 +360,16 @@ def test_fanin_serving_config_requires_complete_opt_in(case):
         pvd_full_kv_fanin_max_slices=64,
         pvd_full_kv_fanin_response_bytes=65536,
     )
-    if case in ("enabled", "rank_packed_enabled"):
-        args.pvd_full_kv_fanin_rank_packed = case == "rank_packed_enabled"
+    if case in ("enabled", "rank_packed_enabled", "triton_scatter_enabled"):
+        args.pvd_full_kv_fanin_rank_packed = case != "enabled"
+        args.pvd_full_kv_fanin_triton_scatter = case == "triton_scatter_enabled"
         handle_pvd_disaggregation(args)
         assert args.disable_overlap_schedule and args.disable_radix_cache
         return
-    if case == "rank_packed_missing":
+    if case == "triton_scatter_missing":
+        args.pvd_full_kv_fanin_triton_scatter = True
+        expected = "requires rank-packed"
+    elif case == "rank_packed_missing":
         args.pvd_full_kv_fanin_rank_packed = True
         args.pvd_full_kv_fanin_max_slices = None
         expected = "requires bounded"

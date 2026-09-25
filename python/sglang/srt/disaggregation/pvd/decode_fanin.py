@@ -40,6 +40,7 @@ class PVDDecodeFanInSession(PVDDecodeSession):
         self._canonical_staging = None
         self._canonical_budget = None
         self._canonical_budget_owner = None
+        self._scatter_completion_unknown = False
 
     async def initialize(self, runtime):
         record = await super().initialize(runtime)
@@ -216,9 +217,25 @@ class PVDDecodeFanInSession(PVDDecodeSession):
         # _network_receipt exists only after the complete V writer set has
         # terminal proof. Fence device visibility before reading the RDMA target.
         self.synchronize()
-        scatter_rank_packed_bytes(
-            self.staging, self._canonical_staging, self._rank_packed_plan
-        )
+        try:
+            scatter_rank_packed_bytes(
+                self.staging,
+                self._canonical_staging,
+                self._rank_packed_plan,
+                backend=(
+                    "triton"
+                    if getattr(self.manager, "full_kv_fanin_triton_scatter", False)
+                    else "torch"
+                ),
+            )
+        finally:
+            # A launch can fail after earlier GPU work was queued. Drain that
+            # work before any close path can release either byte buffer.
+            try:
+                self.synchronize()
+            except BaseException:
+                self._scatter_completion_unknown = True
+                raise
         super().unpack(reply, staging=self._canonical_staging)
 
     async def ack_fanin(self):
@@ -240,6 +257,10 @@ class PVDDecodeFanInSession(PVDDecodeSession):
                 except Exception:
                     return False
                 self._fanin = None
+            if self._scatter_completion_unknown:
+                # The local kernel may still read RDMA staging or write the
+                # canonical buffer. Retain both even after all V writers fence.
+                return False
             # No control coroutine can publish after acquiring this lock while
             # _closed is set. The remaining pin is the original session owner.
             if self._refresh_owner is not None:

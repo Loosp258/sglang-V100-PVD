@@ -5,7 +5,10 @@ from types import SimpleNamespace as NS
 
 import pytest
 import torch
-from sglang.srt.disaggregation.pvd.fanin_scatter import scatter_rank_packed_bytes
+from sglang.srt.disaggregation.pvd.fanin_scatter import (
+    _uniform_rank_packed_shape,
+    scatter_rank_packed_bytes,
+)
 from sglang.srt.disaggregation.pvd.kv_packer import (
     describe_kv_layout,
     pack_full_prompt_kv,
@@ -181,6 +184,89 @@ def test_rank_packed_scatter_rejects_alias_and_out_of_bounds_before_copy():
     with pytest.raises(ValueError, match="outside"):
         scatter_rank_packed_bytes(source, destination, bad)
     assert torch.all(destination == 0)
+
+
+@pytest.mark.parametrize("v_tp,d_tp", [(1, 1), (2, 1), (3, 1), (4, 2), (3, 3)])
+def test_triton_scatter_shape_proves_every_uniform_copy_rule(v_tp, d_tp):
+    plan = rank_packed_full_shard_fanin_plan(
+        layout(v_tp), layout(d_tp), compute_rank=0, token_count=6
+    )
+    components, parts, tokens, width = _uniform_rank_packed_shape(plan)
+    assert (components, parts, tokens, width) == (4, v_tp // d_tp, 6, 72 // v_tp)
+
+    corrupted = replace(
+        plan,
+        scatters=(
+            *plan.scatters[:-1],
+            replace(plan.scatters[-1], destination_offset=0),
+        ),
+    )
+    with pytest.raises(ValueError, match="cannot represent"):
+        _uniform_rank_packed_shape(corrupted)
+
+
+@pytest.mark.parametrize("v_tp,d_tp", [(1, 1), (2, 1), (3, 1), (4, 2)])
+def test_triton_scatter_byte_formula_matches_independent_torch_copy(v_tp, d_tp):
+    plan = rank_packed_full_shard_fanin_plan(
+        layout(v_tp), layout(d_tp), compute_rank=0, token_count=7
+    )
+    components, parts, tokens, width = _uniform_rank_packed_shape(plan)
+    source = torch.arange(plan.staging_bytes, dtype=torch.int64).to(torch.uint8)
+    expected = torch.empty_like(source)
+    scatter_rank_packed_bytes(source, expected, plan)
+    actual = torch.empty_like(source)
+    component_bytes = tokens * parts * width
+    for dest in range(plan.staging_bytes):
+        component, in_component = divmod(dest, component_bytes)
+        token, in_token = divmod(in_component, parts * width)
+        part, in_part = divmod(in_token, width)
+        src = (
+            part * components * tokens * width
+            + component * tokens * width
+            + token * width
+            + in_part
+        )
+        actual[dest] = source[src]
+    assert torch.equal(actual, expected)
+
+
+def test_triton_scatter_refuses_cpu_without_importing_gpu_backend():
+    plan = rank_packed_full_shard_fanin_plan(
+        layout(2), layout(1), compute_rank=0, token_count=4
+    )
+    source = torch.arange(plan.staging_bytes, dtype=torch.uint8)
+    destination = torch.full_like(source, 211)
+    with pytest.raises(ValueError, match="requires CUDA"):
+        scatter_rank_packed_bytes(source, destination, plan, backend="triton")
+    assert torch.all(destination == 211)
+
+
+def test_rank_packed_scatter_refuses_disjoint_views_of_one_storage():
+    plan = rank_packed_full_shard_fanin_plan(
+        layout(2), layout(1), compute_rank=0, token_count=4
+    )
+    shared = torch.empty(plan.staging_bytes * 2, dtype=torch.uint8)
+    source, destination = shared[: plan.staging_bytes], shared[plan.staging_bytes :]
+    with pytest.raises(ValueError, match="distinct"):
+        scatter_rank_packed_bytes(source, destination, plan)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="real CUDA unavailable")
+@pytest.mark.parametrize("v_tp,d_tp", [(1, 1), (2, 1), (3, 1), (4, 2)])
+def test_triton_scatter_matches_torch_bytes_on_real_cuda(v_tp, d_tp):
+    pytest.importorskip("triton")
+    plan = rank_packed_full_shard_fanin_plan(
+        layout(v_tp), layout(d_tp), compute_rank=0, token_count=13
+    )
+    source = torch.randint(
+        0, 256, (plan.staging_bytes,), dtype=torch.uint8, device="cuda"
+    )
+    expected = torch.empty_like(source)
+    actual = torch.empty_like(source)
+    scatter_rank_packed_bytes(source, expected, plan)
+    scatter_rank_packed_bytes(source, actual, plan, backend="triton")
+    torch.cuda.synchronize(source.device)
+    assert torch.equal(actual, expected)
 
 
 @pytest.mark.parametrize("v_tp,d_tp,rank", [(2, 4, 0), (3, 2, 1), (4, 3, 1)])

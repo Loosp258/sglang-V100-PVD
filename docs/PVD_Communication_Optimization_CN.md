@@ -316,6 +316,23 @@ UNKNOWN、未隔离。试验后隔离 D:30003 留在保守的 online tile64；
 
 ## 实施与验收顺序
 
+### D rank-packed 重排的单 kernel 实验（尚未完成 GPU 验收）
+
+新增默认关闭的 `--pvd-full-kv-fanin-triton-scatter`，只在 Decode 已启用
+`--pvd-full-kv-fanin-rank-packed` 时可用。该路径先逐条验证 wire transfer
+和 scatter 规则确属完整、等宽、连续的 V shard，再用一个 Triton kernel
+将 rank-packed 接收区重排到既有 canonical 缓冲区；不增加中间 GPU 缓冲，
+不改变 Mooncake 提交、全部 writer terminal-success 门禁、预算、unpack
+或 ACK。默认 `torch` 重排路径保持不变。若本地 kernel 完成无法确认，
+会保留接收区与 canonical 缓冲，不以网络完成证明替代 CUDA 完成证明。
+
+本地 Linux CPU 定向验证：151 passed、4 个真实 CUDA 用例因无 GPU 跳过；
+覆盖字节映射、TP1/TP2/TP3/TP4 的完整 shard 形状、非法规则、共享
+storage 拒绝、旧路径兼容及完成未知时的资源保留。已授权 CloudLab
+节点当前仍有 V100S，但此轮检查时原推理环境与源码检出不在节点上，
+故**尚未运行 Triton 编译、真实 CUDA 字节一致性或端到端 A/B**。
+这个开关只能视为实验性代码，不能计入性能收益。
+
 1. 固定 A/B 负载：同模型、prompt 长度、输出长度、冷/热 Entry、
    1/2/4 并发和相同 D attention 配置；分开记录 pack、native
    submit、transport status、D scatter、CAGRA、target forward、

@@ -298,6 +298,9 @@ class PVDKVManager:
         self.full_kv_fanin_rank_packed = bool(
             getattr(scheduler.server_args, "pvd_full_kv_fanin_rank_packed", False)
         )
+        self.full_kv_fanin_triton_scatter = bool(
+            getattr(scheduler.server_args, "pvd_full_kv_fanin_triton_scatter", False)
+        )
         self.bootstrap_gates: Dict[Any, BootstrapGate] = {}
         # One bounded driver per worker. It never creates a task per failed
         # request; it advances the owners that already hold the resources.

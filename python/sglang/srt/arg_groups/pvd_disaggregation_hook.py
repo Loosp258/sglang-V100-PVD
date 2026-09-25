@@ -293,6 +293,10 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     if topology not in ("pd", "pvd"):
         raise ValueError(f"invalid disaggregation topology: {topology!r}")
     if topology == "pd":
+        if getattr(server_args, "pvd_full_kv_fanin_triton_scatter", False):
+            raise ValueError(
+                "--pvd-full-kv-fanin-triton-scatter requires PVD Decode"
+            )
         _validate_predictive_retrieval_config(server_args)
         return
     # PVD Decode always runs without the overlap scheduler. Normalize this
@@ -325,6 +329,13 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
     fanin = getattr(server_args, "pvd_full_kv_fanin_max_slices", None)
     fanin_bytes = getattr(server_args, "pvd_full_kv_fanin_response_bytes", None)
     rank_packed = getattr(server_args, "pvd_full_kv_fanin_rank_packed", False)
+    fused_scatter = getattr(server_args, "pvd_full_kv_fanin_triton_scatter", False)
+    if type(fused_scatter) is not bool:
+        raise ValueError("--pvd-full-kv-fanin-triton-scatter must be a boolean")
+    if fused_scatter and not rank_packed:
+        raise ValueError(
+            "--pvd-full-kv-fanin-triton-scatter requires rank-packed fan-in"
+        )
     if type(rank_packed) is not bool:
         raise ValueError("--pvd-full-kv-fanin-rank-packed must be a boolean")
     if rank_packed and (fanin is None or fanin_bytes is None):

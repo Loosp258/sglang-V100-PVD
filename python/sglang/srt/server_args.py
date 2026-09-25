@@ -830,6 +830,7 @@ class ServerArgs:
     pvd_full_kv_fanin_max_slices: Optional[int] = None
     pvd_full_kv_fanin_response_bytes: Optional[int] = None
     pvd_full_kv_fanin_rank_packed: bool = False
+    pvd_full_kv_fanin_triton_scatter: bool = False
     # Prediction-only draft model on D. These never set speculative_algorithm:
     # PVD's refusal to run SGLang's speculative generation loop stays in force,
     # and this path only ever produces candidate tokens for retrieval.
@@ -7031,6 +7032,13 @@ class ServerArgs:
             help="Opt in on Decode to versioned rank-packed full-KV fan-in. "
             "Requires complete V source shards, V native batch support, and "
             "an additional budgeted D canonical reorder buffer.",
+        )
+        parser.add_argument(
+            "--pvd-full-kv-fanin-triton-scatter",
+            action=argparse.BooleanOptionalAction,
+            default=ServerArgs.pvd_full_kv_fanin_triton_scatter,
+            help="Opt in on Decode to a single Triton kernel for the uniform "
+            "rank-packed receive reorder. Requires rank-packed fan-in and CUDA.",
         )
         parser.add_argument(
             "--pvd-draft-model-path",
