@@ -134,10 +134,21 @@ def test_uninitialized_sparse_receiver_cannot_discover_routes():
     assert not client.keys
 
 
-def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatch):
+@pytest.mark.parametrize(
+    ("setting", "uses_background_loop"),
+    ((None, True), ("0", False), ("1", True)),
+)
+def test_selected_request_factory_uses_only_manager_owned_d_resources(
+    monkeypatch, setting, uses_background_loop
+):
     from sglang.srt.disaggregation.pvd import cuda_routed_request
 
     manager, req, selected, _ = manager_for(("mlx5_0", "mlx5_1"))
+    if setting is None:
+        monkeypatch.delenv("PVD_SEARCH_BACKGROUND_IO", raising=False)
+    else:
+        monkeypatch.setenv("PVD_SEARCH_BACKGROUND_IO", setting)
+    manager.control.loop = object()
     registry = SimpleNamespace(
         engine=manager.sparse_receive_engine, _owner=lambda: None
     )
@@ -185,6 +196,9 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(monkeypatc
                 "d_rail": "mlx5_0",
                 "d_rails": {0: "mlx5_0", 1: "mlx5_1"},
                 "initial_import_pending": False,
+                "search_io_loop": (
+                    manager.control.loop if uses_background_loop else None
+                ),
             },
         )
     ]

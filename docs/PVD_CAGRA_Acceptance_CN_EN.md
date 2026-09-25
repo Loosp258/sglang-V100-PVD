@@ -13,6 +13,61 @@ Gateway=`10.0.1.2:8001`；原 P/D GPU0、V 9000 和 Gateway 8000 服务未停。
 `--base-gpu-id 1` 的物理 GPU→HCA 键错误；P/D GPU1 本机 GPUDirect
 预检通过，随后完整跨节点请求通过。
 
+### 2026-09-25 后续复测 / Follow-up with background search I/O
+
+隔离 D 使用 `PVD_REFRESH_POLL_TURNS=8`、`request_timeout_seconds=300`。
+首次约 1935-token 长 Prompt 虽由 V 两 rank 各完成 14 个原生 Mooncake
+batch（约 55.5 MB/rank），最终 SSE 仅返回 4/8 token，
+`finish_type='abort'`、耗时 201.12 s。D 在第一次 V 索引版本查询后，
+每次目标前向约 35.5 s；路由搜索客户端默认 HTTP 总超时仅 30 s，
+刷新任务当时等待在 aiohttp。两者构成强烈的超时/事件循环阻塞嫌疑，
+但该次未记录异常原文，不将它写成已证明的唯一根因。
+
+仅打开既有 `PVD_SEARCH_BACKGROUND_IO=1`、其余长 Prompt 配置保持相同后，
+实际 1938-token Prompt 完整返回 8/8，`[DONE]`、TTFT 94.84 s、
+总耗时 242.79 s（`run_id=11ce2b64d987`）。V 两 rank 各写
+108528 个切片/55,566,336 bytes、14 个 batch，均为
+`terminal_success`；刷新 `ready` 并在第 4-token 边界安装。
+V 双 rank 后续均为零 in-flight、零 UNKNOWN、未隔离。
+因此 CUDA 路由请求现默认把只读 V 搜索放到管理器已有的后台控制 loop；
+`PVD_SEARCH_BACKGROUND_IO=0` 仅用于显式诊断性回退。
+该结果通过**这一规模的端到端功能验收**，不代表延迟达标：
+刷新前 `online` 注意力遍历完整 Prompt，每层约 1.26 s、
+一次目标前向约 35.6 s；安装稀疏工作集后前向约 0.64 s。
+
+| 实际 Prompt token | 并发 | 完整输出 | 总墙钟 | 总吞吐 | p95 TTFT | p95 完成延迟 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 515 | 1 | 8/8 | 68.87 s | 0.116 token/s | 26.68 s | 68.87 s |
+| 515 × 2 | 2 | 8/8 each | 112.46 s | 0.142 token/s | 68.72 s | 112.46 s |
+| 516 × 4 | 4 | 8/8 each | 225.18 s | 0.142 token/s | 98.78 s | 225.18 s |
+
+这三轮分别为 `run_id=c0b4db7c7548`、`e1992f7ac488`、
+`a35f0f065f23`；每档仅一轮、冷 Entry、同一 Qwen2.5-7B、
+相同 55 次句子重复及 8-token 输出。V 日志明确报告
+`backend=cagra_auto path=cagra heads=56 rows_per_head=515/516`，
+并非 exact 回退。**并发完整性到 4 通过，但 2→4 吞吐不扩展，
+尾延迟明显恶化；性能收益不通过。** 尚缺同条件 GPU exact/full-KV
+对照、真实 query 的召回/质量分布与多轮稳定性验收。
+
+With the same isolated three-node setup, the no-background-I/O long run
+ended `abort` after 4/8 tokens and 201.12 s, despite terminal-success
+Mooncake fan-in on both V ranks. The target forward took roughly 35.5 s
+per token while the routed search client's HTTP total timeout was 30 s;
+this is a strong, not conclusively logged, explanation. Enabling the
+existing D-only background search I/O mode yielded a full 8/8 SSE response
+for an actual 1,938-token Prompt in 242.79 s. Both V ranks finished 14
+native batches and had no in-flight, UNKNOWN or quarantined transfers.
+Routed CUDA requests now use the manager-owned background control loop for
+read-only V search by default; `PVD_SEARCH_BACKGROUND_IO=0` is the explicit
+diagnostic opt-out.
+The refresh was installed at the fourth-token boundary. This establishes
+bounded long-context correctness, **not acceptable speed**: the initial
+full-Prompt `online` attention cost about 35.6 s per target forward, falling
+to about 0.64 s after sparse-bank installation. At matched ~515-token
+inputs, 1/2/4 clients all completed, but throughput was 0.116/0.142/0.142
+token/s and p95 TTFT grew 26.68/68.72/98.78 s. These are single cold-Entry
+runs, not statistically stable or apples-to-apples CAGRA-vs-exact baselines.
+
 | 实际 Prompt token | 并发 | 每条输出 | 总墙钟 | TTFT | D 单次预测检索 |
 | ---: | ---: | ---: | ---: | ---: | ---: |
 | 236 | 1 | 8/8 | 39.02 s | 17.75 s | 9.62 s |
@@ -29,7 +84,8 @@ Gateway=`10.0.1.2:8001`；原 P/D GPU0、V 9000 和 Gateway 8000 服务未停。
 这些是每 Entry 冷建图、真实 Gateway 计时；尚无同长度、同配置的
 full-KV 或 GPU exact 公平对照，也不能作为质量/召回保证。
 
-2044-token **尚未通过**。首次请求在 600 s 客户端上限内没有完成：
+以下是修复前的 2044-token 失败经过，并非上方 1938-token 复测的最终状态。
+首次请求在 600 s 客户端上限内没有完成：
 D 的 64 MiB transfer staging 总预算小于约 112 MiB 的完整 Prompt KV，
 waiting-queue 把永久不可能的请求当作暂时容量不足而无限重试；该轮
 V 没有 fan-in reserve 或 RDMA UNKNOWN。已加入 fail-fast 回归。
@@ -42,7 +98,7 @@ transfer 标为 UNKNOWN 并隔离，D 正确拒绝安装未确认的 KV，SSE �
 所有 chunk terminal 前保留 MR 与整体 delivery fence。CPU 回归通过，
 CloudLab 上实际 1936-token 复测证实两个 V rank 各约 108416 切片分成
 14 个 batch，均以 `terminal_success` 结束且 V 无 UNKNOWN；但 SSE
-未返回完整 8 token 和 `[DONE]`，故**端到端长上下文仍未通过**。隔离 D
+当时未返回完整 8 token 和 `[DONE]`，故该轮**端到端长上下文未通过**。隔离 D
 在第二轮预测刷新记录 `scope entered` 后没有 `refresh ready`，V 未见新的
 已完成 search RPC。SIGUSR2 栈采样分别落在目标模型 forward 与 scheduler
 轮询，**没有**证明逐 Q-head GPU→CPU 拷贝是卡点；已加入 opt-in 挂起 task
@@ -57,7 +113,7 @@ completed request. Full SSE completion passed at actual Prompt lengths
 236, 517 and 1010, and with 2 and 4 concurrent clients. The table above
 contains cold-Entry latency and D search timings. Functionality passed;
 performance improvement did **not**: search latency rose with Prompt
-length and four clients delivered no throughput gain over two. A 2044-token
+length and four clients delivered no throughput gain over two. A historical 2044-token
 request first timed out at 600 s because its complete D Prompt KV exceeded
 the 64 MiB staging budget and the waiting gate silently retried an impossible
 request. The fail-fast fix is covered by CPU regressions. After raising the
@@ -69,8 +125,9 @@ services. Native batch chunking (at most 8,192 slices and two in-flight
 handles, with a whole-delivery fence) passed CPU regressions. In a live retry
 at 1,936 actual Prompt tokens, each V rank finished about 108,416
 slices in 14 chunks with `terminal_success` and no UNKNOWN. Nevertheless,
-the SSE stream ended without eight tokens and `[DONE]`, so end-to-end long
-context is **not accepted**. D logged a second prediction scope entry but no
+the SSE stream ended without eight tokens and `[DONE]`, so that run was
+**not accepted**; the later 1938-token successful result is reported above.
+D logged a second prediction scope entry but no
 refresh-ready event; V had no newly completed search RPC. SIGUSR2 stack
 samples landed in target forward and scheduler polling, not in a Q-head copy,
 so a copy bottleneck is only a hypothesis. Opt-in suspended-task-site logging

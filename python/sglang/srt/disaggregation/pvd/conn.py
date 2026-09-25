@@ -676,6 +676,11 @@ class PVDKVManager:
         endpoint = compute_health.get("session_id")
         if not isinstance(endpoint, str) or not endpoint.strip():
             raise PVDConnectionError("D compute Mooncake session is unavailable")
+        search_io_loop = (
+            None
+            if os.environ.get("PVD_SEARCH_BACKGROUND_IO") == "0"
+            else self.control.loop
+        )
         return assemble_routed_cuda_request(
             selected,
             request_id=req.rid,
@@ -697,11 +702,7 @@ class PVDKVManager:
             d_rails={route.rank: route.rail for route in selected.shards},
             poll_interval_seconds=poll_interval_seconds,
             initial_import_pending=initial_import_pending,
-            **(
-                {"search_io_loop": self.control.loop}
-                if os.environ.get("PVD_SEARCH_BACKGROUND_IO") == "1"
-                else {}
-            ),
+            search_io_loop=search_io_loop,
         )
 
     def client_for(self, req) -> PVDCoordinatorClient:

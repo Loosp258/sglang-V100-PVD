@@ -3263,6 +3263,25 @@ Decode token. Compare identical requests with background I/O off/on to
 establish actual interval overlap; never subtract monotonic timestamps
 across separate D processes.
 
+**2026-09-25 更新 / Update:** 上述“默认关闭”是当时短 Prompt
+实验的历史结论。后续隔离三机、约 1935-token Prompt 的无后台 I/O
+请求在目标前向约 35.5 s、搜索客户端 HTTP 超时 30 s 的组合下
+以 `finish_type=abort` 结束，仅返回 4/8 token；启用后台 I/O 后，
+实际 1938-token 请求完整返回 8/8，并且 1/2/4 并发约 515-token
+请求全部完整。因此 CUDA 路由请求现默认使用管理器已有的后台 I/O
+loop，只有显式 `PVD_SEARCH_BACKGROUND_IO=0` 才关闭。该结论仅是
+功能/长前向下的进展保障，不是性能收益或完整召回验收；数值证据见
+`docs/PVD_CAGRA_Acceptance_CN_EN.md` 顶部。
+
+The preceding “default off” statement was the historical conclusion from
+short-Prompt samples. A later isolated ~1935-token run without background
+I/O aborted after 4/8 tokens while target forwards took ~35.5 s and the
+search HTTP timeout was 30 s. With background I/O, an actual 1938-token
+request completed 8/8; matched ~515-token requests completed at 1/2/4
+clients. Routed CUDA requests therefore use the manager-owned I/O loop by
+default, with explicit `PVD_SEARCH_BACKGROUND_IO=0` as an opt-out. This is
+progress under long blocking forwards, not a speedup or recall claim.
+
 CloudLab 时间线 `6357dd340` 的一次固定 20-token 请求返回 20/20 SSE。
 热态 boundary 8 中，D forward（committed 7）区间为
 `489667.699731–489667.765947`，四个 V search HTTP 区间约

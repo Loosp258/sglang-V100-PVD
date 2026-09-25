@@ -45,6 +45,9 @@ case "$role" in
     root=/mnt/sglang-data/yiliu124-node-2-sglang-pvd
     work="$root/pvd-long-acceptance-20260925"
     checkout="${PVD_D_CHECKOUT:-$root/src/sglang-PVD-validate-8a96123b0-long}"
+    # Long online target forwards can exceed the search client's HTTP timeout.
+    # Keep V search I/O advancing while the scheduler executes that forward.
+    export PVD_SEARCH_BACKGROUND_IO="${PVD_SEARCH_BACKGROUND_IO:-1}"
     export PYTHONPATH="$checkout/python:$root/deps/pvd-validation-mooncake"
     if [[ -n "${PVD_STACK_SIGNAL_DIR:-}" ]]; then
       export PYTHONPATH="$PVD_STACK_SIGNAL_DIR:$PYTHONPATH"
