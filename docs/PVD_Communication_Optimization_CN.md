@@ -214,6 +214,27 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
   KV-head 工作集、生成 token 的 D 本地 KV、数值精度和
   bank read lease/CUDA fence。
 
+### 2026-09-26 融合 attention 原型（尚未接入 serving）
+
+提交 `e5d0defc8` 新增独立的 Triton 单 kernel 原型：每个 Q head
+一个 program，在 kernel 内按 tile 对 Prompt K/V 与 D 本地生成 K/V
+做 FP32 online softmax；测试仍使用完整 softmax 独立参考。
+V100S/SM70、Triton 3.5.1 上，12 种 Prompt 长度、tile=8/64
+及额外高 logits case 均通过；普通 case 的最大绝对误差
+`2.4414e-4`，高 logits case 为 `9.7656e-4`。1923-token、
+5 次热态单层调用中位墙钟约 `0.169 ms`，CUDA event 约
+`0.152 ms`。这是原型 kernel 的调用耗时，不包含 Prompt bank
+变换、GPU 行索引制作、任何网络通信或模型 forward。
+
+**当前不能据此宣布 PVD 提速。** 原型要求 Prompt KV 为
+`[KV-head, K/V, token, dim]` 连续张量，而现有 bank 按
+`(layer, KV-head)` 保存独立的 `[2, tokens, dim]` 张量；
+它也尚未接入原有的 bank read lease、generated-row pin、
+CUDA drain/quarantine 和显存预算。直接在每次 Decode 前
+`stack` Prompt KV 会重新引入大量复制；下一步必须建立
+零拷贝的 per-head 指针/长度接口，或在 bank 安装阶段受预算
+约束地一次性打包，再做同条件真实模型前向及端到端 A/B。
+
 ## 实施与验收顺序
 
 1. 固定 A/B 负载：同模型、prompt 长度、输出长度、冷/热 Entry、
