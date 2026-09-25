@@ -29,14 +29,20 @@ Gateway=`10.0.1.2:8001`；原 P/D GPU0、V 9000 和 Gateway 8000 服务未停。
 这些是每 Entry 冷建图、真实 Gateway 计时；尚无同长度、同配置的
 full-KV 或 GPU exact 公平对照，也不能作为质量/召回保证。
 
-2044-token 的首次请求在 600 s 客户端上限内**没有完成**，不能列入通过。
-V 两 rank 已建原生 CAGRA 图，但 D 的 64 MiB transfer staging
-总预算小于该请求约 112 MiB 的完整 Prompt KV。waiting-queue 旧逻辑
-把永久不可能的请求当作暂时容量不足而无限重试；V 没有该请求的 fan-in
-reserve、RDMA 未出现 UNKNOWN。现已加入 fail-fast 回归，隔离 D 下一轮
-改为 256 MiB staging 后须重跑。CPU-only 的 Qwen 形状计划探针测得
-2044 token/228928 切片、13.88 MB manifest，构造+校验约 4.36 s；
-这不能解释 600 s 等待，更不能代替真实 RDMA 计时。
+2044-token **尚未通过**。首次请求在 600 s 客户端上限内没有完成：
+D 的 64 MiB transfer staging 总预算小于约 112 MiB 的完整 Prompt KV，
+waiting-queue 把永久不可能的请求当作暂时容量不足而无限重试；该轮
+V 没有 fan-in reserve 或 RDMA UNKNOWN。已加入 fail-fast 回归。
+隔离 D 改为 256 MiB 后再次请求，虽然两 V rank 均建好原生 CAGRA 图，
+每 rank 单次提交约 114464 个 Mooncake 原生切片的 fan-in batch，
+约 57 s 后 `Sync batch data transfer timeout`，V 两 rank 均将不确定
+transfer 标为 UNKNOWN 并隔离，D 正确拒绝安装未确认的 KV，SSE 未完成。
+该隔离 PVD sidecar 已按 V sender 先、D receiver 后的顺序停止，原服务保留。
+代码已改为每个原生 batch 最多 8192 切片、最多两个并发 handle；
+所有 chunk terminal 前保留 MR 与整体 delivery fence。CPU 回归通过，
+**CloudLab 上的分批长上下文复测尚待完成**。CPU-only 的 Qwen 形状计划
+探针测得 2044 token/228928 切片、13.88 MB manifest，构造+校验约
+4.36 s；它不能代替真实 RDMA 计时。
 
 The isolated Qwen2.5-7B run used P GPU1/TP1, V two GPU shards, D
 GPU1/TP1, and the separate 8001 Gateway; original services stayed up.
@@ -46,11 +52,17 @@ completed request. Full SSE completion passed at actual Prompt lengths
 contains cold-Entry latency and D search timings. Functionality passed;
 performance improvement did **not**: search latency rose with Prompt
 length and four clients delivered no throughput gain over two. A 2044-token
-request timed out at 600 s because its complete D Prompt KV exceeded the
-64 MiB staging budget and the waiting gate silently retried an impossible
-request. A fail-fast fix is covered by CPU regressions; rerun with a 256 MiB
-isolated D budget is pending. No apples-to-apples baseline, long-context
-quality set or per-length recall distribution has been established.
+request first timed out at 600 s because its complete D Prompt KV exceeded
+the 64 MiB staging budget and the waiting gate silently retried an impossible
+request. The fail-fast fix is covered by CPU regressions. After raising the
+isolated D budget to 256 MiB, a second request reached native fan-in but each
+V rank's single batch of about 114,464 slices timed out after about 57 s.
+Both V ranks quarantined the uncertain transfer, and D did not install KV.
+The isolated V sender then D receiver were stopped without touching original
+services. Native batch chunking (at most 8,192 slices and two in-flight
+handles, with a whole-delivery fence) passed CPU regressions; a live retry is
+still pending. No apples-to-apples baseline, long-context quality set or
+per-length recall distribution has been established.
 
 ## 2026-09-25 在线 native CAGRA 与有界 SSE 并发探针 / Live native and bounded SSE load
 

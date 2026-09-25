@@ -9,6 +9,7 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
+import sglang.srt.disaggregation.pvd.full_kv_fanin_writer as writer_module
 import test_pvd_fanin_lifecycle as lifecycle
 import torch
 from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
@@ -114,6 +115,30 @@ class BatchEngine(FakeTransferEngine):
         return handle
 
 
+class DelayedBatchEngine(FakeTransferEngine):
+    def __init__(self):
+        super().__init__()
+        self.batch_calls = []
+
+    def submit_batch_put(self, slices, remote, *, remote_offsets):
+        handle = TransferHandle(
+            uuid.uuid4().hex, transport_state=TransportState.IN_FLIGHT
+        )
+        self.batch_calls.append((handle, slices, remote, remote_offsets))
+        return handle
+
+    def complete(self, handle):
+        _, slices, remote, offsets = next(
+            row for row in self.batch_calls if row[0] is handle
+        )
+        for local, offset in zip(slices, offsets, strict=True):
+            part = super().submit_put(local, remote, remote_offset=offset)
+            assert part.transport_state == TransportState.TERMINAL_SUCCESS
+            handle.transferred_bytes += part.transferred_bytes
+        handle.status = TransferStatus.SUCCESS
+        handle.transport_state = TransportState.TERMINAL_SUCCESS
+
+
 def test_two_writers_reconstruct_bytes_and_feed_receiver_proofs(case):
     c = case
     c.manifest = c.receiver.publish()
@@ -164,6 +189,139 @@ def test_native_batch_writer_preserves_exact_fanin_proof(case):
         ]
         c.receiver.close()
         assert c.released == ["MR released"]
+
+
+def test_native_batch_chunks_reconstruct_and_fence_only_after_every_chunk(
+    case, monkeypatch
+):
+    c = case
+    c.manifest = c.receiver.publish()
+    monkeypatch.setattr(writer_module, "NATIVE_BATCH_MAX_SLICES", 2)
+    engine = BatchEngine()
+    with (
+        writer(c, 0, engine=engine, use_native_batch=True) as a,
+        writer(c, 1, engine=engine, use_native_batch=True) as b,
+    ):
+        c.receiver.adopt({0: a.result.identity, 1: b.result.identity})
+        c.guard.request_release()
+        for w in (a, b):
+            proof = w.result.start()
+            assert not proof["fenced"]
+            for _ in range(20):
+                if proof["fenced"]:
+                    break
+                proof = w.result.poll()
+            assert proof["fenced"] and proof["transport_state"] == "terminal_success"
+            c.receiver.observe(proof)
+            assert not w.result._pending
+        assert c.receiver.ready
+        assert len(engine.batch_calls) == 12
+        assert all(len(slices) <= 2 for slices, _ in engine.batch_calls)
+        assert c.engine.total_put_bytes == 0
+        assert engine.total_put_bytes == c.size
+        c.receiver.close()
+        assert c.released == ["MR released"]
+
+
+def test_native_batch_chunking_respects_inflight_cap_and_retains_source(
+    case, monkeypatch
+):
+    c = case
+    c.manifest = c.receiver.publish()
+    monkeypatch.setattr(writer_module, "NATIVE_BATCH_MAX_SLICES", 2)
+    engine = DelayedBatchEngine()
+    with writer(c, 0, engine=engine, use_native_batch=True, max_inflight=2) as w:
+        proof = w.result.start()
+        assert len(engine.batch_calls) == 2 and not proof["fenced"]
+        w.result.poll()
+        assert len(engine.batch_calls) == 2 and not w.releases
+
+        engine.complete(engine.batch_calls[0][0])
+        w.result.poll()
+        assert len(engine.batch_calls) == 3 and not w.releases
+
+        for _ in range(20):
+            for handle, *_ in engine.batch_calls:
+                if handle.transport_state == TransportState.IN_FLIGHT:
+                    engine.complete(handle)
+            proof = w.result.poll()
+            if proof["fenced"]:
+                break
+        assert proof["transport_state"] == "terminal_success"
+        assert proof["fenced"] and w.releases == [0]
+        assert len(engine.batch_calls) == 6
+        assert engine.total_put_bytes == c.size // 2
+
+
+def test_native_batch_later_submit_uncertain_never_replays_or_unpins(case, monkeypatch):
+    c = case
+    c.manifest = c.receiver.publish()
+    monkeypatch.setattr(writer_module, "NATIVE_BATCH_MAX_SLICES", 2)
+
+    class LostHandle(BatchEngine):
+        def submit_batch_put(self, slices, remote, *, remote_offsets):
+            if self.batch_calls:
+                raise RuntimeError("native write posted but handle was lost")
+            return super().submit_batch_put(
+                slices, remote, remote_offsets=remote_offsets
+            )
+
+    engine = LostHandle()
+    with writer(c, engine=engine, use_native_batch=True) as w:
+        proof = w.result.start()
+        assert proof["transport_state"] == "unknown" and not proof["fenced"]
+        assert len(engine.batch_calls) == 1
+        for _ in range(3):
+            assert w.result.poll() == proof
+        assert not w.result.cancel()["fenced"]
+        assert len(engine.batch_calls) == 1 and not w.releases
+        assert w.result._source is not None
+
+
+def test_native_batch_cancel_drains_only_submitted_chunks(case, monkeypatch):
+    c = case
+    c.manifest = c.receiver.publish()
+    monkeypatch.setattr(writer_module, "NATIVE_BATCH_MAX_SLICES", 2)
+    engine = DelayedBatchEngine()
+    with writer(c, engine=engine, use_native_batch=True, max_inflight=2) as w:
+        assert not w.result.start()["fenced"]
+        assert len(engine.batch_calls) == 2
+        proof = w.result.cancel()
+        assert proof["transport_state"] == "draining" and not proof["fenced"]
+        assert not w.releases
+        for handle, *_ in engine.batch_calls:
+            assert handle.status == TransferStatus.CANCELLED
+            engine.complete(handle)
+        proof = w.result.poll()
+        assert proof["transport_state"] == "terminal_failed" and proof["fenced"]
+        assert len(engine.batch_calls) == 2 and w.releases == [0]
+
+
+def test_native_batch_terminal_failure_stops_remaining_chunks(case, monkeypatch):
+    c = case
+    c.manifest = c.receiver.publish()
+    monkeypatch.setattr(writer_module, "NATIVE_BATCH_MAX_SLICES", 2)
+
+    class FailsSecond(BatchEngine):
+        def submit_batch_put(self, slices, remote, *, remote_offsets):
+            if self.batch_calls:
+                self.batch_calls.append((slices, remote_offsets))
+                return TransferHandle(
+                    uuid.uuid4().hex,
+                    status=TransferStatus.FAILED,
+                    transport_state=TransportState.TERMINAL_FAILED,
+                )
+            return super().submit_batch_put(
+                slices, remote, remote_offsets=remote_offsets
+            )
+
+    engine = FailsSecond()
+    with writer(c, engine=engine, use_native_batch=True) as w:
+        proof = w.result.start()
+        assert proof["transport_state"] == "terminal_failed" and proof["fenced"]
+        assert len(engine.batch_calls) == 2
+        assert proof["transferred_bytes"] < c.size // 2
+        assert w.result.poll() == proof and w.releases == [0]
 
 
 def test_fanin_terminal_diagnostic_is_aggregated_once(case, caplog):

@@ -34,6 +34,12 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 
 logger = logging.getLogger(__name__)
 
+# Classic Mooncake 0.3.13.post1 can time out one aggregate batch containing
+# more than 100k disjoint GPU slices even when the payload is only tens of MB.
+# A bounded native handle per chunk preserves the existing whole-delivery fence:
+# source and destination stay pinned until *every* handle is terminal.
+NATIVE_BATCH_MAX_SLICES = 8192
+
 
 class FullKVFanInWriter:
     def __init__(
@@ -284,8 +290,15 @@ class FullKVFanInWriter:
         try:
             self._drain()
             if self._native_batch:
-                self._submit_batch()
-                self._drain()
+                # Fill at most one window per poll. A fast terminal chunk can
+                # free a slot immediately, but the bounded loop prevents the
+                # reaper interval from serializing every native submission.
+                for _ in range(self._max_inflight):
+                    before = self._cursor
+                    self._submit_batch()
+                    self._drain()
+                    if self._cursor == before:
+                        break
                 self._finish()
                 return self.snapshot()
             for _ in range(self._max_inflight):
@@ -362,15 +375,17 @@ class FullKVFanInWriter:
             self._drive_lock.release()
 
     def _submit_batch(self):
-        # The validated plan already proves disjoint destination ranges. One
-        # aggregate handle owns all slices until native full-batch completion.
+        # The validated plan already proves disjoint destination ranges. Bound
+        # each native batch's work; the writer still owns all handles until the
+        # complete plan has locally safe terminal evidence.
         with self._lock:
             if (
                 not self._started
                 or self._cancelled
                 or self._unknown
                 or self._terminal is not None
-                or self._cursor != 0
+                or self._cursor == len(self._parts)
+                or len(self._pending) >= self._max_inflight
             ):
                 return
             source = self._source
@@ -383,17 +398,20 @@ class FullKVFanInWriter:
                 self.error = "source registration changed"
                 self._authorization.close()
                 return
+            end = min(self._cursor + NATIVE_BATCH_MAX_SLICES, len(self._parts))
+            parts = self._parts[self._cursor : end]
             slices = tuple(
                 MemorySlice(
                     source.registration,
                     source.offset + part.local_offset,
                     part.length,
                 )
-                for part in self._parts
+                for part in parts
             )
-            offsets = tuple(part.remote_offset for part in self._parts)
-            expected = sum(part.length for part in self._parts)
-            self._authorization.begin(self.identity)
+            offsets = tuple(part.remote_offset for part in parts)
+            expected = sum(part.length for part in parts)
+            if not self._attempted:
+                self._authorization.begin(self.identity)
             self._attempted = self._submitting = True
         submit_started = time.monotonic()
         self._submit_calls += 1
@@ -420,7 +438,7 @@ class FullKVFanInWriter:
         else:
             with self._lock:
                 self._pending.append((handle, expected))
-                self._cursor = len(self._parts)
+                self._cursor = end
                 if handle.transport_state in (
                     TransportState.UNKNOWN,
                     TransportState.TERMINAL_FAILED,

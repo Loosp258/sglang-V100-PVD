@@ -10,7 +10,8 @@ case "$role" in
   v)
     root=/mnt/sglang-data/yiliu124-node-1-sglang-pvd
     work="$root/pvd-long-acceptance-20260925"
-    export PYTHONPATH="$root/src/sglang-PVD-validate-91c284b12/python:$root/deps/pvd-validation-mooncake"
+    checkout="${PVD_V_CHECKOUT:-$root/src/sglang-PVD-validate-91c284b12}"
+    export PYTHONPATH="$checkout/python:$root/deps/pvd-validation-mooncake"
     cuda_lib="$root/conda-envs/sglang-v100/lib/python3.12/site-packages/nvidia"
     cuvs_lib="$root/deps/pvd-cagra25-venv/lib/python3.12/site-packages"
     export LD_LIBRARY_PATH="$cuda_lib/cublas/lib:$cuda_lib/cusolver/lib:$cuda_lib/cusparse/lib:$cuda_lib/nvjitlink/lib:$cuda_lib/cuda_runtime/lib:$cuvs_lib/libcuvs/lib64:$cuvs_lib/libraft/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -36,14 +37,15 @@ case "$role" in
       --prompt-index-cagra-itopk-size 64 \
       --experimental-cuda-sparse-packing \
       --full-kv-fanin-max-slices 262144 \
-      --full-kv-fanin-max-inflight 16 \
+      --full-kv-fanin-max-inflight 2 \
       --full-kv-fanin-max-records 1024 \
       --full-kv-fanin-native-batch >"$work/v-large.log" 2>&1 </dev/null &
     ;;
   d)
     root=/mnt/sglang-data/yiliu124-node-2-sglang-pvd
     work="$root/pvd-long-acceptance-20260925"
-    export PYTHONPATH="$root/src/sglang-PVD-validate-8a96123b0-long/python:$root/deps/pvd-validation-mooncake"
+    checkout="${PVD_D_CHECKOUT:-$root/src/sglang-PVD-validate-8a96123b0-long}"
+    export PYTHONPATH="$checkout/python:$root/deps/pvd-validation-mooncake"
     if pgrep -f 'sglang.launch_server.*--port 30003' >/dev/null; then
       echo 'Refusing to start: isolated D server 30003 already exists' >&2
       exit 1
