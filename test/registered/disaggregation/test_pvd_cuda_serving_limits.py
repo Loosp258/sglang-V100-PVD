@@ -52,6 +52,24 @@ def test_loads_exact_config_as_immutable_dataclass(tmp_path):
         limits.lead_tokens = 3
 
 
+def test_v100s_chunk64_experiment_only_changes_attention_tile():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits.json").read_text()
+    )
+    alternative = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_chunk64.json").read_text()
+    )
+    assert baseline["attention_chunk_tokens"] == 8
+    assert alternative == {**baseline, "attention_chunk_tokens": 64}
+    limits = load_cuda_serving_limits(
+        directory / "pvd_qwen_v100s_serving_limits_chunk64.json",
+        refresh_interval=4,
+        predict_tokens=2,
+    )
+    assert limits.attention_chunk_tokens == 64
+
+
 @pytest.mark.parametrize(
     "mutate, message",
     [
