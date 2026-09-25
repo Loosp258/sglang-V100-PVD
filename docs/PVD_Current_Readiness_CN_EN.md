@@ -2751,3 +2751,27 @@ shard's total head-build time was only about 8–21 ms. This directly locates
 the main first-request cost for this case in per-head CAGRA construction,
 not Prompt-K extraction. It does not identify the optimal policy for longer
 indexes or measure concurrent throughput.
+
+### 跨刷新轮次复用版本 pin / Reuse version pins across refresh windows
+
+请求绑定的 `RoutedShardSearchClient` 现在只在整轮搜索成功完成并形成
+完整 `ProbeSelection` 后，保存每个已选 V source 的 index/mapping
+版本。后续同一 Entry 和路由的刷新轮次直接以这些版本发批量搜索，
+不再每轮重复单查一个 head 来获取版本；V 返回不一致版本时拒绝整轮，
+不会自动重建 pin 或发布部分选择。路由关闭即清除缓存，不跨 Entry 或
+端点复用。首轮仍使用既有先单查再批量的协议。
+真实 HTTP/双 V source 测试验证首轮 2 次单查 + 2 次批量，第二轮
+只有 2 次批量；取消、被篡改回复均没有留下版本缓存。
+该改动尚未部署到 D 实机，延迟收益仍待测。
+
+The Entry-bound `RoutedShardSearchClient` now remembers each selected V
+source's index/mapping version only after the entire search window produces
+a complete `ProbeSelection`. Later windows for that same Entry and route send
+pinned batches directly, without repeating one single-head discovery request
+per source. A changed V version refuses the whole round; it is neither
+silently repinned nor partially published. Closing the route clears the
+cache, which never crosses an Entry or endpoint. The first window keeps the
+existing single-then-batch protocol. A real HTTP/two-source test observes
+two singles and two batches initially, then only two batches in the next
+window; cancellation and corrupted replies retain no pins. This D change
+has not yet been measured on CloudLab.

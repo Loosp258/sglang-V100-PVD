@@ -121,7 +121,38 @@ class RoutedShardSearchClient:
             type(client) is PVDShardSearchClient for client in clients.values()
         )
         self._endpoints = {rank: client.base_url for rank, client in clients.items()}
+        # This routing object is bound to one immutable Entry and selected V
+        # endpoints. A complete search window may carry its verified version
+        # pins into later windows; a changed index then fails closed instead
+        # of being silently rediscovered with an unpinned search.
+        self._verified_versions = {}
         self._closed = False
+
+    def verified_versions(self):
+        if self._closed:
+            raise ShardSearchError("routed search client is closed")
+        return dict(self._verified_versions) if self.supports_batch else {}
+
+    def remember_verified_versions(self, versions):
+        if self._closed:
+            raise ShardSearchError("routed search client is closed")
+        if not self.supports_batch or not isinstance(versions, dict):
+            raise ValueError("verified version cache requires bounded batch routing")
+        for rank, pair in versions.items():
+            if (
+                type(rank) is not int
+                or rank not in self.clients
+                or not isinstance(pair, tuple)
+                or len(pair) != 2
+                or any(
+                    not isinstance(value, str) or not value.strip() for value in pair
+                )
+            ):
+                raise ValueError("invalid V source version pair")
+            previous = self._verified_versions.get(rank)
+            if previous is not None and previous != pair:
+                raise ValueError("V source index version changed within this Entry")
+        self._verified_versions.update(versions)
 
     def version_scope(self, identity):
         """Trusted source rank, used to pin versions BEFORE each HTTP query."""
@@ -216,3 +247,4 @@ class RoutedShardSearchClient:
         # Borrowed clients may also serve another D/request. Their owner closes
         # them only after all windows using them have drained.
         self._closed = True
+        self._verified_versions.clear()

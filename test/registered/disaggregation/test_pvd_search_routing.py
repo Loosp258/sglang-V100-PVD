@@ -435,6 +435,7 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
                 with pytest.raises(asyncio.CancelledError):
                     await task
                 assert session._ready is None
+                assert routing.verified_versions() == {}
                 with pytest.raises(ValueError):
                     session.take_selection(window)
                 return
@@ -442,6 +443,7 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
                 with pytest.raises(ValueError, match="identity or version changed"):
                     await session.search(prepared, routing)
                 assert session._ready is None
+                assert routing.verified_versions() == {}
                 with pytest.raises(ValueError):
                     session.take_selection(window)
                 return
@@ -451,6 +453,7 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
             assert {rank for rank, _ in singles} == {0, 1}
             assert len(singles) == 2
             assert len(batches) == 2
+            assert set(routing.verified_versions()) == {0, 1}
             for rank, identities in batches:
                 assert len(identities) == 3
                 assert all(identity.kv_head // 2 == rank for identity in identities)
@@ -458,5 +461,30 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
                 assert all(
                     identity.expected_id_mapping_version for identity in identities
                 )
+
+            # The same Entry and selected V endpoints survive another refresh
+            # window. Both source versions have already been verified, so all
+            # groups can be sent pinned in two batches without new singles.
+            next_session = ProbeSearchSession("request", manifest.key.transfer_id)
+            next_window = next_session.begin(
+                prefix, target_tokens=4, query_positions=(5,)
+            )
+            next_prepared = next_session.prepare(
+                next_window,
+                pipeline,
+                routes=routes,
+                head_mapping=QueryHeadMapping(8, 4),
+            )
+            await next_session.search(next_prepared, routing)
+            assert len(next_session.take_selection(next_window).selections) == 8
+            assert len(singles) == 2
+            assert len(batches) == 4
+            assert sorted(len(identities) for _, identities in batches[2:]) == [4, 4]
+            pinned = routing.verified_versions()
+            with pytest.raises(ValueError, match="version changed"):
+                routing.remember_verified_versions(
+                    {0: ("foreign-index-version", pinned[0][1])}
+                )
+            assert routing.verified_versions() == pinned
 
     asyncio.run(run())

@@ -469,7 +469,11 @@ class ProbeSearchSession:
                 for query in prepared.queries
             )
             query_groups = _group_search_queries(prepared.queries, source_scopes)
-            source_versions = {}
+            source_versions = (
+                client.verified_versions()
+                if isinstance(client, RoutedShardSearchClient) and client.supports_batch
+                else {}
+            )
 
             def group_request(group_index, versions):
                 members = query_groups[group_index]
@@ -691,9 +695,12 @@ class ProbeSearchSession:
                 if tasks:
                     await asyncio.gather(*tasks.values(), return_exceptions=True)
             self._match(window)
-            self._ready = ProbeSelection(
+            selection = ProbeSelection(
                 window, prepared.queries, tuple(results), query_groups
             )
+            if isinstance(client, RoutedShardSearchClient) and client.supports_batch:
+                client.remember_verified_versions(source_versions)
+            self._ready = selection
         except BaseException:
             if self._pending is window:
                 self.invalidate()
