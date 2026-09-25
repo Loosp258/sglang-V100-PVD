@@ -2454,3 +2454,39 @@ registrations and PUTs are refused until recovery.
   Initial Prompt must be installed before Decode; generated KV stays on D; Entries are reusable.
 - 取消、超时、UNKNOWN 都不是原生完成证明；未排空不复用资源、不退预算。
   Cancellation, timeout and UNKNOWN are not native fences; ownership outlives the operation.
+
+## 2026-09-25 V100S 稀疏注意力延迟调查 / Sparse-attention latency investigation
+
+三机 Qwen2.5-7B 试验中，同一固定输入的预测检索模式（8-token tile）
+SSE 端到端约 14.2 秒、中位 token 间隔约 0.72 秒；完整 Prompt KV
+对照约 2.3–2.6 秒、0.03 秒。64-token tile 有改善，但仍约 12.2 秒。
+因此当前实现不能声称已达到“D 感觉 KV 在本地”的最终延迟目标。
+
+在 D 节点 V100S GPU0 的独立单层 GQA 微基准中，Prompt32 + 生成20 token
+时逐块路径中位约 48.86 ms，有界 SDPA 约 1.33 ms，输出最大绝对差
+约 1.5e-5；Prompt99 + 生成20 时约 98.08 ms 对 1.34 ms。
+这只是合成数据微基准，并非模型前向或三机服务结果。
+
+新 `attention_impl=sdpa_bounded` 为默认关闭的短上下文实验路径：
+`max_sequence_tokens <= 256`，选中 Prompt + 本请求生成 KV 不超过此上限，
+预留显式 K/V 工作集以及保守的 SDPA 临时区估算；原有资源租约和设备完成
+栅栏不变。Torch CUDA 后端的内部峰值显存无法从此估算严格证明，
+启用前必须在 V100S 实测峰值、对照 token 正确性、端到端延迟及故障回收。
+
+In the three-node Qwen2.5-7B run, predictive retrieval with 8-token attention
+tiles took about 14.2 s end-to-end and 0.72 s median inter-token gap on one
+fixed input, versus 2.3–2.6 s and 0.03 s for full Prompt KV. A 64-token tile
+improved the result to about 12.2 s but did not close the gap. The final
+local-KV-like latency goal is therefore **not met**.
+
+An isolated V100S single-layer synthetic GQA microprobe measured 48.86 ms
+online versus 1.33 ms bounded SDPA at Prompt32 + generated20, with 1.5e-5
+maximum output difference; at Prompt99 + generated20 it measured 98.08 ms
+versus 1.34 ms. This is not model-forward or end-to-end evidence.
+
+The new opt-in `attention_impl=sdpa_bounded` is restricted to
+`max_sequence_tokens <= 256`, reserves an explicit K/V workset and a
+conservative estimate for SDPA temporaries, and retains the existing reader
+leases and device completion fence. Opaque Torch CUDA allocations are not
+strictly bounded by this estimate; V100S peak memory, output equivalence,
+end-to-end latency and fault cleanup remain mandatory validation.

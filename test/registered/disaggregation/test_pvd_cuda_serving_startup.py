@@ -1,5 +1,6 @@
 """Owner identity and aggregate-budget tests for production CUDA composition."""
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -112,6 +113,19 @@ def test_composition_shares_one_lock_and_target_scratch_budget(monkeypatch):
     assert admission.execution_lock is installed.target.execution_lock
     assert installed.head_mapping.num_query_heads == 28
     assert installed.head_mapping.total_kv_heads == 4
+    assert target["attention_impl"] == "online"
+    assert target["max_sequence_tokens"] == 64
+    assert target["num_query_heads"] == 28
+    assert target["total_kv_heads"] == 4
+
+
+def test_opt_in_sdpa_reaches_target_workspace_without_changing_prediction(monkeypatch):
+    scheduler, limits, observed = _setup(monkeypatch)
+    startup.install_cuda_predictive_serving(
+        scheduler, replace(limits, attention_impl="sdpa_bounded")
+    )
+    assert observed["target"]["attention_impl"] == "sdpa_bounded"
+    assert "attention_impl" not in observed["prediction"]
 
 
 @pytest.mark.parametrize("wrong_lock,wrong_budget", [(True, False), (False, True)])
@@ -163,7 +177,11 @@ def test_enabled_startup_gate_loads_config_and_installs(monkeypatch):
         return limits
 
     monkeypatch.setattr(cuda_serving_limits, "load_cuda_serving_limits", load)
-    monkeypatch.setattr(startup, "install_cuda_predictive_serving", lambda s, l: (s, l))
+    monkeypatch.setattr(
+        startup,
+        "install_cuda_predictive_serving",
+        lambda scheduler_arg, limits_arg: (scheduler_arg, limits_arg),
+    )
     assert startup.maybe_install_cuda_predictive_serving(scheduler) == (
         scheduler,
         limits,

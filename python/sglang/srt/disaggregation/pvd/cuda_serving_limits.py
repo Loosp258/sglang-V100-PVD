@@ -21,6 +21,7 @@ _NONNEGATIVE_INTEGER_FIELDS = (
 )
 _DURATION_FIELDS = ("request_timeout_seconds", "poll_interval_seconds")
 _FIELDS = frozenset(_INTEGER_FIELDS + _NONNEGATIVE_INTEGER_FIELDS + _DURATION_FIELDS)
+_OPTIONAL_FIELDS = frozenset(("attention_impl",))
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class CUDAServingLimits:
     probe_transient_bytes_bound: int
     target_scratch_max_reservations: int
     bank_max_reservations: int
+    attention_impl: str = "online"
 
 
 def _reject_constant(value):
@@ -95,7 +97,7 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
     config = _read_json_object(path)
     actual_fields = set(config)
     missing = _FIELDS - actual_fields
-    extra = actual_fields - _FIELDS
+    extra = actual_fields - _FIELDS - _OPTIONAL_FIELDS
     if missing or extra:
         details = []
         if missing:
@@ -137,5 +139,15 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
         raise ValueError("lead_tokens must not exceed predict_tokens")
     if values["max_sequence_tokens"] <= predict_tokens:
         raise ValueError("max_sequence_tokens must exceed predict_tokens")
+
+    attention_impl = config.get("attention_impl", "online")
+    if (
+        attention_impl not in ("online", "sdpa_bounded")
+        or type(attention_impl) is not str
+    ):
+        raise ValueError("attention_impl must be online or sdpa_bounded")
+    if attention_impl == "sdpa_bounded" and values["max_sequence_tokens"] > 256:
+        raise ValueError("sdpa_bounded requires max_sequence_tokens <= 256")
+    values["attention_impl"] = attention_impl
 
     return CUDAServingLimits(**values)

@@ -83,6 +83,10 @@ def install_cuda_target_components(
     dtype,
     head_dim,
     chunk_tokens,
+    attention_impl="online",
+    max_sequence_tokens=None,
+    total_kv_heads=None,
+    num_query_heads=None,
     target_scratch_budget,
     max_batch_size,
     max_requests,
@@ -158,6 +162,10 @@ def install_cuda_target_components(
             head_dim=head_dim,
             chunk_tokens=chunk_tokens,
             budget=target_scratch_budget,
+            attention_impl=attention_impl,
+            max_sequence_tokens=max_sequence_tokens,
+            total_kv_heads=total_kv_heads,
+            num_query_heads=num_query_heads,
         )
         backend = make_cuda_sparse_backend(
             runner,

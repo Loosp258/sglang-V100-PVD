@@ -112,8 +112,93 @@ def _stream_attention(groups, buffers, mapping, layer, scale, scratch, chunk, di
             buffers.output[head].copy_(accum)
 
 
+def sdpa_workspace_bytes(max_tokens, kv_heads, query_heads, head_dim, dtype):
+    """Conservative reservation, including a bound for opaque SDPA temporaries.
+
+    This is not a proof of the CUDA library's actual peak allocation. The
+    opt-in path additionally requires real-device peak-memory validation.
+    """
+    if any(
+        type(n) is not int or n <= 0
+        for n in (max_tokens, kv_heads, query_heads, head_dim)
+    ):
+        raise SparsePayloadError("positive bounded SDPA dimensions required")
+    if (
+        query_heads < kv_heads
+        or query_heads % kv_heads
+        or dtype not in (torch.float16, torch.float32)
+    ):
+        raise SparsePayloadError("unsupported bounded SDPA head layout or dtype")
+    element_bytes = torch.empty((), dtype=dtype).element_size()
+    resident = 2 * kv_heads * max_tokens * head_dim * element_bytes
+    # Worst-case math fallback repeats K/V for every Q head. One-token scores,
+    # output and row indices are counted too; backend internals remain opaque.
+    transient = (
+        2 * query_heads * max_tokens * head_dim * element_bytes
+        + 4 * query_heads * max_tokens * 4
+        + query_heads * head_dim * element_bytes
+        + max_tokens * 8
+    )
+    return resident + transient
+
+
+def _sdpa_attention(groups, buffers, mapping, layer, scale, keys, values, max_tokens):
+    """Use only the selected Prompt workset and this request's generated rows."""
+    rows = buffers.generated_rows
+    generated_count = buffers.generated_k.shape[0] if rows is None else len(rows)
+    if any(
+        groups[(layer, head)][1].shape[1] + generated_count > max_tokens
+        for head in range(mapping.total_kv_heads)
+    ):
+        raise SparsePayloadError("bounded SDPA workset exceeds max_sequence_tokens")
+    row_ids = (
+        None
+        if rows is None
+        else torch.tensor(rows, dtype=torch.long, device=buffers.q.device)
+    )
+    with torch.inference_mode():
+        for kv_head in range(mapping.total_kv_heads):
+            prompt = groups[(layer, kv_head)][1]
+            prompt_count = prompt.shape[1]
+            total = prompt_count + generated_count
+            key = keys[kv_head, :total]
+            value = values[kv_head, :total]
+            key[:prompt_count].copy_(prompt[0])
+            value[:prompt_count].copy_(prompt[1])
+            for source, dest in (
+                (buffers.generated_k[:, kv_head], key[prompt_count:]),
+                (buffers.generated_v[:, kv_head], value[prompt_count:]),
+            ):
+                if row_ids is None:
+                    dest.copy_(source)
+                else:
+                    torch.index_select(source, 0, row_ids, out=dest)
+            first = kv_head * mapping.group_size
+            last = first + mapping.group_size
+            result = torch.nn.functional.scaled_dot_product_attention(
+                buffers.q[first:last][None, :, None, :],
+                key[None, None, :, :],
+                value[None, None, :, :],
+                scale=scale,
+                enable_gqa=True,
+            )
+            buffers.output[first:last].copy_(result[0, :, 0, :])
+
+
 class CUDASparseAttentionWorkspace:
-    def __init__(self, *, device, dtype, head_dim, chunk_tokens, budget):
+    def __init__(
+        self,
+        *,
+        device,
+        dtype,
+        head_dim,
+        chunk_tokens,
+        budget,
+        attention_impl="online",
+        max_sequence_tokens=None,
+        total_kv_heads=None,
+        num_query_heads=None,
+    ):
         count = scratch_elements(chunk_tokens, head_dim)
         self.device = torch.device(device)
         if self.device.type != "cuda" or self.device.index is None:
@@ -123,7 +208,15 @@ class CUDASparseAttentionWorkspace:
         if not isinstance(budget, TransferBudget) or not torch.cuda.is_available():
             raise SparsePayloadError("CUDA and explicit attention budget required")
         self.dtype, self.head_dim, self.chunk_tokens = dtype, head_dim, chunk_tokens
+        if attention_impl not in ("online", "sdpa_bounded"):
+            raise SparsePayloadError("unknown attention implementation")
+        self.attention_impl = attention_impl
+        self.max_sequence_tokens = max_sequence_tokens
+        self.total_kv_heads = total_kv_heads
+        self.num_query_heads = num_query_heads
         self._budget, self._owner = budget, f"cuda-attention:{uuid.uuid4().hex}"
+        self._sdpa_owner = f"{self._owner}:sdpa"
+        self._sdpa_keys = self._sdpa_values = None
         self._thread = threading.get_ident()
         self._closed, self._active, self._quarantine, self._held = (
             False,
@@ -137,6 +230,28 @@ class CUDASparseAttentionWorkspace:
         except BaseException:
             budget.release(self._owner)
             raise
+        if attention_impl == "sdpa_bounded":
+            try:
+                if type(max_sequence_tokens) is not int or max_sequence_tokens > 256:
+                    raise SparsePayloadError(
+                        "bounded SDPA requires max_sequence_tokens <= 256"
+                    )
+                reservation = sdpa_workspace_bytes(
+                    max_sequence_tokens,
+                    total_kv_heads,
+                    num_query_heads,
+                    head_dim,
+                    dtype,
+                )
+                budget.reserve(self._sdpa_owner, reservation, 1)
+                shape = (total_kv_heads, max_sequence_tokens, head_dim)
+                self._sdpa_keys = torch.empty(shape, dtype=dtype, device=self.device)
+                self._sdpa_values = torch.empty(shape, dtype=dtype, device=self.device)
+            except BaseException:
+                self._sdpa_keys = self._sdpa_values = self._scratch = None
+                budget.release(self._sdpa_owner)
+                budget.release(self._owner)
+                raise
 
     def _check(self):
         if threading.get_ident() != self._thread:
@@ -182,6 +297,11 @@ class CUDASparseAttentionWorkspace:
                 raise SparsePayloadError(
                     "bank and attention device/dtype/dimension mismatch"
                 )
+            if self.attention_impl == "sdpa_bounded" and (
+                mapping.total_kv_heads != self.total_kv_heads
+                or mapping.num_query_heads != self.num_query_heads
+            ):
+                raise SparsePayloadError("bounded SDPA head mapping changed")
             pool_rows = decode_tokens + 1
             if buffers.generated_rows is not None:
                 rows = buffers.generated_rows
@@ -244,16 +364,28 @@ class CUDASparseAttentionWorkspace:
                 # The lease covers all operations and failure draining, not only
                 # Python's return from an asynchronous CUDA tensor operation.
                 try:
-                    _stream_attention(
-                        groups,
-                        buffers,
-                        mapping,
-                        layer,
-                        scale,
-                        self._scratch,
-                        self.chunk_tokens,
-                        self.head_dim,
-                    )
+                    if self.attention_impl == "sdpa_bounded":
+                        _sdpa_attention(
+                            groups,
+                            buffers,
+                            mapping,
+                            layer,
+                            scale,
+                            self._sdpa_keys,
+                            self._sdpa_values,
+                            self.max_sequence_tokens,
+                        )
+                    else:
+                        _stream_attention(
+                            groups,
+                            buffers,
+                            mapping,
+                            layer,
+                            scale,
+                            self._scratch,
+                            self.chunk_tokens,
+                            self.head_dim,
+                        )
                 finally:
                     try:
                         self._synchronize()
@@ -293,6 +425,18 @@ class CUDASparseAttentionWorkspace:
             if self._scratch is None
             else self._scratch.numel() * 4,
             "completion_policy": "device_synchronize",
+            "attention_impl": self.attention_impl,
+            "sdpa_reserved_bytes": (
+                sdpa_workspace_bytes(
+                    self.max_sequence_tokens,
+                    self.total_kv_heads,
+                    self.num_query_heads,
+                    self.head_dim,
+                    self.dtype,
+                )
+                if self.attention_impl == "sdpa_bounded" and self._sdpa_keys is not None
+                else 0
+            ),
         }
 
     def close(self):
@@ -304,5 +448,7 @@ class CUDASparseAttentionWorkspace:
         # Every execution drains before returning. Unknown completion has
         # already quarantined this object; close cannot override that state.
         self._scratch = None
+        self._sdpa_keys = self._sdpa_values = None
+        self._budget.release(self._sdpa_owner)
         self._budget.release(self._owner)
         self._closed = True

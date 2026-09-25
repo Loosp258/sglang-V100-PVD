@@ -104,6 +104,55 @@ def test_online_softmax_rescales_across_tiles_and_is_stable():
     torch.testing.assert_close(data.output, expected, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.parametrize("q_heads,kv_heads", [(2, 2), (4, 2), (4, 1)])
+def test_bounded_sdpa_matches_independent_online_oracle_with_scattered_rows(
+    q_heads, kv_heads
+):
+    prompt = groups((3, 1))
+    original = buffers(7, q_heads=q_heads)
+    rows = (7, 2, 5)
+    mapping = QueryHeadMapping(q_heads, kv_heads)
+    data = attention.AttentionBuffers(
+        original.q,
+        original.generated_k[:, :kv_heads].contiguous(),
+        original.generated_v[:, :kv_heads].contiguous(),
+        original.output,
+        rows,
+    )
+    selected = attention.AttentionBuffers(
+        data.q,
+        data.generated_k[list(rows)],
+        data.generated_v[list(rows)],
+        torch.empty_like(data.output),
+    )
+    scratch = torch.empty(attention.scratch_elements(2, 3))
+    attention._stream_attention(
+        prompt, selected, mapping, 0, 1 / math.sqrt(3), scratch, 2, 3
+    )
+    keys = torch.empty((kv_heads, 8, 3))
+    values = torch.empty_like(keys)
+    before = tuple(t.clone() for t in (data.q, data.generated_k, data.generated_v))
+    attention._sdpa_attention(
+        prompt, data, mapping, 0, 1 / math.sqrt(3), keys, values, 8
+    )
+    torch.testing.assert_close(data.output, selected.output, atol=2e-5, rtol=2e-5)
+    for tensor, old in zip(
+        (data.q, data.generated_k, data.generated_v), before, strict=True
+    ):
+        torch.testing.assert_close(tensor, old, atol=0, rtol=0)
+    with pytest.raises(SparsePayloadError, match="exceeds max_sequence_tokens"):
+        attention._sdpa_attention(
+            prompt, data, mapping, 0, 1 / math.sqrt(3), keys, values, 4
+        )
+
+
+def test_bounded_sdpa_reservation_includes_materialization_and_math_fallback():
+    count = attention.sdpa_workspace_bytes(128, 4, 28, 128, torch.float16)
+    assert count > 2 * 4 * 128 * 128 * 2
+    with pytest.raises(SparsePayloadError):
+        attention.sdpa_workspace_bytes(128, 3, 28, 128, torch.float16)
+
+
 @pytest.mark.parametrize("q_heads,kv_heads", [(2, 2), (4, 1)])
 def test_mha_mqa_and_explicit_attention_scale(q_heads, kv_heads):
     prompt, original = groups(), buffers(5, q_heads=q_heads)
@@ -123,7 +172,7 @@ def test_mha_mqa_and_explicit_attention_scale(q_heads, kv_heads):
     torch.testing.assert_close(data.output, expected, atol=2e-5, rtol=2e-5)
 
 
-def policy_workspace(monkeypatch, *, capacity=4096):
+def policy_workspace(monkeypatch, *, capacity=4096, attention_impl="online"):
     # Only allocation placement and synchronization are replaced, not the math.
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     original = torch.empty
@@ -138,6 +187,10 @@ def policy_workspace(monkeypatch, *, capacity=4096):
             head_dim=3,
             chunk_tokens=2,
             budget=budget,
+            attention_impl=attention_impl,
+            max_sequence_tokens=8 if attention_impl == "sdpa_bounded" else None,
+            total_kv_heads=2 if attention_impl == "sdpa_bounded" else None,
+            num_query_heads=4 if attention_impl == "sdpa_bounded" else None,
         )
     workspace.device = torch.device("cpu")
     syncs = []
@@ -187,6 +240,31 @@ def test_workspace_is_charged_before_execution_and_input_guard_survives_fence(
     execute(workspace, peers[0], resources)
     assert syncs == [True] and released == [True]
     torch.testing.assert_close(data.output, expected, atol=2e-5, rtol=2e-5)
+    workspace.close()
+    assert budget.snapshot()["used_staging_bytes"] == 0
+    for peer in peers.values():
+        peer.close()
+
+
+def test_bounded_sdpa_workspace_reserves_before_use_and_releases_after_fence(
+    monkeypatch,
+):
+    peers, exchange, _, _ = setup(monkeypatch)
+    complete(peers, exchange, 0)
+    workspace, budget, syncs = policy_workspace(
+        monkeypatch, attention_impl="sdpa_bounded"
+    )
+    data = buffers()
+    resources = ResourceGuard(data, lambda: None)
+    reserved = budget.snapshot()["used_staging_bytes"]
+    assert reserved == attention.scratch_elements(
+        2, 3
+    ) * 4 + attention.sdpa_workspace_bytes(8, 2, 4, 3, torch.float32)
+    expected = oracle(groups(), data, QueryHeadMapping(4, 2), 0)
+    execute(workspace, peers[0], resources)
+    assert syncs == [True]
+    torch.testing.assert_close(data.output, expected, atol=2e-5, rtol=2e-5)
+    assert budget.snapshot()["used_staging_bytes"] == reserved
     workspace.close()
     assert budget.snapshot()["used_staging_bytes"] == 0
     for peer in peers.values():

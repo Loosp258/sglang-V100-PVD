@@ -48,6 +48,7 @@ def test_loads_exact_config_as_immutable_dataclass(tmp_path):
     assert limits.request_timeout_seconds == 30.0
     assert limits.poll_interval_seconds == 0.01
     assert limits.draft_transient_bytes_bound == 0
+    assert limits.attention_impl == "online"
     with pytest.raises(dataclasses.FrozenInstanceError):
         limits.lead_tokens = 3
 
@@ -68,6 +69,37 @@ def test_v100s_chunk64_experiment_only_changes_attention_tile():
         predict_tokens=2,
     )
     assert limits.attention_chunk_tokens == 64
+
+
+def test_bounded_sdpa_requires_opt_in_and_short_context(tmp_path):
+    config = valid_config()
+    config["max_sequence_tokens"] = 128
+    config["attention_impl"] = "sdpa_bounded"
+    assert load(write_config(tmp_path, config)).attention_impl == "sdpa_bounded"
+    config["max_sequence_tokens"] = 8192
+    with pytest.raises(ValueError, match="<= 256"):
+        load(write_config(tmp_path, config))
+    config["attention_impl"] = "unknown"
+    with pytest.raises(ValueError, match="attention_impl"):
+        load(write_config(tmp_path, config))
+
+
+def test_v100s_sdpa_fixture_changes_only_attention_implementation():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits.json").read_text()
+    )
+    candidate_path = directory / "pvd_qwen_v100s_serving_limits_sdpa.json"
+    assert json.loads(candidate_path.read_text()) == {
+        **baseline,
+        "attention_impl": "sdpa_bounded",
+    }
+    assert (
+        load_cuda_serving_limits(
+            candidate_path, refresh_interval=4, predict_tokens=2
+        ).attention_impl
+        == "sdpa_bounded"
+    )
 
 
 @pytest.mark.parametrize(
