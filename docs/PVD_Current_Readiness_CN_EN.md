@@ -2636,3 +2636,39 @@ labeled data, a quality metric, or an acceptance threshold it does not
 justify increasing the default M. D was restored to M=4 and returned
 health 200 after the experiment. Raw observations are on the D node in
 `pvd-eval-sdpa-batch-{,m8-,m16-}67c0bb375.json`.
+
+### 99-token Prompt 的首次索引等待 / First-index wait for a 99-token Prompt
+
+在 V 的 `cagra-auto` 模式中，原实验设置 `--prompt-index-exact-max-rows 64`
+使 99 行的每个 layer/KV-head 索引都走 CAGRA。V 日志在首次搜索返回
+`index_not_ready` 期间反复显示 `nrows 99` 图构建；代码按
+layer/KV-head 顺序构建并同步每个图。这是前述约 13–16 秒首次等待的
+有力原因，但尚未将其分解为各层的精确耗时。
+
+隔离实验仅将 V 阈值从 64 改为 128，D 保持 M=4、SDPA、批量检索和
+top-k=4。三条固定请求耗时从 4.82/4.46/27.68 秒变为
+5.25/4.48/7.78 秒；三条的输出 token ID 均 20/20 相同。
+新 V 日志没有 `nrows 99` 的 CAGRA 图构建，批量检索收到 200，
+未见新的 RDMA remote-access 错误。这说明短索引的图构建是该
+99-token 请求大幅减速的主要因素；不说明更长上下文的 CAGRA 已优化，
+也不能由三条样本推导质量或整体性能。实验后 V 已恢复阈值 64，
+双 rank 健康检查均为 200。原始结果在 D 节点的
+`pvd-eval-sdpa-batch-v-exact128-67c0bb375.json`。
+
+In `cagra-auto`, the original V threshold of 64 sent each 99-row
+layer/KV-head index to CAGRA. While initial searches returned
+`index_not_ready`, V logs repeatedly showed `nrows 99` graph construction;
+the code builds and synchronizes these indexes sequentially. This strongly
+implicates graph-building in the earlier 13–16 s first wait, though no
+per-layer timing decomposition exists yet.
+
+Changing only V's exact-search threshold from 64 to 128, with D still at
+M=4, SDPA, batched search, and top-k=4, changed the three fixed request
+times from 4.82/4.46/27.68 s to 5.25/4.48/7.78 s. All three output-token
+sequences remained identical over 20 tokens. The experimental V log showed
+zero 99-row CAGRA graph builds, successful batch requests, and no new RDMA
+remote-access errors. Short-index graph build is thus a major cause for this
+99-token request, not a solution for longer-context CAGRA or proof of global
+quality/performance. V was restored to threshold 64; both ranks returned
+health 200. Raw results are on D in
+`pvd-eval-sdpa-batch-v-exact128-67c0bb375.json`.
