@@ -2564,3 +2564,41 @@ entire probe selection from being published. The legacy single route remains;
 non-serving routes do not opt in by default. Deploy V before enabling D; an
 older V fails explicitly, never supplies an unchecked fallback. Only CPU HTTP
 protocol evidence exists so far; live latency benefit is unmeasured.
+
+### 三机批量检索核验 / Live batch-search check
+
+在 V 和 D 的独立 `67c0bb375` worktree 上、P 与 Gateway 不变时，
+V 双 shard `/internal/health` 均为 200，日志确认 D 实际调用
+`POST /internal/v1/indexes/search-batch` 并收到 200；每个 V source
+仍先有单查询以取得版本。20-token 固定 SSE 热态复测为 3.692、3.478 秒，
+中位观察 token 间隔约 0.070 秒；批量前同 SDPA 路径为 3.694、3.716 秒。
+D 热态日志中 V search 从约 0.33–0.37 秒降至通常约 0.29–0.30 秒，
+边界等待从约 0.28–0.32 秒降至通常约 0.22–0.24 秒。一次首轮 search
+为 0.56 秒，不能把小样本视为稳定性能保证。
+
+固定三条请求同数据集/同输出长度的 batch 对单查询 SDPA 对照，
+输出 token ID **3/3 相同**；两条短请求从 5.05/4.97 秒变为
+4.82/4.46 秒，一条较长请求却从 24.00 秒变为 27.68 秒。
+后者日志中第一次 V search 等待约 13.54 秒，随后各轮约 0.34–0.35 秒；
+前一次长请求同样出现了约 15.95 秒的首轮等待。该异常更像
+Entry 的 CAGRA 索引就绪/构建延迟，尚未隔离验证，不能归因于批量协议。
+新版 D 和 V 均保持健康，未观察到新的 RDMA 错误。最终延迟目标仍未达到。
+
+With V and D on isolated `67c0bb375` worktrees and P/Gateway unchanged,
+both V shard health endpoints returned 200. V access logs confirm actual
+`POST /internal/v1/indexes/search-batch` requests from D returned 200; the
+initial per-source version-establishing singles remain. Two warm fixed
+20-token SSE runs took 3.692/3.478 s, about 0.070 s median observed token
+gap; preceding same-SDPA single-search runs took 3.694/3.716 s. Typical
+warm V search shrank from about 0.33–0.37 s to 0.29–0.30 s, and observed
+boundary wait from 0.28–0.32 s to 0.22–0.24 s. One first search took
+0.56 s; these small samples are not a stable performance guarantee.
+
+All three fixed prompts had identical output token IDs between the new batch
+and earlier single-search SDPA runs. Two short requests improved from
+5.05/4.97 s to 4.82/4.46 s, but one longer request regressed from 24.00 s
+to 27.68 s. Its first V search waited about 13.54 s, then later searches
+were 0.34–0.35 s; the earlier long request also had a roughly 15.95 s
+first wait. CAGRA Entry-index readiness/build is a hypothesis, not yet
+isolated proof. V and D stayed healthy; no new RDMA errors were observed.
+The final latency goal remains unmet.
