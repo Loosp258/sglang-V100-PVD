@@ -89,6 +89,14 @@ v2 运行 ID `7c46db11d88d`，v1 运行 ID `e1c023d6ec34`。
 长上下文生成的 D target forward/稀疏刷新前注意力是下一瓶颈。
 更大的 Prompt、并发、重复轮次、数值一致性和故障恢复仍须验收。
 
+恢复 v2 后另做了单轮 4 客户端、各 55 次句子重复的排队测试
+（`run_id=e6509bfc8daf`）：实际每请求 513-token Prompt，4×8 token
+全部完成，总墙钟 181.17 s、合计 0.177 token/s、p95 TTFT 47.23 s。
+两 V rank 随后仍为零 in-flight、零 UNKNOWN、未隔离。该 D 实例的
+最终 token 容量只允许同时运行 1 个请求，所以这里验证的是并发到达时
+的排队、Delivery 生命周期和释放，不是 4 路同时 Decode 的扩展性；
+也不能把它与历史 v1 单轮的 0.142 token/s 当作严格同条件加速比。
+
 ## 专用集合通信：Select–Pack–FanIn–Install
 
 这是 PVD **应用层集合操作**，不是把 `alltoall`、
@@ -141,9 +149,10 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
    submit、transport status、D scatter、CAGRA、target forward、
    TTFT/TPOT/p95、显存峰值和 UNKNOWN。
 2. rank-packed dense fan-in 的计划器、字节级测试和显式协议协商
-   已实现，独立 sidecar 首轮真实 RDMA A/B 如上；下一步增加重复
-   轮次与 1/2/4 并发，验证正确性和尾延迟。绝不在一次不确定写入后
-   自动 fallback。
+   已实现，独立 sidecar 首轮真实 RDMA A/B 和 v2 四客户端排队测试
+   如上；下一步增加重复轮次、严格同条件并发 A/B 与真正多 running
+   request 的容量，验证正确性和尾延迟。绝不在一次不确定写入后自动
+   fallback。
 3. 扩展同一协议为 sparse Select–Pack–FanIn–Install，保持现有
    m-token 边界和全部等待语义；做故障注入和 1/2/4 并发验收。
 4. 最后做 V 与 D 的融合 kernel，分别证明真实 query 的召回、
@@ -151,5 +160,5 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
    在 `mlx5_1` 物理链路恢复并完成 GPUDirect 预检后才加入。
 
 本文件是设计与验收合同。v2 是实验性 opt-in，虽已通过首轮真实
-GPU/RDMA A/B，尚未通过多轮及并发性能验收；稀疏集合通信和融合
+GPU/RDMA A/B，尚未通过多轮及真正并行 Decode 的性能验收；稀疏集合通信和融合
 kernel 仍是后续工作。
