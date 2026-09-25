@@ -40,7 +40,13 @@ transfer 标为 UNKNOWN 并隔离，D 正确拒绝安装未确认的 KV，SSE �
 该隔离 PVD sidecar 已按 V sender 先、D receiver 后的顺序停止，原服务保留。
 代码已改为每个原生 batch 最多 8192 切片、最多两个并发 handle；
 所有 chunk terminal 前保留 MR 与整体 delivery fence。CPU 回归通过，
-**CloudLab 上的分批长上下文复测尚待完成**。CPU-only 的 Qwen 形状计划
+CloudLab 上实际 1936-token 复测证实两个 V rank 各约 108416 切片分成
+14 个 batch，均以 `terminal_success` 结束且 V 无 UNKNOWN；但 SSE
+未返回完整 8 token 和 `[DONE]`，故**端到端长上下文仍未通过**。隔离 D
+在第二轮预测刷新记录 `scope entered` 后没有 `refresh ready`，V 未见新的
+已完成 search RPC。SIGUSR2 栈采样分别落在目标模型 forward 与 scheduler
+轮询，**没有**证明逐 Q-head GPU→CPU 拷贝是卡点；已加入 opt-in 挂起 task
+位点日志，以区分 Q 准备、HTTP 等待和内部超时。CPU-only 的 Qwen 形状计划
 探针测得 2044 token/228928 切片、13.88 MB manifest，构造+校验约
 4.36 s；它不能代替真实 RDMA 计时。
 
@@ -60,8 +66,16 @@ V rank's single batch of about 114,464 slices timed out after about 57 s.
 Both V ranks quarantined the uncertain transfer, and D did not install KV.
 The isolated V sender then D receiver were stopped without touching original
 services. Native batch chunking (at most 8,192 slices and two in-flight
-handles, with a whole-delivery fence) passed CPU regressions; a live retry is
-still pending. No apples-to-apples baseline, long-context quality set or
+handles, with a whole-delivery fence) passed CPU regressions. In a live retry
+at 1,936 actual Prompt tokens, each V rank finished about 108,416
+slices in 14 chunks with `terminal_success` and no UNKNOWN. Nevertheless,
+the SSE stream ended without eight tokens and `[DONE]`, so end-to-end long
+context is **not accepted**. D logged a second prediction scope entry but no
+refresh-ready event; V had no newly completed search RPC. SIGUSR2 stack
+samples landed in target forward and scheduler polling, not in a Q-head copy,
+so a copy bottleneck is only a hypothesis. Opt-in suspended-task-site logging
+is now available to distinguish Q preparation, HTTP wait and timeout. No
+apples-to-apples baseline, long-context quality set or
 per-length recall distribution has been established.
 
 ## 2026-09-25 在线 native CAGRA 与有界 SSE 并发探针 / Live native and bounded SSE load

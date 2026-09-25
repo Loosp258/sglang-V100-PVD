@@ -13,7 +13,10 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
     TargetExecutionArbiter,
 )
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
-from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_refresh_driver import (
+    CUDARefreshDriver,
+    _task_site,
+)
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
 from test_pvd_cuda_prefetch_request import controller
 from test_pvd_cuda_sparse_delivery import case, complete
@@ -28,6 +31,26 @@ def req():
         is_retracted=False,
         finished=lambda: False,
     )
+
+
+def test_refresh_task_site_reports_code_location_without_payload():
+    loop = asyncio.new_event_loop()
+    try:
+        gate = asyncio.Event()
+
+        async def pending_refresh():
+            await gate.wait()
+
+        task = loop.create_task(pending_refresh())
+        loop.run_until_complete(asyncio.sleep(0))
+        site = _task_site(task)
+        assert "test_pvd_cuda_refresh_driver.py" in site
+        assert "pending_refresh" in site
+        assert _task_site(object()) == "unavailable"
+        task.cancel()
+        loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+    finally:
+        loop.close()
 
 
 def test_receiver_quarantine_reports_its_original_reason(monkeypatch):
@@ -215,7 +238,12 @@ def test_opt_in_timeline_orders_refresh_schedule_ready_and_install(monkeypatch, 
         for row in caplog.records
         if "PVD timeline event=" in row.message
     ]
-    assert events == ["refresh_scheduled", "refresh_ready", "installed"]
+    assert "refresh_pending" in events
+    assert [event for event in events if event != "refresh_pending"] == [
+        "refresh_scheduled",
+        "refresh_ready",
+        "installed",
+    ]
 
 
 def test_boundary_diagnostic_failure_cannot_undo_safe_install(monkeypatch):

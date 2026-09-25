@@ -34,6 +34,18 @@ def _timeline(message, *args):
             pass  # Diagnostics must never change refresh ownership.
 
 
+def _task_site(task):
+    """Code location only; never log Prompt tokens or query tensors."""
+    try:
+        frames = task.get_stack(limit=1)
+        if not frames:
+            return "no-python-frame"
+        frame = frames[-1]
+        return f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}:{frame.f_code.co_name}"
+    except Exception:
+        return "unavailable"
+
+
 @dataclass
 class _Request:
     req: object
@@ -58,6 +70,7 @@ class _Request:
     provisional_source: object = None
     provisional_pool_owner: object = None
     boundary_observed_at: float | None = None
+    last_progress_log_at: float | None = None
 
 
 class CUDARefreshDriver:
@@ -500,6 +513,26 @@ class CUDARefreshDriver:
                 continue
             if record.provisional and not record.stopping:
                 continue
+            if (
+                os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1"
+                and record.refresh is not None
+                and not record.refresh.done()
+            ):
+                now = self._clock()
+                if (
+                    record.last_progress_log_at is None
+                    or now - record.last_progress_log_at >= 10.0
+                ):
+                    record.last_progress_log_at = now
+                    children = getattr(record.controller, "_tasks", ())
+                    _timeline(
+                        "PVD timeline event=refresh_pending request_id=%s "
+                        "parent_site=%s child_sites=%s t=%.6f",
+                        record.req.rid,
+                        _task_site(record.refresh),
+                        tuple(_task_site(task) for task in children),
+                        now,
+                    )
             if record.refresh is not None and record.refresh.done():
                 self._release_capture(record)  # Also cancel-before-first-dispatch.
                 try:
