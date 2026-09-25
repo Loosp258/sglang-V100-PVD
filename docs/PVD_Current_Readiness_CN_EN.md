@@ -3,6 +3,41 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 真实边界观测 / Live boundary observation
+
+`e5d2bf248` 的 D CUDA 驱动记录“Scheduler 首次观察到 committed
+边界 → 安全安装完成”时间；CPU 全量回归 **2909 passed / 23 skipped**，
+随后增加的“日志处理器抛错不影响已安装工作集”单项测试亦通过。增量在
+D 的独立 worktree 运行同一 36-token/20-output 固定请求，HTTP 200，
+输出 ID 与此前 Top-4 预测模式一致。四个 4-token 边界观测耗时分别
+约 **0.316、0.298、0.304、0.303 秒**。同期搜索阶段首轮约 2.22
+秒、后续约 1.41–1.89 秒，交付每轮约 0.10 秒。这表明该请求的大部分
+搜索时间不暴露在**已观察到的边界等待**上。
+
+但这不是“网络不可见”证明：计时起点晚于真实 token 提交时刻，
+且首轮 capture 约 **14.79 秒**（首次模型/内核预热），该同步计算可能
+阻塞正式 Decode，却不计入边界等待。冷态请求客户端耗时约 62.24
+秒；需另测热态 TTFT/TPOT、目标执行仲裁占用与总吞吐。D 当前仍运行
+此 Top-4 预测配置，P/V/Gateway 健康。
+
+Commit `e5d2bf248` records Scheduler-first-observed-boundary to safe-install
+time in D's CUDA driver. The full CPU suite reported **2909 passed /
+23 skipped**; the subsequently added focused test also confirmed a failing
+log handler cannot undo an installed workset. In an isolated D worktree, the
+same fixed 36-token/20-output request returned HTTP 200 and the prior Top-4
+output IDs. Four four-token boundaries took about **0.316, 0.298, 0.304 and
+0.303 seconds** from observation to installation. Search phases took about
+2.22 seconds first and 1.41–1.89 seconds later; each delivery about 0.10
+seconds. Thus most search time was outside the **observed boundary stall**
+for this request.
+
+This does not prove invisible network cost: the timer starts after the actual
+token commit, and the first synchronous capture took **14.79 seconds** during
+cold model/kernel warmup. That compute can block committed Decode without
+appearing in the boundary metric. Cold client latency was about 62.24
+seconds. Warm TTFT/TPOT, target-arbiter occupancy and throughput remain to be
+measured. D remains on this predictive Top-4 build; P/V/Gateway are healthy.
+
 ## 2026-09-25 配对评估工具现场验收 / Paired-evaluation tool live check
 
 新增 `run_pvd_paired_eval.py` 与 3 条固定烟测数据；CPU 全量回归
