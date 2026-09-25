@@ -89,7 +89,17 @@ def check(device, rank, dtype, *, multiblock):
     )
     manifest = SparseDeliveryManifest(specs, str(dtype), head_dim)
     plan = build_sparse_pack_plan(manifest, layout, shard)
-    values = torch.arange(source_bytes // element_bytes, device=device).to(dtype)
+    # Random exact integers avoid FP16 overflow/repeated rows masking a wrong
+    # token or head offset in the large multi-block case.
+    generator = torch.Generator(device=device).manual_seed(1603 + rank)
+    values = torch.randint(
+        0,
+        256,
+        (source_bytes // element_bytes,),
+        generator=generator,
+        device=device,
+        dtype=torch.int32,
+    ).to(dtype)
     source = values.contiguous().view(torch.uint8)
     actual = torch.empty(manifest.nbytes, dtype=torch.uint8, device=device)
     reference = torch.empty_like(actual)
