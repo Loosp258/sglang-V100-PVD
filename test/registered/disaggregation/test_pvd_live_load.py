@@ -1,7 +1,7 @@
 """CPU-only contract tests for the bounded live load probe."""
 
-import json
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -170,5 +170,58 @@ def test_collect_fixed_prefix_is_repeatable_and_single_request_only(monkeypatch)
     assert live_load.collect(args)["fixed_prefix"] is True
     assert texts == ["PVD_LOAD_FIXED: " + ("Test sentence. " * 10)] * 2
     args.clients = 2
+    with pytest.raises(ValueError, match="bounded"):
+        live_load.collect(args)
+
+
+def test_collect_replay_seed_reuses_distinct_prompts_for_concurrent_clients(
+    monkeypatch,
+):
+    observed = []
+
+    def fake_request(url, text, expected_tokens, timeout, barrier):
+        barrier.wait()
+        observed.append(text)
+        return 10.0, {
+            "prompt_tokens": 109,
+            "completion_tokens": 1,
+            "sse_events": 1,
+            "coalesced_tokens": 0,
+            "ttft_seconds": 1.0,
+            "elapsed_seconds": 2.0,
+            "median_observed_gap_seconds": None,
+            "max_observed_gap_seconds": None,
+            "true_tpot_observable": True,
+        }
+
+    monkeypatch.setattr(live_load, "_request", fake_request)
+    args = SimpleNamespace(
+        gateway_url="http://gateway",
+        clients=4,
+        rounds=1,
+        sentence="Test sentence.",
+        repetitions=10,
+        max_new_tokens=1,
+        timeout_seconds=5,
+        min_prompt_tokens=100,
+        max_prompt_tokens=120,
+        fixed_prefix=False,
+        replay_seed="matched_20260926",
+    )
+    first = live_load.collect(args)
+    first_prompts = sorted(observed)
+    observed.clear()
+    second = live_load.collect(args)
+    assert first["run_id"] == second["run_id"] == args.replay_seed
+    assert first["replay_seed"] == args.replay_seed
+    assert sorted(observed) == first_prompts
+    assert len(set(first_prompts)) == 4
+    assert all("PVD_LOAD_matched_20260926_0_" in text for text in first_prompts)
+
+    args.replay_seed = "../unsafe"
+    with pytest.raises(ValueError, match="bounded"):
+        live_load.collect(args)
+    args.replay_seed = "matched_20260926"
+    args.fixed_prefix = True
     with pytest.raises(ValueError, match="bounded"):
         live_load.collect(args)

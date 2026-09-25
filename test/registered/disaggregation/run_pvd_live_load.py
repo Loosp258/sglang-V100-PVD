@@ -11,6 +11,7 @@ import hashlib
 import itertools
 import json
 import math
+import re
 import statistics
 import sys
 import threading
@@ -128,6 +129,7 @@ def _request(url, text, expected_tokens, timeout, barrier):
 
 def collect(args):
     fixed_prefix = getattr(args, "fixed_prefix", False)
+    replay_seed = getattr(args, "replay_seed", None)
     if (
         not args.gateway_url.startswith(("http://", "https://"))
         or not 1 <= args.clients <= 4
@@ -139,9 +141,17 @@ def collect(args):
         or len(args.sentence) * args.repetitions > 100_000
         or not 1 <= args.min_prompt_tokens <= args.max_prompt_tokens <= 8192
         or (fixed_prefix and (args.clients != 1 or args.rounds != 1))
+        or (
+            replay_seed is not None
+            and (
+                not isinstance(replay_seed, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,32}", replay_seed) is None
+                or fixed_prefix
+            )
+        )
     ):
         raise ValueError("bounded URL, clients, rounds, prompt and timeout required")
-    run_id = uuid.uuid4().hex[:12]
+    run_id = replay_seed if replay_seed is not None else uuid.uuid4().hex[:12]
     rounds = []
     for round_number in range(args.rounds):
         barrier = threading.Barrier(args.clients)
@@ -193,6 +203,7 @@ def collect(args):
         "schema": "pvd.live_load.v1",
         "run_id": run_id,
         "fixed_prefix": fixed_prefix,
+        "replay_seed": replay_seed,
         "mode_verified_by_script": False,
         "clients": args.clients,
         "rounds": rounds,
@@ -230,6 +241,10 @@ def main(argv=None):
         "--fixed-prefix",
         action="store_true",
         help="Use the same Prompt across single-client, single-round A/B runs",
+    )
+    parser.add_argument(
+        "--replay-seed",
+        help="Repeat exact per-client Prompts across separately launched A/B runs",
     )
     args = parser.parse_args(argv)
     try:
