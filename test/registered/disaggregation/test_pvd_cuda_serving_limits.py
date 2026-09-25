@@ -88,6 +88,29 @@ def test_v100s_sdpa_lead3_experiment_keeps_four_token_cadence():
     assert limits.lead_tokens == 3
 
 
+def test_v100s_sdpa_m8_lead6_experiment_extends_only_prefetch_window():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_sdpa.json").read_text()
+    )
+    alternative = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_sdpa_m8_lead6.json").read_text()
+    )
+    assert alternative == {**baseline, "lead_tokens": 6}
+    with pytest.raises(ValueError, match="less than refresh_interval"):
+        load_cuda_serving_limits(
+            directory / "pvd_qwen_v100s_serving_limits_sdpa_m8_lead6.json",
+            refresh_interval=4,
+            predict_tokens=6,
+        )
+    limits = load_cuda_serving_limits(
+        directory / "pvd_qwen_v100s_serving_limits_sdpa_m8_lead6.json",
+        refresh_interval=8,
+        predict_tokens=6,
+    )
+    assert limits.lead_tokens == 6
+
+
 def test_bounded_sdpa_requires_opt_in_and_short_context(tmp_path):
     config = valid_config()
     config["max_sequence_tokens"] = 128

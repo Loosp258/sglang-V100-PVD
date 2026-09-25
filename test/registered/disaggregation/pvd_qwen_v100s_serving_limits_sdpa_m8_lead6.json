@@ -1,0 +1,14 @@
+{
+  "max_sequence_tokens": 128,
+  "lead_tokens": 6,
+  "attention_chunk_tokens": 8,
+  "attention_impl": "sdpa_bounded",
+  "request_timeout_seconds": 90.0,
+  "poll_interval_seconds": 0.01,
+  "max_pending_events": 8,
+  "max_pending_bytes": 67108864,
+  "draft_transient_bytes_bound": 134217728,
+  "probe_transient_bytes_bound": 134217728,
+  "target_scratch_max_reservations": 64,
+  "bank_max_reservations": 32
+}

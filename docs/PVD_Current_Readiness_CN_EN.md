@@ -3284,3 +3284,20 @@ by about 86 ms. Thus background I/O overlaps search with a forward, but
 lead=2 does not also hide delivery/install. The first boundary has extra
 unversioned source-discovery searches. This single-request trace is not
 a concurrency or latency-distribution result.
+
+下一项**仅实验**配置为 `pvd_qwen_v100s_serving_limits_sdpa_m8_lead6.json`，
+须同时使用 `--pvd-kv-refresh-interval 8` 与
+`--pvd-draft-predict-tokens 6`。其余内存/超时/attention 上限与
+已验证 SDPA 配置一致。目的仅是检验更长前瞻窗口能否隐藏
+已经观察到的约 0.17 秒搜索与 0.08 秒交付；六步 draft
+预测可能增加 capture 开销并改变近似检索结果，不能仅凭
+SSE 完整性把它当成质量通过或默认配置。
+
+The next **non-default experiment** uses
+`pvd_qwen_v100s_serving_limits_sdpa_m8_lead6.json` with
+`--pvd-kv-refresh-interval 8` and `--pvd-draft-predict-tokens 6`.
+All other attention, memory and timeout bounds match the validated SDPA
+configuration. The purpose is to test whether a longer prefetch window
+hides the measured search and delivery. Six draft steps may cost more
+capture time and change approximate retrieval; complete SSE output alone
+is neither quality acceptance nor permission to make it the default.
