@@ -2831,3 +2831,24 @@ or wire behavior. CUDA work may be asynchronous, so these wall times are
 not standalone kernel timings. The new logs have not yet run on CloudLab;
 targeted WSL prediction tests passed 79, with full regression and a real
 cold rerun still required.
+
+在 `1c0e1f8e6` 的 D 冷态复测中，20-token 请求 46.56 秒，最大间隔
+28.10 秒；首次刷新捕获 14.66 秒，其中 **draft 14.55 秒、目标
+probe 0.048 秒**，后续轮次 draft 约 0.041–0.044 秒、probe
+约 0.048–0.052 秒。故首次捕获的主要一次性开销在独立 draft，
+不是目标 Q probe。但第一个约 28 秒的 token 停顿发生在首次
+draft 日志之前，尚不能归因于 draft。为定位它，新增每个 layer
+首次成功 sparse attention execution 的耗时日志，包含完成 fence；
+只记录每 layer 一次，不输出 KV/token。这项额外日志的 CPU policy
+测试为 54 passed / 4 skipped，尚待完整回归与冷态实机复测。
+
+In the D cold rerun on `1c0e1f8e6`, a 20-token request took 46.56 s with
+a 28.10 s maximum gap. First-refresh capture took 14.66 s, consisting of
+**14.55 s draft** and 0.048 s target probe. Subsequent rounds took about
+0.041–0.044 s draft and 0.048–0.052 s probe. Thus the first capture's
+one-time cost is predominantly the independent draft, not target-Q probing.
+However, the earlier roughly 28-second token gap precedes the first draft
+log, so it is not yet attributable to draft. The next instrumentation logs
+the first successful sparse-attention execution per layer, including its
+completion fence, without token or KV values. Its CPU policy tests passed
+54/4 (pass/skip); full regression and live cold validation remain.

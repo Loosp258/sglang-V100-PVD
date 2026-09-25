@@ -7,8 +7,10 @@ allocator caches. This is a synchronous correctness baseline, not a latency or
 total GPU-memory bound. Model pool/forward integration is deliberately separate.
 """
 
+import logging
 import math
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -20,6 +22,8 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransferBudget,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -217,6 +221,7 @@ class CUDASparseAttentionWorkspace:
         self._budget, self._owner = budget, f"cuda-attention:{uuid.uuid4().hex}"
         self._sdpa_owner = f"{self._owner}:sdpa"
         self._sdpa_keys = self._sdpa_values = None
+        self._timed_first_layers = set()
         self._thread = threading.get_ident()
         self._closed, self._active, self._quarantine, self._held = (
             False,
@@ -281,6 +286,7 @@ class CUDASparseAttentionWorkspace:
             raise SparsePayloadError(
                 "explicit participant, mapping, buffers and scale required"
             )
+        started = time.perf_counter()
         pin = f"{self._owner}:execution"
         resources.pin(pin)
         self._active = True
@@ -410,6 +416,16 @@ class CUDASparseAttentionWorkspace:
                         raise
             finally:
                 self._active = False
+        if layer not in self._timed_first_layers:
+            self._timed_first_layers.add(layer)
+            logger.info(
+                "PVD first sparse attention execution: layer=%d impl=%s "
+                "decode_tokens=%d elapsed_seconds=%.6f",
+                layer,
+                self.attention_impl,
+                decode_tokens,
+                time.perf_counter() - started,
+            )
 
     def snapshot(self):
         if threading.get_ident() != self._thread:

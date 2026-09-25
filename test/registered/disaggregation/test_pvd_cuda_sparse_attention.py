@@ -1,6 +1,8 @@
 """Actual CPU math and explicit CPU ownership policies; CUDA tests skip separately."""
 
+import logging
 import math
+import re
 from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
@@ -218,6 +220,29 @@ def execute(workspace, peer, resources, **overrides):
         "scale": 1 / math.sqrt(3),
     }
     workspace.execute(peer, **{**options, **overrides})
+
+
+def test_first_sparse_attention_execution_is_timed_once_per_layer(
+    monkeypatch, caplog
+):
+    peers, workspace, _, _, resources, _ = ready(monkeypatch)
+    with caplog.at_level(
+        logging.INFO, logger="sglang.srt.disaggregation.pvd.cuda_sparse_attention"
+    ):
+        execute(workspace, peers[0], resources)
+        execute(workspace, peers[0], resources)
+    messages = [
+        record.message
+        for record in caplog.records
+        if record.name == "sglang.srt.disaggregation.pvd.cuda_sparse_attention"
+    ]
+    assert len(messages) == 1
+    assert "layer=0 impl=online decode_tokens=0" in messages[0]
+    match = re.search(r"elapsed_seconds=([0-9]+\.[0-9]+)", messages[0])
+    assert match is not None and float(match.group(1)) >= 0
+    workspace.close()
+    for peer in peers.values():
+        peer.close()
 
 
 def test_workspace_is_charged_before_execution_and_input_guard_survives_fence(
