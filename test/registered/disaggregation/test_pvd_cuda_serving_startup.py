@@ -128,6 +128,47 @@ def test_opt_in_sdpa_reaches_target_workspace_without_changing_prediction(monkey
     assert "attention_impl" not in observed["prediction"]
 
 
+def test_opt_in_qwen_precompile_precedes_target_publication(monkeypatch):
+    from sglang.srt.disaggregation.pvd import qwen_kernel_precompile
+    from sglang.srt.models import qwen2
+
+    scheduler, limits, observed = _setup(monkeypatch)
+
+    class Qwen:
+        config = NS(num_attention_heads=28)
+
+    target_model, draft_model = Qwen(), Qwen()
+    scheduler.tp_worker.model_runner.model = target_model
+    monkeypatch.setattr(qwen2, "Qwen2ForCausalLM", Qwen)
+    original_prediction = startup.build_cuda_prediction_startup
+    original_target = startup.install_cuda_target_components
+    events = []
+
+    def prediction(*args, **kwargs):
+        value = original_prediction(*args, **kwargs)
+        value.draft_runner = NS(model=draft_model, token_to_kv_pool=object())
+        return value
+
+    def target(*args, **kwargs):
+        assert events == ["target-jit", "draft-jit"]
+        return original_target(*args, **kwargs)
+
+    def precompile(model, pool, *, device):
+        assert str(device) == "cuda:0"
+        events.append("target-jit" if model is target_model else "draft-jit")
+
+    monkeypatch.setenv("PVD_PRECOMPILE_QWEN_KERNELS", "1")
+    monkeypatch.setattr(startup, "build_cuda_prediction_startup", prediction)
+    monkeypatch.setattr(startup, "install_cuda_target_components", target)
+    monkeypatch.setattr(
+        qwen_kernel_precompile, "precompile_qwen_decode_kernels", precompile
+    )
+    installed = startup.install_cuda_predictive_serving(scheduler, limits)
+    assert installed.prediction.draft_runner.model is draft_model
+    assert observed["target"] is not None
+    assert events == ["target-jit", "draft-jit"]
+
+
 @pytest.mark.parametrize("wrong_lock,wrong_budget", [(True, False), (False, True)])
 def test_composition_refuses_independent_execution_owners(
     monkeypatch, wrong_lock, wrong_budget

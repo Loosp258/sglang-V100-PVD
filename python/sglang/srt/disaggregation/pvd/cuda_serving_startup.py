@@ -7,6 +7,7 @@ full-Prompt decode if a CUDA component fails to install.
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
 
@@ -158,6 +159,26 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
         )
         if prediction.target_scratch_budget is not scratch_budget:
             raise LifecycleError("prediction did not retain the shared target budget")
+
+        if os.environ.get("PVD_PRECOMPILE_QWEN_KERNELS") == "1":
+            from sglang.srt.disaggregation.pvd.qwen_kernel_precompile import (
+                precompile_qwen_decode_kernels,
+            )
+            from sglang.srt.models.qwen2 import Qwen2ForCausalLM
+
+            if (
+                type(runner.model) is not Qwen2ForCausalLM
+                or type(prediction.draft_runner.model) is not Qwen2ForCausalLM
+            ):
+                raise LifecycleError(
+                    "PVD Qwen JIT precompile requires Qwen2 target and draft"
+                )
+            precompile_qwen_decode_kernels(runner.model, kv_pool, device=device)
+            precompile_qwen_decode_kernels(
+                prediction.draft_runner.model,
+                prediction.draft_runner.token_to_kv_pool,
+                device=device,
+            )
 
         def prepare(_preflight):
             return CUDAWaitingAdmissionResources(
