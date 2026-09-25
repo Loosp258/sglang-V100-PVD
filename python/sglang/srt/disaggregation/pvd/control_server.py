@@ -312,6 +312,25 @@ def _run_search(index, identity, queries, top_k: int, timings=None, queued_at=0.
     return index.search(identity, queries=tensor, top_k=top_k, timings=timings)
 
 
+def _run_search_many(index, prepared, queued_at=0.0, timings=None):
+    if timings is not None:
+        timings["thread_wait"] = time.perf_counter() - queued_at
+        started = time.perf_counter()
+    requests = tuple(
+        (identity, torch.tensor(queries, dtype=torch.float32), top_k)
+        for identity, queries, top_k in prepared
+    )
+    if timings is not None:
+        timings["query_tensor"] = time.perf_counter() - started
+        started = time.perf_counter()
+    metadata = {} if timings is not None else None
+    result = index.search_many(requests, metadata=metadata)
+    if timings is not None:
+        timings["manager_total"] = time.perf_counter() - started
+        timings["path"] = metadata["path"]
+    return result
+
+
 def create_shard_app(
     store: VectorKVStore, *, preflight: Optional[Mapping[str, Any]] = None
 ) -> web.Application:
@@ -463,8 +482,8 @@ def create_shard_app(
             {"enabled": True, **(await asyncio.to_thread(store.prompt_index.snapshot))}
         )
 
-    async def _search_data(data, *, timings=None):
-        """Search one (layer, KV head) and return logical token/page ids.
+    def _parse_search_data(data):
+        """Validate caller-owned search identity before any backend call.
 
         The request carries its own identity: which model's vector space the
         Q comes from and under which positional-encoding semantics, which
@@ -477,7 +496,6 @@ def create_shard_app(
         from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_PROTOCOL
 
-        started = time.perf_counter() if timings is not None else 0.0
         index = _require_prompt_index()
         search_id = data.get("search_id")
         if "search_id" in data or "search_protocol" in data:
@@ -525,18 +543,12 @@ def create_shard_app(
                 data, "expected_id_mapping_version"
             ),
         )
-        if timings is not None:
-            timings["request_validate"] = time.perf_counter() - started
-        # The query is built on the host because that is where JSON numbers
-        # arrive; the index manager places it on its backend's device only
-        # after identity checks and the search-scratch budget reservation. Both the
-        # tensor build and the search run off the event loop.
-        queued_at = time.perf_counter() if timings is not None else 0.0
-        result = await asyncio.to_thread(
-            _run_search, index, identity, queries, top_k, timings, queued_at
-        )
-        if timings is not None:
-            timings["item_total"] = time.perf_counter() - started
+        return index, identity, queries, top_k
+
+    def _format_search_result(data, identity, result):
+        from sglang.srt.disaggregation.pvd.search_client import SEARCH_PROTOCOL
+
+        search_id = data.get("search_id")
         selection = result.selection
         return {
             "search_protocol": SEARCH_PROTOCOL,
@@ -552,11 +564,25 @@ def create_shard_app(
             "metric": selection.metric,
             "id_mapping_version": result.id_mapping_version,
             "index_version": result.index_version,
-            # Exactly which identity comparisons were made. A caller that
-            # pinned no version will not see one named here, rather than
-            # being told its request was "validated".
             "validated": list(result.validated),
         }
+
+    async def _search_data(data, *, timings=None):
+        started = time.perf_counter() if timings is not None else 0.0
+        index, identity, queries, top_k = _parse_search_data(data)
+        if timings is not None:
+            timings["request_validate"] = time.perf_counter() - started
+        # The query is built on the host because that is where JSON numbers
+        # arrive; the index manager places it on its backend's device only
+        # after identity checks and the search-scratch budget reservation. Both the
+        # tensor build and the search run off the event loop.
+        queued_at = time.perf_counter() if timings is not None else 0.0
+        result = await asyncio.to_thread(
+            _run_search, index, identity, queries, top_k, timings, queued_at
+        )
+        if timings is not None:
+            timings["item_total"] = time.perf_counter() - started
+        return _format_search_result(data, identity, result)
 
     async def search_index(request):
         timings = {} if os.environ.get("PVD_PROFILE_V_SEARCH") == "1" else None
@@ -615,24 +641,59 @@ def create_shard_app(
             raise ValueError("batch items must share Entry, space and version pins")
         profile = os.environ.get("PVD_PROFILE_V_SEARCH") == "1"
         batch_started = time.perf_counter() if profile else 0.0
-        stages = [] if profile else None
-        results = []
-        for item in items:
+        if os.environ.get("PVD_GROUPED_EXACT_SEARCH") == "1":
+            prepared = [_parse_search_data(item) for item in items]
+            index = prepared[0][0]
+            if any(row[0] is not index for row in prepared):
+                raise ValueError("batch items must address one V index manager")
             timings = {} if profile else None
-            results.append(await _search_data(item, timings=timings))
-            if stages is not None:
-                stages.append(timings)
-        if stages is not None:
-            totals = {
-                name: sum(item.get(name, 0.0) for item in stages) for name in stages[0]
-            }
-            totals["batch_total"] = time.perf_counter() - batch_started
-            logger.info(
-                "PVD V search-batch items=%d query_rows=%d stage_ms=%s",
-                len(items),
-                sum(len(item["queries"]) for item in items),
-                _stage_ms(totals),
+            if timings is not None:
+                timings["request_validate"] = time.perf_counter() - batch_started
+            queued_at = time.perf_counter() if profile else 0.0
+            searched = await asyncio.to_thread(
+                _run_search_many,
+                index,
+                tuple(
+                    (identity, queries, top_k)
+                    for _, identity, queries, top_k in prepared
+                ),
+                queued_at,
+                timings,
             )
+            results = [
+                _format_search_result(item, row[1], result)
+                for item, row, result in zip(items, prepared, searched)
+            ]
+            if timings is not None:
+                path = timings.pop("path")
+                timings["batch_total"] = time.perf_counter() - batch_started
+                logger.info(
+                    "PVD V search-batch path=%s items=%d query_rows=%d stage_ms=%s",
+                    path,
+                    len(items),
+                    sum(len(item["queries"]) for item in items),
+                    _stage_ms(timings),
+                )
+        else:
+            stages = [] if profile else None
+            results = []
+            for item in items:
+                timings = {} if profile else None
+                results.append(await _search_data(item, timings=timings))
+                if stages is not None:
+                    stages.append(timings)
+            if stages is not None:
+                totals = {
+                    name: sum(item.get(name, 0.0) for item in stages)
+                    for name in stages[0]
+                }
+                totals["batch_total"] = time.perf_counter() - batch_started
+                logger.info(
+                    "PVD V search-batch items=%d query_rows=%d stage_ms=%s",
+                    len(items),
+                    sum(len(item["queries"]) for item in items),
+                    _stage_ms(totals),
+                )
         reply = {
             "batch_protocol": SEARCH_BATCH_PROTOCOL,
             "batch_id": batch_id,

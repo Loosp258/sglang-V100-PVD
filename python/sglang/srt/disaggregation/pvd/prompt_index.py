@@ -716,6 +716,8 @@ class PromptIndexManager:
     def search_many(
         self,
         requests: Sequence[Tuple[SearchRequestIdentity, torch.Tensor, int]],
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[SearchResult, ...]:
         """Search one Entry batch under one lease, reservation and fence.
 
@@ -812,6 +814,8 @@ class PromptIndexManager:
                 )
                 and supports_grouped(indexes, num_queries=num_queries, top_k=top_k)
             )
+            if metadata is not None:
+                metadata["path"] = "grouped_exact" if grouped else "individual"
             if grouped:
                 scratch_bytes = self.backend.grouped_exact_footprint(
                     indexes, num_queries=num_queries, top_k=top_k

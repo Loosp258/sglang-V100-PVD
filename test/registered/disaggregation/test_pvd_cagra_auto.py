@@ -7,12 +7,13 @@ from sglang.srt.disaggregation.pvd.index_search import (
     IndexCompletionUnknown,
     IndexSearchError,
 )
+from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferBudget,
     TransferCapacityError,
 )
 from test_pvd_cagra_backend import Runtime, args, backend
-from test_pvd_prompt_index import budgeted, ident, manager, stored_entry
+from test_pvd_prompt_index import SPACE, budgeted, ident, manager, shard_client, stored_entry
 
 
 def test_short_prompt_uses_exact_device_path_with_actual_footprints():
@@ -212,6 +213,70 @@ def test_manager_batch_capacity_refuses_before_grouped_backend(monkeypatch):
     budget.release("competing-index")
     store.release_entry(manifest.key)
     assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_http_batch_opt_in_uses_grouped_exact_and_preserves_identity(
+    monkeypatch, caplog
+):
+    import asyncio
+    import logging
+
+    async def scenario():
+        auto = CagraAutoIndexBackend(backend(intermediate_degree=16))
+        budget = TransferBudget(staging_bytes=1 << 20, max_inflight=4)
+        index = manager(backend=auto, metric="ip", budget=budget)
+        store, manifest, _, _ = stored_entry(index, prompt_tokens=2)
+        store.progress_prompt_indexes()
+        record = index._entries[manifest.key.transfer_id]
+        descriptor = record.gate.descriptor
+        items = []
+        for n, (key, vector) in enumerate(sorted(record.vectors.items())[:2]):
+            items.append(
+                {
+                    "search_protocol": "pvd.search.v1",
+                    "search_id": f"grouped-{n}",
+                    "transfer_id": manifest.key.transfer_id,
+                    "vector_space": SPACE,
+                    "positional_encoding": ROPE_APPLIED,
+                    "expected_index_version": descriptor.index_version,
+                    "expected_id_mapping_version": descriptor.id_mapping_version,
+                    "layer": key[0],
+                    "kv_head": key[1],
+                    "queries": vector.vectors[:1].tolist(),
+                    "top_k": 1,
+                }
+            )
+        before = budget.snapshot()["used_staging_bytes"]
+        monkeypatch.setenv("PVD_GROUPED_EXACT_SEARCH", "1")
+        monkeypatch.setenv("PVD_PROFILE_V_SEARCH", "1")
+        with caplog.at_level(
+            logging.INFO, logger="sglang.srt.disaggregation.pvd.control_server"
+        ):
+            async with shard_client(store) as http:
+                reply = await http.post(
+                    "/internal/v1/indexes/search-batch",
+                    json={
+                        "batch_protocol": "pvd.search.batch.v1",
+                        "batch_id": "grouped-batch",
+                        "items": items,
+                    },
+                )
+                assert reply.status == 200, await reply.text()
+                body = await reply.json()
+        assert body["batch_id"] == "grouped-batch"
+        assert [row["search_id"] for row in body["results"]] == [
+            "grouped-0",
+            "grouped-1",
+        ]
+        assert all(row["token_ids"] == [0] for row in body["results"])
+        assert all(row["index_version"] == descriptor.index_version for row in body["results"])
+        assert all("index_version" in row["validated"] for row in body["results"])
+        assert any("path=grouped_exact" in row.message for row in caplog.records)
+        assert budget.snapshot()["used_staging_bytes"] == before
+        store.release_entry(manifest.key)
+        assert budget.snapshot()["used_staging_bytes"] == 0
+
+    asyncio.run(scenario())
 
 
 def test_long_prompt_keeps_the_native_cap_and_native_lifecycle():

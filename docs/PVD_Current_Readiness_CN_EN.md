@@ -3012,3 +3012,32 @@ with a stacked batched matmul+sort. This is only an optimization signal:
 it excludes index leasing, staging-budget reservations, HTTP, result
 identity checks, and concurrent PVD load. No grouped serving path has been
 implemented or proven yet.
+
+### 分组精确检索实验路径 / Grouped exact-search experiment
+
+`7cadce7c7` 增加了短 Prompt、IP、同形状索引的 batched GEMM + 稳定
+Top-K 原语；`a59c2b3dd` 在 V 索引管理器中加入整批身份校验、单份
+reader 租约、提前预留合计 scratch 与单次完成栅栏。默认服务路径不变；
+设置 `PVD_GROUPED_EXACT_SEARCH=1` 才让 V shard 的批量 HTTP 接口
+使用该管理器。只有 2–32 个同形状、同 top_k、同 query 数的有效
+`cagra-auto` exact/IP 索引进入 grouped kernel；其他情况仍逐项检索，
+但使用同一整批租约与预算边界。原生 CAGRA 图索引不参与 grouped
+kernel。批量结果仍包含各项独立 `search_id`、layer/head、版本 pin
+与逻辑 token/page ID。batched GEMM 的浮点累加顺序可能使 score 在
+约 1e-6 级别不同，必须比较 Top-K ID/召回，而不能要求 score
+逐 bit 相等。GPU 峰值预算与三机性能尚待 CloudLab 实测，不能仅凭
+CPU 单测和合成微基准宣布提速或默认开启。
+
+`7cadce7c7` adds a stable-Top-K batched-GEMM primitive for uniform small
+IP indexes; `a59c2b3dd` adds one atomic identity check, reader lease,
+up-front scratch reservation and final completion fence for a V search
+batch. Serving is unchanged by default. `PVD_GROUPED_EXACT_SEARCH=1`
+opts the V shard batch endpoint into this manager. Only 2–32 live,
+uniform `cagra-auto` exact/IP indexes with matching query counts and
+`top_k` use the grouped kernel; all other batches retain per-item search
+under the same batch-wide lifetime boundary. Native CAGRA graph indexes
+never enter the grouped kernel. Each reply retains its own search ID,
+layer/head, version pins and logical token/page IDs. Batched GEMM can
+change floating-point scores at roughly the 1e-6 scale; compare selected
+IDs and recall, not bitwise score equality. GPU peak-memory and three-node
+performance are still unverified, so this is not yet enabled by default.
