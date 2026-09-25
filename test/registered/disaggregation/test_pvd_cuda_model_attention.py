@@ -15,6 +15,7 @@ from sglang.srt.disaggregation.pvd.cuda_model_attention import (
     CUDADecodeBinding,
     CUDAModelPools,
     CUDAModelSparseConsumer,
+    _ColdModelStageProfile,
     make_cuda_sparse_backend,
 )
 from sglang.srt.disaggregation.pvd.cuda_rank_install import CUDARankInstallParticipant
@@ -434,6 +435,9 @@ def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault, archit
             self.req_to_token_pool = runner.req_to_token_pool
             self.token_to_kv_pool = runner.token_to_kv_pool
 
+        def init_forward_metadata(self, forward_batch):
+            pass
+
     for name, attribute, cls in (
         ("sglang.srt.models.llama", "LlamaForCausalLM", Model),
         ("sglang.srt.models.qwen2", "Qwen2ForCausalLM", QwenModel),
@@ -482,7 +486,19 @@ def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault, archit
             build()
         assert c.pool.writes == 0
     else:
+        monkeypatch.setenv("PVD_PROFILE_COLD_STAGES", "1")
         backend = build()
+        profile_batch = SimpleNamespace(
+            forward_mode=SimpleNamespace(is_decode=lambda: True),
+            pvd_cold_profile=None,
+        )
+        backend.init_forward_metadata(profile_batch)
+        assert isinstance(profile_batch.pvd_cold_profile, _ColdModelStageProfile)
+        next_batch = SimpleNamespace(
+            forward_mode=profile_batch.forward_mode, pvd_cold_profile=None
+        )
+        backend.init_forward_metadata(next_batch)
+        assert next_batch.pvd_cold_profile is None
         monkeypatch.setattr(backend.consumer, "_synchronize", lambda: None)
         with backend.consumer.bind([c.binding], pool_owner=c.owner):
             assert backend.forward_decode(c.q, c.k, c.v, c.layer, c.batch).shape == (
@@ -491,6 +507,26 @@ def test_explicit_backend_factory_gates_and_delegates(monkeypatch, fault, archit
             )
         with pytest.raises(SparsePayloadError, match="bound decode"):
             backend.forward_extend()
+
+
+def test_cold_model_stage_profile_fences_and_ignores_other_layers(monkeypatch, caplog):
+    import sglang.srt.disaggregation.pvd.cuda_model_attention as attention_module
+
+    times = iter((1.0, 1.25, 1.5))
+    fences = []
+    monkeypatch.setattr(
+        attention_module, "time", SimpleNamespace(perf_counter=lambda: next(times))
+    )
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: fences.append(device))
+    caplog.set_level("INFO")
+    profile = _ColdModelStageProfile(torch.device("cuda:0"))
+    profile.mark(0, "qkv_projection")
+    profile.mark(2, "mlp")
+    profile.mark(1, "layer_begin")
+    assert fences == [torch.device("cuda:0")] * 2
+    assert "layer=0 stage=qkv_projection elapsed_seconds=0.250000" in caplog.text
+    assert "layer=1 stage=layer_begin elapsed_seconds=0.250000" in caplog.text
+    assert "layer=2" not in caplog.text
 
 
 def test_real_cuda_model_smoke_is_blocked_not_passed_without_device(

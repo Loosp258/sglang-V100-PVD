@@ -6,8 +6,11 @@ and tie the pool guard to actual allocator retirement (not a no-op callback).
 Device synchronization is a correctness baseline, not compute/network overlap.
 """
 
+import logging
 import math
+import os
 import threading
+import time
 import traceback
 import uuid
 from contextlib import ExitStack, contextmanager
@@ -26,6 +29,29 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransferBudget,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class _ColdModelStageProfile:
+    """Opt-in, first-forward CUDA-fenced timings; no tensor data is recorded."""
+
+    def __init__(self, device):
+        self.device = device
+        self._last = time.perf_counter()
+
+    def mark(self, layer, stage):
+        if layer not in (0, 1):
+            return
+        torch.cuda.synchronize(self.device)
+        now = time.perf_counter()
+        logger.info(
+            "PVD cold target stage: layer=%d stage=%s elapsed_seconds=%.6f",
+            layer,
+            stage,
+            now - self._last,
+        )
+        self._last = now
 
 
 @dataclass(frozen=True)
@@ -469,6 +495,9 @@ def make_cuda_sparse_backend(
     class CUDASparseBackend(TorchNativeAttnBackend):
         def __init__(self):
             super().__init__(runner)
+            self._profile_first_decode = (
+                os.environ.get("PVD_PROFILE_COLD_STAGES") == "1"
+            )
             config = runner.model.config
             self.consumer = CUDAModelSparseConsumer(
                 self.req_to_token_pool,
@@ -482,6 +511,16 @@ def make_cuda_sparse_backend(
                 output_budget=output_budget,
                 max_batch_size=max_batch_size,
             )
+
+        def init_forward_metadata(self, forward_batch):
+            super().init_forward_metadata(forward_batch)
+            if self._profile_first_decode and forward_batch.forward_mode.is_decode():
+                self._profile_first_decode = False
+                if forward_batch.pvd_cold_profile is not None:
+                    raise SparsePayloadError("cold target profile already attached")
+                forward_batch.pvd_cold_profile = _ColdModelStageProfile(
+                    workspace.device
+                )
 
         def forward_decode(self, q, k, v, layer, forward_batch, save_kv_cache=True):
             return self.consumer.forward_decode(

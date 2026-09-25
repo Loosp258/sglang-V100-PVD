@@ -460,6 +460,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     rids_int: Optional[torch.Tensor] = None
     bootstrap_room_ids_int: Optional[torch.Tensor] = None
 
+    # Opt-in, first-PVD-target-forward stage timing; never contains tensor data.
+    pvd_cold_profile: Optional[object] = None
+
     # kv-canary token-id validator snapshot
     req_all_ids_flat: Optional[torch.Tensor] = None
     req_all_ids_lens: Optional[torch.Tensor] = None

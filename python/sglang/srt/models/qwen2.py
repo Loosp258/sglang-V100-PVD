@@ -187,15 +187,25 @@ class Qwen2Attention(nn.Module):
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
+        profile = getattr(forward_batch, "pvd_cold_profile", None)
+        layer_id = self.attn.layer_id
         qkv, _ = self.qkv_proj(hidden_states)
+        if profile is not None:
+            profile.mark(layer_id, "qkv_projection")
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(positions, q, k)
+        if profile is not None:
+            profile.mark(layer_id, "rotary")
         if forward_batch.pvd_query_capture is not None:
             # Capture target-space Q after RoPE and before attention writes KV.
             # The collector is batch-owned; no hook lives on shared weights.
             forward_batch.pvd_query_capture.capture(self.attn.layer_id, positions, q)
         attn_output = self.attn(q, k, v, forward_batch)
+        if profile is not None:
+            profile.mark(layer_id, "attention_return")
         output, _ = self.o_proj(attn_output)
+        if profile is not None:
+            profile.mark(layer_id, "output_projection")
         return output
 
 
@@ -250,12 +260,18 @@ class Qwen2DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        profile = getattr(forward_batch, "pvd_cold_profile", None)
+        layer_id = self.self_attn.attn.layer_id
+        if profile is not None:
+            profile.mark(layer_id, "layer_begin")
         # Self Attention
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        if profile is not None:
+            profile.mark(layer_id, "input_layernorm")
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
@@ -264,7 +280,11 @@ class Qwen2DecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        if profile is not None:
+            profile.mark(layer_id, "post_attention_layernorm")
         hidden_states = self.mlp(hidden_states)
+        if profile is not None:
+            profile.mark(layer_id, "mlp")
         return hidden_states, residual
 
 
