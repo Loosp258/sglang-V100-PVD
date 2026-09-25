@@ -53,17 +53,88 @@ def packed_payloads(
     return views, guard, released
 
 
-def policy_bank(monkeypatch, *, limit=4096):
+def policy_bank(monkeypatch, *, limit=4096, contiguous_stage_copy=False):
     # No CUDA allocation/forward is executed. Exercise ownership on real CPU data.
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     budget = TransferBudget(limit, 3)
     bank = CUDASparseWorkingSet(
-        device="cuda:0", dtype=torch.float32, budget=budget, **options()
+        device="cuda:0",
+        dtype=torch.float32,
+        budget=budget,
+        contiguous_stage_copy=contiguous_stage_copy,
+        **options(),
     )
     bank.device = torch.device("cpu")
     syncs = []
     monkeypatch.setattr(bank, "_synchronize", lambda: syncs.append(True))
     return bank, budget, syncs
+
+
+def test_opt_in_contiguous_bank_copy_clones_once_and_owns_its_bytes(monkeypatch):
+    bank, budget, syncs = policy_bank(monkeypatch, contiguous_stage_copy=True)
+    rows, guard, _ = packed_payloads()
+    source = guard.value
+    original = torch.Tensor.clone
+    cloned = []
+
+    def count_clone(tensor, *args, **kwargs):
+        cloned.append(tensor.numel() * tensor.element_size())
+        return original(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "clone", count_clone)
+    bank.stage(rows, source_guard=guard)
+    assert cloned == [source.numel() * source.element_size()]
+    assert syncs == [True]
+    assert budget.snapshot()["used_staging_bytes"] == 192
+    bank.install(0)
+    expected = rows[0].tensor.detach().clone()
+    source.zero_()
+    with bank.read() as groups:
+        assert torch.equal(groups[(0, 0)][1], expected)
+        assert (
+            groups[(0, 0)][1].untyped_storage().data_ptr()
+            == groups[(0, 1)][1].untyped_storage().data_ptr()
+        )
+    bank.close()
+    guard.request_release()
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_opt_in_contiguous_bank_copy_refuses_gap_before_cuda_copy(monkeypatch):
+    bank, budget, _ = policy_bank(monkeypatch, contiguous_stage_copy=True)
+    rows, _, _ = packed_payloads()
+    count = rows[0].tensor.numel()
+    backing = torch.empty(2 * count + 1, dtype=torch.float32)
+    backing[:count].copy_(rows[0].tensor.flatten())
+    backing[count + 1 :].copy_(rows[1].tensor.flatten())
+    separated = [
+        SparseKVPayload(rows[0].spec, backing[:count].view(rows[0].tensor.shape)),
+        SparseKVPayload(rows[1].spec, backing[count + 1 :].view(rows[1].tensor.shape)),
+    ]
+    guard = ResourceGuard(backing, lambda: None)
+    with pytest.raises(SparsePayloadError, match="exact source extent"):
+        bank.stage(separated, source_guard=guard)
+    assert budget.snapshot()["used_staging_bytes"] == 0
+    guard.request_release()
+    bank.close()
+
+
+def test_opt_in_contiguous_bank_copy_retains_storage_on_unknown_fence(monkeypatch):
+    bank, budget, _ = policy_bank(monkeypatch, contiguous_stage_copy=True)
+    rows, guard, released = packed_payloads()
+
+    def unknown_completion():
+        raise RuntimeError("unknown")
+
+    monkeypatch.setattr(bank, "_synchronize", unknown_completion)
+    with pytest.raises(RuntimeError, match="unknown"):
+        bank.stage(rows, source_guard=guard)
+    guard.request_release()
+    assert not released
+    assert bank._pending_copy is not None
+    assert bank._retained_stage is not None
+    assert bank._retained_source_guard is not None
+    assert budget.snapshot()["used_staging_bytes"] == 192
 
 
 def test_stage_source_pin_is_held_through_completion_and_readers_block_switch(

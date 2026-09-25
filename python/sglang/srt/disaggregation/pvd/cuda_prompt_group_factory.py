@@ -5,6 +5,7 @@ requires a real CUDA placement and builds the local install group/importer;
 only a later, explicit install_received() may import the completed Prompt.
 """
 
+import os
 import threading
 from dataclasses import dataclass
 
@@ -160,10 +161,16 @@ def create_received_prompt_group(
         raise InstallProtocolError(
             "explicit CUDA placement, budgets, lock and bounded install policy required"
         )
+    copy_mode = os.environ.get("PVD_CONTIGUOUS_SPARSE_BANK_COPY", "0")
+    if copy_mode not in ("0", "1"):
+        raise InstallProtocolError(
+            "PVD_CONTIGUOUS_SPARSE_BANK_COPY must be exactly 0 or 1"
+        )
     bank = CUDASparseWorkingSet(
         device=plan.device,
         dtype=plan.dtype,
         budget=bank_budget,
+        contiguous_stage_copy=copy_mode == "1",
         request_id=plan.identity[0],
         incarnation=plan.identity[1],
         entry_transfer_id=plan.identity[2],

@@ -145,10 +145,16 @@ def test_creation_requires_real_cuda_but_does_not_install(monkeypatch):
     monkeypatch.setattr(module, "CUDASparseWorkingSet", Bank)
     monkeypatch.setattr(module, "CUDARuntimeInstallGroup", Group)
     monkeypatch.setattr(module, "CUDAPromptBootstrap", Importer)
+    monkeypatch.setenv("PVD_CONTIGUOUS_SPARSE_BANK_COPY", "yes")
+    with pytest.raises(InstallProtocolError, match="must be exactly 0 or 1"):
+        module.create_received_prompt_group(c.session, **kwargs)
+    assert not built
+    monkeypatch.setenv("PVD_CONTIGUOUS_SPARSE_BANK_COPY", "1")
     created = module.create_received_prompt_group(c.session, **kwargs)
     assert created.plan.identity == plan.identity
     assert built[0][1]["expected_groups"] == plan.expected_groups
     assert built[0][1]["request_id"] == c.request.rid
+    assert built[0][1]["contiguous_stage_copy"] is True
     assert built[1][1] == {0: created.bank}
     assert built[1][2]["peer_epochs"] == {0: "worker"}
     assert built[2][1] is created.group

@@ -32,7 +32,7 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
 
     _budget_namespace = "pvd-cuda-working-set"
 
-    def __init__(self, *, device, dtype, budget, **kwargs):
+    def __init__(self, *, device, dtype, budget, contiguous_stage_copy=False, **kwargs):
         selected = torch.device(device)
         if selected.type != "cuda" or selected.index is None:
             raise SparsePayloadError("an explicit indexed CUDA device is required")
@@ -40,6 +40,10 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
             raise SparsePayloadError("CUDA bank requires an explicit floating KV dtype")
         if not isinstance(budget, TransferBudget):
             raise SparsePayloadError("an explicit bank budget is required")
+        if type(contiguous_stage_copy) is not bool:
+            raise SparsePayloadError(
+                "contiguous stage copy must be an explicit boolean"
+            )
         if not torch.cuda.is_available():
             raise SparsePayloadError("CUDA bank requested but CUDA is unavailable")
         self.device, self.dtype = selected, dtype
@@ -47,7 +51,35 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
         self._quarantine = None
         self._retained_stage = None
         self._retained_source_guard = None
+        self.contiguous_stage_copy = contiguous_stage_copy
+        self._stage_backing = None
+        self._pending_copy = None
         super().__init__(budget=budget, **kwargs)
+
+    def _copy_groups(self, source, size, copies):
+        if not self.contiguous_stage_copy:
+            return super()._copy_groups(source, size, copies)
+        backing = self._stage_backing
+        if backing is None or backing.numel() * backing.element_size() != size:
+            raise SparsePayloadError(
+                "contiguous bank copy requires exact source extent"
+            )
+        offset = 0
+        for _, tensor in source.values():
+            if tensor.data_ptr() != backing.data_ptr() + offset:
+                raise SparsePayloadError("bank groups are not consecutive source views")
+            offset += tensor.numel() * tensor.element_size()
+        if offset != size:
+            raise SparsePayloadError("bank groups do not cover the source extent")
+        # One device copy replaces one clone per (layer, KV head). The typed
+        # views keep this copied storage alive for the whole bank lifetime.
+        self._pending_copy = backing.detach().clone()
+        copied = self._pending_copy.view(self.dtype)
+        offset = 0
+        for key, (spec, tensor) in source.items():
+            count = tensor.numel()
+            copies[key] = (spec, copied[offset : offset + count].view(tensor.shape))
+            offset += count
 
     def _check_policy(self):
         if threading.get_ident() != self._thread:
@@ -75,6 +107,7 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
             self._quarantine = "staging completion unknown"
             self._retained_stage = (source, copies, owner)
             raise
+        self._pending_copy = None
 
     def _drain_reader(self):
         try:
@@ -119,7 +152,11 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
                     raise SparsePayloadError(
                         "source guard does not cover payload storage"
                     )
-            super().stage(payloads)
+            self._stage_backing = backing
+            try:
+                super().stage(payloads)
+            finally:
+                self._stage_backing = None
         finally:
             if self._quarantine is None:
                 try:

@@ -353,6 +353,19 @@ CPU 字节规划对 FP16/BF16/FP32、两 V rank 和乱序 token ID 与旧路径
 gather+pack**：CAGRA 搜索、跨网络控制消息与 RDMA 提交仍分离，
 不能称为完整的 `Select–Pack–FanIn–Install` 通算融合。
 
+### D 连续稀疏 bank 拷贝实验（默认关闭）
+
+设置 `PVD_CONTIGUOUS_SPARSE_BANK_COPY=1` 后，D 对已验证、字节连续的
+稀疏 staging，在工作集安装前只克隆一次完整缓冲区，再建立各
+`(layer, KV-head)` 的零拷贝视图；原路径按组 clone 仍是默认。
+源 extent、组顺序及每段地址必须完全覆盖且连续，否则在克隆前拒绝。
+目标 bank 仍独立拥有一份 KV，预算和 CUDA 完成栅栏不变，异常完成时
+保留可能仍被内核使用的拷贝。此优化仅合并 **aggregate→bank**
+这一段的 GPU 拷贝，尚未合并各 V receive 区→aggregate、install
+状态切换或 attention；不是端到端流水线收益证据。本地 CPU 策略替身
+已验证单次 clone、字节独立、间隙拒绝与生命周期；真实 CUDA/RDMA
+仍待三机环境验收。
+
 1. 固定 A/B 负载：同模型、prompt 长度、输出长度、冷/热 Entry、
    1/2/4 并发和相同 D attention 配置；分开记录 pack、native
    submit、transport status、D scatter、CAGRA、target forward、

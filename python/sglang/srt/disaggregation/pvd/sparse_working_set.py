@@ -97,6 +97,11 @@ class _SparseWorkingSetCore:
     def _drain_reader(self):
         """Complete device reads before a read lease can end."""
 
+    def _copy_groups(self, source, size, copies):
+        """Make an independently owned bank; device implementations may coalesce copies."""
+        for key, (spec, tensor) in source.items():
+            copies[key] = (spec, tensor.detach().clone())
+
     def stage(self, payloads):
         self._open()
         if self._next is not None:
@@ -146,8 +151,7 @@ class _SparseWorkingSetCore:
         self.budget.reserve(owner, size, 1)
         copies = {}
         try:
-            for key, (spec, tensor) in source.items():
-                copies[key] = (spec, tensor.detach().clone())
+            self._copy_groups(source, size, copies)
         except BaseException:
             self._drain_stage(source, copies, owner)
             copies.clear()
