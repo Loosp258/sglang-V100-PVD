@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from pvd_attention_tile_parity import PROMPT_LENGTHS, run_case
 from sglang.srt.disaggregation.pvd import cuda_sparse_attention as attention
 from sglang.srt.disaggregation.pvd.cuda_rank_install import CUDARankInstallParticipant
 from sglang.srt.disaggregation.pvd.cuda_working_set import CUDASparseWorkingSet
@@ -707,57 +708,11 @@ def test_real_cuda_attention_consumes_installed_banks_across_refresh():
     not torch.cuda.is_available(),
     reason="Qwen2.5-7B tile parity requires a real CUDA device",
 )
-@pytest.mark.parametrize(
-    "prompt_tokens", [1, 7, 8, 9, 63, 64, 65, 127, 128, 129, 511, 1923]
-)
+@pytest.mark.parametrize("prompt_tokens", PROMPT_LENGTHS)
 def test_real_cuda_qwen_gqa_tiles_match_independent_softmax(prompt_tokens):
     """Check the online tiles against full softmax, including scattered D rows.
 
     This is a one-layer numerical gate, not an end-to-end or latency claim.
     The full-context concatenation exists only in the independent test oracle.
     """
-    device = "cuda:0"
-    generator = torch.Generator().manual_seed(2000 + prompt_tokens)
-    q = torch.randn(28, 128, generator=generator).to(device, torch.float16)
-    prompt_kv = torch.randn(4, 2, prompt_tokens, 128, generator=generator).to(
-        device, torch.float16
-    )
-    generated_k = torch.randn(32, 4, 128, generator=generator).to(device, torch.float16)
-    generated_v = torch.randn(32, 4, 128, generator=generator).to(device, torch.float16)
-    rows = (19, 3, 17, 11)
-    mapping = QueryHeadMapping(28, 4)
-    prompt = {(0, head): (None, prompt_kv[head]) for head in range(4)}
-    scale = 1 / math.sqrt(128)
-    expected = torch.empty_like(q)
-    for head in range(28):
-        kv_head = mapping.kv_head_for(head)
-        keys = torch.cat(
-            (prompt_kv[kv_head, 0], generated_k[list(rows), kv_head]), dim=0
-        ).float()
-        values = torch.cat(
-            (prompt_kv[kv_head, 1], generated_v[list(rows), kv_head]), dim=0
-        ).float()
-        scores = torch.mv(keys, q[head].float()) * scale
-        expected[head] = torch.mv(values.T, torch.softmax(scores, dim=0))
-
-    before = (q.clone(), prompt_kv.clone(), generated_k.clone(), generated_v.clone())
-    outputs = []
-    for chunk in (8, 64):
-        output = torch.empty_like(q)
-        data = attention.AttentionBuffers(q, generated_k, generated_v, output, rows)
-        scratch = torch.empty(
-            attention.scratch_elements(chunk, 128), device=device, dtype=torch.float32
-        )
-        attention._stream_attention(
-            prompt, data, mapping, 0, scale, scratch, chunk, 128
-        )
-        torch.cuda.synchronize(device)
-        assert torch.isfinite(output).all()
-        torch.testing.assert_close(output, expected, atol=0.025, rtol=0.002)
-        outputs.append(output.clone())
-
-    torch.testing.assert_close(outputs[0], outputs[1], atol=0.025, rtol=0.002)
-    for actual, original in zip(
-        (q, prompt_kv, generated_k, generated_v), before, strict=True
-    ):
-        torch.testing.assert_close(actual, original, atol=0, rtol=0)
+    assert run_case(prompt_tokens)["prompt_tokens"] == prompt_tokens
