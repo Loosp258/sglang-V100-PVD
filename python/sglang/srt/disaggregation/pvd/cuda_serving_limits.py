@@ -142,12 +142,22 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
 
     attention_impl = config.get("attention_impl", "online")
     if (
-        attention_impl not in ("online", "sdpa_bounded")
+        attention_impl not in ("online", "sdpa_bounded", "triton_grouped")
         or type(attention_impl) is not str
     ):
-        raise ValueError("attention_impl must be online or sdpa_bounded")
+        raise ValueError(
+            "attention_impl must be online, sdpa_bounded or triton_grouped"
+        )
     if attention_impl == "sdpa_bounded" and values["max_sequence_tokens"] > 256:
         raise ValueError("sdpa_bounded requires max_sequence_tokens <= 256")
+    if attention_impl == "triton_grouped" and values["attention_chunk_tokens"] not in (
+        8,
+        16,
+        32,
+        64,
+        128,
+    ):
+        raise ValueError("triton_grouped requires tile size 8, 16, 32, 64 or 128")
     values["attention_impl"] = attention_impl
 
     return CUDAServingLimits(**values)

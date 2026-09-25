@@ -212,8 +212,28 @@ class CUDASparseAttentionWorkspace:
         if not isinstance(budget, TransferBudget) or not torch.cuda.is_available():
             raise SparsePayloadError("CUDA and explicit attention budget required")
         self.dtype, self.head_dim, self.chunk_tokens = dtype, head_dim, chunk_tokens
-        if attention_impl not in ("online", "sdpa_bounded"):
+        if attention_impl not in ("online", "sdpa_bounded", "triton_grouped"):
             raise SparsePayloadError("unknown attention implementation")
+        if attention_impl == "triton_grouped":
+            if (
+                dtype != torch.float16
+                or head_dim not in (64, 128)
+                or chunk_tokens not in (8, 16, 32, 64, 128)
+                or type(total_kv_heads) is not int
+                or total_kv_heads <= 0
+                or type(num_query_heads) is not int
+                or num_query_heads < total_kv_heads
+                or num_query_heads % total_kv_heads
+                or torch.cuda.get_device_capability(self.device) != (7, 0)
+            ):
+                raise SparsePayloadError(
+                    "triton_grouped requires SM70, FP16, supported tile and GQA heads"
+                )
+            from sglang.srt.disaggregation.pvd.triton_sparse_attention import (
+                one_token_gqa_grouped,
+            )
+
+            self._triton_execute = one_token_gqa_grouped
         self.attention_impl = attention_impl
         self.max_sequence_tokens = max_sequence_tokens
         self.total_kv_heads = total_kv_heads
@@ -287,6 +307,7 @@ class CUDASparseAttentionWorkspace:
                 "explicit participant, mapping, buffers and scale required"
             )
         started = time.perf_counter()
+        triton_owner = triton_view = triton_rows = None
         pin = f"{self._owner}:execution"
         resources.pin(pin)
         self._active = True
@@ -303,11 +324,11 @@ class CUDASparseAttentionWorkspace:
                 raise SparsePayloadError(
                     "bank and attention device/dtype/dimension mismatch"
                 )
-            if self.attention_impl == "sdpa_bounded" and (
+            if self.attention_impl in ("sdpa_bounded", "triton_grouped") and (
                 mapping.total_kv_heads != self.total_kv_heads
                 or mapping.num_query_heads != self.num_query_heads
             ):
-                raise SparsePayloadError("bounded SDPA head mapping changed")
+                raise SparsePayloadError("attention head mapping changed")
             pool_rows = decode_tokens + 1
             if buffers.generated_rows is not None:
                 rows = buffers.generated_rows
@@ -370,7 +391,52 @@ class CUDASparseAttentionWorkspace:
                 # The lease covers all operations and failure draining, not only
                 # Python's return from an asynchronous CUDA tensor operation.
                 try:
-                    if self.attention_impl == "sdpa_bounded":
+                    if self.attention_impl == "triton_grouped":
+                        if not math.isclose(
+                            scale,
+                            self.head_dim**-0.5,
+                            rel_tol=1e-8,
+                            abs_tol=1e-12,
+                        ):
+                            raise SparsePayloadError(
+                                "triton_grouped requires standard attention scale"
+                            )
+                        from sglang.srt.disaggregation.pvd.triton_sparse_attention import (
+                            PromptPointerView,
+                        )
+
+                        owner = f"{self._owner}:tables:{uuid.uuid4().hex}"
+                        # Two tiny GPU tables plus the generated-row index. Charge
+                        # before allocation; release only after the reader fence.
+                        table_bytes = 12 * mapping.total_kv_heads + 8 * (
+                            decode_tokens + 1
+                        )
+                        self._budget.reserve(owner, table_bytes, 1)
+                        triton_owner = owner
+                        triton_view = PromptPointerView.from_groups(
+                            groups,
+                            layer=layer,
+                            kv_heads=mapping.total_kv_heads,
+                            device=self.device,
+                        )
+                        row_ids = (
+                            buffers.generated_rows
+                            if buffers.generated_rows is not None
+                            else tuple(range(decode_tokens + 1))
+                        )
+                        triton_rows = torch.tensor(
+                            row_ids, dtype=torch.int64, device=self.device
+                        )
+                        self._triton_execute(
+                            buffers.q,
+                            triton_view,
+                            buffers.generated_k,
+                            buffers.generated_v,
+                            triton_rows,
+                            buffers.output,
+                            block_tokens=self.chunk_tokens,
+                        )
+                    elif self.attention_impl == "sdpa_bounded":
                         _sdpa_attention(
                             groups,
                             buffers,
@@ -397,7 +463,13 @@ class CUDASparseAttentionWorkspace:
                         self._synchronize()
                     except BaseException:
                         self._quarantine = "attention completion unknown"
-                        self._held = (resources, pin, participant)
+                        self._held = (
+                            resources,
+                            pin,
+                            participant,
+                            triton_view,
+                            triton_rows,
+                        )
                         raise
         finally:
             try:
@@ -406,14 +478,28 @@ class CUDASparseAttentionWorkspace:
                 # generated pool/output owner too, not just the Prompt bank.
                 if participant._bank.snapshot()["quarantine"] is not None:
                     self._quarantine = "Prompt reader completion unknown"
-                    self._held = (resources, pin, participant)
+                    self._held = (
+                        resources,
+                        pin,
+                        participant,
+                        triton_view,
+                        triton_rows,
+                    )
                 if self._quarantine is None:
                     try:
                         resources.unpin(pin)
                     except BaseException:
                         self._quarantine = "attention resource release unknown"
-                        self._held = (resources, pin, participant)
+                        self._held = (
+                            resources,
+                            pin,
+                            participant,
+                            triton_view,
+                            triton_rows,
+                        )
                         raise
+                    if triton_owner is not None:
+                        self._budget.release(triton_owner)
             finally:
                 self._active = False
         if layer not in self._timed_first_layers:
