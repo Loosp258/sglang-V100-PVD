@@ -8,7 +8,7 @@ import run_pvd_live_load as live_load
 
 
 class Response:
-    def __init__(self, counts, *, prompt_tokens=109, done=True):
+    def __init__(self, counts, *, prompt_tokens=109, done=True, finish_reason=None):
         self.headers = {"Content-Type": "text/event-stream"}
         self.lines = [
             (
@@ -18,6 +18,7 @@ class Response:
                         "meta_info": {
                             "prompt_tokens": prompt_tokens,
                             "completion_tokens": count,
+                            "finish_reason": finish_reason,
                         }
                     }
                 )
@@ -64,7 +65,14 @@ def test_observe_rejects_incomplete_or_inconsistent_stream(response, reason):
     with pytest.raises(ValueError, match=reason) as exc:
         live_load._observe(response, 0.0, 2)
     if reason == "DONE":
-        assert "received=1/2 events=1" in str(exc.value)
+        assert "received=1/2 events=1 finish_type=None" in str(exc.value)
+
+
+def test_observe_reports_early_finish_type_without_response_content():
+    response = Response((1,), finish_reason={"type": "stop", "matched": "secret"})
+    with pytest.raises(ValueError, match="finish_type='stop'") as exc:
+        live_load._observe(response, 0.0, 2)
+    assert "secret" not in str(exc.value)
 
 
 def test_collect_bounds_actual_gateway_prompt_and_summarizes_concurrency(monkeypatch):

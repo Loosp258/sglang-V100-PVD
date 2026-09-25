@@ -32,6 +32,7 @@ def _observe(response, started, expected_tokens):
     prompt_tokens = None
     events = coalesced = previous = 0
     done = False
+    last_finish_type = None
     for raw in response:
         if len(raw) > 1 << 20:
             raise ValueError("oversized SSE line")
@@ -44,6 +45,8 @@ def _observe(response, started, expected_tokens):
             break
         payload = json.loads(data)
         meta = payload.get("meta_info") if isinstance(payload, dict) else None
+        finish = meta.get("finish_reason") if isinstance(meta, dict) else None
+        last_finish_type = finish.get("type") if isinstance(finish, dict) else finish
         count = meta.get("completion_tokens") if isinstance(meta, dict) else None
         length = meta.get("prompt_tokens") if isinstance(meta, dict) else None
         if type(count) is not int or not previous <= count <= expected_tokens:
@@ -64,7 +67,8 @@ def _observe(response, started, expected_tokens):
         raise ValueError(
             "SSE stream ended without every requested token and DONE: "
             f"done={done} received={len(times)}/{expected_tokens} "
-            f"events={events} elapsed_seconds={time.perf_counter() - started:.3f}"
+            f"events={events} finish_type={last_finish_type!r} "
+            f"elapsed_seconds={time.perf_counter() - started:.3f}"
         )
     gaps = [b - a for a, b in itertools.pairwise(times)]
     return {
