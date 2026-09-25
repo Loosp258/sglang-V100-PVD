@@ -319,6 +319,21 @@ def test_a_request_that_does_not_fit_is_deferred_not_aborted():
     assert runnable(mgr, req) is False
 
 
+def test_a_request_larger_than_total_staging_capacity_fails_instead_of_waiting_forever():
+    mgr = make_manager(staging_bytes=64, per_req=80)
+    req = make_req()
+    gate = open_gate(mgr, req)
+    gate.mark_source_ready()
+
+    failures = enter(mgr, [req])
+    assert len(failures) == 1
+    assert failures[0][0] is req
+    assert "required=80 configured=64 bytes" in failures[0][1]
+    assert mgr.decode_refresher.calls == []
+    assert gate.state is BootstrapState.QUEUED
+    assert not runnable(mgr, req)
+
+
 def test_a_deferred_request_is_pulled_once_the_budget_frees_up():
     mgr = make_manager(staging_bytes=128, used=100, per_req=64)
     req = make_req()

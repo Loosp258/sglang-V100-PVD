@@ -401,6 +401,8 @@ class PVDKVManager:
             return failures
 
         headroom = self._bootstrap_staging_headroom()
+        budget = getattr(self, "transfer_budget", None)
+        capacity = budget.snapshot()["staging_bytes"] if budget is not None else None
         candidates, local_errors = {}, {}
         by_key = {}
         for req in reqs:
@@ -416,8 +418,15 @@ class PVDKVManager:
                 continue
             try:
                 gate.enter_waiting_queue()
+                needed = self.bootstrap_staging_bytes(req)
+                if capacity is not None and needed > capacity:
+                    local_errors[key] = (
+                        "PVD initial Prompt KV exceeds Decode staging capacity: "
+                        f"required={needed} configured={capacity} bytes"
+                    )
+                    continue
                 if gate.can_request():
-                    candidates[key] = self.bootstrap_staging_bytes(req)
+                    candidates[key] = needed
             except Exception as exc:
                 local_errors[key] = str(exc)
 

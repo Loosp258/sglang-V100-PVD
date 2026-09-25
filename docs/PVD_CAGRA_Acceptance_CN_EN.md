@@ -1,5 +1,57 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-25 三机长上下文与并发实测 / Three-node long-context and concurrency run
+
+隔离服务使用真实 Qwen2.5-7B-Instruct：P=`clgpu020` GPU1/TP1，
+V=`clgpu021` GPU0+GPU1/两 shard，D=`clgpu019` GPU1/TP1，
+Gateway=`10.0.1.2:8001`；原 P/D GPU0、V 9000 和 Gateway 8000 服务未停。
+`mlx5_0` 单 rail，V 为 `cagra-auto`、`exact_max_rows=64`、
+每 rank 1 GiB index budget/640 MiB shared native cap，D 为
+`online` sparse attention、`max_sequence_tokens=2304`。隔离实例启动脚本为
+`test/registered/disaggregation/cloudlab_pvd_long_sidecar.sh`，有界 SSE 客户端为
+`test/registered/disaggregation/run_pvd_live_load.py`。先发现并修复
+`--base-gpu-id 1` 的物理 GPU→HCA 键错误；P/D GPU1 本机 GPUDirect
+预检通过，随后完整跨节点请求通过。
+
+| 实际 Prompt token | 并发 | 每条输出 | 总墙钟 | TTFT | D 单次预测检索 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 236 | 1 | 8/8 | 39.02 s | 17.75 s | 9.62 s |
+| 517 | 1 | 8/8 | 69.03 s | 28.16 s | 19.40 s |
+| 1010 | 1 | 8/8 | 125.83 s | 49.34 s | 37.02 s |
+| 236 × 2 | 2 | 8/8 each | 66.19 s | 15.14/34.33 s | — |
+| 235 × 4 | 4 | 8/8 each | 138.29 s | 12.04–43.52 s | — |
+
+所有完成请求的 V 双 rank 日志均为 `backend=cagra_auto path=cagra heads=56`，
+并在 D 安装预测刷新后完整结束 SSE；不是 `exact` 回退。2 并发总吞吐
+约 0.242 token/s，4 并发约 0.231 token/s，单请求 236 token
+约 0.205 token/s。故**功能与 4 并发正确性通过，性能收益未通过**：
+检索时间随 Prompt 长度显著增长，增加到 4 并发没有进一步扩展吞吐。
+这些是每 Entry 冷建图、真实 Gateway 计时；尚无同长度、同配置的
+full-KV 或 GPU exact 公平对照，也不能作为质量/召回保证。
+
+2044-token 的首次请求在 600 s 客户端上限内**没有完成**，不能列入通过。
+V 两 rank 已建原生 CAGRA 图，但 D 的 64 MiB transfer staging
+总预算小于该请求约 112 MiB 的完整 Prompt KV。waiting-queue 旧逻辑
+把永久不可能的请求当作暂时容量不足而无限重试；V 没有该请求的 fan-in
+reserve、RDMA 未出现 UNKNOWN。现已加入 fail-fast 回归，隔离 D 下一轮
+改为 256 MiB staging 后须重跑。CPU-only 的 Qwen 形状计划探针测得
+2044 token/228928 切片、13.88 MB manifest，构造+校验约 4.36 s；
+这不能解释 600 s 等待，更不能代替真实 RDMA 计时。
+
+The isolated Qwen2.5-7B run used P GPU1/TP1, V two GPU shards, D
+GPU1/TP1, and the separate 8001 Gateway; original services stayed up.
+Both V ranks logged native CAGRA (`path=cagra`, 56 heads) for every
+completed request. Full SSE completion passed at actual Prompt lengths
+236, 517 and 1010, and with 2 and 4 concurrent clients. The table above
+contains cold-Entry latency and D search timings. Functionality passed;
+performance improvement did **not**: search latency rose with Prompt
+length and four clients delivered no throughput gain over two. A 2044-token
+request timed out at 600 s because its complete D Prompt KV exceeded the
+64 MiB staging budget and the waiting gate silently retried an impossible
+request. A fail-fast fix is covered by CPU regressions; rerun with a 256 MiB
+isolated D budget is pending. No apples-to-apples baseline, long-context
+quality set or per-length recall distribution has been established.
+
 ## 2026-09-25 在线 native CAGRA 与有界 SSE 并发探针 / Live native and bounded SSE load
 
 新增 `test/registered/disaggregation/run_pvd_live_load.py`：最多 4 并发、5 轮、
@@ -19,7 +71,7 @@
 V 双 rank 对三个 Entry 均报告 `searchable=true`、56 heads、
 `quarantined=false`、`active_searches=0`；共享 native 根预算仍在，
 Entry 暂存等待 TTL 回收。这是冷 Entry 建图和排队门槛，**不是吞吐或尾延迟
-收益验收**。接下来须用隔离的较长上下文服务，并做相同配置的 exact 对照。
+收益验收**。隔离较长上下文结果见本页顶部，公平 exact 对照仍待完成。
 
 The bounded live SSE probe now checks actual Gateway Prompt tokens, complete
 streamed output and coalesced events for at most four clients. With the
@@ -41,15 +93,16 @@ Mooncake 本机 GPUDirect 预检；两者都通过 GPU MR 注册和本机传输�
 原因是 PVD 把 TP rank 0 写成 Mooncake 的 GPU→HCA JSON 键，
 但 Mooncake 按物理 GPU ID 1 查找。修复将 rank 的 rail 映射至
 `base_gpu_id + rank * gpu_id_step`，保留默认 GPU0 行为，且二次参数校验
-仍可识别规范化的物理 GPU JSON。GPU1 跨节点服务尚待重新启动验证；
-本机 loopback 成功不能代替跨节点验收。
+仍可识别规范化的物理 GPU JSON。后续 GPU1 跨节点通过，见本页顶部；
+本机 loopback 本身不能代替该验收。
 
 To keep the original GPU0 services untouched, local Mooncake GPUDirect
 loopback preflight on idle GPU1 passed on P and D. Isolated P/D startup then
 failed because PVD keyed the HCA JSON by TP rank 0 while Mooncake looked up
 physical GPU 1. The model-server hook now maps each rail to
 `base_gpu_id + rank * gpu_id_step`, retaining default-GPU behavior and
-idempotent argument validation. Cross-node GPU1 serving remains to be tested.
+idempotent argument validation. The later cross-node GPU1 gate is recorded
+above; the local loopback alone did not establish it.
 
 ## 2026-09-24 91-token Gateway Prompt / Bounded longer-Prompt gate
 
