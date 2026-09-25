@@ -2730,3 +2730,24 @@ passed 2935/24 with 21 subtests. The live V still runs `67c0bb375`, so
 these new timings have not yet been measured on CloudLab. Deploy V before D
 and measure a genuinely above-threshold Prompt next; the existing live
 diagnosis proves only the 99-token case.
+
+新提交 `48e69c068` 已在 V 的新独立 worktree 实机运行，D 仍为
+`67c0bb375`、M=4。固定数据集长请求耗时 27.07 秒；V 两个 shard
+各有 56 个 KV-head/layer 索引，99 行索引确实走 CAGRA。
+两个 shard 的提取/构建/总耗时分别为 0.389/13.100/13.490 秒和
+0.003/9.548/9.551 秒；日志共出现 112 次 99 行图构建。
+短请求的 29/36 行索引走 exact，两个 shard 总构建时间分别只需
+约 8–21 毫秒。实测证明这一请求的首次停顿主要是逐 head 的
+CAGRA 建图，而不是 Prompt KV 提取。该数据尚不说明更长索引采用
+何种建图策略最快，也不包含并发吞吐统计。
+
+Commit `48e69c068` was subsequently run on V in a new isolated worktree,
+while D stayed on `67c0bb375` at M=4. The fixed long request took 27.07 s.
+Each V shard built 56 per-layer/KV-head indexes with 99 rows on the CAGRA
+path. Extraction/build/total times were 0.389/13.100/13.490 s on one shard
+and 0.003/9.548/9.551 s on the other; the log contained 112 graph builds
+for 99-row data. The 29/36-row short requests took the exact path and each
+shard's total head-build time was only about 8–21 ms. This directly locates
+the main first-request cost for this case in per-head CAGRA construction,
+not Prompt-K extraction. It does not identify the optimal policy for longer
+indexes or measure concurrent throughput.
