@@ -1,0 +1,3 @@
+{"id":"short-repetition","text":"PVD_AB_SHORT_001: Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence."}
+{"id":"short-fact","text":"PVD_AB_FACT_001: What is the purpose of remote direct memory access in a GPU inference pipeline? Answer in one sentence."}
+{"id":"long-repetition","text":"PVD_AB_LONG_001: Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence. Explain GPU RDMA in one short sentence."}
