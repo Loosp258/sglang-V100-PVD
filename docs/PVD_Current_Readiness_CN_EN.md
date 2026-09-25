@@ -3,6 +3,37 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 全选 KV 诊断 / Full-selection KV diagnostic
+
+保持同一 36-token Prompt、Qwen2.5-7B-Instruct、P/V/Gateway 与 4-token
+刷新间隔，在 D 的预测路径上临时设 `top_k=36`、每组并集上限 36，
+即每个 layer/KV-head 都选到该 Prompt 的全部 token。两次 HTTP 200、
+各输出 20 token，生成 token ID **逐项匹配**完整 Prompt KV 基线；
+Top-4 配置则从第 9 个生成 token 起与基线分歧。这是一个受控样例，
+支持差异来自丢弃 Prompt KV，而非该样例的稀疏 KV 安装出错；不证明
+一般情形下的检索质量或所有模型的数值等价。
+
+全选诊断两次均约 **26.9 秒**，比 Top-4 预测路径约 19 秒及完整 KV
+基线约 7.3 秒更慢。热态四轮搜索约 2.20–2.83 秒/轮，交付约
+0.18–0.25 秒/轮。扩大 `top_k` 能恢复这个样例的输出，却不是性能方案。
+D 随后恢复 Top-4/并集上限 32；V 仍保持 128 行精确阈值。
+
+With the same 36-token Prompt, Qwen2.5-7B-Instruct, P/V/Gateway and
+four-token refresh interval, D's predictive path was temporarily set to
+`top_k=36` and a 36-token union limit. Each layer/KV-head therefore selected
+all Prompt tokens. Both HTTP 200 requests generated 20 tokens whose IDs
+matched the periodic full-Prompt-KV baseline **exactly**; Top-4 had diverged
+at generated token nine. This controlled case supports sparse exclusion as
+the source of that output difference, not a delivery/install error in this
+case. It does not prove retrieval quality or equivalence across models.
+
+Both full-selection runs took about **26.9 seconds**, slower than the roughly
+19-second Top-4 predictive path and 7.3-second full-KV baseline. Warm search
+phases took about 2.20–2.83 seconds each and delivery about 0.18–0.25
+seconds each. Raising `top_k` recovers this case's output, but is not a
+latency solution. D was restored to Top-4/union-limit-32; V retained its
+128-row exact cutoff.
+
 ## 2026-09-25 有界并行搜索 / Bounded parallel search
 
 `24ae1bcd9` 保持每个 V 来源先做一次搜索取得索引/映射版本，再把其余
