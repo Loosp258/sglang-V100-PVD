@@ -450,10 +450,17 @@ class CagraAutoIndexBackend(IndexBackend):
 
     name = "cagra_auto"
 
-    def __init__(self, cagra: CagraIndexBackend):
+    def __init__(self, cagra: CagraIndexBackend, *, exact_max_rows: int | None = None):
         if not isinstance(cagra, CagraIndexBackend):
             raise TypeError("a configured CAGRA backend is required")
+        if exact_max_rows is None:
+            exact_max_rows = cagra.intermediate_degree
+        if type(exact_max_rows) is not int or exact_max_rows < cagra.intermediate_degree:
+            raise ValueError(
+                "exact_max_rows must be at least the CAGRA intermediate degree"
+            )
         self.cagra = cagra
+        self.exact_max_rows = exact_max_rows
         self.exact = BruteForceIndexBackend(device=cagra.device)
         self._lock = threading.RLock()
         self._built = {}
@@ -469,7 +476,7 @@ class CagraAutoIndexBackend(IndexBackend):
     def _for_rows(self, rows):
         if type(rows) is not int or rows <= 0:
             raise IndexSearchError("index rows must be a positive integer")
-        return self.exact if rows <= self.cagra.intermediate_degree else self.cagra
+        return self.exact if rows <= self.exact_max_rows else self.cagra
 
     def build_footprint(self, rows, dim, *, metric):
         return self._for_rows(rows).build_footprint(rows, dim, metric=metric)

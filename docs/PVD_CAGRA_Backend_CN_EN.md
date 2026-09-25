@@ -56,6 +56,10 @@ capacity, not from this document:
 `cagra` 模式原来的短 Prompt 拒绝行为不变。自动模式分别向索引预算申报
 精确副本或 native cap，短 Prompt 不预留完整 CAGRA cap；但 GPU 精确副本
 仍和权威 KV pool 竞争显存，因此必须为它留出明确预算。
+自动模式可选 `--prompt-index-exact-max-rows N`，将精确检索阈值独立设为
+`N`；`N` 必须不小于 intermediate degree。未指定时阈值仍等于
+intermediate degree，以保持既有行为。显式扩大阈值会增加精确 GPU
+索引的显存与检索成本，必须在索引预算内按实际负载验证。
 
 For short prompts, explicitly select `--prompt-index-backend cagra-auto`
 instead of `cagra`. At `rows <= intermediate_degree`, this uses bounded
@@ -64,6 +68,11 @@ Pure `cagra` retains its prior short-prompt refusal. Each path declares its
 actual retained and scratch footprints to the index budget. Short indexes
 avoid the full native cap, but their exact GPU copy still competes with the
 authoritative KV pool and must be budgeted.
+Only in auto mode, `--prompt-index-exact-max-rows N` can raise the exact
+cutoff independently of CAGRA's graph intermediate degree. `N` must be at
+least that degree; omitting the flag preserves the old cutoff. Raising it
+trades graph-build work for GPU-resident exact-index memory and search work,
+and must be evaluated under the configured index budget.
 
 The three numeric graph/search defaults above are configuration defaults, not
 tuned V100S results. CAGRA requires an actual indexed CUDA device; the factory

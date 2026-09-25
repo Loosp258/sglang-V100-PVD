@@ -315,6 +315,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt-index-cagra-intermediate-degree", type=_positive_int, default=128
     )
     parser.add_argument(
+        "--prompt-index-exact-max-rows",
+        type=_positive_int,
+        default=None,
+        help="For cagra-auto only: use bounded on-device exact search up to this "
+        "many index rows. Must be at least the CAGRA intermediate degree. "
+        "Omitted means the intermediate degree, preserving prior behavior.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-itopk-size", type=_positive_int, default=512
     )
     parser.add_argument(
@@ -370,6 +378,16 @@ def build_parser() -> argparse.ArgumentParser:
 def _validate_args(args: argparse.Namespace) -> List[str]:
     index_mode = getattr(args, "prompt_index_backend", "exact")
     shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
+    exact_max_rows = getattr(args, "prompt_index_exact_max_rows", None)
+    if exact_max_rows is not None and (
+        index_mode != "cagra-auto"
+        or type(exact_max_rows) is not int
+        or exact_max_rows < args.prompt_index_cagra_intermediate_degree
+    ):
+        raise ValueError(
+            "--prompt-index-exact-max-rows requires cagra-auto and must be "
+            "at least --prompt-index-cagra-intermediate-degree"
+        )
     if index_mode in ("cagra", "cagra-auto"):
         if (
             not args.prompt_index_vector_space
@@ -526,7 +544,12 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
             native_kwargs["global_native_cap_bytes"] = shared_native
         native = CagraIndexBackend(**native_kwargs)
         backend = (
-            CagraAutoIndexBackend(native) if index_mode == "cagra-auto" else native
+            CagraAutoIndexBackend(
+                native,
+                exact_max_rows=getattr(args, "prompt_index_exact_max_rows", None),
+            )
+            if index_mode == "cagra-auto"
+            else native
         )
     elif shared_native is not None:
         raise ValueError("shared CAGRA native cap requires a CAGRA backend")
