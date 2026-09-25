@@ -580,6 +580,7 @@ class PromptIndexManager:
         *,
         queries: torch.Tensor,
         top_k: int,
+        timings: Optional[Dict[str, float]] = None,
     ) -> SearchResult:
         """Search one (layer, KV head) under the caller's stated identity.
 
@@ -600,6 +601,7 @@ class PromptIndexManager:
             )
         transfer_id = identity.entry_transfer_id
         key = (identity.layer, identity.kv_head)
+        stage_started = time.perf_counter() if timings is not None else 0.0
         with self._lock:
             if self.quarantined:
                 raise IndexCompletionUnknown(self._quarantine_reason)
@@ -632,6 +634,8 @@ class PromptIndexManager:
             # racing this search leaves the copies -- and their charge -- in
             # place until this search returns them.
             record.users += 1
+        if timings is not None:
+            timings["identity_lease"] = time.perf_counter() - stage_started
         scratch_owner = f"prompt-index-search:{transfer_id}:{uuid.uuid4().hex[:8]}"
         failure = None
         placed_queries = queries
@@ -645,6 +649,7 @@ class PromptIndexManager:
             validated = validated + ("positional_encoding", "layer", "kv_head")
             # A search's scratch is bounded and charged for its duration, so
             # concurrent searches cannot together exceed the worker's budget.
+            stage_started = time.perf_counter() if timings is not None else 0.0
             if self.budget is not None:
                 self._reserve(
                     scratch_owner,
@@ -652,16 +657,21 @@ class PromptIndexManager:
                         index.count, index.dim, int(queries.shape[0]), int(top_k)
                     ),
                 )
+            if timings is not None:
+                timings["reserve"] = time.perf_counter() - stage_started
             # HTTP queries arrive on CPU, whereas native CAGRA (and the
             # exact CUDA fallback) need the V rank's own GPU. Place only
             # after identity checks and the backend's search reservation:
             # the declared footprint includes the query copy, and an
             # unauthorized or over-budget request must not allocate it.
+            stage_started = time.perf_counter() if timings is not None else 0.0
             if (
                 self.backend_device is not None
                 and placed_queries.device != torch.device(self.backend_device)
             ):
                 placed_queries = queries.to(device=self.backend_device)
+            if timings is not None:
+                timings["query_place"] = time.perf_counter() - stage_started
             selection = select(
                 self.backend,
                 index,
@@ -670,6 +680,7 @@ class PromptIndexManager:
                 kv_head=identity.kv_head,
                 mapping=item.mapping,
                 top_k=top_k,
+                timings=timings,
             )
         except BaseException as exc:
             failure = exc
@@ -678,7 +689,10 @@ class PromptIndexManager:
             raise
         finally:
             try:
+                stage_started = time.perf_counter() if timings is not None else 0.0
                 self._fence(placed_queries)
+                if timings is not None:
+                    timings["completion_fence"] = time.perf_counter() - stage_started
             except IndexCompletionUnknown:
                 self._retain_operation(
                     record, scratch_owner, item, index, queries, placed_queries, failure

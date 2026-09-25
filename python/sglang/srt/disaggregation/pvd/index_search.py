@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import abc
 import math
+import time
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
@@ -525,6 +526,7 @@ def select(
     mapping: IdMapping,
     top_k: int,
     kv_head: Optional[int] = None,
+    timings: Optional[Dict[str, float]] = None,
 ) -> Selection:
     """Search one layer and return the choice in Prompt terms, not addresses."""
     if isinstance(layer, bool) or not isinstance(layer, int) or layer < 0:
@@ -549,7 +551,12 @@ def select(
         or queries.shape[1] != index.dim
     ):
         raise IndexSearchError("queries must have non-empty [num_queries, dim] shape")
+    started = time.perf_counter() if timings is not None else 0.0
     result = backend.search(index, queries, top_k=top_k)
+    if timings is not None:
+        # CUDA work may still be queued here. The host materialization below
+        # is the synchronization point; these are wall stages, not kernel time.
+        timings["backend_enqueue"] = time.perf_counter() - started
     if not isinstance(result, (tuple, list)) or len(result) != 2:
         raise IndexSearchError("backend must return (rows, scores)")
     rows, scores = result
@@ -575,7 +582,10 @@ def select(
         raise IndexSearchError("backend result device differs from declared device")
     # Materialize only the bounded result, as logical selection already does.
     # Validate on the host without another CUDA sort/mask or reshape allocation.
+    started = time.perf_counter() if timings is not None else 0.0
     host_rows, host_scores = rows.tolist(), scores.tolist()
+    if timings is not None:
+        timings["host_materialize"] = time.perf_counter() - started
     for query_rows, query_scores in zip(host_rows, host_scores):
         if any(not 0 <= row < index.count for row in query_rows):
             raise IndexSearchError("backend row is outside the indexed vector range")

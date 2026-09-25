@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
+import os
+import time
 from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
@@ -41,6 +44,8 @@ from sglang.srt.disaggregation.pvd.vector_store import (
     ResourceExhaustedError,
     VectorKVStore,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _json_error(message: str, status: int) -> web.Response:
@@ -284,18 +289,27 @@ def _optional_text(data: Mapping[str, Any], field: str) -> Optional[str]:
     return value
 
 
-def _run_search(index, identity, queries, top_k: int):
+def _stage_ms(timings: Mapping[str, float]) -> Dict[str, float]:
+    """Keep diagnostic values bounded and independent of request contents."""
+    return {name: round(seconds * 1000, 3) for name, seconds in timings.items()}
+
+
+def _run_search(index, identity, queries, top_k: int, timings=None, queued_at=0.0):
     """Build the query tensor and search, both off the HTTP event loop.
 
     Materialising a 64 x head_dim tensor is small but not free, and the search
     itself is not: neither belongs on the loop that is also answering
     delivery polls.
     """
-    return index.search(
-        identity,
-        queries=torch.tensor(queries, dtype=torch.float32),
-        top_k=top_k,
-    )
+    if timings is not None:
+        timings["thread_wait"] = time.perf_counter() - queued_at
+        started = time.perf_counter()
+    tensor = torch.tensor(queries, dtype=torch.float32)
+    if timings is not None:
+        timings["query_tensor"] = time.perf_counter() - started
+    if timings is None:
+        return index.search(identity, queries=tensor, top_k=top_k)
+    return index.search(identity, queries=tensor, top_k=top_k, timings=timings)
 
 
 def create_shard_app(
@@ -449,7 +463,7 @@ def create_shard_app(
             {"enabled": True, **(await asyncio.to_thread(store.prompt_index.snapshot))}
         )
 
-    async def _search_data(data):
+    async def _search_data(data, *, timings=None):
         """Search one (layer, KV head) and return logical token/page ids.
 
         The request carries its own identity: which model's vector space the
@@ -463,6 +477,7 @@ def create_shard_app(
         from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_PROTOCOL
 
+        started = time.perf_counter() if timings is not None else 0.0
         index = _require_prompt_index()
         search_id = data.get("search_id")
         if "search_id" in data or "search_protocol" in data:
@@ -510,11 +525,18 @@ def create_shard_app(
                 data, "expected_id_mapping_version"
             ),
         )
+        if timings is not None:
+            timings["request_validate"] = time.perf_counter() - started
         # The query is built on the host because that is where JSON numbers
         # arrive; the index manager places it on its backend's device only
         # after identity checks and the search-scratch budget reservation. Both the
         # tensor build and the search run off the event loop.
-        result = await asyncio.to_thread(_run_search, index, identity, queries, top_k)
+        queued_at = time.perf_counter() if timings is not None else 0.0
+        result = await asyncio.to_thread(
+            _run_search, index, identity, queries, top_k, timings, queued_at
+        )
+        if timings is not None:
+            timings["item_total"] = time.perf_counter() - started
         selection = result.selection
         return {
             "search_protocol": SEARCH_PROTOCOL,
@@ -537,7 +559,11 @@ def create_shard_app(
         }
 
     async def search_index(request):
-        return web.json_response(await _search_data(await _payload(request)))
+        timings = {} if os.environ.get("PVD_PROFILE_V_SEARCH") == "1" else None
+        result = await _search_data(await _payload(request), timings=timings)
+        if timings is not None:
+            logger.info("PVD V search stage_ms=%s", _stage_ms(timings))
+        return web.json_response(result)
 
     async def search_index_batch(request):
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_BATCH_PROTOCOL
@@ -587,7 +613,26 @@ def create_shard_app(
         first = tuple(items[0].get(name) for name in shared)
         if any(tuple(item.get(name) for name in shared) != first for item in items[1:]):
             raise ValueError("batch items must share Entry, space and version pins")
-        results = [await _search_data(item) for item in items]
+        profile = os.environ.get("PVD_PROFILE_V_SEARCH") == "1"
+        batch_started = time.perf_counter() if profile else 0.0
+        stages = [] if profile else None
+        results = []
+        for item in items:
+            timings = {} if profile else None
+            results.append(await _search_data(item, timings=timings))
+            if stages is not None:
+                stages.append(timings)
+        if stages is not None:
+            totals = {
+                name: sum(item.get(name, 0.0) for item in stages) for name in stages[0]
+            }
+            totals["batch_total"] = time.perf_counter() - batch_started
+            logger.info(
+                "PVD V search-batch items=%d query_rows=%d stage_ms=%s",
+                len(items),
+                sum(len(item["queries"]) for item in items),
+                _stage_ms(totals),
+            )
         reply = {
             "batch_protocol": SEARCH_BATCH_PROTOCOL,
             "batch_id": batch_id,

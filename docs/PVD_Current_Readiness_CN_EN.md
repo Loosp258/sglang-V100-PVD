@@ -2954,3 +2954,25 @@ observed boundary wait; later refreshes were roughly 0.49–0.51 s with
 about 0.11 s wait. The final goal of hiding search/network waits remains
 unmet. The opt-in applies only to Qwen2 target/draft. D is on isolated
 `9d062add1`; P/V are unchanged.
+
+### V 检索阶段计时 / V search-stage timing
+
+可在 V shard 启动前设置 `PVD_PROFILE_V_SEARCH=1`，为单项或批量索引检索
+输出 `PVD V search[-batch] ... stage_ms` 日志。该开关默认关闭，不改变
+HTTP 响应或资源生命周期。记录请求校验、线程等待、张量构造、索引身份与
+租约、预算预留、query 放置、backend 提交、结果回读以及完成栅栏；
+批量日志对各项求和并附总耗时。`backend_enqueue` 只计主机提交时间，
+CUDA 实际执行可能延至 `host_materialize` 的同步，不能把两者当作
+独立的 GPU kernel 时间。目前批量接口仍逐项搜索，计时用于定位下一步
+优化点；不能仅凭 D 端整轮 search 耗时将瓶颈归因于 V。
+
+Set `PVD_PROFILE_V_SEARCH=1` before launching a V shard to log stage
+wall times for single or batched index searches. It is off by default and
+does not alter the HTTP result or resource lifecycle. The batch log sums
+per-item validation, thread wait, tensor construction, identity/lease,
+budget reservation, query placement, backend enqueue, host materialization,
+and completion-fence intervals, plus the whole batch. CUDA execution may
+complete during host materialization, so `backend_enqueue` is **not** pure
+GPU kernel time. The batch route still searches each item separately;
+these data must precede any claim that the D-observed search interval is
+spent on V.

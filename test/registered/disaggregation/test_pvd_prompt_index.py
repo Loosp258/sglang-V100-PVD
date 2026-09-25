@@ -701,6 +701,75 @@ def test_progress_and_search_over_http_return_original_tokens():
     asyncio.run(scenario())
 
 
+def test_search_batch_profiling_preserves_results_and_reports_stages(
+    monkeypatch, caplog
+):
+    import asyncio
+    import logging
+
+    async def scenario():
+        index = manager()
+        store, manifest, _, _ = stored_entry(index)
+        store.progress_prompt_indexes()
+        (layer, head), vector = sorted(
+            index._entries[manifest.key.transfer_id].vectors.items()
+        )[0]
+        descriptor = index.gate_for(manifest.key.transfer_id).descriptor
+        item = {
+            "search_protocol": "pvd.search.v1",
+            "search_id": "profile-0",
+            "transfer_id": manifest.key.transfer_id,
+            "vector_space": SPACE,
+            "positional_encoding": ROPE_APPLIED,
+            "expected_index_version": descriptor.index_version,
+            "expected_id_mapping_version": descriptor.id_mapping_version,
+            "layer": layer,
+            "kv_head": head,
+            "queries": vector.vectors[5:6].tolist(),
+            "top_k": 1,
+        }
+        request = {
+            "batch_protocol": "pvd.search.batch.v1",
+            "batch_id": "profile-batch",
+            "items": [item, {**item, "search_id": "profile-1"}],
+        }
+        async with shard_client(store) as http:
+            ordinary = await http.post(
+                "/internal/v1/indexes/search-batch", json=request
+            )
+            assert ordinary.status == 200
+            ordinary_body = await ordinary.json()
+            monkeypatch.setenv("PVD_PROFILE_V_SEARCH", "1")
+            with caplog.at_level(
+                logging.INFO, logger="sglang.srt.disaggregation.pvd.control_server"
+            ):
+                profiled = await http.post(
+                    "/internal/v1/indexes/search-batch", json=request
+                )
+            assert profiled.status == 200
+            assert await profiled.json() == ordinary_body
+            message = next(
+                record.message
+                for record in caplog.records
+                if "PVD V search-batch" in record.message
+            )
+            for stage in (
+                "request_validate",
+                "thread_wait",
+                "query_tensor",
+                "identity_lease",
+                "reserve",
+                "query_place",
+                "backend_enqueue",
+                "host_materialize",
+                "completion_fence",
+                "batch_total",
+            ):
+                assert f"'{stage}':" in message
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "payload,expected",
     [
