@@ -2762,7 +2762,7 @@ indexes or measure concurrent throughput.
 端点复用。首轮仍使用既有先单查再批量的协议。
 真实 HTTP/双 V source 测试验证首轮 2 次单查 + 2 次批量，第二轮
 只有 2 次批量；取消、被篡改回复均没有留下版本缓存。
-该改动尚未部署到 D 实机，延迟收益仍待测。
+提交代码时尚未部署到 D 实机；随后实测见下文。
 
 The Entry-bound `RoutedShardSearchClient` now remembers each selected V
 source's index/mapping version only after the entire search window produces
@@ -2774,4 +2774,34 @@ cache, which never crosses an Entry or endpoint. The first window keeps the
 existing single-then-batch protocol. A real HTTP/two-source test observes
 two singles and two batches initially, then only two batches in the next
 window; cancellation and corrupted replies retain no pins. This D change
-has not yet been measured on CloudLab.
+had not yet been measured on CloudLab at commit time; live follow-up follows.
+
+实机后续：D 已在独立 `da46ed429` worktree、V 在 `48e69c068`
+worktree 上运行，P/Gateway 不变。首次请求仍有 46.09 秒冷态停顿
+（单次约 28.10 秒 token 间隔），不能将其归为本优化的热态收益。
+同服务第二次固定 20-token SSE 为 3.44 秒。V 日志对每个请求
+增加 2 次单查和 16 次批量查询：2 个 V source 各首次单查一次，
+此后各刷新轮次直接批量；旧实现每轮都需 2 次单查。
+该热态请求的 D 日志中首轮搜索约 0.381 秒、后续三轮约
+0.251–0.256 秒；首轮边界等待约 0.326 秒、后续约
+0.098–0.102 秒。固定三条请求的输出 token ID 相对旧版 **3/3
+完全一致**，耗时从 4.82/4.46/27.68 秒变为
+4.81/4.46/24.05 秒。长请求包含 CAGRA 首次建图抖动，不能把
+其差值全归因于 pin 缓存；样本量不足以证明尾延迟或吞吐收益。
+原始结果在 D 节点的 `pvd-eval-pin-cache-da46ed429.json`。
+
+Live follow-up: D runs from isolated worktree `da46ed429`, V from
+`48e69c068`, while P/Gateway are unchanged. The first request still showed
+a 46.09 s cold stall, including one 28.10 s token gap; this is not a warm
+gain from pin reuse. A second fixed 20-token SSE request took 3.44 s.
+V logged two single searches and 16 batched searches per request: one initial
+single per V source, then pinned batches for later windows. The old path
+performed two singles each window. In the warm D log, first-round search
+took about 0.381 s and later rounds 0.251–0.256 s; the corresponding first
+boundary wait was about 0.326 s and later waits 0.098–0.102 s. All three
+fixed prompts had exactly the same output-token IDs as before the change.
+Their elapsed times moved from 4.82/4.46/27.68 s to 4.81/4.46/24.05 s.
+The long request includes first CAGRA-build variance, so its difference
+cannot all be attributed to pin caching. This sample cannot establish tail
+latency or throughput benefit. Raw results are on D in
+`pvd-eval-pin-cache-da46ed429.json`.
