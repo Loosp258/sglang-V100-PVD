@@ -1,7 +1,7 @@
-"""Standalone V100S microprobe for a bounded SDPA sparse-attention candidate.
+"""Standalone V100S microprobe for the opt-in bounded SDPA math core.
 
-This does not activate a serving backend or account transient SDPA allocations.
-It compares one synthetic layer against the current online-softmax reference.
+This does not activate a serving backend. It measures one synthetic layer and
+observes CUDA allocation peaks, but does not prove peak bounds under serving.
 """
 
 import argparse
@@ -13,11 +13,12 @@ import time
 import torch
 from sglang.srt.disaggregation.pvd.cuda_sparse_attention import (
     AttentionBuffers,
+    _sdpa_attention,
     _stream_attention,
     scratch_elements,
+    sdpa_workspace_bytes,
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
-from torch.nn.functional import scaled_dot_product_attention
 
 
 def _measure(call, *, warmups, repeats):
@@ -61,7 +62,6 @@ def main(argv=None):
     prompt_v = torch.randn_like(prompt_k)
     pool_k = torch.randn((256, kv_heads, dim), device=device, dtype=torch.float16)
     pool_v = torch.randn_like(pool_k)
-    row_ids = torch.arange(1, args.generated_tokens + 1, device=device)
     row_tuple = tuple(range(1, args.generated_tokens + 1))
     groups = {
         (0, head): (None, torch.stack((prompt_k[head], prompt_v[head])))
@@ -71,24 +71,18 @@ def main(argv=None):
     candidate = torch.empty_like(q)
     buffers = AttentionBuffers(q, pool_k, pool_v, reference, row_tuple)
     scratch = torch.empty(scratch_elements(8, dim), device=device, dtype=torch.float32)
+    max_tokens = args.prompt_tokens + args.generated_tokens
+    keys = torch.empty((kv_heads, max_tokens, dim), device=device, dtype=torch.float16)
+    values = torch.empty_like(keys)
+    candidate_buffers = AttentionBuffers(q, pool_k, pool_v, candidate, row_tuple)
 
     def online():
         _stream_attention(groups, buffers, mapping, 0, scale, scratch, 8, dim)
 
     def sdpa():
-        for head in range(kv_heads):
-            keys = torch.cat((prompt_k[head], pool_k[row_ids, head]), dim=0)
-            values = torch.cat((prompt_v[head], pool_v[row_ids, head]), dim=0)
-            q_first = head * (q_heads // kv_heads)
-            q_last = q_first + (q_heads // kv_heads)
-            output = scaled_dot_product_attention(
-                q[q_first:q_last][None, :, None, :],
-                keys[None, None, :, :],
-                values[None, None, :, :],
-                scale=scale,
-                enable_gqa=True,
-            )
-            candidate[q_first:q_last].copy_(output[0, :, 0, :])
+        _sdpa_attention(
+            groups, candidate_buffers, mapping, 0, scale, keys, values, max_tokens
+        )
 
     try:
         online()
@@ -98,7 +92,11 @@ def main(argv=None):
         if max_error > 0.02:
             raise ValueError(f"SDPA candidate differs from reference: {max_error}")
         online_seconds = _measure(online, warmups=1, repeats=args.repeats)
+        torch.cuda.synchronize()
+        allocated_before = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
         sdpa_seconds = _measure(sdpa, warmups=1, repeats=args.repeats)
+        peak_extra = torch.cuda.max_memory_allocated() - allocated_before
     except Exception as exc:
         parser.exit(1, f"SDPA candidate probe failed: {exc}\n")
     print(
@@ -108,6 +106,10 @@ def main(argv=None):
                 "prompt_tokens": args.prompt_tokens,
                 "generated_tokens": args.generated_tokens,
                 "max_abs_error": max_error,
+                "sdpa_reserved_bytes_estimate": sdpa_workspace_bytes(
+                    max_tokens, kv_heads, q_heads, dim, torch.float16
+                ),
+                "sdpa_observed_peak_extra_bytes": peak_extra,
                 "online_one_layer_median_seconds": online_seconds,
                 "sdpa_one_layer_median_seconds": sdpa_seconds,
                 "serving_validated": False,
