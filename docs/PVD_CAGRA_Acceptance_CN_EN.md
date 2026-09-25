@@ -1,5 +1,37 @@
 # CAGRA 验收边界 / Acceptance gate
 
+## 2026-09-25 在线 native CAGRA 与有界 SSE 并发探针 / Live native and bounded SSE load
+
+新增 `test/registered/disaggregation/run_pvd_live_load.py`：最多 4 并发、5 轮、
+每请求最多 32 个输出 token；用 Gateway 返回的真实 `prompt_tokens` 执行输入长度
+门槛，要求完整 SSE `[DONE]`，并将合并事件标为不可准确观测逐 token 间隔。
+脚本只证明 Gateway 响应与客户端计时，不自行宣称 native CAGRA、RDMA、质量
+或相对加速。CPU 契约测试 6 项通过，ruff 检查和格式检查通过。
+
+在原有 128-token 上限的三机服务上，先做 10 次句子重复的有界请求：
+109-token Prompt / 8 输出，HTTP 200，约 26.78 秒。双 rank 的
+`PVD Prompt index ready` 日志都明确写 `backend=cagra_auto path=cagra`
+和 `heads=56 rows_per_head=109`，所以这次确实是 native CAGRA，
+不是短 Prompt 的 exact 回退。新 SSE 探针的另一次单请求为 110 输入、
+8/8 输出、约 21.93 秒，TTFT 约 5.96 秒，最大 token 间隔约 15.21 秒。
+两并发各为 111-token Prompt、8/8 输出，完成时间约 39.05/45.54 秒；
+一个请求 TTFT 约 44.44 秒，另一个最大 token 间隔约 32.87 秒。
+V 双 rank 对三个 Entry 均报告 `searchable=true`、56 heads、
+`quarantined=false`、`active_searches=0`；共享 native 根预算仍在，
+Entry 暂存等待 TTL 回收。这是冷 Entry 建图和排队门槛，**不是吞吐或尾延迟
+收益验收**。接下来须用隔离的较长上下文服务，并做相同配置的 exact 对照。
+
+The bounded live SSE probe now checks actual Gateway Prompt tokens, complete
+streamed output and coalesced events for at most four clients. With the
+existing 128-token service limit, a 109-token/8-output request returned HTTP
+200 in about 26.78 s. Both V ranks logged `path=cagra` with 56 heads and
+109 rows/head. A later 110-token/8-output SSE request took about 21.93 s,
+including a 15.21 s maximum token gap. Two concurrent 111-token/8-output
+requests completed in about 39.05/45.54 s; one had 44.44 s TTFT and the
+other a 32.87 s maximum gap. V indexes were searchable and not quarantined.
+These cold-build observations establish native execution and bounded
+concurrency correctness, **not** throughput or tail-latency improvement.
+
 ## 2026-09-24 91-token Gateway Prompt / Bounded longer-Prompt gate
 
 在同一组三机隔离服务上，D 检出更新至 `b9ba454e6` 的测试工具，以
