@@ -7,6 +7,7 @@ Inspect V/D logs and service state separately for those claims.
 
 import argparse
 import concurrent.futures
+import hashlib
 import itertools
 import json
 import math
@@ -33,6 +34,7 @@ def _observe(response, started, expected_tokens):
     events = coalesced = previous = 0
     done = False
     last_finish_type = None
+    last_text = None
     for raw in response:
         if len(raw) > 1 << 20:
             raise ValueError("oversized SSE line")
@@ -44,6 +46,10 @@ def _observe(response, started, expected_tokens):
             done = True
             break
         payload = json.loads(data)
+        if isinstance(payload, dict) and "text" in payload:
+            if not isinstance(payload["text"], str) or len(payload["text"]) > 100_000:
+                raise ValueError("SSE output text is invalid or oversized")
+            last_text = payload["text"]
         meta = payload.get("meta_info") if isinstance(payload, dict) else None
         finish = meta.get("finish_reason") if isinstance(meta, dict) else None
         last_finish_type = finish.get("type") if isinstance(finish, dict) else finish
@@ -81,6 +87,11 @@ def _observe(response, started, expected_tokens):
         "median_observed_gap_seconds": statistics.median(gaps) if gaps else None,
         "max_observed_gap_seconds": max(gaps) if gaps else None,
         "true_tpot_observable": coalesced == 0,
+        "output_sha256": (
+            hashlib.sha256(last_text.encode("utf-8")).hexdigest()
+            if last_text is not None
+            else None
+        ),
     }
 
 
@@ -111,10 +122,12 @@ def _request(url, text, expected_tokens, timeout, barrier):
             result = _observe(response, started, expected_tokens)
     except urllib.error.HTTPError as exc:
         raise ValueError(f"Gateway returned HTTP {exc.code}") from exc
+    result["input_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return started, result
 
 
 def collect(args):
+    fixed_prefix = getattr(args, "fixed_prefix", False)
     if (
         not args.gateway_url.startswith(("http://", "https://"))
         or not 1 <= args.clients <= 4
@@ -125,6 +138,7 @@ def collect(args):
         or not 1 <= len(args.sentence) <= 500
         or len(args.sentence) * args.repetitions > 100_000
         or not 1 <= args.min_prompt_tokens <= args.max_prompt_tokens <= 8192
+        or (fixed_prefix and (args.clients != 1 or args.rounds != 1))
     ):
         raise ValueError("bounded URL, clients, rounds, prompt and timeout required")
     run_id = uuid.uuid4().hex[:12]
@@ -136,7 +150,11 @@ def collect(args):
                 pool.submit(
                     _request,
                     args.gateway_url,
-                    f"PVD_LOAD_{run_id}_{round_number}_{client}: "
+                    (
+                        "PVD_LOAD_FIXED: "
+                        if fixed_prefix
+                        else f"PVD_LOAD_{run_id}_{round_number}_{client}: "
+                    )
                     + (args.sentence + " ") * args.repetitions,
                     args.max_new_tokens,
                     args.timeout_seconds,
@@ -174,6 +192,7 @@ def collect(args):
     return {
         "schema": "pvd.live_load.v1",
         "run_id": run_id,
+        "fixed_prefix": fixed_prefix,
         "mode_verified_by_script": False,
         "clients": args.clients,
         "rounds": rounds,
@@ -207,6 +226,11 @@ def main(argv=None):
     parser.add_argument("--min-prompt-tokens", type=int, default=1)
     parser.add_argument("--max-prompt-tokens", type=int, default=8192)
     parser.add_argument("--timeout-seconds", type=float, default=180)
+    parser.add_argument(
+        "--fixed-prefix",
+        action="store_true",
+        help="Use the same Prompt across single-client, single-round A/B runs",
+    )
     args = parser.parse_args(argv)
     try:
         result = collect(args)
