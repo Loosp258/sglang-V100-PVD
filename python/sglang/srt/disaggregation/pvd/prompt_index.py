@@ -41,7 +41,9 @@ with no cuVS present. A CAGRA backend replaces it without touching this file.
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import traceback
 import uuid
 from contextlib import contextmanager
@@ -72,6 +74,8 @@ from sglang.srt.disaggregation.pvd.prompt_vectors import (
     extract_prompt_k,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferCapacityError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -376,6 +380,7 @@ class PromptIndexManager:
         lack of budget* is not even recorded as a failure: the attempt is
         abandoned and the Entry stays a candidate for the next round.
         """
+        started = time.perf_counter()
         with self._lock:
             if self.quarantined:
                 raise IndexCompletionUnknown(self._quarantine_reason)
@@ -405,6 +410,9 @@ class PromptIndexManager:
         vectors = []
         built = {}
         item = None
+        extracted_at = None
+        head_build_seconds = []
+        backend_path = getattr(self.backend, "name", type(self.backend).__name__)
         # Extraction and the backend build run outside the lock: they copy and
         # index the whole shard, and close() must not block behind them.
         try:
@@ -421,6 +429,10 @@ class PromptIndexManager:
             )
             if not vectors:
                 raise PromptVectorError("the shard produced no Prompt K vectors")
+            extracted_at = time.perf_counter()
+            build_path = getattr(self.backend, "build_path", None)
+            if callable(build_path):
+                backend_path = build_path(int(vectors[0].vectors.shape[0]))
             # The backend's own storage is charged before it is allocated,
             # not discovered afterwards, and retained bytes are charged
             # separately from the transient peak a build passes through:
@@ -450,6 +462,7 @@ class PromptIndexManager:
                     ),
                 )
             for item in vectors:
+                head_started = time.perf_counter()
                 built[(item.layer, item.kv_head)] = self.backend.build(
                     item.vectors, vector_space=self.vector_space, metric=self.metric
                 )
@@ -457,6 +470,7 @@ class PromptIndexManager:
                 # The reservation is max(per-head scratch), not their sum.
                 # Python return alone does not make native builds sequential.
                 self._fence(packed)
+                head_build_seconds.append(time.perf_counter() - head_started)
             self._fence(packed)
             # The transient peak is over; give it back before the index is
             # installed, so an idle index is charged only for what it holds.
@@ -541,6 +555,21 @@ class PromptIndexManager:
                     metric=self.metric,
                 )
             )
+        logger.info(
+            "PVD Prompt index ready: transfer_id=%s backend=%s path=%s heads=%d "
+            "rows_per_head=%d extract_seconds=%.6f "
+            "head_build_total_seconds=%.6f max_head_seconds=%.6f "
+            "total_seconds=%.6f",
+            transfer_id,
+            getattr(self.backend, "name", type(self.backend).__name__),
+            backend_path,
+            len(vectors),
+            int(vectors[0].vectors.shape[0]),
+            extracted_at - started,
+            sum(head_build_seconds),
+            max(head_build_seconds),
+            time.perf_counter() - started,
+        )
         return True
 
     # -- searching ----------------------------------------------------------

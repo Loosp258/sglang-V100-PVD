@@ -5,10 +5,11 @@ no GPU. Queries are rows taken from the extracted vectors, so these tests show
 that the plumbing preserves identity -- not that retrieval is any good.
 """
 
+import logging
+import re
+
 import pytest
 import torch
-from test_pvd_prompt_vectors import FakePool, pack_shard, storage_layout
-from test_pvd_vector_lifecycle import DelayedTransferEngine
 
 from sglang.srt.disaggregation.pvd.index_lifecycle import IndexState
 from sglang.srt.disaggregation.pvd.index_search import (
@@ -26,6 +27,8 @@ from sglang.srt.disaggregation.pvd.prompt_vectors import (
 from sglang.srt.disaggregation.pvd.protocol import KVEntryKey, KVEntryManifest
 from sglang.srt.disaggregation.pvd.request_state import EntryShardState
 from sglang.srt.disaggregation.pvd.vector_store import VectorKVStore
+from test_pvd_prompt_vectors import FakePool, pack_shard, storage_layout
+from test_pvd_vector_lifecycle import DelayedTransferEngine
 
 SPACE = "target/model-8b"
 PROMPT_TOKENS = 8
@@ -113,6 +116,33 @@ def test_a_store_without_an_index_is_unchanged():
         "deferred": 0,
         "skipped": 0,
     }
+
+
+def test_successful_build_reports_bounded_index_costs(caplog):
+    index = manager()
+    store, manifest, _, _ = stored_entry(index)
+    with caplog.at_level(
+        logging.INFO, logger="sglang.srt.disaggregation.pvd.prompt_index"
+    ):
+        assert store.progress_prompt_indexes()["built"] == 1
+    messages = [
+        record.message
+        for record in caplog.records
+        if record.name == "sglang.srt.disaggregation.pvd.prompt_index"
+    ]
+    assert len(messages) == 1
+    message = messages[0]
+    assert f"transfer_id={manifest.key.transfer_id}" in message
+    assert "backend=brute_force path=brute_force heads=6 rows_per_head=8" in message
+    for field in (
+        "extract_seconds",
+        "head_build_total_seconds",
+        "max_head_seconds",
+        "total_seconds",
+    ):
+        match = re.search(rf"\b{field}=([0-9]+\.[0-9]+)\b", message)
+        assert match is not None
+        assert float(match.group(1)) >= 0
 
 
 # --------------------------------------------------------------------------

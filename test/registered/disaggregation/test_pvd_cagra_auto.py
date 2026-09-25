@@ -49,6 +49,8 @@ def test_exact_cutoff_is_independent_of_graph_intermediate_degree():
     native = backend(intermediate_degree=2)
     auto = CagraAutoIndexBackend(native, exact_max_rows=4)
     assert auto.exact_max_rows == 4
+    assert auto.build_path(4) == "exact"
+    assert auto.build_path(5) == "cagra"
     assert auto.build_footprint(4, 3, metric="ip") == 4 * 3 * 4
     assert auto.build_footprint(5, 3, metric="ip") == native.cap
     exact = auto.build(torch.ones((4, 3)), vector_space="model", metric="ip")

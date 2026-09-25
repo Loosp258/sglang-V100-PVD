@@ -478,6 +478,10 @@ class CagraAutoIndexBackend(IndexBackend):
             raise IndexSearchError("index rows must be a positive integer")
         return self.exact if rows <= self.exact_max_rows else self.cagra
 
+    def build_path(self, rows):
+        """Expose the selected path for index-build diagnostics."""
+        return "exact" if self._for_rows(rows) is self.exact else "cagra"
+
     def build_footprint(self, rows, dim, *, metric):
         return self._for_rows(rows).build_footprint(rows, dim, metric=metric)
 

@@ -2707,3 +2707,26 @@ Three smoke prompts and token agreement are not a semantic-quality metric or
 an acceptance gate. Raw control data is on D in
 `pvd-eval-full-control-67c0bb375.json`. Predictive M=4 was restored and D
 health returned 200; V remained at threshold 64.
+
+### 索引构建耗时观测 / Index-build timing observability
+
+V 的 `PromptIndexManager` 在 Entry 索引成功进入 READY 后新增一条
+聚合日志，记录 Entry、backend、`cagra-auto` 实际 exact/CAGRA 路径、
+head 数、每 head 行数，以及提取、所有 head 构建、最慢 head 和总耗时。
+每 head 耗时包含 backend build 与完成 fence；只记录成功发布的索引，
+不会使失败或已关闭的 Entry 看起来 READY。WSL 定向索引测试
+90 passed / 2 skipped；完整 PVD CPU 回归 2935 passed / 24 skipped、
+21 subtests。实机 V 仍运行旧提交 `67c0bb375`，因此这些新增日志尚未在
+CloudLab 测量；后续须先 V 后 D 部署新代码，再对真正大于阈值的
+Prompt 量化建图成本。现有实机诊断仍只证明 99-token 的局部问题。
+
+After a V Entry index becomes READY, `PromptIndexManager` now emits one
+aggregate log with Entry, backend, the actual exact/CAGRA path for
+`cagra-auto`, head count, rows per head, and extraction, all-head build,
+slowest-head, and total times. Per-head time includes backend build and its
+completion fence. Only successfully published indexes are reported as ready.
+Targeted WSL index tests passed 90/2 (pass/skip); the full PVD CPU suite
+passed 2935/24 with 21 subtests. The live V still runs `67c0bb375`, so
+these new timings have not yet been measured on CloudLab. Deploy V before D
+and measure a genuinely above-threshold Prompt next; the existing live
+diagnosis proves only the 99-token case.
