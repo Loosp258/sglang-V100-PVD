@@ -46,6 +46,9 @@ case "$role" in
     work="$root/pvd-long-acceptance-20260925"
     checkout="${PVD_D_CHECKOUT:-$root/src/sglang-PVD-validate-8a96123b0-long}"
     export PYTHONPATH="$checkout/python:$root/deps/pvd-validation-mooncake"
+    if [[ -n "${PVD_STACK_SIGNAL_DIR:-}" ]]; then
+      export PYTHONPATH="$PVD_STACK_SIGNAL_DIR:$PYTHONPATH"
+    fi
     if pgrep -f 'sglang.launch_server.*--port 30003' >/dev/null; then
       echo 'Refusing to start: isolated D server 30003 already exists' >&2
       exit 1
