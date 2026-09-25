@@ -19,10 +19,15 @@ def _model_and_pool():
 
 
 def test_precompile_uses_loaded_layout_and_never_calls_model_or_pool(monkeypatch):
-    from sglang.jit_kernel import activation, kvcache, rope
+    from sglang.jit_kernel import activation, clamp_position, kvcache, rope
 
     calls = []
     monkeypatch.setattr(torch.cuda, "device", lambda device: nullcontext())
+    monkeypatch.setattr(
+        clamp_position,
+        "_jit_clamp_position_module",
+        lambda dtype: calls.append(("clamp_position", dtype)),
+    )
     monkeypatch.setattr(
         rope,
         "_jit_fused_rope_module",
@@ -41,6 +46,7 @@ def test_precompile_uses_loaded_layout_and_never_calls_model_or_pool(monkeypatch
     model, pool = _model_and_pool()
     precompile.precompile_qwen_decode_kernels(model, pool, device="cuda:0")
     assert calls == [
+        ("clamp_position", torch.int64),
         ("rope", True, 128, torch.float16),
         ("activation", torch.float16),
         ("kv_store", 1024),
@@ -68,9 +74,12 @@ def test_unsupported_layout_refused_before_jit(monkeypatch, fault):
 
 
 def test_kv_store_jit_refusal_is_not_reported_as_warmed(monkeypatch):
-    from sglang.jit_kernel import activation, kvcache, rope
+    from sglang.jit_kernel import activation, clamp_position, kvcache, rope
 
     monkeypatch.setattr(torch.cuda, "device", lambda device: nullcontext())
+    monkeypatch.setattr(
+        clamp_position, "_jit_clamp_position_module", lambda *_: object()
+    )
     monkeypatch.setattr(rope, "_jit_fused_rope_module", lambda *_: object())
     monkeypatch.setattr(activation, "_jit_activation_module", lambda *_: object())
     monkeypatch.setattr(kvcache, "can_use_store_cache", lambda *_: False)

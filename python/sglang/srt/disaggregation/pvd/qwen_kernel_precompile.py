@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def precompile_qwen_decode_kernels(model, kv_pool, *, device):
-    """Compile the RoPE, activation and KV-store modules used by this model.
+    """Compile position, RoPE, activation and KV-store modules for Decode.
 
     No model forward, pool-row allocation, KV write or request mutation occurs.
     The caller checks the concrete Qwen2 architecture and owns startup failure.
     """
     from sglang.jit_kernel.activation import _jit_activation_module
+    from sglang.jit_kernel.clamp_position import _jit_clamp_position_module
     from sglang.jit_kernel.kvcache import can_use_store_cache
     from sglang.jit_kernel.rope import _jit_fused_rope_module
 
@@ -41,6 +42,9 @@ def precompile_qwen_decode_kernels(model, kv_pool, *, device):
     row_bytes = kv_pool.row_dim * kv_pool.store_dtype.itemsize
     with torch.cuda.device(device):
         for name, compile_module in (
+            # ScheduleBatch.prepare_for_extend creates int64 seq_lens, and
+            # ForwardBatch.init_new's Decode path clamps that same tensor.
+            ("clamp_position", lambda: _jit_clamp_position_module(torch.int64)),
             (
                 "rope",
                 lambda: _jit_fused_rope_module(
