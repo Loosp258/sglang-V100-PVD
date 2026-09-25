@@ -2976,3 +2976,39 @@ complete during host materialization, so `backend_enqueue` is **not** pure
 GPU kernel time. The batch route still searches each item separately;
 these data must precede any claim that the D-observed search interval is
 spent on V.
+
+CloudLab V 双 rank 在独立 `20401f763` worktree 上完成了计时验证；P、D
+仍分别运行原 worktree。固定 20-token Gateway 请求 20/20 SSE 事件，
+客户端总耗时约 3.89 秒、最大可观测 token 间隔约 0.469 秒。该请求每
+head 只有 17 个 Prompt 向量，日志确认走 `cagra-auto` 的 GPU exact
+分支，不是 CAGRA 图检索。V 的 24–32 项 search-batch 约 50–113 ms；
+其中 backend enqueue 合计约 17–53 ms，逐项 HTTP 校验约 8–15 ms，
+完成栅栏约 5–28 ms。D 后三轮整段 search 分别约
+0.241/0.242/0.242 秒，还包含网络与路由。不同 rank 的批次可能
+并发，不能把所有 V 日志时间相加当作 D 临界路径。首次按裸系统库
+启动失败，按 CAGRA 验收文档加入 Conda NVIDIA cublas、cusolver、
+cusparse、nvjitlink、cuda_runtime 与 venv libcuvs/libraft 库路径后
+V coordinator 和两个 shard 均恢复；`/health` 仅在 coordinator，
+shard 应查 `/internal/v1/indexes`。没有修改系统 CUDA 库。
+
+On the isolated `20401f763` V worktree, the fixed 20-token Gateway
+request produced 20/20 SSE events in about 3.89 s with a 0.469 s maximum
+observed gap. Each head had 17 Prompt vectors, so `cagra-auto` selected
+its GPU exact path, **not** a native CAGRA graph. V search batches of
+24–32 items took roughly 50–113 ms; summed backend enqueue accounted
+for 17–53 ms, per-item validation for 8–15 ms, and completion fences
+for 5–28 ms. The last three D search intervals were about
+0.241/0.242/0.242 s including routing and network; V rank batches can
+overlap, so their logged intervals are not additive on D's critical path.
+The first V restart failed from a missing cuVS loader path and then a
+system/Conda CUDA library mismatch. Using the documented Conda NVIDIA
+and venv cuVS/RAFT library paths restored the coordinator and both shards;
+system CUDA libraries were not changed.
+
+A synthetic V100S microbenchmark with the observed 17-row, 128-dimension,
+7-query shape found median serial per-head matmul+sort+host materialization
+about 3.97 ms for 24 heads and 5.28 ms for 32, versus 0.21/0.23 ms
+with a stacked batched matmul+sort. This is only an optimization signal:
+it excludes index leasing, staging-budget reservations, HTTP, result
+identity checks, and concurrent PVD load. No grouped serving path has been
+implemented or proven yet.
