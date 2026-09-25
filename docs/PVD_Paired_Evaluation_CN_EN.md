@@ -74,3 +74,25 @@ from the Scheduler's **first observation** of the committed boundary until
 successful installation. It includes polling and installation overhead: it
 is neither the exact interval since token generation nor network-only time.
 A failed or cancelled refresh emits no successful-install log.
+
+## 流式时间线 / Streaming timeline
+
+可对固定 Prompt 用 `run_pvd_stream_probe.py` 记录 TTFT 和每个 SSE token
+的到达时间；它拒绝非 SSE、倒退或缺失的 token 计数以及不完整流。
+若一个 SSE 事件一次增加多个 token，它会报告 `coalesced_tokens>0`
+并将 `true_tpot_observable=false`，不把同一事件的时间戳误作真实逐
+token TPOT。即使每 token 都有事件，客户端间隔仍包含网络和路由开销。
+
+Use `run_pvd_stream_probe.py` on a fixed Prompt to observe TTFT and each
+SSE token's arrival time. It rejects non-SSE responses, regressed/missing
+token counts and incomplete streams. If an event carries several tokens,
+`coalesced_tokens>0` and `true_tpot_observable=false`; duplicated event
+timestamps are not claimed as true per-token TPOT. Even one event per token
+still includes client/network/router overhead.
+
+```bash
+python test/registered/disaggregation/run_pvd_stream_probe.py \
+  --gateway-url http://10.0.1.2:8000 \
+  --text 'PVD_TPOT_001: Explain GPU RDMA in one sentence.' \
+  --max-new-tokens 20
+```
