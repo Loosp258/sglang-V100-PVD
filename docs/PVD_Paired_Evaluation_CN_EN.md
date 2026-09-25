@@ -15,6 +15,12 @@ Prepare UTF-8 JSONL with a unique `id` and `text` on each line. Keep the
 dataset, model revisions, sampling settings, GPU resources and P/V/Gateway
 fixed; **switch only D's mode**. Collect both reports:
 
+仓库附带的 `test/registered/disaggregation/pvd_eval_smoke.jsonl` 只有 3 条
+短/中长度 Prompt，仅用于验证采集链路，不是正式质量集。
+The checked-in `test/registered/disaggregation/pvd_eval_smoke.jsonl` has only
+three short/mid-length Prompts for validating the collection path; it is not
+a representative quality dataset.
+
 ```bash
 python test/registered/disaggregation/run_pvd_paired_eval.py collect \
   --gateway-url http://10.0.1.2:8000 --dataset eval.jsonl \
