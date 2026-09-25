@@ -2490,3 +2490,51 @@ conservative estimate for SDPA temporaries, and retains the existing reader
 leases and device completion fence. Opaque Torch CUDA allocations are not
 strictly bounded by this estimate; V100S peak memory, output equivalence,
 end-to-end latency and fault cleanup remain mandatory validation.
+
+### 本轮实机接入结果 / Live opt-in SDPA result
+
+在 D 节点第二张空闲 V100S 上，实装数学核心的合成 Prompt32+生成20 测试为
+online 47.77 ms/层、SDPA 1.25 ms/层，最大输出差约 1.53e-5。
+合成 GPU 工作区在执行期间约增加 624 KB 峰值，预留约 893 KB；
+验证了设备栅栏前 guard 未释放和 close 后预算归零。
+这个测试的 bank reader 是合成替身，不能代替真实 RDMA bank 或并发峰值。
+
+三机真实 Qwen2.5-7B Gateway 上，固定 `PVD_TPOT_001`、20 个 token、
+SDPA 热态两次 SSE 分别为 3.694/3.716 秒，中位观察 token 间隔
+0.0716/0.0706 秒；同代码 online 热身请求为 14.352 秒、0.696 秒。
+SDPA 首次请求为 46.80 秒，其中存在约 28.35 秒的单次 token 间隔；
+不能把热态结果解释为冷启动性能。三条固定请求同代码/同输入 A/B 的
+输出 token ID **3/3 完全相同**，SDPA 延迟 5.05/4.97/24.00 秒，
+online 延迟 19.21/18.28/35.24 秒。这是小型 smoke，不是质量/吞吐统计。
+实测后 D 已恢复到 `attention_impl=sdpa_bounded`，健康检查为 200；
+P、V、Gateway 没有更改。D 日志没有观察到新的 RDMA 错误。
+
+热态 D 日志显示每轮目标 Q capture 约 0.15–0.17 秒、V search
+约 0.33–0.37 秒、稀疏交付约 0.07–0.10 秒，边界观察到安装约
+0.28–0.32 秒。以当前 M=4、lead=2 和约 0.07 秒 token 间隔，
+预取窗口仍不足以完全隐藏搜索/交付；与先前完整 KV 对照约 2.3–2.6 秒相比，
+最终延迟目标仍未达到。下一步应减少按 head 逐个 HTTP 检索的往返，
+并在相同代码和模型条件下重新测量刷新边界。
+
+On an idle second V100S, the implemented math core measured 47.77 ms/layer
+online versus 1.25 ms/layer SDPA at synthetic Prompt32+generated20, with
+1.53e-5 maximum output difference. The synthetic GPU workspace added about
+624 KB peak allocation against about 893 KB reserved; its guard stayed live
+through the device fence and its budget returned to zero after close. Its bank
+reader was a double, not a real RDMA bank or concurrent workload.
+
+On the live three-node Qwen2.5-7B Gateway, two warm fixed 20-token SSE runs
+with SDPA took 3.694/3.716 s, with 0.0716/0.0706 s median observed token
+gaps. A same-code online warmup took 14.352 s and 0.696 s. The first SDPA
+request took 46.80 s with one 28.35 s gap; this is not a cold-start win.
+The three fixed A/B prompts yielded identical token IDs in all 3 cases:
+SDPA 5.05/4.97/24.00 s versus online 19.21/18.28/35.24 s. These are smoke
+observations, not quality or throughput statistics. D was restored to the
+SDPA configuration and returned health 200; P/V/Gateway were unchanged.
+
+Warm logs show about 0.15–0.17 s target-Q capture, 0.33–0.37 s V search,
+0.07–0.10 s sparse delivery and 0.28–0.32 s observed boundary-to-install.
+At M=4, lead=2 and about 0.07 s per token, the current prefetch window
+cannot hide all this work. The earlier full-KV control was 2.3–2.6 s, so
+the final latency target remains unmet. Reducing per-head HTTP search
+round-trips is the next measurable code target.

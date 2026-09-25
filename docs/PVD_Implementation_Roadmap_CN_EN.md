@@ -3,6 +3,18 @@
 当前统一状态：[实现与验收边界](PVD_Current_Readiness_CN_EN.md)。下面保留历史推进
 记录；不得从 CPU 回归推导“生产实现或全部非硬件缺口已完成”。
 
+2026-09-25 当前指令：每个验证完成的步骤本地 commit，不推送 GitHub；
+此前关于“每步推送”的句子仅为历史记录。可使用已授权的 CloudLab
+P/V/D 三机和隔离验证 worktree。最新的可选有界 SDPA 稀疏注意力已完成
+三机热态 A/B；接下来优先降低 V 搜索往返和刷新边界等待，尚不能宣布
+最终延迟/质量目标完成。
+
+Current instruction (2026-09-25): commit each validated step locally, do not
+push GitHub. Earlier push instructions below are historical. The authorized
+CloudLab P/V/D machines and isolated validation worktrees are available.
+The opt-in bounded SDPA path has a live warm A/B, but V search round-trips,
+refresh stalls, and final latency/quality acceptance remain open.
+
 最新修复：[draft 分支私有请求 owner](PVD_Draft_Worker_Reuse_Audit_CN_EN.md) 避免
 多个 runner handle 共用一个可变请求对象，且释放加入执行锁。仍只有一份模型
 和私有池；并发所有权不代表 GPU 前向可重入。
