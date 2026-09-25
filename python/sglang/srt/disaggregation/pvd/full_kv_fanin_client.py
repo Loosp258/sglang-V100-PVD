@@ -170,6 +170,7 @@ class FullKVFanInDelivery:
                 fingerprint=self._manifest["plan_fingerprint"],
                 identities=self._identities,
                 byte_counts=self._byte_counts,
+                protocol=self._manifest["protocol"],
             )
             if str(reported) != rank or terminal is None:
                 raise ProtocolValidationError("fan-in proof key/terminal mismatch")

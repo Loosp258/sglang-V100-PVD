@@ -13,6 +13,8 @@ from typing import Mapping
 
 from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
     FULL_KV_FANIN_PROTOCOL,
+    FULL_KV_FANIN_PROTOCOLS,
+    RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
     plan_fingerprint,
 )
 from sglang.srt.disaggregation.pvd.full_kv_fanin_proof import validate_fanin_proof
@@ -26,6 +28,7 @@ from sglang.srt.disaggregation.pvd.protocol import (
 )
 from sglang.srt.disaggregation.pvd.sharding import (
     packed_fanin_transfer_slices,
+    rank_packed_full_shard_fanin_plan,
     source_shard_intersections,
 )
 from sglang.srt.disaggregation.pvd.transfer_engine import RegisteredMemory
@@ -54,6 +57,7 @@ class FullKVFanInReceiver:
         compute,
         token_count,
         max_slices,
+        protocol=FULL_KV_FANIN_PROTOCOL,
     ):
         if (
             not isinstance(key, KVEntryKey)
@@ -71,8 +75,12 @@ class FullKVFanInReceiver:
             or token_count <= 0
             or type(max_slices) is not int
             or max_slices <= 0
+            or type(protocol) is not str
+            or protocol not in FULL_KV_FANIN_PROTOCOLS
         ):
-            raise ProtocolValidationError("positive token and slice bounds required")
+            raise ProtocolValidationError(
+                "positive token/slice bounds and supported fan-in protocol required"
+            )
         descriptor = copy.deepcopy(registration.descriptor)
         storage, compute = copy.deepcopy(storage), copy.deepcopy(compute)
         parts = source_shard_intersections(storage, compute, descriptor.rank)
@@ -88,14 +96,28 @@ class FullKVFanInReceiver:
             raise ProtocolValidationError(
                 "fan-in destination length differs from layout"
             )
-        if (
-            len(parts) * len(compute.extra["component_bytes_per_token"]) * token_count
-            > max_slices
-        ):
-            raise ProtocolValidationError("fan-in slice count exceeds configured bound")
-        plans = packed_fanin_transfer_slices(
-            storage, compute, compute_rank=descriptor.rank, token_count=token_count
-        )
+        if protocol == RANK_PACKED_FULL_KV_FANIN_PROTOCOL:
+            packed = rank_packed_full_shard_fanin_plan(
+                storage, compute, compute_rank=descriptor.rank, token_count=token_count
+            )
+            if len(packed.transfers) > max_slices:
+                raise ProtocolValidationError(
+                    "fan-in slice count exceeds configured bound"
+                )
+            plans = {rank: [transfer] for rank, transfer in packed.transfers}
+        else:
+            if (
+                len(parts)
+                * len(compute.extra["component_bytes_per_token"])
+                * token_count
+                > max_slices
+            ):
+                raise ProtocolValidationError(
+                    "fan-in slice count exceeds configured bound"
+                )
+            plans = packed_fanin_transfer_slices(
+                storage, compute, compute_rank=descriptor.rank, token_count=token_count
+            )
         # Validate the receiver-owned identity now, before taking any ownership.
         identity = dict(
             protocol=PVD_TRANSFER_LIFECYCLE_PROTOCOL,
@@ -111,13 +133,14 @@ class FullKVFanInReceiver:
         )
         WriteIdentity(**identity).validate_destination(descriptor)
         self._descriptor, self._key, self._delivery = descriptor, key, delivery_id
+        self.protocol = protocol
         self._registration_id = id(registration)
         self._plans = {rank: tuple(parts) for rank, parts in plans.items()}
         self._bytes = {
             rank: sum(p.length for p in parts) for rank, parts in plans.items()
         }
         manifest = {
-            "protocol": FULL_KV_FANIN_PROTOCOL,
+            "protocol": protocol,
             "key": key.to_dict(),
             "delivery_id": delivery_id,
             "destination": descriptor.to_dict(),
@@ -236,6 +259,7 @@ class FullKVFanInReceiver:
             fingerprint=self._fingerprint,
             identities=self._identities,
             byte_counts=self._bytes,
+            protocol=self.protocol,
         )
         if proof is None:
             return False

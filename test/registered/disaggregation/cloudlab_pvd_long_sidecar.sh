@@ -5,6 +5,11 @@ set -euo pipefail
 
 role="${1:-}"
 export MC_DISABLE_METACACHE=1
+log_tag="${PVD_LONG_RUN_TAG:-large}"
+if [[ ! "$log_tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo 'PVD_LONG_RUN_TAG must be a filename-safe label' >&2
+  exit 2
+fi
 
 case "$role" in
   v)
@@ -39,7 +44,7 @@ case "$role" in
       --full-kv-fanin-max-slices 262144 \
       --full-kv-fanin-max-inflight 2 \
       --full-kv-fanin-max-records 1024 \
-      --full-kv-fanin-native-batch >"$work/v-large.log" 2>&1 </dev/null &
+      --full-kv-fanin-native-batch >"$work/v-$log_tag.log" 2>&1 </dev/null &
     ;;
   d)
     root=/mnt/sglang-data/yiliu124-node-2-sglang-pvd
@@ -56,6 +61,10 @@ case "$role" in
       echo 'Refusing to start: isolated D server 30003 already exists' >&2
       exit 1
     fi
+    rank_packed_args=()
+    if [[ "${PVD_RANK_PACKED_FANIN:-0}" == 1 ]]; then
+      rank_packed_args+=(--pvd-full-kv-fanin-rank-packed)
+    fi
     nohup setsid "$root/conda-envs/sglang-v100/bin/python" -m sglang.launch_server \
       --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
       --device cuda --dtype float16 --tp-size 1 --base-gpu-id 1 \
@@ -70,6 +79,7 @@ case "$role" in
       --pvd-transfer-max-inflight 16 --pvd-waiting-queue-bootstrap \
       --pvd-full-kv-fanin-max-slices 262144 \
       --pvd-full-kv-fanin-response-bytes 67108864 \
+      "${rank_packed_args[@]}" \
       --pvd-kv-refresh-interval 4 --num-reserved-decode-tokens 16 \
       --pvd-draft-model-path "$root/models/Qwen2.5-0.5B-Instruct" \
       --pvd-draft-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
@@ -87,7 +97,7 @@ case "$role" in
       --max-total-tokens 2304 --max-running-requests 4 \
       --max-prefill-tokens 2304 \
       --disable-cuda-graph --disable-overlap-schedule \
-      --log-level info >"$work/d-large.log" 2>&1 </dev/null &
+      --log-level info >"$work/d-$log_tag.log" 2>&1 </dev/null &
     ;;
   *)
     echo 'Usage: cloudlab_pvd_long_sidecar.sh {v|d}' >&2

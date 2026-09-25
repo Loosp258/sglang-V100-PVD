@@ -1,5 +1,6 @@
 """Shared real CPU MR guard, synthetic sender proofs; no network fence evidence."""
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from types import SimpleNamespace as NS
@@ -7,6 +8,12 @@ from types import SimpleNamespace as NS
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd.full_kv_fanin import FullKVFanInReceiver
+from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
+    FULL_KV_FANIN_PROTOCOL,
+    RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
+    plan_fingerprint,
+    validate_fanin_plan,
+)
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_TRANSFER_LIFECYCLE_PROTOCOL,
     KVEntryKey,
@@ -25,8 +32,8 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 from test_pvd_fanin_mapping import layout
 
 
-@pytest.fixture
-def case():
+@pytest.fixture(params=[FULL_KV_FANIN_PROTOCOL, RANK_PACKED_FULL_KV_FANIN_PROTOCOL])
+def case(request=None):
     engine, released = FakeTransferEngine(), []
     compute, storage = layout(1), layout(2)
     size = sum(compute.extra["component_bytes_per_token"]) * 3
@@ -56,6 +63,7 @@ def case():
         compute=compute,
         token_count=3,
         max_slices=64,
+        protocol=request.param if request is not None else FULL_KV_FANIN_PROTOCOL,
     )
     identities = {
         rank: WriteIdentity(
@@ -113,6 +121,28 @@ def test_shared_mr_survives_one_writer_and_waits_for_complete_success(case):
     assert c.receiver._guard is None
     with pytest.raises(ProtocolValidationError, match="closed"):
         c.receiver.publish()
+
+
+def test_protocol_and_writer_ranges_cannot_be_reinterpreted(case):
+    wire = case.receiver.publish()
+    plan = validate_fanin_plan(wire, max_slices=64)
+    assert plan.protocol == wire["protocol"]
+    altered = copy.deepcopy(wire)
+    altered["protocol"] = (
+        RANK_PACKED_FULL_KV_FANIN_PROTOCOL
+        if wire["protocol"] == FULL_KV_FANIN_PROTOCOL
+        else FULL_KV_FANIN_PROTOCOL
+    )
+    altered.pop("plan_fingerprint")
+    altered["plan_fingerprint"] = plan_fingerprint(altered)
+    with pytest.raises(ProtocolValidationError, match="ranges"):
+        validate_fanin_plan(altered, max_slices=64)
+    altered = copy.deepcopy(wire)
+    altered["writers"]["0"][0]["remote_offset"] += 1
+    altered.pop("plan_fingerprint")
+    altered["plan_fingerprint"] = plan_fingerprint(altered)
+    with pytest.raises(ProtocolValidationError, match="ranges"):
+        validate_fanin_plan(altered, max_slices=64)
 
 
 @pytest.mark.parametrize("state", ["in_flight", "draining", "unknown"])

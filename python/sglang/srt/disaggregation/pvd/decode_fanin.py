@@ -7,17 +7,27 @@ agreement and completion receipts remain on the Scheduler thread.
 import asyncio
 import math
 
+import torch
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
+from sglang.srt.disaggregation.pvd.fanin_scatter import scatter_rank_packed_bytes
 from sglang.srt.disaggregation.pvd.full_kv_fanin import FullKVFanInReceiver
 from sglang.srt.disaggregation.pvd.full_kv_fanin_client import (
     FanInHTTPClient,
     FullKVFanInDelivery,
 )
+from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
+    FULL_KV_FANIN_PROTOCOL,
+    RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
+)
+from sglang.srt.disaggregation.pvd.kv_packer import kv_components
 from sglang.srt.disaggregation.pvd.protocol import (
     KVEntryManifest,
     RemoteRegionDescriptor,
 )
-from sglang.srt.disaggregation.pvd.sharding import source_shard_intersections
+from sglang.srt.disaggregation.pvd.sharding import (
+    rank_packed_full_shard_fanin_plan,
+    source_shard_intersections,
+)
 
 
 class PVDDecodeFanInSession(PVDDecodeSession):
@@ -26,6 +36,10 @@ class PVDDecodeFanInSession(PVDDecodeSession):
         self._fanin = self._fanin_client = self._manifest = None
         self._fanin_lock = asyncio.Lock()
         self._network_receipt = None
+        self._rank_packed_plan = None
+        self._canonical_staging = None
+        self._canonical_budget = None
+        self._canonical_budget_owner = None
 
     async def initialize(self, runtime):
         record = await super().initialize(runtime)
@@ -37,6 +51,39 @@ class PVDDecodeFanInSession(PVDDecodeSession):
             raise RuntimeError("previous fan-in still owns the receive region")
         if self._manifest is None:
             raise RuntimeError("fan-in Entry manifest is not ready")
+        if getattr(self.manager, "full_kv_fanin_rank_packed", False):
+            tokens = (
+                math.ceil(len(self.req.origin_input_ids) / self.manager.page_size)
+                * self.manager.page_size
+            )
+            plan = rank_packed_full_shard_fanin_plan(
+                self._manifest.layout,
+                self.manager.layout(),
+                compute_rank=self.manager.tp_rank,
+                token_count=tokens,
+            )
+            if self._rank_packed_plan is not None and self._rank_packed_plan != plan:
+                raise RuntimeError("immutable rank-packed Prompt plan changed")
+            if self._canonical_staging is None:
+                budget = getattr(self.manager, "transfer_budget", None)
+                if budget is None:
+                    raise RuntimeError("rank-packed canonical buffer requires a budget")
+                owner = (
+                    f"decode-rank-packed:{self.key.transfer_id}:"
+                    f"{self.consumer_id}:{self.manager.tp_rank}"
+                )
+                budget.reserve(owner, plan.staging_bytes, 0)
+                try:
+                    device = kv_components(self.manager.kv_pool)[0].device
+                    canonical = torch.empty(
+                        plan.staging_bytes, dtype=torch.uint8, device=device
+                    )
+                except BaseException:
+                    budget.release(owner)
+                    raise
+                self._canonical_staging = canonical
+                self._canonical_budget, self._canonical_budget_owner = budget, owner
+            self._rank_packed_plan = plan
         result = super().prepare(pages)
         # The old round has drained before prepare is legal. Update this MR's
         # protocol metadata without registering/deregistering the native region.
@@ -73,6 +120,7 @@ class PVDDecodeFanInSession(PVDDecodeSession):
                 self._manifest.layout, layout, self.manager.tp_rank
             )
             required = {part.storage_rank for part in parts}
+            rank_packed = self._rank_packed_plan is not None
             epochs = {}
             seen = set()
             for shard in health["shards"]:
@@ -89,6 +137,14 @@ class PVDDecodeFanInSession(PVDDecodeSession):
                         raise ValueError(
                             "fan-in source is unavailable or has another rail"
                         )
+                    if rank_packed and (
+                        RANK_PACKED_FULL_KV_FANIN_PROTOCOL
+                        not in shard["full_kv_fanin"].get("protocols", ())
+                        or shard["full_kv_fanin"].get("native_batch") is not True
+                    ):
+                        raise ValueError(
+                            "V source lacks rank-packed native fan-in capability"
+                        )
                     epochs[str(rank)] = shard.get("worker_epoch")
             if set(epochs) != {str(r) for r in required} or any(
                 not isinstance(v, str) or not v.strip() for v in epochs.values()
@@ -96,6 +152,11 @@ class PVDDecodeFanInSession(PVDDecodeSession):
                 raise ValueError("fan-in preflight omitted required source epochs")
             if health.get("full_kv_fanin", {}).get("enabled") is not True:
                 raise ValueError("V coordinator fan-in is disabled")
+            if rank_packed and (
+                RANK_PACKED_FULL_KV_FANIN_PROTOCOL
+                not in health["full_kv_fanin"].get("protocols", ())
+            ):
+                raise ValueError("V coordinator lacks rank-packed fan-in capability")
             receiver = FullKVFanInReceiver(
                 key=self.key,
                 delivery_id=self.clock.pending[0],
@@ -108,6 +169,11 @@ class PVDDecodeFanInSession(PVDDecodeSession):
                 )
                 * self.manager.page_size,
                 max_slices=self.manager.full_kv_fanin_max_slices,
+                protocol=(
+                    RANK_PACKED_FULL_KV_FANIN_PROTOCOL
+                    if rank_packed
+                    else FULL_KV_FANIN_PROTOCOL
+                ),
             )
             try:
                 self._fanin = FullKVFanInDelivery(
@@ -142,7 +208,18 @@ class PVDDecodeFanInSession(PVDDecodeSession):
     def unpack(self, reply):
         if reply is not self._network_receipt:
             raise ValueError("fan-in result is not this session's completion receipt")
-        super().unpack(reply)
+        if self._rank_packed_plan is None:
+            super().unpack(reply)
+            return
+        if self._canonical_staging is None:
+            raise RuntimeError("rank-packed canonical staging is unavailable")
+        # _network_receipt exists only after the complete V writer set has
+        # terminal proof. Fence device visibility before reading the RDMA target.
+        self.synchronize()
+        scatter_rank_packed_bytes(
+            self.staging, self._canonical_staging, self._rank_packed_plan
+        )
+        super().unpack(reply, staging=self._canonical_staging)
 
     async def ack_fanin(self):
         async with self._fanin_lock:
@@ -171,9 +248,14 @@ class PVDDecodeFanInSession(PVDDecodeSession):
 
     async def close(self):
         result = await super().close()
-        if result and self._fanin_client is not None:
-            await self._fanin_client.close()
-            self._fanin_client = None
+        if result:
+            if self._fanin_client is not None:
+                await self._fanin_client.close()
+                self._fanin_client = None
+            if self._canonical_staging is not None:
+                self._canonical_staging = None
+                self._canonical_budget.release(self._canonical_budget_owner)
+                self._canonical_budget = self._canonical_budget_owner = None
         return result
 
 

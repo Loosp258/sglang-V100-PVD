@@ -324,6 +324,13 @@ def handle_pvd_disaggregation(server_args: "ServerArgs") -> None:
         raise ValueError("--pvd-waiting-queue-bootstrap must be a boolean")
     fanin = getattr(server_args, "pvd_full_kv_fanin_max_slices", None)
     fanin_bytes = getattr(server_args, "pvd_full_kv_fanin_response_bytes", None)
+    rank_packed = getattr(server_args, "pvd_full_kv_fanin_rank_packed", False)
+    if type(rank_packed) is not bool:
+        raise ValueError("--pvd-full-kv-fanin-rank-packed must be a boolean")
+    if rank_packed and (fanin is None or fanin_bytes is None):
+        raise ValueError(
+            "--pvd-full-kv-fanin-rank-packed requires bounded full-KV fan-in"
+        )
     if (fanin, fanin_bytes) != (None, None):
         _require_positive_int("--pvd-full-kv-fanin-max-slices", fanin)
         _require_positive_int("--pvd-full-kv-fanin-response-bytes", fanin_bytes)

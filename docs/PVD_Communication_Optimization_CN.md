@@ -1,4 +1,4 @@
-# PVD 通信与通算融合设计（提案，尚未接入生产路径）
+# PVD 通信与通算融合设计及实验状态
 
 ## 实测依据（2026-09-25）
 
@@ -50,10 +50,14 @@ slice，不能解决 V TP2 → D TP1 的主要碎片化。
 生命周期测试，以及在 CloudLab 上同配置 A/B 实测。性能目标
 优先检查原生 submit 总时间和 p95，而不是只看发送字节数。
 
-目前仅有 `rank_packed_full_shard_fanin_plan` 纯字节计划器和
-CPU 字节覆盖测试：完整 V shard 的场景给出每 rank 一次连续
-WRITE 及 D 本地重排规则；部分 shard 被显式拒绝。它**没有**
-接入现有 fan-in wire，不能声称线上请求已经加速。
+当前代码已有**显式 opt-in** 的 v2 wire：D 设置
+`--pvd-full-kv-fanin-rank-packed`，旧 v1 仍为默认。v2 要求完整 V
+shard、V coordinator 与每个必需 shard 公告 v2 能力，以及 V 原生
+batch PUT。D 为注册接收区和独立 canonical 重排缓冲区分别预留预算；
+只在全部 writer terminal-success 后做本地重排和原有 unpack/ACK。
+CPU 的真实类 V↔D 测试已验证字节重建、重复刷新、预算归还、
+旧 V 拒绝与 v1 兼容。**尚无 v2 CloudLab RDMA A/B 结果**，不能
+声称线上已加速或建议默认开启。
 
 ## 专用集合通信：Select–Pack–FanIn–Install
 
@@ -106,14 +110,14 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
    1/2/4 并发和相同 D attention 配置；分开记录 pack、native
    submit、transport status、D scatter、CAGRA、target forward、
    TTFT/TPOT/p95、显存峰值和 UNKNOWN。
-2. 先实现 rank-packed dense fan-in 的纯计划器、字节级测试、
-   协议协商与 guarded fallback；再在独立 sidecar 做真实 RDMA
-   A/B。绝不在一次不确定写入后自动 fallback。
+2. rank-packed dense fan-in 的计划器、字节级测试和显式协议协商
+   已实现；下一步在独立 sidecar 做真实 RDMA A/B。绝不在一次
+   不确定写入后自动 fallback。
 3. 扩展同一协议为 sparse Select–Pack–FanIn–Install，保持现有
    m-token 边界和全部等待语义；做故障注入和 1/2/4 并发验收。
 4. 最后做 V 与 D 的融合 kernel，分别证明真实 query 的召回、
    目标输出质量、V100S 数值正确性与端到端性能。双 rail 只有
    在 `mlx5_1` 物理链路恢复并完成 GPUDirect 预检后才加入。
 
-本文件是设计与验收合同；除上述纯计划器外，**不是已经接入的通信库
-或性能声明**。
+本文件是设计与验收合同。v2 是实验性 opt-in，尚未通过真实 GPU/RDMA
+性能验收；稀疏集合通信和融合 kernel 仍是后续工作。

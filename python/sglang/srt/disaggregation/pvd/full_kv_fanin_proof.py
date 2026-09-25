@@ -10,7 +10,14 @@ from sglang.srt.disaggregation.pvd.protocol import (
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 
 
-def validate_fanin_proof(reply, *, fingerprint, identities, byte_counts):
+def validate_fanin_proof(
+    reply,
+    *,
+    fingerprint,
+    identities,
+    byte_counts,
+    protocol=FULL_KV_FANIN_PROTOCOL,
+):
     fields = {
         "protocol",
         "plan_fingerprint",
@@ -27,7 +34,7 @@ def validate_fanin_proof(reply, *, fingerprint, identities, byte_counts):
         raise ProtocolValidationError("unknown or unadopted V writer")
     identity = WriteIdentity.from_dict(reply["identity"])
     if (
-        reply["protocol"] != FULL_KV_FANIN_PROTOCOL
+        reply["protocol"] != protocol
         or reply["plan_fingerprint"] != fingerprint
         or identity != identities[rank]
         or type(reply["fenced"]) is not bool

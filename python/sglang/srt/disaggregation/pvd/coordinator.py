@@ -10,6 +10,10 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional
 
+from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
+    FULL_KV_FANIN_PROTOCOL,
+    RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
+)
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
@@ -1331,6 +1335,14 @@ class VectorCoordinator:
                 "enabled": self.fanin is not None,
                 "max_records": self.fanin.max_records if self.fanin else None,
                 "retained_records": len(self.fanin.records) if self.fanin else 0,
+                "protocols": (
+                    [
+                        FULL_KV_FANIN_PROTOCOL,
+                        RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
+                    ]
+                    if self.fanin is not None
+                    else []
+                ),
             },
             "pending_entry_cancellations": len(self._pending_entry_cancellations),
             "record_capacity": {

@@ -17,29 +17,62 @@ from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeRefresher
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_fanin_coordinator import group
 from test_pvd_fanin_store import setup
+from test_pvd_fanin_writer import BatchEngine
 from test_pvd_transfer_admission import base_args
 
 
+def test_rank_packed_bootstrap_admission_counts_both_gpu_buffers():
+    manager = NS(
+        full_kv_fanin_rank_packed=True,
+        local_shard_manifest=lambda n: NS(expected_bytes=128),
+    )
+    req = NS(origin_input_ids=list(range(5)))
+    assert PVDKVManager.bootstrap_staging_bytes(manager, req) == 256
+    manager.full_kv_fanin_rank_packed = False
+    assert PVDKVManager.bootstrap_staging_bytes(manager, req) == 128
+
+
 @pytest.mark.parametrize(
-    "tp_size,fault",
+    "tp_size,fault,rank_packed",
     [
-        (1, None),
-        (2, None),
-        (4, None),
-        (2, "unpack"),
-        (1, "preflight"),
-        (1, "cancel"),
-        (1, "waiting"),
-        (2, "waiting"),
+        (1, None, False),
+        (2, None, False),
+        (4, None, False),
+        (2, "unpack", False),
+        (1, "preflight", False),
+        (1, "cancel", False),
+        (1, "waiting", False),
+        (2, "waiting", False),
+        (1, None, True),
+        (2, None, True),
+        (2, "unpack", True),
+        (1, "cancel", True),
+        (1, "waiting", True),
+        (1, "old_v", True),
     ],
 )
-def test_real_decode_bootstrap_fanin_rank_agreement_and_reuse(tp_size, fault):
+def test_real_decode_bootstrap_fanin_rank_agreement_and_reuse(
+    tp_size, fault, rank_packed
+):
     use_waiting = fault == "waiting"
     if use_waiting:
         fault = None
-    with setup(publish=False) as c:
+    with setup(
+        publish=False,
+        engine=BatchEngine() if rank_packed else None,
+        native_batch=rank_packed,
+    ) as c:
         control = _AsyncControlLoop()
         parent, _, _ = group(c, max_records=32)
+        if fault == "old_v":
+            current_health = parent.health
+
+            async def old_health():
+                health = await current_health()
+                health["full_kv_fanin"].pop("protocols", None)
+                return health
+
+            parent.health = old_health
 
         async def serve():
             runner = web.AppRunner(create_coordinator_app(parent))
@@ -93,6 +126,7 @@ def test_real_decode_bootstrap_fanin_rank_agreement_and_reuse(tp_size, fault):
 
             manager = NS(
                 full_kv_fanin_max_slices=64,
+                full_kv_fanin_rank_packed=rank_packed,
                 tp_rank=rank,
                 tp_size=tp_size,
                 key_for=lambda r: c.key,
@@ -233,6 +267,12 @@ def test_real_decode_bootstrap_fanin_rank_agreement_and_reuse(tp_size, fault):
                         torch.all(s.manager.kv_pool.k_buffer[0][5:] == 99)
                         for s in sessions
                     )
+                    if rank_packed:
+                        assert c.engine.batch_calls
+                        assert all(
+                            len(slices) == len(offsets) == 1
+                            for slices, offsets in c.engine.batch_calls
+                        )
             for s in sessions:
                 assert control.submit(s.close()).result(10)
                 assert s.manager.transfer_budget.snapshot()["used_staging_bytes"] == 0
@@ -249,7 +289,16 @@ def test_real_decode_bootstrap_fanin_rank_agreement_and_reuse(tp_size, fault):
 
 
 @pytest.mark.parametrize(
-    "case", ["enabled", "legacy_tp1", "missing_bound", "no_waiting", "prefill"]
+    "case",
+    [
+        "enabled",
+        "rank_packed_enabled",
+        "rank_packed_missing",
+        "legacy_tp1",
+        "missing_bound",
+        "no_waiting",
+        "prefill",
+    ],
 )
 def test_fanin_serving_config_requires_complete_opt_in(case):
     from sglang.srt.arg_groups.pvd_disaggregation_hook import handle_pvd_disaggregation
@@ -261,11 +310,16 @@ def test_fanin_serving_config_requires_complete_opt_in(case):
         pvd_full_kv_fanin_max_slices=64,
         pvd_full_kv_fanin_response_bytes=65536,
     )
-    if case == "enabled":
+    if case in ("enabled", "rank_packed_enabled"):
+        args.pvd_full_kv_fanin_rank_packed = case == "rank_packed_enabled"
         handle_pvd_disaggregation(args)
         assert args.disable_overlap_schedule and args.disable_radix_cache
         return
-    if case == "legacy_tp1":
+    if case == "rank_packed_missing":
+        args.pvd_full_kv_fanin_rank_packed = True
+        args.pvd_full_kv_fanin_max_slices = None
+        expected = "requires bounded"
+    elif case == "legacy_tp1":
         args.pvd_full_kv_fanin_max_slices = args.pvd_full_kv_fanin_response_bytes = None
         expected = "supports"
     elif case == "missing_bound":

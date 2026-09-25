@@ -10,10 +10,7 @@ import logging
 import threading
 import time
 
-from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
-    FULL_KV_FANIN_PROTOCOL,
-    validate_fanin_plan,
-)
+from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import validate_fanin_plan
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
     PVD_RECEIVER_EPOCH_METADATA_KEY,
@@ -151,7 +148,7 @@ class FullKVFanInWriter:
                 else TransportState.NOT_SUBMITTED
             )
             return {
-                "protocol": FULL_KV_FANIN_PROTOCOL,
+                "protocol": self.plan.protocol,
                 "plan_fingerprint": self.plan.fingerprint,
                 "source_rank": self.source_rank,
                 "identity": self.identity.to_dict(),

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
     FULL_KV_FANIN_PROTOCOL,
+    RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
     validate_fanin_plan,
 )
 from sglang.srt.disaggregation.pvd.full_kv_fanin_writer import FullKVFanInWriter
@@ -870,7 +871,7 @@ class VectorKVStore:
             self._progress_releases()
             return delivery.fanin_writer.snapshot()
         return {
-            "protocol": FULL_KV_FANIN_PROTOCOL,
+            "protocol": plan.protocol,
             "plan_fingerprint": plan.fingerprint,
             "source_rank": self.rank,
             "identity": identity.to_dict(),
@@ -1786,6 +1787,14 @@ class VectorKVStore:
                     "max_slices": self._fanin_max_slices,
                     "max_inflight": self._fanin_max_inflight,
                     "native_batch": self._fanin_native_batch,
+                    "protocols": (
+                        [
+                            FULL_KV_FANIN_PROTOCOL,
+                            RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
+                        ]
+                        if self._fanin_max_slices is not None
+                        else []
+                    ),
                 },
                 "closed": self._closed,
                 "isolated_reason": self._isolated_reason,

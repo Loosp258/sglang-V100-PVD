@@ -295,6 +295,9 @@ class PVDKVManager:
         self.full_kv_fanin_max_slices = getattr(
             scheduler.server_args, "pvd_full_kv_fanin_max_slices", None
         )
+        self.full_kv_fanin_rank_packed = bool(
+            getattr(scheduler.server_args, "pvd_full_kv_fanin_rank_packed", False)
+        )
         self.bootstrap_gates: Dict[Any, BootstrapGate] = {}
         # One bounded driver per worker. It never creates a task per failed
         # request; it advances the owners that already hold the resources.
@@ -352,7 +355,10 @@ class PVDKVManager:
 
     def bootstrap_staging_bytes(self, req) -> int:
         """Staging bytes this rank's initial pull will reserve for one request."""
-        return self.local_shard_manifest(len(req.origin_input_ids)).expected_bytes
+        needed = self.local_shard_manifest(len(req.origin_input_ids)).expected_bytes
+        # Rank-packed fan-in retains both the registered wire destination and
+        # an unregistered canonical reorder buffer until request close.
+        return needed * (2 if getattr(self, "full_kv_fanin_rank_packed", False) else 1)
 
     def _bootstrap_staging_headroom(self) -> Optional[int]:
         """Unreserved staging bytes, or None when no budget is enforced.

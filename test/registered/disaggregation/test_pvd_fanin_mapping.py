@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 import torch
+from sglang.srt.disaggregation.pvd.fanin_scatter import scatter_rank_packed_bytes
 from sglang.srt.disaggregation.pvd.kv_packer import (
     describe_kv_layout,
     pack_full_prompt_kv,
@@ -157,6 +158,29 @@ def test_rank_packed_whole_shard_plan_reconstructs_canonical_bytes(
                 local_writes[destination : destination + rule.width] += 1
         assert torch.equal(canonical, expected)
         assert torch.all(local_writes == 1)
+        via_helper = torch.zeros_like(expected)
+        scatter_rank_packed_bytes(staging, via_helper, plan)
+        assert torch.equal(via_helper, expected)
+
+
+def test_rank_packed_scatter_rejects_alias_and_out_of_bounds_before_copy():
+    plan = rank_packed_full_shard_fanin_plan(
+        layout(2), layout(1), compute_rank=0, token_count=4
+    )
+    source = torch.arange(plan.staging_bytes, dtype=torch.uint8)
+    destination = torch.zeros_like(source)
+    with pytest.raises(ValueError, match="distinct"):
+        scatter_rank_packed_bytes(source, source, plan)
+    bad = replace(
+        plan,
+        scatters=(
+            *plan.scatters[:-1],
+            replace(plan.scatters[-1], source_offset=plan.staging_bytes),
+        ),
+    )
+    with pytest.raises(ValueError, match="outside"):
+        scatter_rank_packed_bytes(source, destination, bad)
+    assert torch.all(destination == 0)
 
 
 @pytest.mark.parametrize("v_tp,d_tp,rank", [(2, 4, 0), (3, 2, 1), (4, 3, 1)])

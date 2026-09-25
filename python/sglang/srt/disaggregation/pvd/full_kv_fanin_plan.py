@@ -15,10 +15,15 @@ from sglang.srt.disaggregation.pvd.protocol import (
 )
 from sglang.srt.disaggregation.pvd.sharding import (
     packed_fanin_transfer_slices,
+    rank_packed_full_shard_fanin_plan,
     source_shard_intersections,
 )
 
 FULL_KV_FANIN_PROTOCOL = "pvd-full-kv-fanin-v1"
+RANK_PACKED_FULL_KV_FANIN_PROTOCOL = "pvd-full-kv-fanin-rank-packed-v2"
+FULL_KV_FANIN_PROTOCOLS = frozenset(
+    (FULL_KV_FANIN_PROTOCOL, RANK_PACKED_FULL_KV_FANIN_PROTOCOL)
+)
 
 
 def canonical(value):
@@ -31,6 +36,7 @@ def plan_fingerprint(manifest):
 
 @dataclass(frozen=True)
 class FanInPlan:
+    protocol: str
     key: KVEntryKey
     delivery_id: str
     destination: RemoteRegionDescriptor
@@ -60,7 +66,8 @@ def validate_fanin_plan(value, *, max_slices):
     raw = copy.deepcopy(dict(value))
     fingerprint = raw.pop("plan_fingerprint")
     try:
-        if raw["protocol"] != FULL_KV_FANIN_PROTOCOL or fingerprint != plan_fingerprint(
+        protocol = raw["protocol"]
+        if protocol not in FULL_KV_FANIN_PROTOCOLS or fingerprint != plan_fingerprint(
             raw
         ):
             raise ProtocolValidationError("fan-in plan fingerprint/protocol mismatch")
@@ -93,20 +100,28 @@ def validate_fanin_plan(value, *, max_slices):
             or tokens <= 0
         ):
             raise ProtocolValidationError("bounded delivery identity/tokens required")
-        parts = source_shard_intersections(storage, compute, destination.rank)
-        if (
-            len(parts) * len(compute.extra["component_bytes_per_token"]) * tokens
-            > max_slices
-        ):
-            raise ProtocolValidationError("fan-in plan exceeds slice bound")
         if (
             destination.length
             != sum(compute.extra["component_bytes_per_token"]) * tokens
         ):
             raise ProtocolValidationError("fan-in destination size mismatch")
-        writers = packed_fanin_transfer_slices(
-            storage, compute, compute_rank=destination.rank, token_count=tokens
-        )
+        if protocol == FULL_KV_FANIN_PROTOCOL:
+            parts = source_shard_intersections(storage, compute, destination.rank)
+            if (
+                len(parts) * len(compute.extra["component_bytes_per_token"]) * tokens
+                > max_slices
+            ):
+                raise ProtocolValidationError("fan-in plan exceeds slice bound")
+            writers = packed_fanin_transfer_slices(
+                storage, compute, compute_rank=destination.rank, token_count=tokens
+            )
+        else:
+            packed = rank_packed_full_shard_fanin_plan(
+                storage, compute, compute_rank=destination.rank, token_count=tokens
+            )
+            if len(packed.transfers) > max_slices:
+                raise ProtocolValidationError("fan-in plan exceeds slice bound")
+            writers = {rank: [transfer] for rank, transfer in packed.transfers}
         expected = {
             str(rank): [asdict(p) for p in slices] for rank, slices in writers.items()
         }
@@ -117,6 +132,7 @@ def validate_fanin_plan(value, *, max_slices):
     except (KeyError, TypeError, ValueError) as exc:
         raise ProtocolValidationError(f"invalid fan-in plan: {exc}") from exc
     return FanInPlan(
+        protocol,
         key,
         delivery_id,
         destination,

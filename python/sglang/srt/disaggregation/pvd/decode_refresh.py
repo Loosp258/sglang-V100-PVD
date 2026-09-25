@@ -189,7 +189,9 @@ class PVDDecodeSession:
 
     def prepare(self, pages):
         if self._cuda_refresh_driver is not None:
-            raise RuntimeError("full Prompt refresh ownership transferred to CUDA driver")
+            raise RuntimeError(
+                "full Prompt refresh ownership transferred to CUDA driver"
+            )
         if self._closed or self.lease_error:
             raise RuntimeError(self.lease_error or "Decode session closed")
         self.pages = pages
@@ -326,7 +328,7 @@ class PVDDecodeSession:
         # own sender epoch is pinned, by the full comparison above.
         self.identities = adopted
 
-    def unpack(self, reply):
+    def unpack(self, reply, *, staging=None):
         expected_id = self.clock.pending[0] if self.clock.pending else None
         if (
             reply.get("delivery_id") != expected_id
@@ -341,8 +343,18 @@ class PVDDecodeSession:
         ]:
             raise ValueError("unsupported retrieval selection or token ranges")
         self.synchronize()
+        source = self.staging if staging is None else staging
+        if (
+            self.staging is None
+            or source is None
+            or not source.is_contiguous()
+            or source.dtype != torch.uint8
+            or source.device != self.staging.device
+            or source.numel() != self.staging.numel()
+        ):
+            raise ValueError("unpack source is not this Decode staging layout")
         unpack_full_prompt_kv(
-            self.staging,
+            source,
             self.manager.kv_pool,
             self.pages,
             page_size=self.manager.page_size,
@@ -589,7 +601,10 @@ class PVDDecodeRefresher:
             close_gate(req)
         key = self.manager.key_for(req)
         session = self.manager.decode_sessions.get(key)
-        if session is not None and getattr(session, "_cuda_refresh_driver", None) is not None:
+        if (
+            session is not None
+            and getattr(session, "_cuda_refresh_driver", None) is not None
+        ):
             # The sparse controller still needs this Entry's consumer lease.
             # Its driver closes the full session only AFTER native sparse drain.
             session._cuda_refresh_driver.cancel(req)
@@ -625,7 +640,8 @@ class PVDDecodeRefresher:
             ]
             # Include lease failures even when a periodic update is not due.
             due = [
-                s for s in sessions
+                s
+                for s in sessions
                 if getattr(s, "_cuda_refresh_driver", None) is None
                 and (s.due() or s.lease_error)
             ]

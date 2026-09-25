@@ -152,6 +152,7 @@ class FullKVFanInCoordinator:
                 r: sum(p.length for p in parts)
                 for r, parts in record.plan.writers.items()
             },
+            protocol=record.plan.protocol,
         )
         if reported != rank:
             raise CoordinatorError("V reply substituted another source rank")
