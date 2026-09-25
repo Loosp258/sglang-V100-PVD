@@ -235,6 +235,41 @@ CUDA drain/quarantine 和显存预算。直接在每次 Decode 前
 零拷贝的 per-head 指针/长度接口，或在 bank 安装阶段受预算
 约束地一次性打包，再做同条件真实模型前向及端到端 A/B。
 
+提交 `3134716b5` 又加入 per-KV-head 指针/长度表接口，直接读取
+现有 bank 的各个独立张量，不在每次 Decode 前复制 Prompt KV。
+V100S 上 12 种长度、每个 KV head 不同的选择长度、tile=8/64
+均与独立完整 softmax 参考值吻合。`64910ffe1` 将它设为显式
+`attention_impl=triton_grouped` 可选项；默认仍是 `online`。
+workspace 保留原 read lease、同步 drain/quarantine，并在分配前
+向 target scratch budget 计入 4 个 head 的指针/长度表与 4 个
+生成 KV 行索引，共 80 B。真实 GPU workspace 测试的最大
+绝对误差 `3.0518e-5`，正常完成后预算清零；提交
+`6543c5f37` 的容量不足和未知完成故障注入也通过：前者拒绝
+分配且无预算泄漏，后者隔离并保留资源/预算，不假装完成。
+
+隔离三机服务只切换 D:30003/GPU1 到该 opt-in 配置，P、V 和
+原有 D:30001 未变。相同 1,923-token 固定 Prompt、8 个贪心 token
+三轮完整返回，输入 SHA-256 均为 `5aa7f0a7…e1fd35e2d73e01f3`，
+最终文本 SHA-256 均为 `7f520dac…d8155ceb3c3d1fe04941cc150`；
+D 日志确认目标层执行 `impl=triton_grouped`：
+
+| 隔离 D 实现 | 首轮 | 随后热态 1 | 随后热态 2 |
+| --- | ---: | ---: | ---: |
+| online tile=64（之前） | 未测同一 Prompt | 30.87 s | 30.86 s |
+| triton_grouped tile=64 | 53.78 s | 22.46 s | 22.06 s |
+
+Triton 后两轮较此前 online 后两轮约快 27–29%，TTFT 仍约 8 s；
+这是两次重启间同输入、同 P/V/模型/刷新配置的首轮 A/B，
+不是统计显著性结论。Triton 首次请求含 JIT/冷态成本，
+而此前 online 的 73.49 s 首轮用了另一个 Prompt，故不列作
+同输入对照，也不与热态混算。
+另一次 4 客户端、各 513-token Prompt 的 opt-in 测试完整返回
+4×8 token，墙钟 60.15 s、合计 0.532 token/s；它与之前的
+tile=64 四客户端输入不完全相同，不能给出严格并发加速比。
+所有这些请求结束后，两 V rank 均无 in-flight、UNKNOWN 或隔离。
+尚未验证真实模型每层输出/全部 logits 的数值偏差、长期反复刷新、
+严格同输入并发 A/B 和跨机故障注入，故 opt-in 仍不应设为默认。
+
 ## 实施与验收顺序
 
 1. 固定 A/B 负载：同模型、prompt 长度、输出长度、冷/热 Entry、
