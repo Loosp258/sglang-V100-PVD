@@ -11,6 +11,7 @@ import asyncio
 import concurrent.futures
 import copy
 import math
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -687,6 +688,11 @@ class PVDKVManager:
             d_rails={route.rank: route.rail for route in selected.shards},
             poll_interval_seconds=poll_interval_seconds,
             initial_import_pending=initial_import_pending,
+            **(
+                {"search_io_loop": self.control.loop}
+                if os.environ.get("PVD_SEARCH_BACKGROUND_IO") == "1"
+                else {}
+            ),
         )
 
     def client_for(self, req) -> PVDCoordinatorClient:

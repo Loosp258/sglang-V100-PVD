@@ -96,6 +96,7 @@ class PVDShardSearchClient:
         base_url: str,
         *,
         session: aiohttp.ClientSession | None = None,
+        background_loop: asyncio.AbstractEventLoop | None = None,
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 2 * 1024 * 1024,
     ):
@@ -105,15 +106,62 @@ class PVDShardSearchClient:
             raise ValueError("an explicit HTTP(S) V shard endpoint is required")
         if not _finite_number(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be finite and positive")
+        if background_loop is not None and (
+            session is not None
+            or not isinstance(background_loop, asyncio.AbstractEventLoop)
+            or not background_loop.is_running()
+            or background_loop.is_closed()
+        ):
+            raise ValueError("background search requires a running owned I/O loop")
+        if background_loop is not None:
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is background_loop:
+                raise ValueError("background search loop must differ from owner loop")
         self.base_url = base_url.rstrip("/")
         self._session = session
         self._owns_session = session is None
+        self._background_loop = background_loop
+        self._background_inflight = set()
+        self._background_close_future = None
         self._closed = False
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         self._max_response_bytes = _positive("max_response_bytes", max_response_bytes)
 
     async def close(self):
         self._closed = True
+        if self._background_loop is not None:
+            # A cancelled owner await does not cancel a read-only V search.
+            # Drain the actual RPC before closing its loop-affine session.
+            if not self._background_loop.is_running():
+                raise SearchTransportError("V search I/O loop stopped before close")
+            pending = tuple(self._background_inflight)
+            if pending:
+                await asyncio.gather(
+                    *(
+                        asyncio.shield(asyncio.wrap_future(future))
+                        for future in pending
+                    ),
+                    return_exceptions=True,
+                )
+            self._background_inflight.clear()
+            if self._session is not None and self._owns_session:
+                if self._background_close_future is None:
+                    coroutine = self._session.close()
+                    try:
+                        self._background_close_future = (
+                            asyncio.run_coroutine_threadsafe(
+                                coroutine, self._background_loop
+                            )
+                        )
+                    except BaseException:
+                        coroutine.close()
+                        raise
+                await asyncio.shield(asyncio.wrap_future(self._background_close_future))
+            self._session = None
+            return
         if self._session is not None and self._owns_session:
             await self._session.close()
         self._session = None
@@ -165,6 +213,30 @@ class PVDShardSearchClient:
         return payload, search_id, len(snapshot)
 
     async def _post_json(self, path, payload, *, encoded_payload=None):
+        if self._background_loop is None:
+            return await self._post_json_on_loop(
+                path, payload, encoded_payload=encoded_payload
+            )
+        if not self._background_loop.is_running():
+            raise SearchTransportError("V search I/O loop stopped")
+        coroutine = self._post_json_on_loop(
+            path, payload, encoded_payload=encoded_payload
+        )
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, self._background_loop)
+        except BaseException:
+            coroutine.close()
+            raise
+        self._background_inflight.add(future)
+        try:
+            # Shielding matters: cancelling the scheduler-side refresh must
+            # not make the proxy look drained before aiohttp has unwound.
+            return await asyncio.shield(asyncio.wrap_future(future))
+        finally:
+            if future.done():
+                self._background_inflight.discard(future)
+
+    async def _post_json_on_loop(self, path, payload, *, encoded_payload=None):
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         # Batched Q rows can be hundreds of KiB. Their wire bytes are already

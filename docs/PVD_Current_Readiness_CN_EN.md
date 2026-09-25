@@ -3198,3 +3198,28 @@ query matrix does not explain the search increase; contention needs finer
 diagnosis. These samples do not justify making lead3 the default. Live D
 should return to the validated lead2 configuration. Generated-content
 quality and recall have not been compared.
+
+### D search I/O overlap experiment / D 检索 I/O 重叠实验
+
+同步 CUDA Decode Scheduler 在一次 `poll()` 后运行目标模型 forward，
+随后才再次 `poll()`。私有刷新 loop 每次只推进一轮；因此原路径中
+V 搜索 HTTP 的 asyncio transport 在 forward 期间不会继续由该 loop
+处理。`PVD_SEARCH_BACKGROUND_IO=1` 是**仅用于 D 的可回退实验开关**：
+把 `PVDShardSearchClient` 的 HTTP 请求/响应放到已有的 PVD control
+loop，身份验证、结果使用、target probe、GPU 工作集安装和 RDMA
+生命周期仍在原 Scheduler 线程。取消刷新不会提前释放后台 HTTP
+所有权；关闭客户端必须等待实际请求结束并在其原 loop 关闭 session。
+该开关不能令 target probe 与 Decode forward 并行，也不能证明
+V 的 GPU search 与 D 的 GPU forward 无资源竞争。默认值仍为关闭。
+
+The synchronous CUDA Decode Scheduler runs a target forward between owner
+polls, while its private refresh loop advances only one turn per poll.
+`PVD_SEARCH_BACKGROUND_IO=1` is a reversible **D-only experiment** that
+executes the shard-search HTTP transport on the already-running PVD control
+loop. Query authorization, result consumption, target probing, bank install
+and RDMA ownership remain on the Scheduler thread. Cancellation retains the
+actual background RPC until it finishes, and client close drains it before
+closing the loop-affine aiohttp session. The default is off. This does not
+make target-model probing concurrent with Decode or establish a latency win;
+the CloudLab lead=2 comparison must measure boundary wait, refresh stages,
+SSE completeness and failure/cleanup behavior before enabling it by default.

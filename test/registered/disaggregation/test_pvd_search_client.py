@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import replace
 
 import pytest
@@ -91,6 +93,165 @@ def test_pinned_batch_roundtrip_preserves_each_head_identity_and_order():
     asyncio.run(run())
 
 
+def test_background_search_http_progresses_while_owner_loop_is_stopped():
+    _, _, identity, query, scope = fixture()
+    received = threading.Event()
+
+    class SearchHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.set()
+            result = json.dumps(valid_body(payload)).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SearchHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    io_loop = asyncio.new_event_loop()
+    io_thread = threading.Thread(target=io_loop.run_forever, daemon=True)
+    io_thread.start()
+    try:
+
+        async def run():
+            client = PVDShardSearchClient(
+                f"http://127.0.0.1:{server.server_port}", background_loop=io_loop
+            )
+            try:
+                task = asyncio.create_task(
+                    client.search(identity, queries=query, top_k=1, scope=scope)
+                )
+                await asyncio.sleep(0)
+                # This blocks the scheduler's loop. Only the separate I/O loop
+                # can reach the server before the next owner poll.
+                assert received.wait(2)
+                assert not task.done()
+                assert (await task).token_ids == (3,)
+            finally:
+                await client.close()
+            assert client._session is None
+
+        asyncio.run(run())
+    finally:
+        io_loop.call_soon_threadsafe(io_loop.stop)
+        io_thread.join(timeout=2)
+        io_loop.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
+
+
+def test_background_search_close_drains_cancelled_owner_without_closing_live_io():
+    _, _, identity, query, scope = fixture()
+    received, release = threading.Event(), threading.Event()
+
+    class SearchHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.set()
+            assert release.wait(2)
+            result = json.dumps(valid_body(payload)).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SearchHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    io_loop = asyncio.new_event_loop()
+    io_thread = threading.Thread(target=io_loop.run_forever, daemon=True)
+    io_thread.start()
+    try:
+
+        async def run():
+            client = PVDShardSearchClient(
+                f"http://127.0.0.1:{server.server_port}", background_loop=io_loop
+            )
+            task = asyncio.create_task(
+                client.search(identity, queries=query, top_k=1, scope=scope)
+            )
+            assert await asyncio.to_thread(received.wait, 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            closing = asyncio.create_task(client.close())
+            await asyncio.sleep(0.02)
+            assert not closing.done()
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+            assert client._session is not None
+            closing = asyncio.create_task(client.close())
+            await asyncio.sleep(0.02)
+            assert not closing.done()
+            release.set()
+            await asyncio.wait_for(closing, 2)
+            assert client._session is None
+            assert not client._background_inflight
+
+        asyncio.run(run())
+    finally:
+        release.set()
+        io_loop.call_soon_threadsafe(io_loop.stop)
+        io_thread.join(timeout=2)
+        io_loop.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
+
+
+def test_background_search_session_close_is_submitted_once_across_cancellation():
+    started, release = threading.Event(), threading.Event()
+    io_loop = asyncio.new_event_loop()
+    io_thread = threading.Thread(target=io_loop.run_forever, daemon=True)
+    io_thread.start()
+    try:
+
+        async def run():
+            client = PVDShardSearchClient("http://127.0.0.1:1", background_loop=io_loop)
+
+            class SlowSession:
+                calls = 0
+
+                async def close(self):
+                    self.calls += 1
+                    started.set()
+                    await asyncio.to_thread(release.wait, 2)
+
+            session = SlowSession()
+            client._session = session
+            closing = asyncio.create_task(client.close())
+            assert await asyncio.to_thread(started.wait, 2)
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+            again = asyncio.create_task(client.close())
+            await asyncio.sleep(0.02)
+            assert not again.done()
+            assert session.calls == 1
+            release.set()
+            await asyncio.wait_for(again, 2)
+            assert session.calls == 1
+            assert client._session is None
+
+        asyncio.run(run())
+    finally:
+        release.set()
+        io_loop.call_soon_threadsafe(io_loop.stop)
+        io_thread.join(timeout=2)
+        io_loop.close()
+
+
 def test_batch_encodes_once_and_sends_the_checked_json_bytes(monkeypatch, caplog):
     async def run():
         _, _, identity, query, scope = fixture()
@@ -142,7 +303,9 @@ def test_batch_encodes_once_and_sends_the_checked_json_bytes(monkeypatch, caplog
         assert len(results) == 2
         assert len(encoded_calls) == 1
         assert seen == [(encoded_calls[0], "application/json")]
-        assert any("PVD D search-batch items=2" in row.message for row in caplog.records)
+        assert any(
+            "PVD D search-batch items=2" in row.message for row in caplog.records
+        )
 
     asyncio.run(run())
 

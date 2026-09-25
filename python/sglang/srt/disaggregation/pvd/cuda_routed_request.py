@@ -6,6 +6,7 @@ and Gateway-selected V routes. Client sessions outlive every
 remote destination and are closed only after the controller drains.
 """
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -126,6 +127,7 @@ def assemble_routed_cuda_request(
     initial_import_pending: bool = False,
     d_rails: Mapping[int, str] | None = None,
     d_endpoints: Mapping[int, str] | None = None,
+    search_io_loop: asyncio.AbstractEventLoop | None = None,
 ) -> CUDARoutedRequestAssembly:
     """Fail closed on mismatched Entry/layout/selected shard metadata.
 
@@ -242,7 +244,10 @@ def assemble_routed_cuda_request(
     routing = delivery = None
     try:
         for route in selected.shards:
-            search_clients[route.rank] = PVDShardSearchClient(route.url)
+            search_clients[route.rank] = PVDShardSearchClient(
+                route.url,
+                **({"background_loop": search_io_loop} if search_io_loop else {}),
+            )
             control_clients[route.rank] = HttpShardClient(route.rank, route.url)
         routing = RoutedShardSearchClient(
             storage_layout=selected.manifest.layout,
