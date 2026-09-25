@@ -3,6 +3,41 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 99-token 原生 CAGRA 对照 / 99-token native CAGRA comparison
+
+使用同一固定 99-token Prompt、20 个输出 token、`temperature=0`，
+D Top-4/并集上限 32，P/D/Gateway 与 V 的其他参数保持不变，仅切换 V
+`cagra-auto` 的 `exact_max_rows`：128 时该 Entry 走 GPU 精确后端，
+64 时走原生 cuVS CAGRA（`intermediate_degree=16`）。前者两次客户端
+耗时 **26.574/26.403 秒**，后者 **36.628/35.247 秒**；四次请求
+HTTP 200、各生成 20 token，这个固定样例的输出 ID 相同。原生后端 V
+日志有 RAFT 图构建记录；一轮首次检索等约 **12.60 秒**、索引搜索
+HTTP 400 共 47 次，后续检索约 1.50–1.87 秒/轮。
+
+因此在这个较短的 V100S 负载上，逐请求/逐 head 原生建图明显不划算。
+输出相同只说明这个样例的最终生成相同，**不能替代**真实 Q 的
+Top-K 召回率、质量数据集或长上下文评估。当前 D `context_length=128`
+不足以代表最终长上下文。V 保持 64 行阈值以供后续原生后端诊断，
+D 已恢复 Top-4 预测配置，服务健康。
+
+With one fixed 99-token Prompt, 20 output tokens and temperature zero, D
+used Top-4/union-limit-32. P/D/Gateway and the other V settings were
+unchanged; only V `cagra-auto`'s `exact_max_rows` changed: 128 selected the
+GPU exact backend, while 64 selected native cuVS CAGRA
+(`intermediate_degree=16`). Client latencies were **26.574/26.403 seconds**
+for exact and **36.628/35.247 seconds** for native. All four requests
+returned HTTP 200 and 20 tokens, with identical generated IDs in this one
+case. V logged actual RAFT graph builds. A native first search waited about
+**12.60 seconds** and the V index endpoint recorded 47 HTTP 400 readiness
+retries; subsequent searches took about 1.50–1.87 seconds per round.
+
+Per-Entry/per-head native graph building is therefore unattractive for this
+short V100S workload. Matching final tokens in one case is **not** evidence
+of actual-Q Top-K recall, dataset quality or long-context performance. D's
+current `context_length=128` is not representative of the ultimate long
+context. V remains at a 64-row cutoff for further native-backend diagnosis;
+D is back on predictive Top-4 and the services are healthy.
+
 ## 2026-09-25 全选 KV 诊断 / Full-selection KV diagnostic
 
 保持同一 36-token Prompt、Qwen2.5-7B-Instruct、P/V/Gateway 与 4-token
