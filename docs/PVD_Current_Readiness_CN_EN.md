@@ -2852,3 +2852,26 @@ log, so it is not yet attributable to draft. The next instrumentation logs
 the first successful sparse-attention execution per layer, including its
 completion fence, without token or KV values. Its CPU policy tests passed
 54/4 (pass/skip); full regression and live cold validation remain.
+
+`715e412a3` 的完整 PVD CPU 回归 2937 passed / 24 skipped、
+21 subtests。D 实机冷态固定请求仍为 46.26 秒、最大 token 间隔
+28.20 秒；首次 draft 14.63 秒，目标 probe 0.048 秒。
+首次每层 sparse attention 记录了全部 28 层：layer 0 约
+0.043 秒，其余每层约 0.001–0.002 秒，均包含 device fence。
+这些测量**排除稀疏 attention `execute()` 本体承担 28 秒停顿**，
+却不定位注意力前后其他模型计算、初始化或调度中的开销；
+例如日志秒级时间显示 layer 0 与 layer 1 的记录相距约 7 秒，
+该间隔不在两次 `execute()` 之内。尚不能把它归因于某个具体 kernel。
+当前 D 继续运行于独立 `715e412a3` worktree，V 为 `48e69c068`。
+
+The full PVD CPU suite at `715e412a3` passed 2937/24 with 21 subtests.
+The real D cold fixed request still took 46.26 s, with a 28.20 s maximum
+token gap; first draft took 14.63 s and target probe 0.048 s. All 28 first
+sparse-attention layer executions were recorded: layer 0 about 0.043 s,
+each other layer roughly 0.001–0.002 s, including its device fence. These
+measurements **rule out the body of sparse-attention `execute()` as the
+28-second stall**, but do not localize other model compute, initialization
+or scheduling around attention. For example, the second-resolution log
+timestamps place about seven seconds between layer 0 and layer 1 records,
+outside both `execute()` calls; that is not proof of any specific kernel.
+D remains on isolated worktree `715e412a3`, V on `48e69c068`.
