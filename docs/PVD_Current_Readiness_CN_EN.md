@@ -3,6 +3,39 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 有界并行搜索 / Bounded parallel search
+
+`24ae1bcd9` 保持每个 V 来源先做一次搜索取得索引/映射版本，再把其余
+layer/KV-head 查询以**最多 8 个在途**并发发出；后续每次 HTTP 请求仍携带
+已固定版本。任一组失败或返回不同版本则取消其他在途查询，绝不发布
+部分选择。CPU 回归为 **2904 passed / 23 skipped**，其中新增测试覆盖
+并发上限、版本固定、失败取消及结果顺序。
+
+在相同 36-token 固定输入和 V 的 128 行精确阈值下，D 从独立 worktree
+切换到该版本。首次请求约 61.58 秒且首轮 capture 约 14.74 秒，明显
+包含冷启动，不能与热态比较；随后热态请求约 **18.89 秒**，之前串行搜索
+的两次热态结果为 **19.42/19.43 秒**。四轮搜索分别约 2.17、1.37、
+1.74、1.85 秒；前述串行观察仍约 1.5–2 秒/轮。输出 token ID 与原
+预测模式相同，HTTP 200、20 token。此改动在当前负载下只有小幅、
+尚不足以统计确认的收益；V 搜索仍是主要刷新耗时，完整 KV 对照仍
+约 7.3 秒。不可声称已经隐藏网络/检索等待或达成最终目标。
+
+Commit `24ae1bcd9` first pins each V source's index/mapping versions with
+one search, then overlaps its remaining layer/KV-head HTTP searches with
+at most eight in flight. Every later request carries the pinned versions;
+any failure or version mismatch cancels outstanding searches and prevents
+publication of a partial selection. The CPU suite reported **2904 passed /
+23 skipped**, including concurrency, pinning, cancellation and ordering
+regressions. In the same 36-token fixed-input setup with V's 128-row exact
+cutoff, the first request took about 61.58 seconds and included a 14.74-second
+cold capture. The next warm request took **18.89 seconds**, compared with
+**19.42/19.43 seconds** for the prior serial-search code. Its four search
+phases took about 2.17, 1.37, 1.74 and 1.85 seconds, still roughly the same
+1.5–2-second range. HTTP and output-token checks passed. This is a small,
+not statistically established improvement; V search still dominates the
+refresh, and the full-KV baseline is roughly 7.3 seconds. The latency-hiding
+and end-to-end quality goals remain unmet.
+
 ## 2026-09-25 短 Prompt 阈值及固定输入对照 / Short-Prompt cutoff and fixed-input comparison
 
 `0693d2806` 为 V `cagra-auto` 新增可选
