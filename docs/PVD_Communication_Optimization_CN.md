@@ -56,8 +56,38 @@ shard、V coordinator 与每个必需 shard 公告 v2 能力，以及 V 原生
 batch PUT。D 为注册接收区和独立 canonical 重排缓冲区分别预留预算；
 只在全部 writer terminal-success 后做本地重排和原有 unpack/ACK。
 CPU 的真实类 V↔D 测试已验证字节重建、重复刷新、预算归还、
-旧 V 拒绝与 v1 兼容。**尚无 v2 CloudLab RDMA A/B 结果**，不能
-声称线上已加速或建议默认开启。
+旧 V 拒绝与 v1 兼容。下面记录首轮 CloudLab A/B；v2 仍为
+实验性 opt-in，不能凭单轮结果建议默认开启。
+
+### 2026-09-25 三机首轮同代码 A/B
+
+在隔离端口 P=`clgpu020:30002`、V=`clgpu021:9100/9300/9301`、
+D=`clgpu019:30003`、Gateway=`clgpu021:8001` 上实测。P 使用已有
+TP1 服务；V 的两个 GPU shard 和 D TP1 均使用提交 `55d364a15`，
+Qwen2.5-7B-Instruct、`mlx5_0` 单 rail、`cagra-auto`、相同 D
+attention/刷新配置。只切换 D 的
+`--pvd-full-kv-fanin-rank-packed`；V 均提供 v1/v2 能力。客户端均以
+相同句子重复 213 次、输出 8 token；请求 ID 的 tokenization 使实际
+Prompt 分别为 1938/1937 token。两轮都是单请求、冷 Entry，顺序为
+v2 后 v1；不是多轮、随机化或并发统计实验。
+
+| 指标 | v2 rank-packed | v1 对照 |
+| --- | ---: | ---: |
+| 完整生成 | 8/8 | 8/8 |
+| TTFT | 8.33 s | 95.53 s |
+| 总耗时 | 158.30 s | 239.67 s |
+| 每个 V rank 写入字节 | 55,566,336 | 55,537,664 |
+| 每个 V rank 计划切片 | 1 | 108,472 |
+| 每个 V rank Mooncake submit | 1 | 14 |
+| 每个 V rank writer 生命周期 | 约 0.044 s | 约 55.13 s |
+
+两轮 V writer 均为 `terminal_success`；之后两 rank 的
+`used_inflight=0`、`unknown_transfers=0`、`quarantined=false`。
+v2 运行 ID `7c46db11d88d`，v1 运行 ID `e1c023d6ec34`。
+这些数据证明当前 TP2→TP1 场景中的切片/提交瓶颈显著下降，
+但单轮端到端差值不能作为稳定加速比；v2 仍耗时 158 s，
+长上下文生成的 D target forward/稀疏刷新前注意力是下一瓶颈。
+更大的 Prompt、并发、重复轮次、数值一致性和故障恢复仍须验收。
 
 ## 专用集合通信：Select–Pack–FanIn–Install
 
@@ -111,13 +141,15 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
    submit、transport status、D scatter、CAGRA、target forward、
    TTFT/TPOT/p95、显存峰值和 UNKNOWN。
 2. rank-packed dense fan-in 的计划器、字节级测试和显式协议协商
-   已实现；下一步在独立 sidecar 做真实 RDMA A/B。绝不在一次
-   不确定写入后自动 fallback。
+   已实现，独立 sidecar 首轮真实 RDMA A/B 如上；下一步增加重复
+   轮次与 1/2/4 并发，验证正确性和尾延迟。绝不在一次不确定写入后
+   自动 fallback。
 3. 扩展同一协议为 sparse Select–Pack–FanIn–Install，保持现有
    m-token 边界和全部等待语义；做故障注入和 1/2/4 并发验收。
 4. 最后做 V 与 D 的融合 kernel，分别证明真实 query 的召回、
    目标输出质量、V100S 数值正确性与端到端性能。双 rail 只有
    在 `mlx5_1` 物理链路恢复并完成 GPUDirect 预检后才加入。
 
-本文件是设计与验收合同。v2 是实验性 opt-in，尚未通过真实 GPU/RDMA
-性能验收；稀疏集合通信和融合 kernel 仍是后续工作。
+本文件是设计与验收合同。v2 是实验性 opt-in，虽已通过首轮真实
+GPU/RDMA A/B，尚未通过多轮及并发性能验收；稀疏集合通信和融合
+kernel 仍是后续工作。
