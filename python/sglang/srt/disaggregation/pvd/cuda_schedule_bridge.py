@@ -6,6 +6,9 @@ valid only inside run(), after CUDARankBatchExecutor proved reader completion.
 """
 
 import inspect
+import logging
+import os
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -16,6 +19,8 @@ from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
     CUDARuntimeBatchMember,
 )
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,11 @@ class CUDAScheduleBridge:
             self._validate_committed()
             return value
 
+        timeline_started = (
+            time.monotonic()
+            if os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1"
+            else None
+        )
         try:
             value = self.executor.run(
                 tuple(
@@ -216,6 +226,22 @@ class CUDAScheduleBridge:
             self.state = "completed"
             return value
         finally:
+            if timeline_started is not None:
+                ended = time.monotonic()
+                try:
+                    logger.info(
+                        "PVD timeline event=target_batch members=%d "
+                        "committed_tokens=%s t_start=%.6f t_end=%.6f seconds=%.6f "
+                        "state=%s",
+                        len(self.records),
+                        tuple(saved.committed_tokens for saved in self.records),
+                        timeline_started,
+                        ended,
+                        ended - timeline_started,
+                        self.state,
+                    )
+                except Exception:
+                    pass  # Diagnostics cannot change a committed batch result.
             if not self.executor._quarantined:
                 self._result = self._processor = None
 

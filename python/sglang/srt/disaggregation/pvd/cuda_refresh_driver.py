@@ -9,6 +9,7 @@ a registration drains its controller, not the caller's Req/KV allocator rows.
 import asyncio
 import logging
 import math
+import os
 import time
 from array import array
 from contextlib import contextmanager
@@ -23,6 +24,14 @@ from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequ
 from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
 
 logger = logging.getLogger(__name__)
+
+
+def _timeline(message, *args):
+    if os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1":
+        try:
+            logger.info(message, *args)
+        except Exception:
+            pass  # Diagnostics must never change refresh ownership.
 
 
 @dataclass
@@ -491,6 +500,14 @@ class CUDARefreshDriver:
                     record.error = exc
                     self._stop(record, "CUDA refresh failed")
                 else:
+                    if not record.ready:
+                        _timeline(
+                            "PVD timeline event=refresh_ready request_id=%s "
+                            "boundary=%s t=%.6f",
+                            record.req.rid,
+                            record.controller.pending_install_boundary,
+                            self._clock(),
+                        )
                     record.ready = not record.stopping
             if record.close_task is not None:
                 if record.close_task.done():
@@ -562,6 +579,13 @@ class CUDARefreshDriver:
                                     )
                                 except Exception:
                                     pass
+                                _timeline(
+                                    "PVD timeline event=installed request_id=%s "
+                                    "boundary=%d t=%.6f",
+                                    record.req.rid,
+                                    boundary,
+                                    self._clock(),
+                                )
                         elif (
                             record.refresh is None
                             and n >= boundary - state["lead_tokens"]
@@ -597,6 +621,14 @@ class CUDARefreshDriver:
             )
             try:
                 record.refresh = self._loop.create_task(coroutine)
+                _timeline(
+                    "PVD timeline event=refresh_scheduled request_id=%s "
+                    "boundary=%d committed_tokens=%d t=%.6f",
+                    record.req.rid,
+                    boundary,
+                    n,
+                    self._clock(),
+                )
             except BaseException:
                 coroutine.close()
                 self._release_capture(record)

@@ -3246,3 +3246,19 @@ These small samples overlap earlier opt-out results and do **not** justify
 enabling the switch by default. Search HTTP progress alone cannot hide the
 whole refresh within two Decode tokens; a stage-level concurrency timeline,
 multi-request and longer-Prompt validation remain necessary.
+
+新的可选诊断 `PVD_PROFILE_REFRESH_TIMELINE=1` 使用 D 进程的单调时钟
+记录 `refresh_scheduled`、`search_http` 的开始/结束、`target_batch`
+的开始/结束、`refresh_ready` 与 `installed`。这些日志只观察状态，
+不参与调度；日志处理失败不会使已提交的 Decode token 失效。
+用相同请求比较 `PVD_SEARCH_BACKGROUND_IO=0/1` 的时间区间，
+才能判断 HTTP 是否与目标模型批次实际重叠。单调时间戳只允许
+**同一 D 进程**内比较；重启后不跨进程相减。
+
+Optional `PVD_PROFILE_REFRESH_TIMELINE=1` records monotonic timestamps
+for `refresh_scheduled`, search-HTTP start/end, target-batch start/end,
+`refresh_ready` and `installed` within D. It does not participate in
+scheduling, and a diagnostic logging failure cannot invalidate a committed
+Decode token. Compare identical requests with background I/O off/on to
+establish actual interval overlap; never subtract monotonic timestamps
+across separate D processes.

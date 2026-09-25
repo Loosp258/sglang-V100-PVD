@@ -237,6 +237,11 @@ class PVDShardSearchClient:
                 self._background_inflight.discard(future)
 
     async def _post_json_on_loop(self, path, payload, *, encoded_payload=None):
+        timeline_started = (
+            time.monotonic()
+            if os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1"
+            else None
+        )
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         # Batched Q rows can be hundreds of KiB. Their wire bytes are already
@@ -284,6 +289,19 @@ class PVDShardSearchClient:
             raise SearchTransportError(
                 f"V shard search transport failed: {exc}"
             ) from exc
+        if timeline_started is not None:
+            ended = time.monotonic()
+            try:
+                logger.info(
+                    "PVD timeline event=search_http path=%s t_start=%.6f "
+                    "t_end=%.6f seconds=%.6f",
+                    path,
+                    timeline_started,
+                    ended,
+                    ended - timeline_started,
+                )
+            except Exception:
+                pass  # An HTTP result stays valid if diagnostics fail.
         return body
 
     async def search(

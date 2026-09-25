@@ -93,7 +93,10 @@ def test_pinned_batch_roundtrip_preserves_each_head_identity_and_order():
     asyncio.run(run())
 
 
-def test_background_search_http_progresses_while_owner_loop_is_stopped():
+def test_background_search_http_progresses_while_owner_loop_is_stopped(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv("PVD_PROFILE_REFRESH_TIMELINE", "1")
     _, _, identity, query, scope = fixture()
     received = threading.Event()
 
@@ -137,7 +140,13 @@ def test_background_search_http_progresses_while_owner_loop_is_stopped():
                 await client.close()
             assert client._session is None
 
-        asyncio.run(run())
+        with caplog.at_level(
+            logging.INFO, logger="sglang.srt.disaggregation.pvd.search_client"
+        ):
+            asyncio.run(run())
+        assert any(
+            "PVD timeline event=search_http" in row.message for row in caplog.records
+        )
     finally:
         io_loop.call_soon_threadsafe(io_loop.stop)
         io_thread.join(timeout=2)

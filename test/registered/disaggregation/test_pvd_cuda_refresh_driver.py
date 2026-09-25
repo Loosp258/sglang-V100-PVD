@@ -174,7 +174,28 @@ def test_observed_boundary_wait_is_reported_only_after_safe_install(
             r.message for r in caplog.records if "PVD boundary installed:" in r.message
         ]
         assert len(messages) == 1
-        assert "boundary=4 observed_to_install_seconds=0.500000" in messages[0]
+    assert "boundary=4 observed_to_install_seconds=0.500000" in messages[0]
+
+
+def test_opt_in_timeline_orders_refresh_schedule_ready_and_install(monkeypatch, caplog):
+    monkeypatch.setenv("PVD_PROFILE_REFRESH_TIMELINE", "1")
+    with synchronous(monkeypatch) as (driver, c, control, request, _):
+        request.output_ids.extend([3] * 4)
+        with caplog.at_level(
+            "INFO", logger="sglang.srt.disaggregation.pvd.cuda_refresh_driver"
+        ):
+            driver.poll()
+            pump(
+                driver,
+                c,
+                lambda: control.group.coordinator.snapshot()["installed_tokens"] == 4,
+            )
+    events = [
+        row.message.split("event=", 1)[1].split(" ", 1)[0]
+        for row in caplog.records
+        if "PVD timeline event=" in row.message
+    ]
+    assert events == ["refresh_scheduled", "refresh_ready", "installed"]
 
 
 def test_boundary_diagnostic_failure_cannot_undo_safe_install(monkeypatch):

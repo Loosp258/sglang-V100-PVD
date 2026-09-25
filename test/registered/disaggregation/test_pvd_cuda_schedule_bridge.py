@@ -149,6 +149,23 @@ def test_sampled_tokens_written_once_under_all_runtime_permits(monkeypatch):
             processor.process_batch_result_decode(batch, result)
 
 
+def test_opt_in_timeline_records_completed_target_batch(monkeypatch, caplog):
+    monkeypatch.setenv("PVD_PROFILE_REFRESH_TIMELINE", "1")
+    with case(monkeypatch) as (c, executor, driver, batch, processor, _, forward):
+        bridge = CUDAScheduleBridge(executor, driver, batch, pool_owner=c.owner)
+        with caplog.at_level(
+            "INFO", logger="sglang.srt.disaggregation.pvd.cuda_schedule_bridge"
+        ):
+            bridge.run(forward=forward, processor=processor)
+    spans = [
+        row.message
+        for row in caplog.records
+        if "PVD timeline event=target_batch" in row.message
+    ]
+    assert len(spans) == 1
+    assert "members=2" in spans[0] and "state=completed" in spans[0]
+
+
 def test_early_result_callback_cannot_retire_or_commit(monkeypatch):
     with case(monkeypatch) as (c, executor, driver, batch, processor, result, forward):
         bridge = CUDAScheduleBridge(executor, driver, batch, pool_owner=c.owner)
