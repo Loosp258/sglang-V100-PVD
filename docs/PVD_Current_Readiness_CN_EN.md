@@ -3385,3 +3385,23 @@ the small poll=1 sample. Warm capture/search/delivery remained roughly
 0.15/0.165/0.07–0.09 s. Do not make four turns the default: extra owner
 loop turns alone do not hide target capture/probe and delivery. Restore
 live D to the default single-turn poll.
+
+## 2026-09-26 V/D 局部融合的 GPU 正确性 / V/D local fusion GPU correctness
+
+默认关闭的 V Triton sparse gather/pack 在 CloudLab V100S 的独立 worktree
+`e898bf058` 中通过 6 种合成布局（rank 0/1 × FP16/BF16/FP32）的
+真实 CUDA 字节对照；默认关闭的 D 连续 bank 拷贝在 D 节点独立 worktree
+`ceca34201` 中通过 3 种 dtype 的初始与刷新 bank 字节对照。两者均在
+CUDA 栅栏后检查预算回收，没有切换正在运行的服务。详见
+[通信优化记录](PVD_Communication_Optimization_CN.md)。这些很小的
+smoke 测试没有运行 Mooncake、在线 Scheduler 或目标模型 forward；
+**尚无同配置端到端加速证据**，不能宣称“网络如本地”。
+
+The default-off V Triton sparse gather/pack passed real V100S byte checks
+for six synthetic layouts (rank 0/1 × FP16/BF16/FP32) in isolated V worktree
+`e898bf058`. The default-off D contiguous bank copy matched the old path
+for initial and refresh banks in three dtypes in isolated D worktree
+`ceca34201`. Both checked budget refund after CUDA completion and left
+running services untouched. These tiny smoke cases did not run Mooncake,
+the online Scheduler or a target-model forward. There is **no controlled
+end-to-end speedup evidence yet**, much less a “network as local” result.

@@ -348,8 +348,12 @@ K/V 字节布局。CUDA 完成同步成功后才退还元数据预算、注册 s
 CPU 字节规划对 FP16/BF16/FP32、两 V rank 和乱序 token ID 与旧路径
 逐字节一致；配置/预算/同步失败故障注入及旧 Delivery 定向回归为
 66 passed、8 个真实 CUDA 用例跳过。
-本地无 CUDA/Triton，且当前 CloudLab 节点缺少原推理环境，真实 kernel
-编译、GPU 字节一致性和三机 A/B 尚未验收。这里**只融合 V 的
+本地无 CUDA/Triton。随后在 CloudLab V 节点的独立 worktree
+`e898bf058` 中，使用原有 CUDA/Triton 环境执行
+`run_pvd_sparse_pack_gpu_smoke.py`；rank 0/1 × FP16/BF16/FP32 共 6
+种合成布局均与现有 CUDA 逐行拷贝逐字节一致，CUDA fence 后元数据预算
+归零。检查的 payload 只有 160/320 字节，**不是**真实 Entry 大小；
+三机服务尚未切换到该实现，也未完成在线 A/B。这里**只融合 V 的
 gather+pack**：CAGRA 搜索、跨网络控制消息与 RDMA 提交仍分离，
 不能称为完整的 `Select–Pack–FanIn–Install` 通算融合。
 
@@ -363,8 +367,11 @@ gather+pack**：CAGRA 搜索、跨网络控制消息与 RDMA 提交仍分离，
 保留可能仍被内核使用的拷贝。此优化仅合并 **aggregate→bank**
 这一段的 GPU 拷贝，尚未合并各 V receive 区→aggregate、install
 状态切换或 attention；不是端到端流水线收益证据。本地 CPU 策略替身
-已验证单次 clone、字节独立、间隙拒绝与生命周期；真实 CUDA/RDMA
-仍待三机环境验收。
+已验证单次 clone、字节独立、间隙拒绝与生命周期。在 CloudLab D
+节点独立 worktree `ceca34201` 中，
+`run_pvd_contiguous_bank_gpu_smoke.py` 对 FP16/BF16/FP32 的合成初始
+bank 和一次刷新边界，与旧路径逐字节一致，关闭后预算归零。
+这不是在线 Scheduler、Mooncake、attention 或端到端性能验收。
 
 1. 固定 A/B 负载：同模型、prompt 长度、输出长度、冷/热 Entry、
    1/2/4 并发和相同 D attention 配置；分开记录 pack、native
