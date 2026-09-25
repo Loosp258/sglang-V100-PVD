@@ -516,6 +516,95 @@ class BruteForceIndexBackend(IndexBackend):
             best_rows = torch.gather(candidate_rows, 1, order[:, :keep]).contiguous()
         return best_rows, best_scores
 
+    def grouped_search_footprint(
+        self, *, indexes: Sequence[BuiltIndex], num_queries: int, top_k: int
+    ) -> int:
+        """Conservative temporary charge for one uniform small-index group.
+
+        This is additional to the indexes' retained copies. It covers the
+        stacked K/Q copies, score and sort tensors, result slices, validation
+        and a generous allowance for the GEMM workspace. Callers reserve it
+        before calling :meth:`search_grouped`.
+        """
+        count, dim = self._group_shape(indexes, num_queries, top_k)
+        heads = len(indexes)
+        key_bytes = heads * count * dim * self._F32
+        query_bytes = heads * num_queries * dim * self._F32
+        score_bytes = heads * num_queries * count * self._F32
+        result_bytes = heads * num_queries * top_k * (self._F32 + self._I64)
+        return 4 * key_bytes + 8 * query_bytes + 32 * score_bytes + 8 * result_bytes
+
+    def _group_shape(
+        self, indexes: Sequence[BuiltIndex], num_queries: int, top_k: int
+    ) -> Tuple[int, int]:
+        if not 2 <= len(indexes) <= 32:
+            raise IndexSearchError("grouped exact search requires 2..32 indexes")
+        _require_positive_int("num_queries", num_queries)
+        _require_positive_int("top_k", top_k)
+        first = indexes[0]
+        if not isinstance(first, BuiltIndex):
+            raise IndexSearchError("a built index is required")
+        count, dim = first.count, first.dim
+        if first.metric != "ip" or count > min(self._chunk_rows, 128):
+            raise IndexSearchError("grouped exact search supports small IP indexes")
+        if top_k > count:
+            raise IndexSearchError("top_k exceeds indexed vector count")
+        for index in indexes:
+            if (
+                not isinstance(index, BuiltIndex)
+                or index.count != count
+                or index.dim != dim
+                or index.metric != first.metric
+                or index.vector_space != first.vector_space
+                or not isinstance(index.handle, torch.Tensor)
+                or not same_device(index.handle.device, self.device)
+            ):
+                raise IndexSearchError("grouped exact indexes must be uniform")
+        return count, dim
+
+    def search_grouped(
+        self,
+        indexes: Sequence[BuiltIndex],
+        queries: Sequence[torch.Tensor],
+        *,
+        top_k: int,
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
+        """One stable batched IP search across separate layer/head indexes.
+
+        This does not own indexes or synchronize CUDA. The manager must hold
+        leases and complete the operation before it releases its reservation.
+        """
+        if len(indexes) != len(queries):
+            raise IndexSearchError("grouped exact queries must match indexes")
+        if (
+            not queries
+            or not isinstance(queries[0], torch.Tensor)
+            or queries[0].ndim != 2
+        ):
+            raise IndexSearchError("grouped exact queries must be 2-D tensors")
+        _, dim = self._group_shape(indexes, int(queries[0].shape[0]), top_k)
+        num_queries = int(queries[0].shape[0])
+        for query in queries:
+            if (
+                not isinstance(query, torch.Tensor)
+                or query.ndim != 2
+                or tuple(query.shape) != (num_queries, dim)
+                or not same_device(query.device, self.device)
+            ):
+                raise IndexSearchError("grouped exact queries must be uniform")
+        stacked_q = torch.stack(
+            [query.detach().to(dtype=torch.float32) for query in queries]
+        )
+        if not torch.isfinite(stacked_q).all():
+            raise IndexSearchError("queries contains non-finite values")
+        stacked_k = torch.stack([index.handle for index in indexes])
+        scores = torch.bmm(stacked_q, stacked_k.transpose(1, 2))
+        ordered, rows = torch.sort(scores, dim=-1, descending=True, stable=True)
+        return tuple(
+            (rows[i, :, :top_k].contiguous(), ordered[i, :, :top_k].contiguous())
+            for i in range(len(indexes))
+        )
+
 
 def select(
     backend: IndexBackend,

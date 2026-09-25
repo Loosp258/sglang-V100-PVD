@@ -521,6 +521,39 @@ class CagraAutoIndexBackend(IndexBackend):
             self.cagra._check()
             return self._owner(index).search(index, queries, top_k=top_k)
 
+    def supports_grouped_exact(self, indexes, *, num_queries, top_k):
+        """Only uniform, small exact indexes may share a batched GEMM."""
+        with self._lock:
+            self.cagra._check()
+            if not indexes or any(
+                self._owner(index) is not self.exact for index in indexes
+            ):
+                return False
+            try:
+                self.exact._group_shape(indexes, num_queries, top_k)
+            except IndexSearchError:
+                return False
+            return True
+
+    def grouped_exact_footprint(self, indexes, *, num_queries, top_k):
+        with self._lock:
+            if not self.supports_grouped_exact(
+                indexes, num_queries=num_queries, top_k=top_k
+            ):
+                raise IndexSearchError("indexes are not a uniform exact group")
+            return self.exact.grouped_search_footprint(
+                indexes=indexes, num_queries=num_queries, top_k=top_k
+            )
+
+    def search_grouped_exact(self, indexes, queries, *, top_k):
+        with self._lock:
+            self.cagra._check()
+            if not queries or not self.supports_grouped_exact(
+                indexes, num_queries=int(queries[0].shape[0]), top_k=top_k
+            ):
+                raise IndexSearchError("indexes are not a uniform exact group")
+            return self.exact.search_grouped(indexes, queries, top_k=top_k)
+
     def dispose(self, index):
         with self._lock:
             self.cagra._check()

@@ -28,6 +28,80 @@ def backend():
     return BruteForceIndexBackend()
 
 
+def test_grouped_small_ip_search_matches_individual_searches():
+    candidate = backend()
+    rng = torch.Generator().manual_seed(47)
+    indexes = tuple(
+        candidate.build(
+            torch.randn(17, 8, generator=rng), vector_space=SPACE, metric="ip"
+        )
+        for _ in range(24)
+    )
+    queries = tuple(torch.randn(7, 8, generator=rng) for _ in indexes)
+    assert candidate.grouped_search_footprint(
+        indexes=indexes, num_queries=7, top_k=4
+    ) > 0
+    grouped = candidate.search_grouped(indexes, queries, top_k=4)
+    assert len(grouped) == len(indexes)
+    for index, query, (rows, scores) in zip(indexes, queries, grouped):
+        expected_rows, expected_scores = candidate.search(index, query, top_k=4)
+        assert torch.equal(rows, expected_rows)
+        torch.testing.assert_close(scores, expected_scores, atol=1e-5, rtol=1e-5)
+
+
+def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
+    candidate = backend()
+    vectors = torch.ones(4, 3)
+    indexes = tuple(
+        candidate.build(vectors, vector_space=SPACE, metric="ip") for _ in range(2)
+    )
+    results = candidate.search_grouped(
+        indexes, (torch.ones(1, 3), torch.ones(1, 3)), top_k=3
+    )
+    assert [rows.tolist() for rows, _ in results] == [[[0, 1, 2]]] * 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
+def test_grouped_small_ip_search_matches_individual_cuda():
+    candidate = BruteForceIndexBackend(device="cuda:0")
+    rng = torch.Generator().manual_seed(47)
+    indexes = tuple(
+        candidate.build(
+            torch.randn(17, 128, generator=rng).to("cuda:0"),
+            vector_space=SPACE,
+            metric="ip",
+        )
+        for _ in range(24)
+    )
+    queries = tuple(
+        torch.randn(7, 128, generator=rng).to("cuda:0") for _ in indexes
+    )
+    grouped = candidate.search_grouped(indexes, queries, top_k=4)
+    for index, query, (rows, scores) in zip(indexes, queries, grouped):
+        expected_rows, expected_scores = candidate.search(index, query, top_k=4)
+        assert torch.equal(rows, expected_rows)
+        torch.testing.assert_close(scores, expected_scores, atol=1e-4, rtol=1e-5)
+
+
+@pytest.mark.parametrize("variant", ["l2", "rows", "query_count", "nonfinite"])
+def test_grouped_exact_refuses_incompatible_inputs(variant):
+    candidate = backend()
+    metric = "l2" if variant == "l2" else "ip"
+    second_rows = 5 if variant == "rows" else 4
+    indexes = (
+        candidate.build(torch.eye(4), vector_space=SPACE, metric=metric),
+        candidate.build(
+            torch.ones(second_rows, 4), vector_space=SPACE, metric=metric
+        ),
+    )
+    first = torch.ones(2, 4)
+    second = torch.ones(1 if variant == "query_count" else 2, 4)
+    if variant == "nonfinite":
+        second[0, 0] = float("nan")
+    with pytest.raises(IndexSearchError):
+        candidate.search_grouped(indexes, (first, second), top_k=1)
+
+
 def build(vectors=None, metric="ip"):
     vectors = torch.eye(4) if vectors is None else vectors
     return backend().build(vectors, vector_space=SPACE, metric=metric)

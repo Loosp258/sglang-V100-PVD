@@ -30,6 +30,27 @@ def test_short_prompt_uses_exact_device_path_with_actual_footprints():
         auto.search(index, vectors[:1], top_k=1)
 
 
+def test_auto_groups_only_live_uniform_exact_indexes():
+    native = backend(intermediate_degree=2)
+    auto = CagraAutoIndexBackend(native)
+    first = auto.build(torch.eye(2), vector_space="model", metric="ip")
+    second = auto.build(torch.eye(2), vector_space="model", metric="ip")
+    indexes = (first, second)
+    assert auto.supports_grouped_exact(indexes, num_queries=1, top_k=1)
+    assert auto.grouped_exact_footprint(indexes, num_queries=1, top_k=1) > 0
+    result = auto.search_grouped_exact(
+        indexes, (torch.tensor([[1.0, 0.0]]), torch.tensor([[0.0, 1.0]])), top_k=1
+    )
+    assert [rows.tolist() for rows, _ in result] == [[[0]], [[1]]]
+    graph = auto.build(torch.ones(3, 2), vector_space="model", metric="ip")
+    assert not auto.supports_grouped_exact((first, graph), num_queries=1, top_k=1)
+    auto.dispose(graph)
+    auto.dispose(first)
+    with pytest.raises(IndexSearchError, match="disposed"):
+        auto.supports_grouped_exact(indexes, num_queries=1, top_k=1)
+    auto.dispose(second)
+
+
 def test_long_prompt_keeps_the_native_cap_and_native_lifecycle():
     native = backend()
     auto = CagraAutoIndexBackend(native)
