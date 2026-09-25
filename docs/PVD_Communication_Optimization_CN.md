@@ -92,10 +92,12 @@ v2 运行 ID `7c46db11d88d`，v1 运行 ID `e1c023d6ec34`。
 恢复 v2 后另做了单轮 4 客户端、各 55 次句子重复的排队测试
 （`run_id=e6509bfc8daf`）：实际每请求 513-token Prompt，4×8 token
 全部完成，总墙钟 181.17 s、合计 0.177 token/s、p95 TTFT 47.23 s。
-两 V rank 随后仍为零 in-flight、零 UNKNOWN、未隔离。该 D 实例的
-最终 token 容量只允许同时运行 1 个请求，所以这里验证的是并发到达时
-的排队、Delivery 生命周期和释放，不是 4 路同时 Decode 的扩展性；
-也不能把它与历史 v1 单轮的 0.142 token/s 当作严格同条件加速比。
+两 V rank 随后仍为零 in-flight、零 UNKNOWN、未隔离。D 目标模型的
+`max_num_reqs=4`，draft 小模型的 `max_num_reqs=1`；不能把后者
+误认为整个 Decode 的并发上限。这轮验证了 4 客户端同时到达下的
+完成情况、Delivery 生命周期和释放，但尚无逐步调度 trace，不能
+据此证明 4 路目标前向同时执行或并行扩展性；也不能把它与历史 v1
+单轮的 0.142 token/s 当作严格同条件加速比。
 
 ## 专用集合通信：Select–Pack–FanIn–Install
 
@@ -150,8 +152,8 @@ MegaMoE 的可借鉴点是合并 dispatch、计算和 combine 之间的
    TTFT/TPOT/p95、显存峰值和 UNKNOWN。
 2. rank-packed dense fan-in 的计划器、字节级测试和显式协议协商
    已实现，独立 sidecar 首轮真实 RDMA A/B 和 v2 四客户端排队测试
-   如上；下一步增加重复轮次、严格同条件并发 A/B 与真正多 running
-   request 的容量，验证正确性和尾延迟。绝不在一次不确定写入后自动
+   如上；下一步增加重复轮次、严格同条件并发 A/B 与实际多 running
+   request 的调度 trace，验证正确性和尾延迟。绝不在一次不确定写入后自动
    fallback。
 3. 扩展同一协议为 sparse Select–Pack–FanIn–Install，保持现有
    m-token 边界和全部等待语义；做故障注入和 1/2/4 并发验收。
