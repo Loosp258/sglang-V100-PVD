@@ -1,5 +1,7 @@
 """CUDA ownership policy with explicit CPU doubles; real CUDA tests stay separate."""
 
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -150,6 +152,7 @@ def test_cuda_store_without_opt_in_still_refuses_before_authorization():
         store.reserve_delivery(entry.key, "disabled", target.descriptor)
     assert not store.entries[entry.key].deliveries
     assert store.snapshot()["sparse_packing_mode"] == "cpu_reference_only"
+    assert store.snapshot()["sparse_pack_kernel"] == "torch"
     store.close()
     store.transfer_engine.release_memory(target)
 
@@ -183,6 +186,107 @@ def test_cuda_packing_flag_is_opt_in_and_explicitly_not_d_activation(caplog):
     )
     server._validate_args(configured)
     assert "D predictive serving is not enabled" in caplog.text
+
+
+def test_triton_sparse_packing_flag_requires_existing_cuda_path():
+    assert not args().experimental_triton_sparse_packing
+    configured = args("--experimental-triton-sparse-packing")
+    with pytest.raises(ValueError, match="requires CUDA sparse packing"):
+        server._validate_args(configured)
+
+
+def test_triton_sparse_packing_option_reaches_both_v_shards(monkeypatch):
+    configured = args(
+        "--experimental-cuda-sparse-packing", "--experimental-triton-sparse-packing"
+    )
+    configured.transfer_backend = "fake"  # constructor wiring only
+    monkeypatch.setattr(server, "_build_prompt_index", lambda _: object())
+    monkeypatch.setattr(server, "VectorKVStore", lambda **kw: SimpleNamespace(**kw))
+    for rank in (0, 1):
+        store, _ = server._create_store(
+            configured, rank=rank, local_rank=rank, rails=["mlx5_2", "mlx5_3"]
+        )
+        assert store.fused_cuda_sparse_packing is True
+
+
+@pytest.mark.parametrize("unknown_completion", [False, True])
+def test_fused_pack_metadata_budget_is_held_until_cuda_fence(
+    monkeypatch, unknown_completion
+):
+    store, entry, manifest, budget, _, delivery, _ = cuda_policy(monkeypatch)
+    store.fused_cuda_sparse_packing = True
+    assert store.snapshot()["sparse_pack_kernel"] == "triton"
+    events = []
+    module = types.ModuleType("sglang.srt.disaggregation.pvd.triton_sparse_pack")
+
+    class FakeWorkspace:
+        def __init__(self, selected, *, budget, owner, **unused):
+            self.manifest_fingerprint = selected.fingerprint
+            self.device = torch.device("cpu")  # fake policy, real CPU bytes
+            self.budget, self.owner = budget, owner
+            budget.reserve(owner, 64, 0)
+            events.append("reserve")
+
+        def release_after_fence(self):
+            events.append("refund")
+            self.budget.release(self.owner)
+
+    def launch(source, destination, workspace, **kwargs):
+        assert delivery.packing_workspace is workspace
+        assert budget.snapshot()["used_staging_bytes"] == manifest.nbytes + 64
+        destination.fill_(27)
+        events.append("launch")
+
+    module.SparsePackWorkspace = FakeWorkspace
+    module.launch_sparse_pack = launch
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    def synchronize(device):
+        events.append("sync")
+        assert device == torch.device("cuda:1")
+        if unknown_completion:
+            raise RuntimeError("device completion unknown")
+
+    monkeypatch.setattr(torch.cuda, "synchronize", synchronize)
+    store.start_delivery(entry.key, delivery.delivery_id)
+    if unknown_completion:
+        assert delivery.packing_workspace is not None
+        assert "refund" not in events
+        assert budget.snapshot()["used_staging_bytes"] == manifest.nbytes + 64
+        assert store.snapshot()["isolated_reason"] is not None
+    else:
+        assert delivery.packing_workspace is None
+        assert events[:4] == ["reserve", "launch", "sync", "refund"]
+        assert budget.snapshot()["used_staging_bytes"] == manifest.nbytes
+        engine = store.transfer_engine
+        engine.finish(delivery.transfer_handle)
+        store.progress_transfers()
+        store.ack_delivery(entry.key, delivery.delivery_id)
+        assert budget.snapshot()["used_staging_bytes"] == 0
+        store.close()
+
+
+def test_unknown_metadata_upload_isolates_v_even_if_later_sync_succeeds(monkeypatch):
+    from sglang.srt.disaggregation.pvd.sparse_pack_plan import (
+        SparsePackCompletionUnknown,
+    )
+
+    store, entry, manifest, budget, _, delivery, _ = cuda_policy(monkeypatch)
+    store.fused_cuda_sparse_packing = True
+    module = types.ModuleType("sglang.srt.disaggregation.pvd.triton_sparse_pack")
+
+    def failed_workspace(selected, *, budget, owner, **unused):
+        budget.reserve(owner, 64, 0)
+        raise SparsePackCompletionUnknown("metadata upload completion unknown")
+
+    module.SparsePackWorkspace = failed_workspace
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
+    store.start_delivery(entry.key, delivery.delivery_id)
+    assert delivery.local_terminal is TransportState.UNKNOWN
+    assert store.snapshot()["isolated_reason"] is not None
+    assert budget.snapshot()["used_staging_bytes"] == manifest.nbytes + 64
+    assert delivery.transfer_handle is None
 
 
 @pytest.mark.parametrize("missing", ["space", "budget", "cuda"])

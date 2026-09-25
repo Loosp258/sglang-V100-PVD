@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib.util
 import logging
 import os
 import signal
@@ -359,6 +360,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Requires Mooncake, retrieval index and budgets. Does not enable D sparse "
         "attention/predictive serving or claim GPU/RDMA validation or overlap.",
     )
+    parser.add_argument(
+        "--experimental-triton-sparse-packing",
+        action="store_true",
+        help="V-only opt-in: gather selected Prompt K/V into the owned sparse "
+        "staging buffer with one Triton kernel. Requires CUDA sparse packing, "
+        "a separately budgeted metadata workspace, and a CUDA fence before PUT.",
+    )
     parser.add_argument("--delivery-timeout-secs", type=float, default=300.0)
     parser.add_argument("--rank1-startup-timeout-secs", type=float, default=300.0)
     parser.add_argument("--reaper-interval-secs", type=float, default=1.0)
@@ -466,6 +474,16 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
             "Experimental V CUDA sparse packing uses blocking completion before PUT; "
             "D predictive serving is not enabled and GPU/RDMA validation is pending"
         )
+    if getattr(args, "experimental_triton_sparse_packing", False) and not getattr(
+        args, "experimental_cuda_sparse_packing", False
+    ):
+        raise ValueError(
+            "experimental Triton sparse packing requires CUDA sparse packing"
+        )
+    if getattr(args, "experimental_triton_sparse_packing", False) and (
+        importlib.util.find_spec("triton") is None
+    ):
+        raise ValueError("experimental Triton sparse packing requires Triton")
     if args.reaper_interval_secs <= 0:
         raise ValueError("--reaper-interval-secs must be positive")
     if args.rank1_startup_timeout_secs <= 0:
@@ -736,6 +754,9 @@ def _create_store(
         full_kv_fanin_native_batch=getattr(args, "full_kv_fanin_native_batch", False),
         allow_cuda_sparse_packing=getattr(
             args, "experimental_cuda_sparse_packing", False
+        ),
+        fused_cuda_sparse_packing=getattr(
+            args, "experimental_triton_sparse_packing", False
         ),
     )
     return store, preflight

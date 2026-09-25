@@ -333,6 +333,26 @@ storage 拒绝、旧路径兼容及完成未知时的资源保留。已授权 Cl
 故**尚未运行 Triton 编译、真实 CUDA 字节一致性或端到端 A/B**。
 这个开关只能视为实验性代码，不能计入性能收益。
 
+### V 稀疏 KV gather/pack 单 kernel 实验（尚未完成 GPU 验收）
+
+新增默认关闭的 V 参数 `--experimental-triton-sparse-packing`，要求原有
+`--experimental-cuda-sparse-packing`、Mooncake、索引和传输预算同时启用。
+V 在锁定 Entry/index 版本后，把已选 token 的逻辑 ID 和每组
+`(layer, KV-head, token 范围, destination offset)` 制成两个有界的
+GPU 元数据张量；**先为这些张量单独预留预算**，再用一个 Triton
+kernel 从完整 Prompt KV 直接 gather 到 Delivery 最终 staging 的配对
+K/V 字节布局。CUDA 完成同步成功后才退还元数据预算、注册 staging
+并提交 Mooncake PUT；同步状态不确定时保留元数据、Entry/index lease
+及 staging 并隔离 V。原逐行 `copy_` 仍为默认和字节对照基线。
+
+CPU 字节规划对 FP16/BF16/FP32、两 V rank 和乱序 token ID 与旧路径
+逐字节一致；配置/预算/同步失败故障注入及旧 Delivery 定向回归为
+66 passed、8 个真实 CUDA 用例跳过。
+本地无 CUDA/Triton，且当前 CloudLab 节点缺少原推理环境，真实 kernel
+编译、GPU 字节一致性和三机 A/B 尚未验收。这里**只融合 V 的
+gather+pack**：CAGRA 搜索、跨网络控制消息与 RDMA 提交仍分离，
+不能称为完整的 `Select–Pack–FanIn–Install` 通算融合。
+
 1. 固定 A/B 负载：同模型、prompt 长度、输出长度、冷/热 Entry、
    1/2/4 并发和相同 D attention 配置；分开记录 pack、native
    submit、transport status、D scatter、CAGRA、target forward、

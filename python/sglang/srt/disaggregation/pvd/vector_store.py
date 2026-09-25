@@ -47,6 +47,7 @@ from sglang.srt.disaggregation.pvd.sparse_delivery import (
     SPARSE_DELIVERY_KEY,
     SparseDeliveryManifest,
 )
+from sglang.srt.disaggregation.pvd.sparse_pack_plan import SparsePackCompletionUnknown
 from sglang.srt.disaggregation.pvd.transfer_authorization import WriteAuthorization
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     MemorySlice,
@@ -186,6 +187,7 @@ class DeliveryShardRecord:
     sparse_manifest: Optional[SparseDeliveryManifest] = None
     # Retained on unknown CUDA completion; cancellation must not drop the lease.
     packing_index_lease: Optional[ExitStack] = field(default=None, repr=False)
+    packing_workspace: Optional[object] = field(default=None, repr=False)
     fanin_writer: Optional[FullKVFanInWriter] = field(default=None, repr=False)
 
     def to_dict(self):
@@ -201,6 +203,7 @@ class DeliveryShardRecord:
                 self.sparse_manifest.fingerprint if self.sparse_manifest else None
             ),
             "packing_index_lease_held": self.packing_index_lease is not None,
+            "packing_workspace_held": self.packing_workspace is not None,
             "write_identity": (
                 self.authorization.identity.to_dict() if self.authorization else None
             ),
@@ -316,6 +319,7 @@ class VectorKVStore:
         max_legacy_absent_fences: int = 4096,
         max_absent_write_fences: int = 4096,
         allow_cuda_sparse_packing: bool = False,
+        fused_cuda_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -353,6 +357,10 @@ class VectorKVStore:
             raise ValueError("max_absent_write_fences must be a positive integer")
         if type(allow_cuda_sparse_packing) is not bool:
             raise ValueError("allow_cuda_sparse_packing must be a boolean")
+        if type(fused_cuda_sparse_packing) is not bool or (
+            fused_cuda_sparse_packing and not allow_cuda_sparse_packing
+        ):
+            raise ValueError("fused CUDA packing requires CUDA sparse packing")
         if allow_cuda_sparse_packing and (
             not device.startswith("cuda")
             or prompt_index is None
@@ -393,6 +401,7 @@ class VectorKVStore:
         self.prompt_index = prompt_index
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
+        self.fused_cuda_sparse_packing = fused_cuda_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1214,7 +1223,22 @@ class VectorKVStore:
         lease = ExitStack()
         descriptor = lease.enter_context(self.prompt_index.pin_selection(manifest))
         delivery.packing_index_lease = lease
+        workspace = None
         try:
+            if self.fused_cuda_sparse_packing:
+                from sglang.srt.disaggregation.pvd.triton_sparse_pack import (
+                    SparsePackWorkspace,
+                )
+
+                workspace = SparsePackWorkspace(
+                    manifest,
+                    shard=entry.manifest,
+                    layout=entry.layout,
+                    device=self.pool.device,
+                    budget=budget,
+                    owner=f"v-sparse-meta:{delivery.owner}",
+                )
+                delivery.packing_workspace = workspace
             copy_sparse_kv_into(
                 source,
                 staging,
@@ -1225,7 +1249,13 @@ class VectorKVStore:
                 index_version=descriptor.index_version,
                 id_mapping_version=descriptor.id_mapping_version,
                 allow_cuda=self.allow_cuda_sparse_packing,
+                fused_workspace=workspace,
             )
+        except SparsePackCompletionUnknown:
+            with self._lock:
+                delivery.local_terminal = TransportState.UNKNOWN
+                self._isolated_reason = "sparse metadata upload completion unknown"
+            raise
         finally:
             # Keep Entry, staging and index leases through both successful and
             # partly failed copies. If completion is unknown, retain everything
@@ -1238,6 +1268,9 @@ class VectorKVStore:
                     delivery.local_terminal = TransportState.UNKNOWN
                     self._isolated_reason = "sparse CUDA packing completion unknown"
                 raise
+            if workspace is not None:
+                workspace.release_after_fence()
+                delivery.packing_workspace = None
             lease.close()
             delivery.packing_index_lease = None
         try:
@@ -1779,6 +1812,9 @@ class VectorKVStore:
                     "cuda_synchronous_experimental"
                     if self.allow_cuda_sparse_packing
                     else "cpu_reference_only"
+                ),
+                "sparse_pack_kernel": (
+                    "triton" if self.fused_cuda_sparse_packing else "torch"
                 ),
                 "page_bytes": self.page_bytes,
                 "worker_epoch": self.worker_epoch,

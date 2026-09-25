@@ -24,6 +24,7 @@ def copy_sparse_kv_into(
     index_version,
     id_mapping_version,
     allow_cuda=False,
+    fused_workspace=None,
 ):
     """Validate every group BEFORE writing any bytes, then copy K and V rows.
 
@@ -33,6 +34,72 @@ def copy_sparse_kv_into(
     Even non-overlapping slices of the same allocation are refused, because the
     authoritative Entry must never double as output staging.
     """
+    outputs, source_groups = _validated_sparse_copy(
+        packed,
+        destination,
+        manifest=manifest,
+        layout=layout,
+        shard=shard,
+        entry_transfer_id=entry_transfer_id,
+        index_version=index_version,
+        id_mapping_version=id_mapping_version,
+        allow_cuda=allow_cuda,
+    )
+    try:
+        if fused_workspace is not None:
+            from sglang.srt.disaggregation.pvd.triton_sparse_pack import (
+                SparsePackWorkspace,
+                launch_sparse_pack,
+            )
+
+            if (
+                allow_cuda is not True
+                or not isinstance(fused_workspace, SparsePackWorkspace)
+                or fused_workspace.manifest_fingerprint != manifest.fingerprint
+                or fused_workspace.device != packed.device
+            ):
+                raise SparsePayloadError(
+                    "fused packing requires a matching CUDA workspace"
+                )
+            launch_sparse_pack(
+                packed,
+                destination,
+                fused_workspace,
+                rows=shard.page_count * layout.page_size,
+                heads=layout.kv_heads_per_rank,
+                layers=shard.layer_end - shard.layer_start,
+                head_dim=layout.head_dim,
+                element_bytes=destination.numel()
+                // (
+                    2 * layout.head_dim * sum(len(s.token_ids) for s in manifest.specs)
+                ),
+            )
+            return
+        with torch.no_grad():
+            for payload, (keys, values, head) in zip(
+                outputs, source_groups, strict=True
+            ):
+                for kind, source in enumerate((keys, values)):
+                    for row, token in enumerate(payload.spec.token_ids):
+                        payload.tensor[kind, row].copy_(source[token, head])
+    finally:
+        for payload in outputs:
+            payload.close()  # drop local views, NEVER retire caller's allocation
+
+
+def _validated_sparse_copy(
+    packed,
+    destination,
+    *,
+    manifest,
+    layout,
+    shard,
+    entry_transfer_id,
+    index_version,
+    id_mapping_version,
+    allow_cuda,
+):
+    """Build every source/destination view before either implementation writes."""
     if not isinstance(manifest, SparseDeliveryManifest) or type(allow_cuda) is not bool:
         raise SparsePayloadError("explicit manifest and boolean CUDA opt-in required")
     views, dtype, valid_tokens = _views(packed, layout, shard, allow_cuda=allow_cuda)
@@ -77,14 +144,4 @@ def copy_sparse_kv_into(
         raise SparsePayloadError(
             "destination cannot form aligned typed KV views"
         ) from exc
-    try:
-        with torch.no_grad():
-            for payload, (keys, values, head) in zip(
-                outputs, source_groups, strict=True
-            ):
-                for kind, source in enumerate((keys, values)):
-                    for row, token in enumerate(payload.spec.token_ids):
-                        payload.tensor[kind, row].copy_(source[token, head])
-    finally:
-        for payload in outputs:
-            payload.close()  # drop local views, NEVER retire caller's allocation
+    return outputs, source_groups
