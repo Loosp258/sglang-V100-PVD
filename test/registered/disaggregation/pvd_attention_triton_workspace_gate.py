@@ -13,6 +13,7 @@ from sglang.srt.disaggregation.pvd.cuda_sparse_attention import (
     scratch_elements,
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
+from sglang.srt.disaggregation.pvd.sparse_payload import SparsePayloadError
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransferBudget,
@@ -112,6 +113,78 @@ def run() -> dict:
     workspace.close()
     assert budget.snapshot()["used_staging_bytes"] == 0
 
+    # A real-model-style shadow call executes both kernels under one lease.
+    shadow_budget = TransferBudget(1 << 20, 4)
+    shadow_workspace = CUDASparseAttentionWorkspace(
+        device=device,
+        dtype=torch.float16,
+        head_dim=128,
+        chunk_tokens=64,
+        budget=shadow_budget,
+        attention_impl="triton_shadow",
+        total_kv_heads=4,
+        num_query_heads=28,
+    )
+    shadow_output = torch.empty_like(q)
+    shadow_guard = ResourceGuard(
+        AttentionBuffers(q, generated_k, generated_v, shadow_output, rows),
+        lambda: None,
+    )
+    shadow_workspace.execute(
+        Peer(),
+        decode_tokens=len(rows) - 1,
+        layer=0,
+        mapping=QueryHeadMapping(28, 4),
+        resources=shadow_guard,
+        scale=1 / math.sqrt(128),
+    )
+    shadow_snapshot = shadow_workspace.snapshot()
+    assert shadow_snapshot["shadow_comparisons"] == 1
+    assert shadow_snapshot["shadow_max_abs_error"] <= 0.025
+    torch.testing.assert_close(shadow_output, expected, atol=0.025, rtol=0.002)
+    shadow_guard.request_release()
+    shadow_workspace.close()
+    assert shadow_budget.snapshot()["used_staging_bytes"] == 0
+
+    # A deliberately corrupted Triton result must quarantine instead of
+    # silently allowing later forwards to use an unverified implementation.
+    bad_budget = TransferBudget(1 << 20, 4)
+    bad_workspace = CUDASparseAttentionWorkspace(
+        device=device,
+        dtype=torch.float16,
+        head_dim=128,
+        chunk_tokens=64,
+        budget=bad_budget,
+        attention_impl="triton_shadow",
+        total_kv_heads=4,
+        num_query_heads=28,
+    )
+    bad_released = []
+    bad_guard = ResourceGuard(
+        AttentionBuffers(q, generated_k, generated_v, torch.empty_like(q), rows),
+        lambda: bad_released.append(True),
+    )
+    bad_workspace._triton_execute = lambda *args, **kwargs: args[5].zero_()
+    try:
+        bad_workspace.execute(
+            Peer(),
+            decode_tokens=len(rows) - 1,
+            layer=0,
+            mapping=QueryHeadMapping(28, 4),
+            resources=bad_guard,
+            scale=1 / math.sqrt(128),
+        )
+    except SparsePayloadError as exc:
+        assert "numerical disagreement" in str(exc)
+    else:
+        raise AssertionError("corrupted Triton output must fail closed")
+    bad_guard.request_release()
+    assert bad_released == []
+    assert (
+        bad_workspace.snapshot()["quarantine"] == "Triton/online numerical disagreement"
+    )
+    assert bad_workspace.snapshot()["resources_held"]
+
     # A capacity refusal must happen before either device table is allocated.
     tight_budget = TransferBudget(baseline_bytes + table_bytes - 1, 4)
     tight_workspace = CUDASparseAttentionWorkspace(
@@ -194,6 +267,9 @@ def run() -> dict:
         "budget_refunded": True,
         "capacity_refused_before_allocation": True,
         "unknown_completion_quarantined": True,
+        "shadow_comparisons": shadow_snapshot["shadow_comparisons"],
+        "shadow_max_abs_error": shadow_snapshot["shadow_max_abs_error"],
+        "mismatch_quarantined": True,
     }
 
 

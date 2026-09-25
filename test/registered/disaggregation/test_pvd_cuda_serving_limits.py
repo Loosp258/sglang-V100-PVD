@@ -162,11 +162,27 @@ def test_v100s_triton_fixture_changes_only_attention_implementation():
     assert limits.attention_impl == "triton_grouped"
 
 
+def test_v100s_triton_shadow_fixture_changes_only_attention_implementation():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_triton_long.json").read_text()
+    )
+    candidate_path = directory / "pvd_qwen_v100s_serving_limits_triton_shadow_long.json"
+    assert json.loads(candidate_path.read_text()) == {
+        **baseline,
+        "attention_impl": "triton_shadow",
+    }
+    limits = load_cuda_serving_limits(
+        candidate_path, refresh_interval=4, predict_tokens=2
+    )
+    assert limits.attention_impl == "triton_shadow"
+
+
 def test_triton_grouped_rejects_unsupported_tile(tmp_path):
     config = valid_config()
     config["attention_impl"] = "triton_grouped"
     config["attention_chunk_tokens"] = 7
-    with pytest.raises(ValueError, match="triton_grouped requires tile"):
+    with pytest.raises(ValueError, match="Triton attention requires tile"):
         load(write_config(tmp_path, config))
 
 

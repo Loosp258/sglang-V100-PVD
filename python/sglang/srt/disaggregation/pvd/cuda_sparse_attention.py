@@ -212,9 +212,14 @@ class CUDASparseAttentionWorkspace:
         if not isinstance(budget, TransferBudget) or not torch.cuda.is_available():
             raise SparsePayloadError("CUDA and explicit attention budget required")
         self.dtype, self.head_dim, self.chunk_tokens = dtype, head_dim, chunk_tokens
-        if attention_impl not in ("online", "sdpa_bounded", "triton_grouped"):
+        if attention_impl not in (
+            "online",
+            "sdpa_bounded",
+            "triton_grouped",
+            "triton_shadow",
+        ):
             raise SparsePayloadError("unknown attention implementation")
-        if attention_impl == "triton_grouped":
+        if attention_impl in ("triton_grouped", "triton_shadow"):
             if (
                 dtype != torch.float16
                 or head_dim not in (64, 128)
@@ -227,7 +232,7 @@ class CUDASparseAttentionWorkspace:
                 or torch.cuda.get_device_capability(self.device) != (7, 0)
             ):
                 raise SparsePayloadError(
-                    "triton_grouped requires SM70, FP16, supported tile and GQA heads"
+                    "Triton attention requires SM70, FP16, supported tile and GQA heads"
                 )
             from sglang.srt.disaggregation.pvd.triton_sparse_attention import (
                 one_token_gqa_grouped,
@@ -240,7 +245,11 @@ class CUDASparseAttentionWorkspace:
         self.num_query_heads = num_query_heads
         self._budget, self._owner = budget, f"cuda-attention:{uuid.uuid4().hex}"
         self._sdpa_owner = f"{self._owner}:sdpa"
+        self._shadow_owner = f"{self._owner}:shadow"
         self._sdpa_keys = self._sdpa_values = None
+        self._shadow_output = None
+        self._shadow_comparisons = 0
+        self._shadow_max_abs_error = 0.0
         self._timed_first_layers = set()
         self._thread = threading.get_ident()
         self._closed, self._active, self._quarantine, self._held = (
@@ -255,6 +264,19 @@ class CUDASparseAttentionWorkspace:
         except BaseException:
             budget.release(self._owner)
             raise
+        if attention_impl == "triton_shadow":
+            try:
+                budget.reserve(self._shadow_owner, num_query_heads * head_dim * 2, 1)
+                self._shadow_output = torch.empty(
+                    (num_query_heads, head_dim),
+                    dtype=dtype,
+                    device=self.device,
+                )
+            except BaseException:
+                budget.release(self._shadow_owner)
+                self._scratch = None
+                budget.release(self._owner)
+                raise
         if attention_impl == "sdpa_bounded":
             try:
                 if type(max_sequence_tokens) is not int or max_sequence_tokens > 256:
@@ -324,7 +346,11 @@ class CUDASparseAttentionWorkspace:
                 raise SparsePayloadError(
                     "bank and attention device/dtype/dimension mismatch"
                 )
-            if self.attention_impl in ("sdpa_bounded", "triton_grouped") and (
+            if self.attention_impl in (
+                "sdpa_bounded",
+                "triton_grouped",
+                "triton_shadow",
+            ) and (
                 mapping.total_kv_heads != self.total_kv_heads
                 or mapping.num_query_heads != self.num_query_heads
             ):
@@ -391,7 +417,7 @@ class CUDASparseAttentionWorkspace:
                 # The lease covers all operations and failure draining, not only
                 # Python's return from an asynchronous CUDA tensor operation.
                 try:
-                    if self.attention_impl == "triton_grouped":
+                    if self.attention_impl in ("triton_grouped", "triton_shadow"):
                         if not math.isclose(
                             scale,
                             self.head_dim**-0.5,
@@ -399,7 +425,7 @@ class CUDASparseAttentionWorkspace:
                             abs_tol=1e-12,
                         ):
                             raise SparsePayloadError(
-                                "triton_grouped requires standard attention scale"
+                                "Triton attention requires standard attention scale"
                             )
                         from sglang.srt.disaggregation.pvd.triton_sparse_attention import (
                             PromptPointerView,
@@ -436,6 +462,24 @@ class CUDASparseAttentionWorkspace:
                             buffers.output,
                             block_tokens=self.chunk_tokens,
                         )
+                        if self.attention_impl == "triton_shadow":
+                            shadow_buffers = AttentionBuffers(
+                                buffers.q,
+                                buffers.generated_k,
+                                buffers.generated_v,
+                                self._shadow_output,
+                                buffers.generated_rows,
+                            )
+                            _stream_attention(
+                                groups,
+                                shadow_buffers,
+                                mapping,
+                                layer,
+                                scale,
+                                self._scratch,
+                                self.chunk_tokens,
+                                self.head_dim,
+                            )
                     elif self.attention_impl == "sdpa_bounded":
                         _sdpa_attention(
                             groups,
@@ -471,6 +515,40 @@ class CUDASparseAttentionWorkspace:
                             triton_rows,
                         )
                         raise
+                if self.attention_impl == "triton_shadow":
+                    difference = (
+                        buffers.output.float() - self._shadow_output.float()
+                    ).abs()
+                    max_error = difference.max().item()
+                    self._shadow_max_abs_error = max(
+                        self._shadow_max_abs_error, max_error
+                    )
+                    self._shadow_comparisons += 1
+                    if not torch.allclose(
+                        buffers.output,
+                        self._shadow_output,
+                        atol=0.025,
+                        rtol=0.002,
+                    ):
+                        self._quarantine = "Triton/online numerical disagreement"
+                        self._held = (
+                            resources,
+                            pin,
+                            participant,
+                            triton_view,
+                            triton_rows,
+                        )
+                        raise SparsePayloadError(
+                            "Triton/online live attention disagreement: "
+                            f"layer={layer} max_abs_error={max_error:.6g}"
+                        )
+                    logger.info(
+                        "PVD Triton shadow match: layer=%d decode_tokens=%d "
+                        "max_abs_error=%.6g",
+                        layer,
+                        decode_tokens,
+                        max_error,
+                    )
         finally:
             try:
                 # A later bank-reader drain can fail even after this workspace's
@@ -539,6 +617,11 @@ class CUDASparseAttentionWorkspace:
                 if self.attention_impl == "sdpa_bounded" and self._sdpa_keys is not None
                 else 0
             ),
+            "shadow_reserved_bytes": (
+                0 if self._shadow_output is None else self._shadow_output.numel() * 2
+            ),
+            "shadow_comparisons": self._shadow_comparisons,
+            "shadow_max_abs_error": self._shadow_max_abs_error,
         }
 
     def close(self):
@@ -551,6 +634,8 @@ class CUDASparseAttentionWorkspace:
         # already quarantined this object; close cannot override that state.
         self._scratch = None
         self._sdpa_keys = self._sdpa_values = None
+        self._shadow_output = None
         self._budget.release(self._sdpa_owner)
+        self._budget.release(self._shadow_owner)
         self._budget.release(self._owner)
         self._closed = True
