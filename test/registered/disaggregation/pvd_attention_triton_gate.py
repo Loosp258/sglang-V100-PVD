@@ -7,7 +7,11 @@ import time
 
 import torch
 from pvd_attention_tile_parity import PROMPT_LENGTHS
-from sglang.srt.disaggregation.pvd.triton_sparse_attention import one_token_gqa
+from sglang.srt.disaggregation.pvd.triton_sparse_attention import (
+    PromptPointerView,
+    one_token_gqa,
+    one_token_gqa_grouped,
+)
 
 
 def check_case(prompt_tokens: int, *, large_logits: bool = False) -> dict:
@@ -56,6 +60,55 @@ def check_case(prompt_tokens: int, *, large_logits: bool = False) -> dict:
     }
 
 
+def check_grouped_case(prompt_tokens: int) -> dict:
+    """Mimic four independent bank groups with unequal refresh union sizes."""
+    generator = torch.Generator().manual_seed(5000 + prompt_tokens)
+    device = "cuda:0"
+    q = torch.randn(28, 128, generator=generator).to(device, torch.float16)
+    lengths = (
+        prompt_tokens,
+        max(1, prompt_tokens - 1),
+        max(1, prompt_tokens // 2),
+        prompt_tokens,
+    )
+    groups = {
+        (0, head): (
+            None,
+            torch.randn(2, length, 128, generator=generator)
+            .to(device, torch.float16)
+            .contiguous(),
+        )
+        for head, length in enumerate(lengths)
+    }
+    generated_k = torch.randn(32, 4, 128, generator=generator).to(device, torch.float16)
+    generated_v = torch.randn(32, 4, 128, generator=generator).to(device, torch.float16)
+    rows = torch.tensor((19, 3, 17, 11), device=device, dtype=torch.int64)
+    expected = torch.empty_like(q)
+    for head in range(28):
+        kv_head = head // 7
+        bank = groups[(0, kv_head)][1]
+        keys = torch.cat((bank[0], generated_k[rows, kv_head]), dim=0).float()
+        values = torch.cat((bank[1], generated_v[rows, kv_head]), dim=0).float()
+        scores = torch.mv(keys, q[head].float()) / math.sqrt(128)
+        expected[head] = torch.mv(values.T, torch.softmax(scores, dim=0))
+    view = PromptPointerView.from_groups(groups, layer=0, kv_heads=4, device=device)
+    errors = {}
+    for tile in (8, 64):
+        output = torch.empty_like(q)
+        one_token_gqa_grouped(
+            q, view, generated_k, generated_v, rows, output, block_tokens=tile
+        )
+        torch.cuda.synchronize(device)
+        assert torch.isfinite(output).all()
+        torch.testing.assert_close(output, expected, atol=0.025, rtol=0.002)
+        errors[str(tile)] = (output.float() - expected.float()).abs().max().item()
+    return {
+        "prompt_tokens": prompt_tokens,
+        "per_head_lengths": lengths,
+        "errors": errors,
+    }
+
+
 def benchmark_long_case() -> dict:
     length = 1923
     device = "cuda:0"
@@ -100,5 +153,9 @@ if __name__ == "__main__":
     )
     for length in PROMPT_LENGTHS:
         print(json.dumps(check_case(length), sort_keys=True), flush=True)
+        print(
+            json.dumps({"grouped": check_grouped_case(length)}, sort_keys=True),
+            flush=True,
+        )
     print(json.dumps(check_case(65, large_logits=True), sort_keys=True), flush=True)
     print(json.dumps({"benchmark": benchmark_long_case()}, sort_keys=True), flush=True)
