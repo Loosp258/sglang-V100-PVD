@@ -3057,3 +3057,42 @@ the live V service. The next correction adds a 64 MiB CUDA workspace
 allowance to the shape-based charge and a CUDA peak assertion. That bound
 still needs validation at maximum supported shapes and concurrency;
 `torch.cuda.memory_allocated` does not include every external allocation.
+
+修正后 V100S 的 32-head GPU 峰值验收覆盖 17×7、64×64、128×64
+（索引行数 × 每 head query 数，维度 128）：PyTorch 峰值额外分配
+分别约 9.01/4.29/7.44 MB，声明预算分别约 69.7/97.3/118.2 MB。
+三机在线 V 在 `e88b7d268` 独立 worktree 开启 grouped 路径后，
+每轮 32 项批次约 34–36 ms，24 项批次约 16–20 ms；旧逐项路径
+分别约 70–113 ms 与 50–67 ms。三次固定 20-token 请求完整返回
+20/20 SSE，耗时约 3.91/3.77/3.73 秒；D 的后续稳态 search
+仍约 0.24 秒，故不能声称整个 PVD 流水线已隐藏检索等待。未见
+V 日志异常，但还没有大语料质量/召回与并发压力验收。
+
+After the budget correction, V100S 32-head peak tests covered 17×7,
+64×64 and 128×64 row/query shapes at dimension 128. Extra PyTorch
+allocations were about 9.01/4.29/7.44 MB versus declared scratch
+charges of 69.7/97.3/118.2 MB. With grouped serving enabled on the
+isolated `e88b7d268` V worktree, 32-item batches took roughly 34–36 ms
+and 24-item batches 16–20 ms, versus 70–113/50–67 ms on the prior
+per-item path. Three fixed 20-token three-node requests returned all
+20 SSE events in about 3.91/3.77/3.73 s. D's later steady search
+intervals remained near 0.24 s, so grouped V search alone did not hide
+the full retrieval wait. Large-corpus recall and concurrent-load safety
+remain unverified.
+
+D 端同形状 JSON 微基准发现批量请求 24/32 head 的标准编码一次需约
+10.7/14.1 ms，`orjson` 约 0.7/0.9 ms。旧客户端先编码检查 3 MiB
+界限，再让 aiohttp 编码一次；新客户端将 `orjson` 编好的同一份 bytes
+用于大小检查和 HTTP 请求，保持 JSON 协议与逐项回复校验不变，并以
+默认关闭的 `PVD_PROFILE_D_SEARCH_BATCH=1` 记录准备、编码、HTTP、
+回复校验时间。上述是微基准而非端到端收益；需在 D 独立 worktree
+上线后比较。
+
+A D-node shape microbenchmark measured standard JSON encoding at about
+10.7/14.1 ms for 24/32 heads, versus 0.7/0.9 ms with installed
+`orjson`. The previous client encoded once for the 3 MiB bound and again
+in aiohttp. The new client uses one `orjson` byte string for both the
+bound and the HTTP body, preserving the JSON protocol and per-item reply
+checks. `PVD_PROFILE_D_SEARCH_BATCH=1` optionally logs prepare, encode,
+HTTP and validation intervals. The microbenchmark is not an end-to-end
+latency claim; D deployment comparison is still pending.

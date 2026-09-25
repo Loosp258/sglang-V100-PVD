@@ -1,6 +1,8 @@
 """Single-shard D search protocol; CPU tensors and local HTTP only."""
 
 import asyncio
+import json
+import logging
 from dataclasses import replace
 
 import pytest
@@ -8,6 +10,7 @@ import torch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 from sglang.srt.disaggregation.pvd.index_search import BruteForceIndexBackend
+from sglang.srt.disaggregation.pvd import search_client as search_client_module
 from sglang.srt.disaggregation.pvd.search_client import (
     PVDShardSearchClient,
     SearchRefused,
@@ -84,6 +87,62 @@ def test_pinned_batch_roundtrip_preserves_each_head_identity_and_order():
                 assert all("index_version" in result.validated for result in results)
             finally:
                 await client.close()
+
+    asyncio.run(run())
+
+
+def test_batch_encodes_once_and_sends_the_checked_json_bytes(monkeypatch, caplog):
+    async def run():
+        _, _, identity, query, scope = fixture()
+        pinned = replace(
+            identity, expected_index_version="v1", expected_id_mapping_version="m1"
+        )
+        encoded_calls, seen = [], []
+        original = search_client_module.orjson.dumps
+
+        def record_encode(payload):
+            raw = original(payload)
+            encoded_calls.append(raw)
+            return raw
+
+        monkeypatch.setattr(search_client_module.orjson, "dumps", record_encode)
+        monkeypatch.setenv("PVD_PROFILE_D_SEARCH_BATCH", "1")
+
+        async def answer(request):
+            raw = await request.read()
+            seen.append((raw, request.content_type))
+            body = json.loads(raw)
+            replies = []
+            for item in body["items"]:
+                reply = valid_body(item)
+                reply["validated"] += ["index_version", "id_mapping_version"]
+                replies.append(reply)
+            return web.json_response(
+                {
+                    "batch_protocol": body["batch_protocol"],
+                    "batch_id": body["batch_id"],
+                    "results": replies,
+                }
+            )
+
+        app = web.Application()
+        app.router.add_post("/internal/v1/indexes/search-batch", answer)
+        async with TestServer(app) as server:
+            client = PVDShardSearchClient(str(server.make_url("")))
+            try:
+                with caplog.at_level(
+                    logging.INFO,
+                    logger="sglang.srt.disaggregation.pvd.search_client",
+                ):
+                    results = await client.search_many(
+                        ((pinned, query, 1, scope), (pinned, query, 1, scope))
+                    )
+            finally:
+                await client.close()
+        assert len(results) == 2
+        assert len(encoded_calls) == 1
+        assert seen == [(encoded_calls[0], "application/json")]
+        assert any("PVD D search-batch items=2" in row.message for row in caplog.records)
 
     asyncio.run(run())
 

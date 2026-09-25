@@ -9,16 +9,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
+import os
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import aiohttp
+import orjson
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 
 SEARCH_PROTOCOL = "pvd.search.v1"
 SEARCH_BATCH_PROTOCOL = "pvd.search.batch.v1"
+logger = logging.getLogger(__name__)
 
 
 class ShardSearchError(RuntimeError):
@@ -159,13 +164,24 @@ class PVDShardSearchClient:
                 payload[name] = value
         return payload, search_id, len(snapshot)
 
-    async def _post_json(self, path, payload):
+    async def _post_json(self, path, payload, *, encoded_payload=None):
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
+        # Batched Q rows can be hundreds of KiB. Their wire bytes are already
+        # encoded for the size bound; send those exact bytes instead of asking
+        # aiohttp to serialize the same floats a second time.
+        body = (
+            {"json": payload}
+            if encoded_payload is None
+            else {
+                "data": encoded_payload,
+                "headers": {"Content-Type": "application/json"},
+            }
+        )
         try:
             async with self._session.post(
                 f"{self.base_url}{path}",
-                json=payload,
+                **body,
                 timeout=self._timeout,
                 allow_redirects=False,
             ) as response:
@@ -216,6 +232,8 @@ class PVDShardSearchClient:
 
     async def search_many(self, requests):
         """One bounded pinned RPC; each result remains independently checked."""
+        profile = os.environ.get("PVD_PROFILE_D_SEARCH_BATCH") == "1"
+        started = time.perf_counter() if profile else 0.0
         if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 32:
             raise ValueError("search batch requires 1..32 requests")
         prepared = []
@@ -264,9 +282,18 @@ class PVDShardSearchClient:
             "batch_id": batch_id,
             "items": [item[3] for item in prepared],
         }
-        if len(json.dumps(payload, separators=(",", ":")).encode()) > 3 * 1024 * 1024:
+        if profile:
+            prepared_at = time.perf_counter()
+        encoded = orjson.dumps(payload)
+        if len(encoded) > 3 * 1024 * 1024:
             raise ValueError("search batch request exceeds 3 MiB")
-        body = await self._post_json("/internal/v1/indexes/search-batch", payload)
+        if profile:
+            encoded_at = time.perf_counter()
+        body = await self._post_json(
+            "/internal/v1/indexes/search-batch", payload, encoded_payload=encoded
+        )
+        if profile:
+            replied_at = time.perf_counter()
         results = body.get("results")
         if (
             body.get("batch_protocol") != SEARCH_BATCH_PROTOCOL
@@ -275,12 +302,27 @@ class PVDShardSearchClient:
             or len(results) != len(prepared)
         ):
             raise SearchReplyError("search batch envelope mismatch")
-        return tuple(
+        validated = tuple(
             self._validate_reply(reply, identity, scope, search_id, count, top_k)
             for reply, (identity, scope, top_k, _, search_id, count) in zip(
                 results, prepared, strict=True
             )
         )
+        if profile:
+            logger.info(
+                "PVD D search-batch items=%d query_rows=%d bytes=%d "
+                "prepare_ms=%.3f encode_ms=%.3f http_ms=%.3f "
+                "validate_ms=%.3f total_ms=%.3f",
+                len(prepared),
+                sum(item[5] for item in prepared),
+                len(encoded),
+                (prepared_at - started) * 1000,
+                (encoded_at - prepared_at) * 1000,
+                (replied_at - encoded_at) * 1000,
+                (time.perf_counter() - replied_at) * 1000,
+                (time.perf_counter() - started) * 1000,
+            )
+        return validated
 
     @staticmethod
     def _validate_reply(body, identity, scope, search_id, query_count, top_k):
