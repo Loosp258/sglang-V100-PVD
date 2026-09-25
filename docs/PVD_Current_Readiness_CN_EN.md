@@ -3223,3 +3223,26 @@ closing the loop-affine aiohttp session. The default is off. This does not
 make target-model probing concurrent with Decode or establish a latency win;
 the CloudLab lead=2 comparison must measure boundary wait, refresh stages,
 SSE completeness and failure/cleanup behavior before enabling it by default.
+
+CloudLab 独立 D worktree `6ea9dd113`、P/V 不变、相同 M=4/lead=2
+且显式 `PVD_SEARCH_BACKGROUND_IO=1` 的三次 20-token 请求均返回
+20/20 SSE，无错误或客户端 token 合并。总耗时约 3.74/3.69/3.46 秒，
+最大可观测 token 间隔约 0.257/0.258/0.262 秒。热态边界
+8/12/16 的可观测等待约 0.084–0.097 秒，首次边界 4 约
+0.19 秒；热态刷新仍约 0.39–0.41 秒（capture 约 0.15 秒、
+search 约 0.17 秒、delivery 约 0.07–0.08 秒）。这与关闭开关
+的较早小样本范围重叠，**没有证据支持默认开启**。后台 HTTP
+可推进不代表整个刷新可在两个 Decode token 的前瞻窗口内完成；
+需要分解捕获、搜索、投递和 scheduler 等待的时间线，并验证
+并发请求与更长 Prompt。
+
+On isolated CloudLab D worktree `6ea9dd113`, with P/V unchanged and
+`PVD_SEARCH_BACKGROUND_IO=1`, three 20-token runs returned 20/20 SSE
+events. End-to-end times were about 3.74/3.69/3.46 s; maximum observed
+token gaps were 0.257/0.258/0.262 s. Warm boundary waits remained about
+0.084–0.097 s and first-boundary waits about 0.19 s. Warm refresh still
+took 0.39–0.41 s (capture ~0.15 s, search ~0.17 s, delivery ~0.07–0.08 s).
+These small samples overlap earlier opt-out results and do **not** justify
+enabling the switch by default. Search HTTP progress alone cannot hide the
+whole refresh within two Decode tokens; a stage-level concurrency timeline,
+multi-request and longer-Prompt validation remain necessary.
