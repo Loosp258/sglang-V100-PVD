@@ -16,6 +16,7 @@ from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     ResourceGuard,
     TransferBudget,
+    TransferCapacityError,
 )
 
 
@@ -110,7 +111,90 @@ def run() -> dict:
     error = (output.float() - expected.float()).abs().max().item()
     workspace.close()
     assert budget.snapshot()["used_staging_bytes"] == 0
-    return {"max_abs_error": error, "table_bytes": table_bytes, "budget_refunded": True}
+
+    # A capacity refusal must happen before either device table is allocated.
+    tight_budget = TransferBudget(baseline_bytes + table_bytes - 1, 4)
+    tight_workspace = CUDASparseAttentionWorkspace(
+        device=device,
+        dtype=torch.float16,
+        head_dim=128,
+        chunk_tokens=64,
+        budget=tight_budget,
+        attention_impl="triton_grouped",
+        total_kv_heads=4,
+        num_query_heads=28,
+    )
+    tight_guard = ResourceGuard(
+        AttentionBuffers(q, generated_k, generated_v, torch.empty_like(q), rows),
+        lambda: None,
+    )
+    try:
+        tight_workspace.execute(
+            Peer(),
+            decode_tokens=len(rows) - 1,
+            layer=0,
+            mapping=QueryHeadMapping(28, 4),
+            resources=tight_guard,
+            scale=1 / math.sqrt(128),
+        )
+    except TransferCapacityError:
+        pass
+    else:
+        raise AssertionError("table capacity must refuse before allocation")
+    assert tight_budget.snapshot()["used_staging_bytes"] == baseline_bytes
+    tight_workspace.close()
+    assert tight_budget.snapshot()["used_staging_bytes"] == 0
+
+    # Unknown completion is terminal: do not return the table reservation or
+    # unpin the output owner, even if the fake peer later drains successfully.
+    unknown_budget = TransferBudget(1 << 20, 4)
+    unknown_workspace = CUDASparseAttentionWorkspace(
+        device=device,
+        dtype=torch.float16,
+        head_dim=128,
+        chunk_tokens=64,
+        budget=unknown_budget,
+        attention_impl="triton_grouped",
+        total_kv_heads=4,
+        num_query_heads=28,
+    )
+    unknown_released = []
+    unknown_guard = ResourceGuard(
+        AttentionBuffers(q, generated_k, generated_v, torch.empty_like(q), rows),
+        lambda: unknown_released.append(True),
+    )
+
+    def uncertain():
+        unknown_guard.request_release()
+        raise RuntimeError("injected CUDA completion uncertainty")
+
+    unknown_workspace._synchronize = uncertain
+    try:
+        unknown_workspace.execute(
+            Peer(),
+            decode_tokens=len(rows) - 1,
+            layer=0,
+            mapping=QueryHeadMapping(28, 4),
+            resources=unknown_guard,
+            scale=1 / math.sqrt(128),
+        )
+    except RuntimeError as exc:
+        assert "completion uncertainty" in str(exc)
+    else:
+        raise AssertionError("injected completion uncertainty must propagate")
+    assert unknown_released == []
+    assert unknown_workspace.snapshot()["quarantine"] == "attention completion unknown"
+    assert unknown_workspace.snapshot()["resources_held"]
+    assert (
+        unknown_budget.snapshot()["used_staging_bytes"] == baseline_bytes + table_bytes
+    )
+    return {
+        "max_abs_error": error,
+        "table_bytes": table_bytes,
+        "budget_refunded": True,
+        "capacity_refused_before_allocation": True,
+        "unknown_completion_quarantined": True,
+    }
 
 
 if __name__ == "__main__":
