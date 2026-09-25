@@ -96,3 +96,41 @@ python test/registered/disaggregation/run_pvd_stream_probe.py \
   --text 'PVD_TPOT_001: Explain GPU RDMA in one sentence.' \
   --max-new-tokens 20
 ```
+
+## 冷启动与就绪 / Cold start and readiness
+
+PVD 必须跳过 SGLang 通用 PD HTTP warmup：该请求没有 Gateway 选定的
+P/V/D 身份。D 的 `/health=200` 因而不代表首个端到端请求已经预热。
+在 Qwen2 target **且** Qwen2 draft 的当前 V100S 配置中，可在启动 D
+之前设置 `PVD_PRECOMPILE_QWEN_KERNELS=1`，把四类已知 Decode JIT
+特化（int64 位置、RoPE、SiLU、KV-store）的编译放到服务就绪之前。
+它不运行模型 forward，不修改请求/KV 状态；非 Qwen2 draft 不要开启。
+`PVD_PROFILE_COLD_STAGES=1` 是插入 CUDA 同步点的诊断开关，正常
+benchmark 应保持关闭。
+
+PVD skips SGLang's generic PD HTTP warmup because that request lacks the
+Gateway-selected P/V/D identities. Therefore D `/health=200` does not imply
+that the first end-to-end request is warm. With a Qwen2 target **and** Qwen2
+draft on the current V100S setup, set `PVD_PRECOMPILE_QWEN_KERNELS=1`
+before starting D to compile the four known Decode JIT specializations
+(int64 positions, RoPE, SiLU and KV-store) before readiness. It performs
+no model forward and changes no request/KV state. Leave it off for a
+non-Qwen2 draft. `PVD_PROFILE_COLD_STAGES=1` adds CUDA fences for diagnosis;
+keep it off for normal benchmarks.
+
+三机 Gateway 与 P/V/D 均健康后，先通过 Gateway 运行上面的流式探针。
+首次请求成功、20/20 token 完整且各端无错误之后，再采正式性能样本；
+首次请求的冷态耗时应**单独报告**，不要静默丢弃。短 Prompt 预热不会
+代替长 Prompt 的 CAGRA 建图，正式测试长度与阈值也必须覆盖。
+当前实机的预编译首请求约 4.20 秒、最大间隔约 0.416 秒，但刷新
+边界仍有可观测等待，不能把“消除 JIT 冷停顿”表述为“网络已隐藏”。
+
+After all three machines and the Gateway report healthy, run the streaming
+probe above through the Gateway. Require a complete 20/20-token response
+and no node-side errors before collecting steady measurements, but report
+the first cold request separately instead of silently discarding it. A
+short-Prompt warmup does not build the longer-Prompt CAGRA graphs; cover
+the actual benchmark lengths and exact/CAGRA threshold. On the measured
+V100S setup, the precompiled first request took about 4.20 s with a
+0.416 s maximum token gap. Refresh boundaries still waited, so removing
+cold JIT delay is not evidence that network/search latency is hidden.
