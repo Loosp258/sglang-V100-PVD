@@ -3301,3 +3301,29 @@ configuration. The purpose is to test whether a longer prefetch window
 hides the measured search and delivery. Six draft steps may cost more
 capture time and change approximate retrieval; complete SSE output alone
 is neither quality acceptance nor permission to make it the default.
+
+CloudLab 独立 D worktree `43e658c36` 实测 M=8/lead=6/draft6：
+三次固定 20-token 请求均为 20/20 SSE，总耗时约
+3.33/3.03/3.03 秒，最大可观测 token 间隔约
+0.329/0.297/0.294 秒。边界 8/16 的可观测等待仍约
+0.073–0.101 秒。capture 增至约 0.217–0.262 秒；其中
+draft 约 0.112 秒，目标 probe 约 0.05–0.06 秒。
+日志中的 search wall-clock 约 0.43 秒**不是纯 V 检索延迟**：
+后台 HTTP 请求本身常在约 0.07–0.08 秒完成，却要等 D
+owner loop 在数个目标 forward 后再次消费结果。
+总时长改善主要与刷新次数从每 4 token 一次降为每 8 token
+一次相符；单 token 平滑性变差，且未验证近似检索召回/生成质量。
+不能将此配置设为默认；在线 D 恢复 M=4/lead=2。
+
+On isolated CloudLab D worktree `43e658c36`, M=8/lead=6/draft6
+returned 20/20 SSE in all three fixed requests. End-to-end times were
+about 3.33/3.03/3.03 s, but maximum observed token gaps grew to
+0.329/0.297/0.294 s. Boundary-8/16 waits still measured roughly
+0.073–0.101 s. Synchronous capture grew to 0.217–0.262 s, including
+about 0.112 s draft and 0.05–0.06 s target probe. The ~0.43 s logged
+search wall time is **not pure V search**: background HTTP often finishes
+in 0.07–0.08 s, while the owner loop consumes completion only after
+several target forwards. Fewer refresh rounds plausibly explain the
+shorter total time; token smoothness worsened, and retrieval recall and
+generation quality remain unverified. Do not make this the default;
+restore live D to M=4/lead=2.
