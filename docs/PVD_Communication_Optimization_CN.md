@@ -350,9 +350,10 @@ CPU 字节规划对 FP16/BF16/FP32、两 V rank 和乱序 token ID 与旧路径
 66 passed、8 个真实 CUDA 用例跳过。
 本地无 CUDA/Triton。随后在 CloudLab V 节点的独立 worktree
 `e898bf058` 中，使用原有 CUDA/Triton 环境执行
-`run_pvd_sparse_pack_gpu_smoke.py`；rank 0/1 × FP16/BF16/FP32 共 6
+`run_pvd_sparse_pack_gpu_smoke.py`；后续 `7b99bf32e` 增加大于单 block
+的乱序 token 场景。rank 0/1 × FP16/BF16/FP32 × 小/多 block 共 12
 种合成布局均与现有 CUDA 逐行拷贝逐字节一致，CUDA fence 后元数据预算
-归零。检查的 payload 只有 160/320 字节，**不是**真实 Entry 大小；
+归零。最大 payload 为 131072 字节，**仍不是**真实 Entry 大小；
 三机服务尚未切换到该实现，也未完成在线 A/B。这里**只融合 V 的
 gather+pack**：CAGRA 搜索、跨网络控制消息与 RDMA 提交仍分离，
 不能称为完整的 `Select–Pack–FanIn–Install` 通算融合。
