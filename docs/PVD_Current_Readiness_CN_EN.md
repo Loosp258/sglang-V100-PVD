@@ -3154,3 +3154,22 @@ around 0.16–0.18 s. These small, contended samples do not establish a
 stable end-to-end gain from fast JSON. Warm refresh still takes roughly
 0.38–0.40 s; the next question is prefetch timing and boundary wait,
 not only V batch kernel time.
+
+现有 D `PVD boundary installed` 日志进一步量化了真正的边界停顿：
+M=4、lead=2 配置下，热态边界 8/12/16 的
+`observed_to_install_seconds` 多为 **0.077–0.101 秒**；首次边界 4
+在最近两次请求约 0.178–0.180 秒。这个数包含 scheduler poll 与
+bank install，不是纯网络等待。与热态刷新约 0.38–0.40 秒相比，
+两 token 的前瞻窗口仍偏短。下一项只测试 M=4 不变、
+lead=3 且 draft 预测 3 token 的实验配置；这可能降低停顿，
+也可能增加预测/probe 开销或改变近似检索结果，不能先当作默认。
+
+The existing D `PVD boundary installed` logs isolate observable
+boundary stalls: under M=4, lead=2, warm boundaries 8/12/16 usually
+show **0.077–0.101 s** from observation to installation; the first
+boundary 4 took roughly 0.178–0.180 s in the latest two requests.
+This includes scheduler polling and bank installation, not just network
+wait. Against a 0.38–0.40 s warm refresh, two tokens of lead remain
+short. The next experiment keeps M=4 but tries lead=3 with three draft
+tokens; it may reduce the stall, add draft/probe cost, or alter approximate
+selection, so it must not become the default without validation.
