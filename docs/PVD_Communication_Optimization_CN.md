@@ -134,6 +134,23 @@ Prompt 长度为 1、7、8、9、63、64、65、127、128、129、511、
 **不**是实际模型 Q/K 的全层数值证明，也不是融合 kernel 或
 端到端吞吐性能的验收。
 
+同一 D 节点、GPU1、代码 `f1fad58ca`，另用
+`test/registered/disaggregation/pvd_attention_tile_bench.py` 做 1 次
+warmup、3 次测量的单层微基准；每种长度先通过上述数值门禁。
+Q/K/V、4 个散布的生成行和 scratch 在计时前分配，计时只覆盖
+`_stream_attention` 调用及同步。中位墙钟与 CUDA event 几乎相同：
+
+| Prompt tokens | tile=8 单层中位墙钟 | tile=64 单层中位墙钟 |
+| ---: | ---: | ---: |
+| 128 | 92.06 ms | 19.46 ms |
+| 511 | 342.89 ms | 50.89 ms |
+| 1923 | 1271.35 ms | 181.97 ms |
+
+这给后续融合 kernel 一个可复现的 **单层** 基线：应直接在相同
+Q/K/V 和设备上比较数值、峰值显存及延迟，不能用 7× 单层差距
+代替端到端收益。测量期间 GPU1 还有空闲中的隔离 D 服务驻留；
+它不是独占 GPU 或多客户端生产负载的性能结论。
+
 恢复 tile=64 后的另一次 4 客户端测试（每请求 517-token Prompt）
 完整返回 4×8 token，总墙钟 73.39 s、合计 0.436 token/s；两 V rank
 随后均为零 in-flight、零 UNKNOWN、未隔离。此前 tile=8 的四客户端
