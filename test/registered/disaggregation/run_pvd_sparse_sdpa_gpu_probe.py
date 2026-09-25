@@ -9,16 +9,24 @@ import json
 import math
 import statistics
 import time
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import torch
+from sglang.srt.disaggregation.pvd.cuda_rank_install import CUDARankInstallParticipant
 from sglang.srt.disaggregation.pvd.cuda_sparse_attention import (
     AttentionBuffers,
+    CUDASparseAttentionWorkspace,
     _sdpa_attention,
     _stream_attention,
     scratch_elements,
     sdpa_workspace_bytes,
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    ResourceGuard,
+    TransferBudget,
+)
 
 
 def _measure(call, *, warmups, repeats):
@@ -32,6 +40,82 @@ def _measure(call, *, warmups, repeats):
         torch.cuda.synchronize()
         samples.append(time.perf_counter() - started)
     return statistics.median(samples)
+
+
+def _check_workspace(groups, candidate_buffers, mapping, scale, max_tokens, reference):
+    """Exercise real CUDA workspace/fence with a synthetic, non-RDMA bank reader."""
+    device = candidate_buffers.q.device
+
+    class Peer(CUDARankInstallParticipant):
+        def __init__(self):
+            self._bank = SimpleNamespace(
+                device=device,
+                dtype=torch.float16,
+                head_dim=128,
+                prompt_tokens=max_tokens,
+                snapshot=lambda: {"quarantine": None},
+            )
+
+        @contextmanager
+        def read(self, decode_tokens):
+            assert decode_tokens + 1 == len(candidate_buffers.generated_rows)
+            yield groups
+
+    budget = TransferBudget(16 << 20, 2)
+    workspace = CUDASparseAttentionWorkspace(
+        device=device,
+        dtype=torch.float16,
+        head_dim=128,
+        chunk_tokens=8,
+        budget=budget,
+        attention_impl="sdpa_bounded",
+        max_sequence_tokens=max_tokens,
+        total_kv_heads=mapping.total_kv_heads,
+        num_query_heads=mapping.num_query_heads,
+    )
+    charged = budget.snapshot()["used_staging_bytes"]
+    released = []
+    guard = ResourceGuard(candidate_buffers, lambda: released.append(True))
+    original_sync = workspace._synchronize
+
+    def fence():
+        guard.request_release()
+        if released:
+            raise AssertionError("CUDA input guard released before completion fence")
+        original_sync()
+
+    workspace._synchronize = fence
+    allocated_before = torch.cuda.memory_allocated(device)
+    torch.cuda.reset_peak_memory_stats(device)
+    try:
+        workspace.execute(
+            Peer(),
+            decode_tokens=len(candidate_buffers.generated_rows) - 1,
+            layer=0,
+            mapping=mapping,
+            resources=guard,
+            scale=scale,
+        )
+        if released != [True]:
+            raise AssertionError("CUDA input guard not released after completion fence")
+        max_error = (
+            (candidate_buffers.output.float() - reference.float()).abs().max().item()
+        )
+        if max_error > 0.02:
+            raise AssertionError(f"workspace output differs: {max_error}")
+        peak_extra = torch.cuda.max_memory_allocated(device) - allocated_before
+    finally:
+        if workspace.snapshot()["quarantine"] is None:
+            workspace.close()
+    if budget.snapshot()["used_staging_bytes"]:
+        raise AssertionError("workspace did not refund its scratch reservations")
+    return {
+        "workspace_max_abs_error": max_error,
+        "workspace_charged_bytes": charged,
+        "workspace_peak_extra_bytes": peak_extra,
+        "workspace_fence_and_refund_verified": True,
+        "real_bank_reader_verified": False,
+    }
 
 
 def main(argv=None):
@@ -64,7 +148,10 @@ def main(argv=None):
     pool_v = torch.randn_like(pool_k)
     row_tuple = tuple(range(1, args.generated_tokens + 1))
     groups = {
-        (0, head): (None, torch.stack((prompt_k[head], prompt_v[head])))
+        (0, head): (
+            SimpleNamespace(token_ids=tuple(range(args.prompt_tokens))),
+            torch.stack((prompt_k[head], prompt_v[head])),
+        )
         for head in range(kv_heads)
     }
     reference = torch.empty_like(q)
@@ -97,6 +184,9 @@ def main(argv=None):
         torch.cuda.reset_peak_memory_stats()
         sdpa_seconds = _measure(sdpa, warmups=1, repeats=args.repeats)
         peak_extra = torch.cuda.max_memory_allocated() - allocated_before
+        workspace_evidence = _check_workspace(
+            groups, candidate_buffers, mapping, scale, max_tokens, reference
+        )
     except Exception as exc:
         parser.exit(1, f"SDPA candidate probe failed: {exc}\n")
     print(
@@ -112,6 +202,7 @@ def main(argv=None):
                 "sdpa_observed_peak_extra_bytes": peak_extra,
                 "online_one_layer_median_seconds": online_seconds,
                 "sdpa_one_layer_median_seconds": sdpa_seconds,
+                **workspace_evidence,
                 "serving_validated": False,
                 "memory_budget_validated": False,
             },
