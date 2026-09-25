@@ -2672,3 +2672,38 @@ remote-access errors. Short-index graph build is thus a major cause for this
 quality/performance. V was restored to threshold 64; both ranks returned
 health 200. Raw results are on D in
 `pvd-eval-sdpa-batch-v-exact128-67c0bb375.json`.
+
+### 同环境完整 Prompt KV 对照 / Same-environment full-Prompt KV control
+
+在相同三机、Qwen2.5-7B、Gateway、20-token 固定数据集和 D 代码下，
+临时关闭 D 的预测式检索、CUDA 稀疏 serving 与独立 draft 参数，保留
+PVD 的 M=4 同步完整 Prompt KV 刷新。启动日志明确显示
+`pvd_predictive_retrieval_config=False`、
+`pvd_cuda_predictive_serving=False` 和每 4 token 的完整刷新；
+这不是脚本自行验证的模式标签。三条请求用时 8.08/6.67/34.77 秒。
+
+相对该完整 KV 对照，预测式 M=4 的三条请求输出 token ID 完全一致
+1/3（共同前缀 8、20、6）；M=8 一致 0/3（17、14、18）；
+M=16 一致 2/3（20、18、20）。这些结果显示 M 不是单调的
+“越小越接近完整 KV”：生成一旦分叉，后续上下文也不同。
+此处只有三个 smoke prompt，token 一致率不是语义质量指标，也不能
+作为调大 M 或验收近似检索的依据。完整对照原始结果位于 D 节点的
+`pvd-eval-full-control-67c0bb375.json`。采集后已恢复预测式 M=4，
+D 健康检查为 200；V 保持阈值 64。
+
+On the same three nodes, Qwen2.5-7B, Gateway, fixed 20-token dataset and
+D checkout, the control temporarily disabled predictive retrieval, CUDA
+sparse serving and draft arguments while retaining PVD's synchronous full-
+Prompt KV refresh every four tokens. Startup logs explicitly reported both
+predictive flags false and the four-token full-refresh barrier; this mode
+claim does not come from the collection script. The three request latencies
+were 8.08/6.67/34.77 s.
+
+Against this full-KV control, predictive M=4 exactly matched output IDs in
+1/3 requests (common prefixes 8, 20, 6); M=8 matched 0/3 (17, 14, 18);
+M=16 matched 2/3 (20, 18, 20). This does not make larger M monotonically
+closer to full KV: once generation diverges, its subsequent context differs.
+Three smoke prompts and token agreement are not a semantic-quality metric or
+an acceptance gate. Raw control data is on D in
+`pvd-eval-full-control-67c0bb375.json`. Predictive M=4 was restored and D
+health returned 200; V remained at threshold 64.
