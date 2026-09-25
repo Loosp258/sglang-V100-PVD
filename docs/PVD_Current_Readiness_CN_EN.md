@@ -2875,3 +2875,32 @@ or scheduling around attention. For example, the second-resolution log
 timestamps place about seven seconds between layer 0 and layer 1 records,
 outside both `execute()` calls; that is not proof of any specific kernel.
 D remains on isolated worktree `715e412a3`, V on `48e69c068`.
+
+`5071826b2` 新增默认关闭的 `PVD_PROFILE_COLD_STAGES=1`：只在首次
+PVD target Decode 的前两层记录带 CUDA 完成点的阶段耗时，不记录
+token/KV。完整 PVD CPU 回归 2938 passed / 24 skipped、21 subtests。
+CloudLab D 在独立 `5071826b2` worktree 复测固定 20-token 请求：
+冷态总计 46.52 秒、最大 token 间隔 28.12 秒；首次 layer 0 的
+RoPE 调用区间 7.60 秒、attention 调用区间 6.94 秒（其中 sparse
+`execute()` 本体约 0.043 秒）、MLP 调用区间 7.04 秒。
+layer 1 对应区间全部约 0.001–0.002 秒或更短。首次 draft
+仍约 14.58 秒，target probe 约 0.049 秒。紧接着相同请求总计
+3.84 秒、最大 token 间隔 0.40 秒。该结果支持**首次调用开销**
+而非持续 RDMA/稀疏 attention 瓶颈的判断，但还不能仅凭阶段计时
+证明具体是 JIT 编译、库初始化或其他内部机制；插桩本身也会增加
+同步开销。当前 D 保持在此诊断 worktree，P/V 未改。
+
+`5071826b2` adds opt-in `PVD_PROFILE_COLD_STAGES=1`, timing only the
+first two target-Decode layers with CUDA completion fences and no token/KV
+contents. The full PVD CPU suite passed 2938/24 plus 21 subtests. On the
+isolated CloudLab D worktree, a cold fixed 20-token request took 46.52 s,
+with a 28.12 s maximum token gap. Layer 0 spent 7.60 s in the RoPE call,
+6.94 s in the whole attention call (only about 0.043 s in sparse
+`execute()`), and 7.04 s in the MLP call. Matching layer-1 intervals were
+all roughly 0.001–0.002 s or less. First draft still took about 14.58 s
+and target probe 0.049 s. An immediate identical warm request took 3.84 s,
+with a 0.40 s maximum token gap. These data support a **first-use cost**
+rather than steady RDMA or sparse-attention execution as the cause, but do
+not distinguish JIT compilation from library initialization or another
+internal mechanism. The opt-in synchronization also perturbs cold timing.
+D remains on diagnostic worktree `5071826b2`; P/V are unchanged.
