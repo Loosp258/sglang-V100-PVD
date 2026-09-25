@@ -117,6 +117,23 @@ Decode 前向。相同最终文本哈希证明该固定 Prompt 的贪心输出�
 性能保证。tile=64 刚启动后的首个不同 Prompt 请求耗时 73.49 s，
 因此不能混用冷启动与稳定运行数据。
 
+### 2026-09-26 V100S attention 数值门禁
+
+在 D 节点 clgpu019 的隔离 GPU1 上，运行
+`test/registered/disaggregation/pvd_attention_tile_parity.py`，代码提交
+`f5c15f7cf`，PyTorch `2.9.1+cu128`，设备 Tesla V100S-PCIE-32GB。
+测试使用 Qwen2.5-7B 形状：28 个 Q heads、4 个 KV heads、
+128 维、FP16；每个 case 带 4 个散布在 D 池中的生成 KV 行。
+Prompt 长度为 1、7、8、9、63、64、65、127、128、129、511、
+1923，均分别用 online tile=8 和 tile=64 计算，并与测试专用的
+完整 softmax 参考值比较。24 个 case 全部通过；相对参考值的
+最大绝对误差为 `2.4414e-4`，两种 tile 之间最大绝对差为
+`1.2207e-4`，输入 Q/K/V 未被修改。本地无 CUDA 的同一 pytest
+入口为 54 passed、16 skipped（其中 12 个是上述真实设备 case）。
+这个门禁覆盖单层合成张量的 GQA、tile 边界和非连续行映射；
+**不**是实际模型 Q/K 的全层数值证明，也不是融合 kernel 或
+端到端吞吐性能的验收。
+
 恢复 tile=64 后的另一次 4 客户端测试（每请求 517-token Prompt）
 完整返回 4×8 token，总墙钟 73.39 s、合计 0.436 token/s；两 V rank
 随后均为零 in-flight、零 UNKNOWN、未隔离。此前 tile=8 的四客户端
