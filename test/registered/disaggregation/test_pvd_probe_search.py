@@ -16,6 +16,7 @@ from sglang.srt.disaggregation.pvd.prediction import (
     snapshot_committed,
 )
 from sglang.srt.disaggregation.pvd.probe_search import (
+    MAX_CONCURRENT_SHARD_SEARCHES,
     ProbeSearchRoute,
     ProbeSearchSession,
     StaleProbeSearch,
@@ -24,6 +25,7 @@ from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.search_client import (
     PVDShardSearchClient,
     SearchRefused,
+    ShardSearchResult,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_prompt_index import shard_client
@@ -453,6 +455,74 @@ def test_multiple_q_heads_coalesce_with_explicit_provenance():
                 assert len({s.index_version for s in result.selections}) == 1
             finally:
                 await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("fail_head", [None, 1])
+def test_group_searches_are_version_pinned_bounded_and_cancelled(fail_head):
+    async def run():
+        _, _, session, window, pipeline, _, route = setup(heads=12)
+        routes = tuple(
+            replace(
+                route,
+                query_head=head,
+                identity=replace(route.identity, kv_head=head),
+            )
+            for head in range(12)
+        )
+        prepared = session.prepare(
+            window, pipeline, routes=routes, head_mapping=QueryHeadMapping(12, 12)
+        )
+
+        class RecordingClient:
+            def __init__(self):
+                self.calls = []
+                self.active = 0
+                self.peak = 0
+
+            async def search(self, identity, *, queries, top_k, scope):
+                self.calls.append(identity)
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+                try:
+                    await asyncio.sleep(0.01 if identity.kv_head != 2 else 0.05)
+                    if identity.kv_head == fail_head:
+                        raise RuntimeError("search failed")
+                    return ShardSearchResult(
+                        identity=identity,
+                        index_version="index-v1",
+                        id_mapping_version="mapping-v1",
+                        token_ids=(0,),
+                        page_ids=(0,),
+                        scores=(1.0,),
+                        metric=scope.metric,
+                        validated=(),
+                    )
+                finally:
+                    self.active -= 1
+
+        client = RecordingClient()
+        if fail_head is not None:
+            with pytest.raises(RuntimeError, match="search failed"):
+                await session.search(prepared, client)
+            with pytest.raises(ValueError):
+                session.take_selection(window)
+        else:
+            await session.search(prepared, client)
+            result = session.take_selection(window)
+            assert len(result.selections) == 12
+            assert tuple(s.identity.kv_head for s in result.selections) == tuple(
+                range(12)
+            )
+        assert client.active == 0
+        assert 1 < client.peak <= MAX_CONCURRENT_SHARD_SEARCHES
+        assert client.calls[0].expected_index_version is None
+        assert all(
+            call.expected_index_version == "index-v1"
+            and call.expected_id_mapping_version == "mapping-v1"
+            for call in client.calls[1:]
+        )
 
     asyncio.run(run())
 

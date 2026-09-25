@@ -38,6 +38,9 @@ class StaleProbeSearch(ValueError):
 # Bound materialized query rows rather than route count alone. A real model can
 # have hundreds of layer/Q-head routes even when it probes only one position.
 MAX_PREPARED_QUERY_ROWS = 4096
+# Search RPCs are per layer/KV head. Keep network overlap bounded; the V
+# backend may still serialize GPU work, and its scratch budget remains binding.
+MAX_CONCURRENT_SHARD_SEARCHES = 8
 
 
 def _text(name, value):
@@ -447,7 +450,6 @@ class ProbeSearchSession:
         ready_deadline = time.monotonic() + index_ready_wait_seconds
         self._searching = window
         try:
-            results = []
             # D compute rank is not a V version namespace: TP1 D can search
             # several V shards. Route identity is trusted local configuration,
             # never a server-provided key. Legacy single-shard clients retain
@@ -464,12 +466,12 @@ class ProbeSearchSession:
             )
             query_groups = _group_search_queries(prepared.queries, source_scopes)
             source_versions = {}
-            for members in query_groups:
+
+            async def search_group(group_index, versions):
+                members = query_groups[group_index]
                 query = prepared.queries[members[0]]
-                source = source_scopes[members[0]]
                 self._match(window)
                 identity = query.route.identity
-                versions = source_versions.get(source)
                 if versions is not None:
                     if identity.expected_index_version not in (
                         None,
@@ -534,8 +536,48 @@ class ProbeSearchSession:
                 current_versions = (reply.index_version, reply.id_mapping_version)
                 if versions is not None and current_versions != versions:
                     raise ValueError("index changed within a probe window")
-                source_versions[source] = current_versions
-                results.append(reply)
+                return reply
+
+            results = [None] * len(query_groups)
+            # The first search to each selected V source establishes its
+            # version before any other request to that source is submitted.
+            # This preserves the old pin-before-HTTP contract even when the
+            # remaining independent layer/head queries overlap.
+            for index, members in enumerate(query_groups):
+                source = source_scopes[members[0]]
+                if source not in source_versions:
+                    reply = await search_group(index, None)
+                    results[index] = reply
+                    source_versions[source] = (
+                        reply.index_version,
+                        reply.id_mapping_version,
+                    )
+
+            semaphore = asyncio.Semaphore(MAX_CONCURRENT_SHARD_SEARCHES)
+
+            async def search_pinned(index, versions):
+                async with semaphore:
+                    return await search_group(index, versions)
+
+            tasks = {
+                index: asyncio.create_task(
+                    search_pinned(index, source_versions[source_scopes[members[0]]])
+                )
+                for index, members in enumerate(query_groups)
+                if results[index] is None
+            }
+            try:
+                if tasks:
+                    replies = await asyncio.gather(*tasks.values())
+                    for index, reply in zip(tasks, replies, strict=True):
+                        results[index] = reply
+            finally:
+                for task in tasks.values():
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks.values(), return_exceptions=True)
+            self._match(window)
             self._ready = ProbeSelection(
                 window, prepared.queries, tuple(results), query_groups
             )
