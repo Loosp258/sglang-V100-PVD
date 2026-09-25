@@ -713,6 +713,178 @@ class PromptIndexManager:
             validated=validated,
         )
 
+    def search_many(
+        self,
+        requests: Sequence[Tuple[SearchRequestIdentity, torch.Tensor, int]],
+    ) -> Tuple[SearchResult, ...]:
+        """Search one Entry batch under one lease, reservation and fence.
+
+        A uniform small IP batch may use the backend's grouped exact path.
+        Everything else keeps the ordinary per-item backend, but still gets
+        an atomic admission/lifetime boundary. No device allocation or
+        backend call occurs until every caller identity has been checked.
+        """
+        if not 2 <= len(requests) <= 32:
+            raise IndexSearchError("search_many requires 2..32 requests")
+        first_identity = requests[0][0]
+        if not isinstance(first_identity, SearchRequestIdentity):
+            raise IndexSearchError("each search needs a caller identity")
+        transfer_id = first_identity.entry_transfer_id
+        for identity, queries, top_k in requests:
+            if not isinstance(identity, SearchRequestIdentity):
+                raise IndexSearchError("each search needs a caller identity")
+            if identity.entry_transfer_id != transfer_id:
+                raise IndexSearchError("search batch must use one Entry")
+            if (
+                not isinstance(queries, torch.Tensor)
+                or queries.ndim != 2
+                or queries.shape[0] == 0
+            ):
+                raise IndexSearchError("queries must have non-empty 2-D shape")
+            if type(top_k) is not int or top_k <= 0:
+                raise IndexSearchError("top_k must be a positive integer")
+
+        prepared = []
+        with self._lock:
+            if self.quarantined:
+                raise IndexCompletionUnknown(self._quarantine_reason)
+            record = self._entries.get(transfer_id)
+            if record is None:
+                raise IndexSearchError(f"no index gate for {transfer_id}")
+            if not record.gate.searchable:
+                message = (
+                    f"index for {transfer_id} is {record.gate.state.value}, not ready"
+                )
+                if record.gate.exhausted or record.gate.state is IndexState.CLOSED:
+                    raise IndexSearchError(message)
+                raise IndexNotReadyError(message)
+            for identity, queries, top_k in requests:
+                descriptor, validated = record.gate.authorize_search(
+                    identity.vector_space,
+                    expected_id_mapping_version=identity.expected_id_mapping_version,
+                    expected_index_version=identity.expected_index_version,
+                    entry_transfer_id=transfer_id,
+                )
+                item = record.vectors.get((identity.layer, identity.kv_head))
+                index = record.indexes.get((identity.layer, identity.kv_head))
+                if item is None or index is None:
+                    raise IndexSearchError(
+                        f"entry {transfer_id} has no index for layer "
+                        f"{identity.layer} KV head {identity.kv_head}"
+                    )
+                item.require_compatible_query(
+                    positional_encoding=identity.positional_encoding,
+                    head_dim=int(queries.shape[-1]),
+                )
+                if top_k > index.count:
+                    raise IndexSearchError("top_k exceeds indexed vector count")
+                prepared.append(
+                    (
+                        identity,
+                        queries,
+                        top_k,
+                        descriptor,
+                        validated + ("positional_encoding", "layer", "kv_head"),
+                        item,
+                        index,
+                    )
+                )
+            # One batch-wide reader holds every index and mapping through the
+            # final device fence, even if close() removes this Entry meanwhile.
+            record.users += 1
+
+        scratch_owner = (
+            f"prompt-index-search-batch:{transfer_id}:{uuid.uuid4().hex[:8]}"
+        )
+        placed_queries = []
+        raw_results = None
+        failure = None
+        try:
+            indexes = tuple(row[6] for row in prepared)
+            num_queries = int(prepared[0][1].shape[0])
+            top_k = prepared[0][2]
+            supports_grouped = getattr(self.backend, "supports_grouped_exact", None)
+            grouped = (
+                callable(supports_grouped)
+                and all(
+                    row[1].shape[0] == num_queries and row[2] == top_k
+                    for row in prepared
+                )
+                and supports_grouped(indexes, num_queries=num_queries, top_k=top_k)
+            )
+            if grouped:
+                scratch_bytes = self.backend.grouped_exact_footprint(
+                    indexes, num_queries=num_queries, top_k=top_k
+                )
+            else:
+                scratch_bytes = sum(
+                    self.backend.search_footprint(
+                        row[6].count, row[6].dim, int(row[1].shape[0]), row[2]
+                    )
+                    for row in prepared
+                )
+            if self.budget is not None:
+                self._reserve(scratch_owner, scratch_bytes)
+            for row in prepared:
+                query = row[1]
+                if self.backend_device is not None and query.device != torch.device(
+                    self.backend_device
+                ):
+                    query = query.to(device=self.backend_device)
+                placed_queries.append(query)
+            if grouped:
+                raw_results = self.backend.search_grouped_exact(
+                    indexes, placed_queries, top_k=top_k
+                )
+            selections = []
+            for n, row in enumerate(prepared):
+                identity, _, item_top_k, descriptor, validated, item, index = row
+                selections.append(
+                    SearchResult(
+                        selection=select(
+                            self.backend,
+                            index,
+                            placed_queries[n],
+                            layer=identity.layer,
+                            kv_head=identity.kv_head,
+                            mapping=item.mapping,
+                            top_k=item_top_k,
+                            backend_result=raw_results[n] if grouped else None,
+                        ),
+                        index_version=descriptor.index_version,
+                        id_mapping_version=descriptor.id_mapping_version,
+                        validated=validated,
+                    )
+                )
+        except BaseException as exc:
+            failure = exc
+            if isinstance(exc, IndexCompletionUnknown):
+                self._quarantine(exc)
+            raise
+        finally:
+            try:
+                self._fence(*placed_queries)
+            except IndexCompletionUnknown:
+                self._retain_operation(
+                    record,
+                    scratch_owner,
+                    prepared,
+                    requests,
+                    placed_queries,
+                    raw_results,
+                    failure,
+                )
+                raise
+            else:
+                if failure is not None:
+                    traceback.clear_frames(failure.__traceback__)
+                raw_results = placed_queries = prepared = indexes = item = index = None
+                self._release_owners((scratch_owner,))
+                with self._lock:
+                    record.users -= 1
+                    self._retire_locked(record)
+        return tuple(selections)
+
     @contextmanager
     def pin_selection(self, manifest):
         """Validate and lease an immutable index/mapping during sparse packing.

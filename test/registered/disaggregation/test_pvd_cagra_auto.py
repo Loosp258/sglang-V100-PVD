@@ -7,8 +7,12 @@ from sglang.srt.disaggregation.pvd.index_search import (
     IndexCompletionUnknown,
     IndexSearchError,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    TransferBudget,
+    TransferCapacityError,
+)
 from test_pvd_cagra_backend import Runtime, args, backend
-from test_pvd_prompt_index import budgeted, ident, stored_entry
+from test_pvd_prompt_index import budgeted, ident, manager, stored_entry
 
 
 def test_short_prompt_uses_exact_device_path_with_actual_footprints():
@@ -49,6 +53,165 @@ def test_auto_groups_only_live_uniform_exact_indexes():
     with pytest.raises(IndexSearchError, match="disposed"):
         auto.supports_grouped_exact(indexes, num_queries=1, top_k=1)
     auto.dispose(second)
+
+
+def test_manager_search_many_groups_exact_indexes_under_one_budget(monkeypatch):
+    auto = CagraAutoIndexBackend(backend(intermediate_degree=16))
+    budget = TransferBudget(staging_bytes=1 << 20, max_inflight=4)
+    index = manager(backend=auto, metric="ip", budget=budget)
+    store, manifest, _, _ = stored_entry(index, prompt_tokens=2)
+    assert store.progress_prompt_indexes()["built"] == 1
+    record = index._entries[manifest.key.transfer_id]
+    keys = sorted(record.vectors)[:2]
+    requests = tuple(
+        (
+            ident(manifest.key.transfer_id, *key),
+            record.vectors[key].vectors[:1].clone(),
+            1,
+        )
+        for key in keys
+    )
+    expected = tuple(
+        index.search(identity, queries=query, top_k=top_k)
+        for identity, query, top_k in requests
+    )
+    before = budget.snapshot()["used_staging_bytes"]
+
+    def scalar_must_not_run(*args, **kwargs):
+        raise AssertionError("uniform exact batch must use grouped search")
+
+    monkeypatch.setattr(auto, "search", scalar_must_not_run)
+    results = index.search_many(requests)
+    for actual, reference in zip(results, expected):
+        assert actual.selection.token_ids == reference.selection.token_ids
+        assert actual.selection.page_ids == reference.selection.page_ids
+        assert actual.selection.id_mapping_version == reference.selection.id_mapping_version
+        assert actual.validated == reference.validated
+        assert actual.selection.scores == pytest.approx(
+            reference.selection.scores, abs=1e-5
+        )
+    assert budget.snapshot()["used_staging_bytes"] == before
+    store.release_entry(manifest.key)
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_manager_batch_rejects_a_stale_pin_before_any_search(monkeypatch):
+    auto = CagraAutoIndexBackend(backend(intermediate_degree=16))
+    index = manager(backend=auto, metric="ip")
+    store, manifest, _, _ = stored_entry(index, prompt_tokens=2)
+    store.progress_prompt_indexes()
+    record = index._entries[manifest.key.transfer_id]
+    keys = sorted(record.vectors)[:2]
+    requests = [
+        (ident(manifest.key.transfer_id, *key), record.vectors[key].vectors[:1], 1)
+        for key in keys
+    ]
+    requests[1] = (
+        ident(manifest.key.transfer_id, *keys[1], expected_index_version="stale"),
+        requests[1][1],
+        1,
+    )
+
+    def any_search_is_wrong(*args, **kwargs):
+        raise AssertionError("invalid batch must not search")
+
+    monkeypatch.setattr(auto, "search_grouped_exact", any_search_is_wrong)
+    monkeypatch.setattr(auto, "search", any_search_is_wrong)
+    with pytest.raises(ValueError, match="rebuilt"):
+        index.search_many(requests)
+    assert record.users == 0
+    store.release_entry(manifest.key)
+
+
+def test_manager_batch_close_waits_for_grouped_reader_and_refunds(monkeypatch):
+    import threading
+
+    auto = CagraAutoIndexBackend(backend(intermediate_degree=16))
+    budget = TransferBudget(staging_bytes=1 << 20, max_inflight=4)
+    index = manager(backend=auto, metric="ip", budget=budget)
+    store, manifest, _, _ = stored_entry(index, prompt_tokens=2)
+    store.progress_prompt_indexes()
+    record = index._entries[manifest.key.transfer_id]
+    requests = tuple(
+        (ident(manifest.key.transfer_id, *key), vector.vectors[:1].clone(), 1)
+        for key, vector in sorted(record.vectors.items())[:2]
+    )
+    entered, continue_search = threading.Event(), threading.Event()
+    original = auto.search_grouped_exact
+
+    def paused(*args, **kwargs):
+        entered.set()
+        assert continue_search.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(auto, "search_grouped_exact", paused)
+    output = []
+    worker = threading.Thread(target=lambda: output.append(index.search_many(requests)))
+    worker.start()
+    assert entered.wait(5)
+    try:
+        assert record.users == 1
+        store.release_entry(manifest.key)
+        assert budget.snapshot()["used_staging_bytes"] > 0
+    finally:
+        continue_search.set()
+        worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert len(output[0]) == 2
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_manager_batch_unknown_completion_retains_all_owners():
+    runtime = Runtime()
+    auto = CagraAutoIndexBackend(backend(runtime, intermediate_degree=16))
+    budget = TransferBudget(staging_bytes=1 << 20, max_inflight=4)
+    index = manager(backend=auto, metric="ip", budget=budget)
+    store, manifest, _, _ = stored_entry(index, prompt_tokens=2)
+    store.progress_prompt_indexes()
+    record = index._entries[manifest.key.transfer_id]
+    requests = tuple(
+        (ident(manifest.key.transfer_id, *key), vector.vectors[:1].clone(), 1)
+        for key, vector in sorted(record.vectors.items())[:2]
+    )
+    runtime.sync_error = RuntimeError("completion is unknown")
+    with pytest.raises(IndexCompletionUnknown, match="completion is unknown"):
+        index.search_many(requests)
+    assert index.quarantined
+    assert record.users == 1
+    assert index._retained_operations
+    assert budget.snapshot()["used_staging_bytes"] > 0
+
+
+def test_manager_batch_capacity_refuses_before_grouped_backend(monkeypatch):
+    auto = CagraAutoIndexBackend(backend(intermediate_degree=16))
+    budget = TransferBudget(staging_bytes=1 << 20, max_inflight=4)
+    index = manager(backend=auto, metric="ip", budget=budget)
+    store, manifest, _, _ = stored_entry(index, prompt_tokens=2)
+    store.progress_prompt_indexes()
+    record = index._entries[manifest.key.transfer_id]
+    keys = sorted(record.vectors)[:2]
+    requests = tuple(
+        (ident(manifest.key.transfer_id, *key), record.vectors[key].vectors[:1], 1)
+        for key in keys
+    )
+    scratch = auto.grouped_exact_footprint(
+        tuple(record.indexes[key] for key in keys), num_queries=1, top_k=1
+    )
+    before = budget.snapshot()["used_staging_bytes"]
+    budget.reserve("competing-index", (1 << 20) - before - scratch + 1, 0)
+    at_capacity = budget.snapshot()["used_staging_bytes"]
+
+    def backend_must_not_run(*args, **kwargs):
+        raise AssertionError("no backend call before reservation")
+
+    monkeypatch.setattr(auto, "search_grouped_exact", backend_must_not_run)
+    with pytest.raises(TransferCapacityError):
+        index.search_many(requests)
+    assert budget.snapshot()["used_staging_bytes"] == at_capacity
+    assert record.users == 0
+    budget.release("competing-index")
+    store.release_entry(manifest.key)
+    assert budget.snapshot()["used_staging_bytes"] == 0
 
 
 def test_long_prompt_keeps_the_native_cap_and_native_lifecycle():

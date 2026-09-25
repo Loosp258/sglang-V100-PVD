@@ -616,6 +616,7 @@ def select(
     top_k: int,
     kv_head: Optional[int] = None,
     timings: Optional[Dict[str, float]] = None,
+    backend_result: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> Selection:
     """Search one layer and return the choice in Prompt terms, not addresses."""
     if isinstance(layer, bool) or not isinstance(layer, int) or layer < 0:
@@ -641,7 +642,11 @@ def select(
     ):
         raise IndexSearchError("queries must have non-empty [num_queries, dim] shape")
     started = time.perf_counter() if timings is not None else 0.0
-    result = backend.search(index, queries, top_k=top_k)
+    result = (
+        backend.search(index, queries, top_k=top_k)
+        if backend_result is None
+        else backend_result
+    )
     if timings is not None:
         # CUDA work may still be queued here. The host materialization below
         # is the synchronization point; these are wall stages, not kernel time.
