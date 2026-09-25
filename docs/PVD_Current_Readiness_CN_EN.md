@@ -3173,3 +3173,28 @@ wait. Against a 0.38–0.40 s warm refresh, two tokens of lead remain
 short. The next experiment keeps M=4 but tries lead=3 with three draft
 tokens; it may reduce the stall, add draft/probe cost, or alter approximate
 selection, so it must not become the default without validation.
+
+CloudLab `c9d9aa901` 的非默认 lead=3/predict=3、M=4 实验完成：
+三次固定 20-token 请求均为 20/20 SSE，总耗时约
+3.77/3.48/3.50 秒，最大可观测间隔约
+0.271/0.261/0.259 秒。热态 boundary 8/12/16 的可观测等待
+约 0.073–0.091 秒，与 lead=2 的约 0.077–0.101 秒基本重叠；
+capture 从约 0.145 秒增至约 0.160–0.171 秒，整轮 search 从
+约 0.16–0.18 秒增至约 0.23 秒，总刷新约 0.46–0.48 秒。
+批量检索的 query_rows 仍为 24/32 项对应的 168/224 行，
+因此 search 变慢不能归因于 query 行数增加；GPU/CPU 并发竞争
+仍需更细的诊断。该样本不支持把 lead3 设为默认，在线 D 应恢复
+已验证的 lead2。尚未做生成内容或检索召回的质量对照。
+
+The non-default `c9d9aa901` CloudLab experiment used lead=3,
+predict=3 and unchanged M=4. Three fixed 20-token requests returned
+20/20 SSE events in about 3.77/3.48/3.50 s, with maximum observed gaps
+of 0.271/0.261/0.259 s. Warm boundary-8/12/16 observable waits were
+roughly 0.073–0.091 s, overlapping the lead=2 range of 0.077–0.101 s.
+Capture rose from about 0.145 s to 0.160–0.171 s, full search from
+about 0.16–0.18 s to 0.23 s, and warm refresh to about 0.46–0.48 s.
+Batch query-row counts stayed at 168/224 for 24/32 items, so a larger
+query matrix does not explain the search increase; contention needs finer
+diagnosis. These samples do not justify making lead3 the default. Live D
+should return to the validated lead2 configuration. Generated-content
+quality and recall have not been compared.
