@@ -539,7 +539,7 @@ class CUDASparseAttentionWorkspace:
                             triton_rows,
                         )
                         raise SparsePayloadError(
-                            "Triton/online live attention disagreement: "
+                            "Triton/online numerical disagreement: "
                             f"layer={layer} max_abs_error={max_error:.6g}"
                         )
                     logger.info(
