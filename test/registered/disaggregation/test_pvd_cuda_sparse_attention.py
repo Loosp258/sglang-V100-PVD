@@ -1,7 +1,9 @@
 """Actual CPU math and explicit CPU ownership policies; CUDA tests skip separately."""
 
 import math
+from contextlib import contextmanager
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -269,6 +271,93 @@ def test_bounded_sdpa_workspace_reserves_before_use_and_releases_after_fence(
     assert budget.snapshot()["used_staging_bytes"] == 0
     for peer in peers.values():
         peer.close()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="real CUDA device required")
+def test_real_gpu_bounded_sdpa_workspace_fences_before_releasing_inputs():
+    device = torch.device("cuda:0")
+    torch.manual_seed(731)
+    mapping = QueryHeadMapping(4, 2)
+    prompt_tokens = 32
+    rows = (1, 5, 10)
+    q = torch.randn((4, 128), device=device, dtype=torch.float16)
+    generated_k = torch.randn((16, 2, 128), device=device, dtype=torch.float16)
+    generated_v = torch.randn_like(generated_k)
+    output = torch.empty_like(q)
+    reference = torch.empty_like(q)
+    selected = {
+        (0, head): (
+            SimpleNamespace(token_ids=tuple(range(prompt_tokens))),
+            torch.randn((2, prompt_tokens, 128), device=device, dtype=torch.float16),
+        )
+        for head in range(2)
+    }
+    reference_buffers = attention.AttentionBuffers(
+        q, generated_k, generated_v, reference, rows
+    )
+    scratch = torch.empty(
+        attention.scratch_elements(8, 128), device=device, dtype=torch.float32
+    )
+    attention._stream_attention(
+        selected, reference_buffers, mapping, 0, 1 / math.sqrt(128), scratch, 8, 128
+    )
+    torch.cuda.synchronize(device)
+
+    class Peer(CUDARankInstallParticipant):
+        def __init__(self):
+            self._bank = SimpleNamespace(
+                device=device,
+                dtype=torch.float16,
+                head_dim=128,
+                prompt_tokens=prompt_tokens,
+                snapshot=lambda: {"quarantine": None},
+            )
+
+        @contextmanager
+        def read(self, decode_tokens):
+            assert decode_tokens == len(rows) - 1
+            yield selected
+
+    budget = TransferBudget(1 << 20, 2)
+    workspace = attention.CUDASparseAttentionWorkspace(
+        device=device,
+        dtype=torch.float16,
+        head_dim=128,
+        chunk_tokens=8,
+        budget=budget,
+        attention_impl="sdpa_bounded",
+        max_sequence_tokens=128,
+        total_kv_heads=2,
+        num_query_heads=4,
+    )
+    released = []
+    guard = ResourceGuard(
+        attention.AttentionBuffers(q, generated_k, generated_v, output, rows),
+        lambda: released.append(True),
+    )
+    original_sync = workspace._synchronize
+
+    def completion_fence():
+        guard.request_release()
+        assert not released
+        original_sync()
+
+    workspace._synchronize = completion_fence
+    try:
+        workspace.execute(
+            Peer(),
+            decode_tokens=len(rows) - 1,
+            layer=0,
+            mapping=mapping,
+            resources=guard,
+            scale=1 / math.sqrt(128),
+        )
+        assert released == [True]
+        torch.testing.assert_close(output, reference, atol=0.02, rtol=0.02)
+    finally:
+        if workspace.snapshot()["quarantine"] is None:
+            workspace.close()
+    assert budget.snapshot()["used_staging_bytes"] == 0
 
 
 @pytest.mark.parametrize("drain_fails", [False, True])
