@@ -3,6 +3,38 @@
 Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-25 稀疏 attention tile 实验 / Sparse-attention tile experiment
+
+在 D 独立 worktree 中仅将 `attention_chunk_tokens` 从 8 改为 64；
+严格配置测试确认其他限制完全相同。固定 `PVD_TPOT_001` 的 20-token
+流式热态请求，chunk 8 约 **14.18 秒**、token 间隔中位数 **0.723 秒**；
+chunk 64 约 **12.19 秒**、中位数 **0.613 秒**。固定 36-token Prompt 的
+chunk-64 请求约 **13.39 秒**，生成 ID 与旧 Top-4 结果逐项相同；
+旧配置同输入约 18.9 秒。首次 chunk-64 请求约 55 秒，其中首个 token
+后的一个间隔约 28.5 秒，可能混有新 tile 的首次编译/预热，不能用于
+热态加速比。完整 KV 的同一短流式输入热态约 2.34 秒，差距仍巨大。
+
+因此增大 tile 能减少部分 Python/tile 循环开销，但没有消除每 head
+小操作、逐层同步的可能瓶颈；此处仅是一个配置实验，不改变生产默认值，
+也未对所有 Prompt/并发/显存峰值做验收。D 实验后恢复原 chunk=8。
+
+In an isolated D worktree, only `attention_chunk_tokens` changed from 8 to
+64; the strict config test checks every other bound is identical. On the
+fixed `PVD_TPOT_001` 20-token warm stream, chunk 8 took about **14.18
+seconds** with **0.723-second** median token interval, versus about **12.19
+seconds** and **0.613 seconds** for chunk 64. The fixed 36-token Prompt took
+about **13.39 seconds** with chunk 64 and produced exactly the prior Top-4
+output IDs; the old config took about 18.9 seconds on that input. The first
+chunk-64 request took about 55 seconds, including a 28.5-second gap after
+its first token; this may include first-use compilation/warmup and is not a
+warm speedup estimate. Full KV took about 2.34 seconds on the same short
+stream, leaving a large gap.
+
+A larger tile removes some Python/tile-loop work but does not eliminate the
+suspected many-small-op/per-layer-sync cost. This is an opt-in config test,
+not a changed production default or validation over diverse prompts,
+concurrency and peak memory. D was restored to its original chunk-8 config.
+
 ## 2026-09-25 流式逐 token 对照 / Streaming token-timing comparison
 
 `e8fdc4178` 增加严格 SSE 计时工具；CPU 全量回归 **2916 passed /
