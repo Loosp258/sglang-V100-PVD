@@ -338,7 +338,9 @@ def test_actual_http_two_source_versions_and_gqa_union(corrupt):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("mode", ["ok", "corrupt", "cancel"])
+@pytest.mark.parametrize(
+    "mode", ["ok", "corrupt", "cancel", "cancel_seed", "parallel_seeds"]
+)
 def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode):
     async def run():
         pool, storage, manifest, _, _ = build_entry()
@@ -364,12 +366,22 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
             }
             singles, batches = [], []
             entered = asyncio.Event()
+            seed_sources = set()
+            both_seeds_started = asyncio.Event()
             for rank, client in clients.items():
                 stack.push_async_callback(client.close)
                 original_single, original_batch = client.search, client.search_many
 
                 async def one(identity, *, _rank=rank, _original=original_single, **kw):
                     singles.append((_rank, identity))
+                    if mode == "cancel_seed" and _rank == 1:
+                        entered.set()
+                        await asyncio.Future()
+                    if mode == "parallel_seeds":
+                        seed_sources.add(_rank)
+                        if len(seed_sources) == 2:
+                            both_seeds_started.set()
+                        await asyncio.wait_for(both_seeds_started.wait(), 2)
                     return await _original(identity, **kw)
 
                 async def many(requests, *, _rank=rank, _original=original_batch):
@@ -427,7 +439,7 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
             prepared = session.prepare(
                 window, pipeline, routes=routes, head_mapping=QueryHeadMapping(8, 4)
             )
-            if mode == "cancel":
+            if mode in ("cancel", "cancel_seed"):
                 task = asyncio.create_task(session.search(prepared, routing))
                 await asyncio.wait_for(entered.wait(), 3)
                 assert session._ready is None
@@ -452,6 +464,8 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
             assert len(selection.selections) == 8
             assert {rank for rank, _ in singles} == {0, 1}
             assert len(singles) == 2
+            if mode == "parallel_seeds":
+                assert both_seeds_started.is_set()
             assert len(batches) == 2
             assert set(routing.verified_versions()) == {0, 1}
             for rank, identities in batches:

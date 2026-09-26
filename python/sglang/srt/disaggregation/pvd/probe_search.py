@@ -553,19 +553,37 @@ class ProbeSearchSession:
                 return reply
 
             results = [None] * len(query_groups)
-            # The first search to each selected V source establishes its
-            # version before any other request to that source is submitted.
-            # This preserves the old pin-before-HTTP contract even when the
-            # remaining independent layer/head queries overlap.
+            # One first search per V source establishes that source's version
+            # before any other request to the SAME source is submitted. The
+            # sources have independent version namespaces, so send their
+            # first searches together: waiting for rank 0 before even issuing
+            # rank 1 can add a scheduler-loop stall to every refresh.
+            seed_groups = {}
             for index, members in enumerate(query_groups):
                 source = source_scopes[members[0]]
                 if source not in source_versions:
-                    reply = await search_group(index, None)
-                    results[index] = reply
-                    source_versions[source] = (
-                        reply.index_version,
-                        reply.id_mapping_version,
-                    )
+                    seed_groups.setdefault(source, index)
+            seed_tasks = {
+                source: asyncio.create_task(search_group(index, None))
+                for source, index in seed_groups.items()
+            }
+            try:
+                if seed_tasks:
+                    seed_replies = await asyncio.gather(*seed_tasks.values())
+                    for (source, index), reply in zip(
+                        seed_groups.items(), seed_replies, strict=True
+                    ):
+                        results[index] = reply
+                        source_versions[source] = (
+                            reply.index_version,
+                            reply.id_mapping_version,
+                        )
+            finally:
+                for task in seed_tasks.values():
+                    if not task.done():
+                        task.cancel()
+                if seed_tasks:
+                    await asyncio.gather(*seed_tasks.values(), return_exceptions=True)
 
             semaphore = asyncio.Semaphore(MAX_CONCURRENT_SHARD_SEARCHES)
 
