@@ -247,6 +247,25 @@ def test_opt_in_timeline_orders_refresh_schedule_ready_and_install(monkeypatch, 
     ]
 
 
+def test_opt_in_timeline_identifies_scheduler_poll_gap(monkeypatch, caplog):
+    monkeypatch.setenv("PVD_PROFILE_REFRESH_TIMELINE", "1")
+    with synchronous(monkeypatch) as (driver, c, control, request, _):
+        now = [100.0]
+        driver._clock = lambda: now[0]
+        request.output_ids.extend([3] * 4)
+        with caplog.at_level(
+            "INFO", logger="sglang.srt.disaggregation.pvd.cuda_refresh_driver"
+        ):
+            driver.poll()
+            assert driver._records[request.rid].refresh is not None
+            now[0] = 100.5
+            driver.poll()
+        assert any(
+            "event=poll_gap seconds=0.500000 pending_refreshes=1" in row.message
+            for row in caplog.records
+        )
+
+
 def test_boundary_diagnostic_failure_cannot_undo_safe_install(monkeypatch):
     from sglang.srt.disaggregation.pvd import cuda_refresh_driver
 

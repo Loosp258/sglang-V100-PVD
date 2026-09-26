@@ -110,6 +110,7 @@ class CUDARefreshDriver:
         self._execution_lock = None
         self._closing = self._pumping = False
         self._source_quarantine = None
+        self._last_poll_at = None
         poll_turns = os.environ.get("PVD_REFRESH_POLL_TURNS", "1")
         if (
             not poll_turns.isascii()
@@ -702,6 +703,25 @@ class CUDARefreshDriver:
             r.capture_lease is not None for r in self._records.values()
         ):
             raise LifecycleError("poll only between target forwards/result processing")
+        now = self._clock()
+        if (
+            self._last_poll_at is not None
+            and now - self._last_poll_at >= 0.25
+            and any(
+                r.refresh is not None and not r.refresh.done()
+                for r in self._records.values()
+            )
+        ):
+            _timeline(
+                "PVD timeline event=poll_gap seconds=%.6f pending_refreshes=%d t=%.6f",
+                now - self._last_poll_at,
+                sum(
+                    r.refresh is not None and not r.refresh.done()
+                    for r in self._records.values()
+                ),
+                now,
+            )
+        self._last_poll_at = now
         if not self._owns_loop:
             self._pumping = True
             try:
