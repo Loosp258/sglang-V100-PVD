@@ -3,6 +3,52 @@
 Updated / 更新：2026-09-26。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-26 并发长 Prompt 对照与刷新轮询 / Concurrent long-prompt A/B and refresh polling
+
+三台隔离 CloudLab V100S 节点使用 Qwen2.5-7B-Instruct、P/D TP1、V 双 GPU、
+单 `mlx5_0` rail、固定 `EEFTRITON` 回放输入；每轮两个并发请求，
+各约 1094 个 Prompt token、贪心生成 8 token，共五轮。P/V/Gateway 保持不变，
+仅重启 D 切换模式。V 使用 exact 阈值 2048、Entry TTL 900 秒，
+预测模式使用 M=4、Top-4/并集上限 32、Triton grouped attention。
+以下是每轮完成全部两个请求的客户端墙钟时间，包含排队、首次请求冷态和通信，
+不是单个 kernel 或纯网络耗时：
+
+| 模式 / Mode | 五轮墙钟秒数 / Five round wall times (s) |
+|---|---|
+| 预测 Top-4，种子搜索顺序版 / Predictive, sequential seed search | 12.57, 11.31, 11.37, 11.39, 11.40 |
+| 完整 Prompt KV / Full Prompt KV | 1.29, 1.11, 1.09, 1.09, 1.07 |
+| 预测 Top-4，V shard 种子并发 / Predictive, parallel V-shard seeds (`2e2476369`) | 11.87, 11.35, 11.19, 11.18, 11.20 |
+| 同上，D 每次轮询 8 个 event-loop turn / Same, 8 poll turns | 11.72, 11.32, 11.34, 11.43, 11.12 |
+
+各配置均完成 10/10 个请求；本组 8-token 样本的输出哈希与完整 KV 一致，
+但不能外推到更长输出或检索质量。并发种子搜索和增加轮询 turn 都没有显著缩小
+约十倍的端到端差距，因此**不应改默认配置或宣称性能达标**。短跑中 V 的批量搜索
+HTTP 约 0.12 秒返回，但 D 曾出现约 3.97 秒的待刷新轮询空档，导致一次
+`search_seconds` 约 4.06 秒；这是下一步需要定位的调度/owner-loop 问题，
+不能简单归因于 RDMA。另一次 20-output 并发五轮实验每轮约 198–200 秒，
+输出长度不同，不与上表直接比较。实验服务已停止；无生产默认值变更。
+
+The isolated three-node V100S comparison used the same Qwen2.5-7B-Instruct
+model, P/D TP1, two-GPU V, single `mlx5_0` rail, and fixed `EEFTRITON`
+replay inputs. Each of five rounds had two concurrent ~1094-token prompts
+and eight greedy output tokens. P/V/Gateway stayed fixed; only D was
+restarted to switch modes. V used an exact-index cutoff of 2048 and a
+900-second Entry TTL. Predictive mode used M=4, Top-4/union cap 32, and
+Triton grouped attention. The table reports client wall time to complete
+both requests in each round, including admission and cold effects, not a
+kernel or network-only measurement. All modes completed 10/10 requests;
+the eight-token output hashes matched full KV for these inputs only.
+Parallelizing seed searches and increasing poll turns did not materially
+close the approximately tenfold end-to-end gap. A short diagnostic run saw
+V batch-search HTTP return in about 0.12 s while D left one refresh
+unpolled for about 3.97 s (`search_seconds` about 4.06 s); the scheduler
+or owner-loop cause remains to be isolated. A separate 20-output concurrent
+run took roughly 198–200 s per round, but its different output length
+precludes a direct comparison with the table. The experiment services were
+stopped, and no production default was changed. These results do **not**
+establish a PVD speedup, general quality equivalence, or network-as-local
+behavior.
+
 ## 2026-09-26 长 Prompt 索引策略对照 / Long-prompt index-policy comparison
 
 三台 CloudLab V100S 节点在隔离 worktree `4dff91e79` 上运行相同的
