@@ -10,12 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import os
 import time
 from typing import Any, Dict, Mapping, Optional
 
 import aiohttp
+import numpy as np
 import orjson
 import torch
 from aiohttp import web
@@ -312,7 +312,7 @@ def _run_search(index, identity, queries, top_k: int, timings=None, queued_at=0.
     if timings is not None:
         timings["thread_wait"] = time.perf_counter() - queued_at
         started = time.perf_counter()
-    tensor = torch.tensor(queries, dtype=torch.float32)
+    tensor = torch.from_numpy(queries)
     if timings is not None:
         timings["query_tensor"] = time.perf_counter() - started
     if timings is None:
@@ -325,7 +325,7 @@ def _run_search_many(index, prepared, queued_at=0.0, timings=None):
         timings["thread_wait"] = time.perf_counter() - queued_at
         started = time.perf_counter()
     requests = tuple(
-        (identity, torch.tensor(queries, dtype=torch.float32), top_k)
+        (identity, torch.from_numpy(queries), top_k)
         for identity, queries, top_k in prepared
     )
     if timings is not None:
@@ -527,13 +527,31 @@ def create_shard_app(
             raise ValueError("queries must be equal-length lists of numbers")
         if len({len(row) for row in queries}) != 1:
             raise ValueError("queries must be equal-length lists of numbers")
-        if any(
-            type(value) not in (int, float)
-            or abs(value) > torch.finfo(torch.float32).max
-            or not math.isfinite(value)
-            for row in queries
-            for value in row
-        ):
+        # One bounded host conversion validates all Q cells, then the worker
+        # creates a zero-copy CPU tensor view. The old per-scalar math checks
+        # and second torch.tensor copy cost ~20 ms per 56-item Qwen batch.
+        # NumPy may coerce a mixed bool/float list to floats, so reject bools
+        # explicitly before the array conversion can erase their type.
+        if any(type(value) is bool for row in queries for value in row):
+            raise ValueError("queries must contain finite float32 numbers")
+        raw = np.asarray(queries)
+        if raw.ndim != 2:
+            raise ValueError("queries must be equal-length lists of numbers")
+        if raw.dtype.kind not in "iuf":
+            # Object arrays can contain valid large Python ints, so retain
+            # the numeric protocol while rejecting mixed strings/None.
+            if any(
+                type(value) not in (int, float)
+                for row in queries
+                for value in row
+            ):
+                raise ValueError("queries must contain finite float32 numbers")
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                queries = np.asarray(queries, dtype=np.float32)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError("queries must contain finite float32 numbers") from exc
+        if not np.isfinite(queries).all():
             raise ValueError("queries must contain finite float32 numbers")
         top_k = data.get("top_k", 1)
         if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:

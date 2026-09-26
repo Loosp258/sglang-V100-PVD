@@ -386,6 +386,31 @@ Top-4 measured **2.47 ms** median for stable sort versus **1.08 ms** for
 the reduction, with identical outputs. Saving about **1.39 ms/batch** is
 not an end-to-end speedup claim; the switch remains off by default.
 
+### V 查询数组校验与零拷贝 CPU tensor / V query validation and zero-copy CPU tensor
+
+V 控制面把有界 JSON Q 行先转成 NumPy float32 数组、整批检查有限值，
+工作线程再用 `torch.from_numpy` 建立 CPU tensor 视图，代替旧的逐标量
+`math.isfinite`/界限检查及第二次 `torch.tensor` 复制。bool、字符串、
+嵌套列表、None、NaN、Inf 和极大整数仍在后端前拒绝；HTTP/索引回归
+**159 passed**，Ruff 通过。同一 V100S 配置、56 项/392 Q 行的真实
+V 日志中，请求校验由约 **19 ms** 降至 **6.5–6.8 ms**，tensor 构造
+由约 **3–4 ms** 降至 **0.1–0.2 ms**。保持 Top-K 归约 opt-in 开启，
+同 seed 三机每轮墙钟由 **6.12/5.25/5.14 s** 至
+**6.05/5.14/5.13 s**，六个哈希与 120 SSE 均一致。三轮小样本不能
+证明端到端稳定收益，仍远慢于完整 KV。
+
+V now converts bounded JSON Q rows to one float32 NumPy array, checks
+finiteness in bulk, and creates a zero-copy CPU tensor view in the worker.
+Malformed booleans, strings, nested rows, nulls, NaN/Inf and enormous ints
+still fail before backend execution. Search/index HTTP tests passed
+**159/159** and Ruff passed. On real V100S 56-item/392-row batches,
+request validation fell from about **19 ms** to **6.5–6.8 ms** and tensor
+construction from **3–4 ms** to **0.1–0.2 ms**. With the Top-K opt-in still
+enabled, three same-seed two-client rounds were **6.05/5.14/5.13 s**
+versus **6.12/5.25/5.14 s** before this change, with all hashes/SSE intact.
+This is a measured V control-path improvement, not an established end-to-end
+win or evidence of the final latency target.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
