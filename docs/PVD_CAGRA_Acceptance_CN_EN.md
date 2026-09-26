@@ -632,10 +632,12 @@ Top-10 overlapped the exact GPU dot-product Top-10 by **10/10** in this one
 query; maximum returned-score error was **0.000244140625**. Probe budget was
 refunded and the gate passed.
 
-This is one query and one layer/head, not a quality distribution or a recall
-guarantee. The Prompt tokens are deterministic synthetic IDs processed by real
-weights. The gate runs on one node: it does not send this model KV over RDMA,
-install it on D, run generated-token attention, or measure pipeline latency.
+This historical run is one query and one layer/head, not a quality distribution
+or a recall guarantee. Its Prompt tokens were deterministic synthetic IDs
+processed by real weights. The script was later expanded to natural-language
+tokens, target-greedy next-token Q and eight layer/GQA-head cases; see
+`PVD_CloudLab_2026-09-27_Validation_CN_EN.md`. Neither standalone version
+sends this model KV over RDMA or measures pipeline latency.
 
 ```bash
 # On the isolated V cuVS-25.02 candidate, with PYTHONPATH=python and the

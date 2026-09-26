@@ -135,9 +135,46 @@ input limit this comparison; it neither establishes general quality nor
 justifies changing the default threshold. Exact search also scales with
 Entry length, so this is not a general replacement for CAGRA.
 
+### 真实目标 Q 的 CAGRA 召回 / Real target-Q CAGRA recall
+
+在 D 节点空闲的 V100S GPU0 上，使用独立的 cuVS 25.02 虚拟环境和已有的
+Qwen2.5-7B-Instruct FP16 checkpoint，运行更新后的
+`run_pvd_qwen_cagra_recall_gpu.py`。测试先从本地 tokenizer 编码的
+自然语言段落构造 1024/2048-token Prompt，经目标模型真实 forward
+生成 post-RoPE K；使用该 forward 的 greedy 下一 token，通过独立目标
+probe 捕获位置 1024/2048 的 post-RoPE Q。覆盖 layer 0/16、Q head
+0/1/7/8（对应 KV head 0/1），每种长度 8 个查询，以 GPU exact
+点积 Top-10 为 oracle。两种长度均为 **8/8 查询 recall@10=1.0**，
+最大分数绝对误差 **0.000244140625**，私有 probe 预算归零。
+2048 行第一次被脚本原来的 256 MiB 测试预算正确拒绝；将这个独立
+测试预算增至 512 MiB 后通过。V/D 正在运行的服务预算未变。
+
+On idle D GPU0, an isolated pinned cuVS 25.02 environment loaded the
+existing FP16 Qwen2.5-7B checkpoint. The updated acceptance script used
+tokenized natural-language passages, actual target Prompt K, the target
+model's greedy next token, and a separate post-RoPE target-Q probe. For both
+1024 and 2048 rows, all eight sampled layer/GQA-head queries had
+**recall@10=1.0** against GPU exact search; maximum score error was
+**0.000244140625**, with the private probe budget refunded. The 2048-row
+run initially hit the script's own 256 MiB budget; it passed after raising
+that independent test bound to 512 MiB. This is a **small, repeated-text
+single-prefix sample** on one GPU, not an end-to-end sparse-attention quality
+distribution, a CAGRA recall guarantee on diverse prompts, or a performance
+result. The script's `performance_validated` flag remains false.
+
+```bash
+# On the D node's isolated validation checkout, after sourcing the normal
+# Conda environment and exposing the pinned cuVS venv's package/library paths:
+CUDA_VISIBLE_DEVICES=0 PVD_CAGRA_RECALL_ROWS=2048 \
+  python test/registered/disaggregation/run_pvd_qwen_cagra_recall_gpu.py \
+  --architecture qwen2 \
+  --model-path /users/Yizhzhu/pvd-models/Qwen2.5-7B-Instruct \
+  --context-length 2304 --max-total-tokens 2304
+```
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
-2. **Quality:** synthetic CAGRA recall and output hashes on repetitive prompts are not real-query recall or task-quality evidence. Measure Qwen query recall against exact, and compare generated outputs under varied prompts.
+2. **Quality:** the new real-Qwen target-Q test covers only one repeated-text prefix, two layers and eight GQA-head queries per length. It is not a broad recall distribution or generated-answer quality evidence. Compare generated outputs on varied, non-repetitive prompts and more query positions/layers before claiming quality.
 3. **Scale:** this experiment is P TP1, V 2 ranks, D TP1, single rail, one or two clients, max 2304 sequence tokens. TP asymmetry, dual-rail, long-running load, TTL pressure, multi-D routing, and full GPU-memory safety have not been established here.
 4. **Cache:** compare private probe prefix cache on/off with matched warmups, unique prompts and budget snapshots; exercise concurrent close, cancellation and retraction. The three-request run establishes only the narrow cleanup regression.
