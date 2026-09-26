@@ -316,6 +316,24 @@ HTTP 200. Only the first round shows a notable observed improvement (~0.71 s);
 warm rounds are essentially unchanged and this is not evidence of a stable
 speedup over full-KV Decode.
 
+### M=4 预取提前量 2→3 / M=4 prefetch lead 2→3
+
+为检验一个额外生成 token 是否能遮蔽搜索和 RDMA，新增独立实验配置
+`pvd_qwen_v100s_serving_limits_triton_m4_lead3_probe_cache_long.json`：
+与上述 lead=2 配置只差 `lead_tokens=3`，启动时配套
+`PVD_DRAFT_PREDICT_TOKENS=3`；配置差异与约束测试 **2 passed**。
+同一新搜索代码、P/V/Gateway、固定输入和 2 客户端 × 3 轮，lead=3
+墙钟为 **5.75/5.44/5.11 s**，对照 lead=2 的 **5.63/5.06/5.00 s**。
+六个输出哈希均相同、120/120 SSE 完整。此负结果不支持把 lead=3
+设为默认；它不证明所有 prompt、并发度或网络条件下 lead=2 最优。
+
+The lead=3 configuration changes only the prefetch lead from the cached
+M=4/lead=2 setup and pairs it with three draft tokens; its two targeted
+configuration tests passed. Under the same fixed seed and live P/V/Gateway,
+three two-client rounds took **5.75/5.44/5.11 s** versus
+**5.63/5.06/5.00 s** with lead=2. All six output hashes and 120 SSE tokens
+matched. This narrow negative result does not justify a default change.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

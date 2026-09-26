@@ -96,6 +96,23 @@ def test_v100s_triton_long_probe_cache_experiment_only_adds_budget():
     assert limits.probe_prefix_cache_bytes == 512 << 20
 
 
+def test_v100s_triton_cached_m4_lead3_changes_only_prefetch_lead():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (
+            directory / "pvd_qwen_v100s_serving_limits_triton_m4_probe_cache_long.json"
+        ).read_text()
+    )
+    candidate_path = (
+        directory / "pvd_qwen_v100s_serving_limits_triton_m4_lead3_probe_cache_long.json"
+    )
+    assert json.loads(candidate_path.read_text()) == {**baseline, "lead_tokens": 3}
+    limits = load_cuda_serving_limits(
+        candidate_path, refresh_interval=4, predict_tokens=3
+    )
+    assert limits.lead_tokens == 3
+
+
 def test_v100s_chunk64_experiment_only_changes_attention_tile():
     directory = Path(__file__).parent
     baseline = json.loads(
