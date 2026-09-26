@@ -11,6 +11,7 @@ import hashlib
 import json
 import statistics
 import time
+import urllib.error
 import urllib.request
 
 
@@ -24,9 +25,13 @@ def request(url, prompt, output_tokens, timeout):
     call = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(call, timeout=timeout) as response:
-        status = response.status
-        result = json.load(response)
+    try:
+        with urllib.request.urlopen(call, timeout=timeout) as response:
+            status = response.status
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gateway HTTP {exc.code}: {detail}") from exc
     if status != 200 or not isinstance(result, dict):
         raise RuntimeError(f"unexpected Gateway response status={status}")
     text = result.get("text")
