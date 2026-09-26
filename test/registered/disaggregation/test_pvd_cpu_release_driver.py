@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -380,6 +381,50 @@ def test_actual_scheduler_loop_polls_when_paused_idle_or_after_result(
     assert hook(NS()) is None
     with pytest.raises(TypeError, match="CPU release driver"):
         hook(NS(pvd_cpu_release_driver=object()))
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_scheduler_phase_timeline_is_opt_in_and_identifies_queue_stall(
+    monkeypatch, caplog, enabled
+):
+    if enabled:
+        monkeypatch.setenv("PVD_PROFILE_REFRESH_TIMELINE", "1")
+    else:
+        monkeypatch.delenv("PVD_PROFILE_REFRESH_TIMELINE", raising=False)
+    samples = iter((0.0, 0.01, 0.02, 0.32, 0.33, 0.34, 0.35, 0.36, 0.37))
+    monkeypatch.setattr(time, "monotonic", lambda: next(samples))
+    received = False
+
+    class StopLoop(Exception):
+        pass
+
+    def receive():
+        nonlocal received
+        if received:
+            raise StopLoop()
+        received = True
+        return []
+
+    scheduler = NS(
+        request_receiver=NS(recv_requests=receive),
+        process_input_requests=lambda _: None,
+        process_decode_queue=lambda: None,
+        poll_pvd_cpu_releases=lambda: None,
+        _engine_paused=False,
+        get_next_disagg_decode_batch_to_run=lambda: None,
+        on_idle=lambda: None,
+    )
+    with caplog.at_level("INFO", logger="sglang.srt.disaggregation.decode"):
+        with pytest.raises(StopLoop):
+            scheduler_methods()["event_loop_normal_disagg_decode"](scheduler)
+    phases = [
+        row.message for row in caplog.records if "event=scheduler_phase" in row.message
+    ]
+    assert (
+        (len(phases) == 1 and "phase=decode_queue" in phases[0])
+        if enabled
+        else not phases
+    )
 
 
 def test_actual_scheduler_poll_hook_drives_sync_retirement():
