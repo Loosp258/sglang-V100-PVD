@@ -51,6 +51,12 @@ case "$role" in
       echo 'Refusing to start: isolated V coordinator 9100 already exists' >&2
       exit 1
     fi
+    entry_ttl_secs="${PVD_LONG_ENTRY_TTL_SECS:-300}"
+    if [[ ! "$entry_ttl_secs" =~ ^[1-9][0-9]{2,3}$ ]] ||
+       (( entry_ttl_secs < 300 || entry_ttl_secs > 3600 )); then
+      echo 'PVD_LONG_ENTRY_TTL_SECS must be an integer in 300..3600' >&2
+      exit 2
+    fi
     triton_sparse_args=()
     case "${PVD_TRITON_SPARSE_PACKING:-0}" in
       0) ;;
@@ -69,6 +75,7 @@ case "$role" in
     nohup setsid "$root/deps/pvd-cagra25-venv/bin/python" -m sglang.srt.disaggregation.pvd.server \
       --world-size 2 --host 0.0.0.0 --advertise-host 10.0.1.2 \
       --coordinator-port 9100 --shard-port-base 9300 \
+      --entry-ttl-secs "$entry_ttl_secs" \
       --pvd-rank-devices 0,1 --pvd-rank-rails mlx5_0,mlx5_0 \
       --transfer-backend mooncake --strict-rdma-preflight \
       --total-pages 8192 --page-bytes 57344 \
