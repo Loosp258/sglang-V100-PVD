@@ -334,6 +334,37 @@ three two-client rounds took **5.75/5.44/5.11 s** versus
 **5.63/5.06/5.00 s** with lead=2. All six output hashes and 120 SSE tokens
 matched. This narrow negative result does not justify a default change.
 
+### 当前完整 KV 控制与刷新关键路径 / Current full-KV control and refresh critical path
+
+上述 `firstbatch-ab-20260927` 的相同固定 seed、921-token prompt、双客户端
+× 3 轮，保持 P/V/Gateway 不变并仅把 D 切为完整 KV，墙钟为
+**2.11/2.00/2.01 s**；6 个输入/输出哈希与预测 PVD 均相同，120/120
+SSE 完整。新预测路径 lead=2 的 **5.63/5.06/5.00 s** 仍约为完整 KV
+的 2.5 倍；当前未证明端到端收益。
+
+用新预测路径打开 D 时间线，仅观察一轮同输入负载：8 条已记录的
+`PVD refresh ready` 中，典型同步 draft+目标 Q 捕获约 **0.216 s**，
+搜索等待约 **0.20–0.44 s**，稀疏交付约 **0.07–0.10 s**；最长总刷新
+约 **0.91 s**。D 的 56 项 batch 各含 392 行 Q，JSON 请求约
+**0.7 MiB/shard**，部分底层 HTTP 为约 0.07–0.12 s；这些阶段的
+并发/排队使它们不能简单相加成纯网络 RTT。完整 KV 控制的最大 SSE
+token 间隔约 0.17 s，而预测路径约 0.73 s。优先工作应是避免每轮
+同步捕获阻塞正式 Decode，并将 V 检索、选择、打包和发送合成更短的
+关键路径；不能以单纯少一个首次 seed RPC 代替这两项。
+
+For the exact same seed and six 921-token/twenty-output requests, a
+full-KV D control with P/V/Gateway unchanged took **2.11/2.00/2.01 s** per
+two-client round, versus **5.63/5.06/5.00 s** for the new lead=2 predictive
+path. All six input/output hashes matched and all 120 SSE tokens arrived.
+Predictive PVD is still about 2.5x slower. One instrumented predictive round
+showed typical synchronous draft+target-Q capture near **0.216 s**, search
+wait **0.20–0.44 s**, and sparse delivery **0.07–0.10 s** per refresh; the
+longest recorded total refresh was **0.91 s**. A 56-item search batch held
+392 Q rows and about **0.7 MiB** of JSON per shard. Queueing and concurrency
+make those numbers different from pure network RTT. The next critical-path
+work is to keep Q capture off committed Decode's execution path and collapse
+V search/selection/pack/send, not only remove first-window discovery RPCs.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
