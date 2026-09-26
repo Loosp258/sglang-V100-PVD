@@ -1911,8 +1911,14 @@ class VectorKVStore:
             }
             if manifest is not None:
                 report["index_admission_room"] = None
+                report["index_build_pending"] = None
                 index = self.prompt_index
                 if index is not None and index.budget is not None:
+                    wants_build = getattr(index, "wants_build", None)
+                    if callable(wants_build):
+                        report["index_build_pending"] = wants_build(
+                            manifest.key.transfer_id
+                        )
                     shard = manifest.shard(self.rank)
                     rows, dim = manifest.prompt_token_count, manifest.layout.head_dim
                     heads = (

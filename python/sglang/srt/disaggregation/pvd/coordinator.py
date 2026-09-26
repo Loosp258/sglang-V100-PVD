@@ -637,9 +637,11 @@ class VectorCoordinator:
         index = all(reply.get("index_admission_room") is not False for reply in replies)
         return physical, index
 
-    async def _ensure_entry_room(self, manifest: KVEntryManifest) -> None:
+    async def _ensure_entry_room(
+        self, manifest: KVEntryManifest, *, index_only: bool = False
+    ) -> None:
         room = await self._entry_room(manifest)
-        if room is None or all(room):
+        if room is None or (room[1] if index_only else all(room)):
             return
         now = time.monotonic()
         async with self._lock:
@@ -666,8 +668,11 @@ class VectorCoordinator:
                 continue
             self.metrics.increment("coordinator_pressure_evictions")
             room = await self._entry_room(manifest)
-            if room is None or all(room):
+            if room is None or (room[1] if index_only else all(room)):
                 return
+        if index_only:
+            self.metrics.increment("coordinator_index_pressure_unrelieved")
+            return
         if room is not None and room[0]:
             # A full-KV Delivery does not require an index. Preserve dense
             # admission if every safe eviction was tried but index budget is
@@ -678,6 +683,50 @@ class VectorCoordinator:
         raise ResourceExhaustedError(
             "V shards have no contiguous room and no safely evictable Entry"
         )
+
+    async def relieve_index_pressure(self) -> int:
+        """Revisit index capacity after concurrent uploads have claimed budget.
+
+        Admission preflight cannot reserve future index bytes: two uploads can
+        both pass before either shard starts building. Only a STORED Entry with
+        an active consumer lease is a reason to reclaim idle Entries here, and
+        the shard must confirm that its index is still pending and lacks room.
+        Never evict an active consumer or make dense KV delivery depend on an
+        index becoming ready.
+        """
+        relieved = 0
+        async with self._entry_allocation_lock:
+            now = time.monotonic()
+            async with self._lock:
+                waiting = [
+                    entry.manifest
+                    for entry in self.entries.values()
+                    if entry.state == EntryState.STORED
+                    and any(
+                        deadline > now for deadline in entry.consumer_leases.values()
+                    )
+                ]
+            for manifest in waiting:
+                replies = await asyncio.gather(
+                    *(self.shards[rank].capacity(manifest) for rank in (0, 1)),
+                    return_exceptions=True,
+                )
+                if not any(
+                    isinstance(reply, Mapping)
+                    and reply.get("index_build_pending") is True
+                    and reply.get("index_admission_room") is False
+                    for reply in replies
+                ):
+                    continue
+                before = self.metrics.snapshot()["counters"].get(
+                    "coordinator_pressure_evictions", 0
+                )
+                await self._ensure_entry_room(manifest, index_only=True)
+                after = self.metrics.snapshot()["counters"].get(
+                    "coordinator_pressure_evictions", 0
+                )
+                relieved += after - before
+        return relieved
 
     async def _create_entry_once(
         self, manifest: KVEntryManifest, uploader_epochs: Dict[int, str]

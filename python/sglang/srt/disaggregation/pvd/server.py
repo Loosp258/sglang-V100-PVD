@@ -606,6 +606,9 @@ async def _reaper(
             ("prompt_index_progress", progress_indexes),
         ]
         if coordinator is not None:
+            steps.append(
+                ("coordinator_index_pressure", coordinator.relieve_index_pressure)
+            )
             steps.append(("coordinator_expiration", coordinator.reap_expired))
         await _run_reaper_round(health, steps)
 
@@ -635,6 +638,7 @@ async def _group_reaper(
                     (f"shard_{store.rank}_prompt_index_progress", progress_indexes),
                 ]
             )
+        steps.append(("coordinator_index_pressure", coordinator.relieve_index_pressure))
         steps.append(("coordinator_expiration", coordinator.reap_expired))
         await _run_reaper_round(health, steps)
 

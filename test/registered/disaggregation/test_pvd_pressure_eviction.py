@@ -174,3 +174,62 @@ def test_index_only_pressure_eviction_preserves_dense_admission():
                 store.close()
 
     asyncio.run(run())
+
+
+def test_post_upload_index_pressure_reclaims_idle_entry_for_active_consumer():
+    async def run():
+        engine, stores, coordinator = make_vector()
+        try:
+            old = await make_ready_entry(coordinator, engine, "index-idle-old")
+            active = await make_ready_entry(coordinator, engine, "index-active")
+            await coordinator.renew_consumer(active, "decode-active")
+            for store in stores:
+                original = store.capacity_snapshot
+
+                def limited(manifest=None, *, store=store, original=original):
+                    report = original(manifest)
+                    if manifest is not None:
+                        report["index_build_pending"] = manifest.key == active
+                        report["index_admission_room"] = not any(
+                            entry.state.value == "stored" and entry.key == old
+                            for entry in store.entries.values()
+                        )
+                    return report
+
+                store.capacity_snapshot = limited
+            assert await coordinator.relieve_index_pressure() == 1
+            assert coordinator.entries[old].state == EntryState.RELEASED
+            assert coordinator.entries[active].state == EntryState.STORED
+            assert await coordinator.relieve_index_pressure() == 0
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(run())
+
+
+def test_index_pressure_does_not_reclaim_without_pending_active_search():
+    async def run():
+        engine, stores, coordinator = make_vector()
+        try:
+            old = await make_ready_entry(coordinator, engine, "idle-no-index")
+            active = await make_ready_entry(coordinator, engine, "active-ready-index")
+            await coordinator.renew_consumer(active, "decode-active")
+            for store in stores:
+                original = store.capacity_snapshot
+
+                def ready(manifest=None, *, original=original):
+                    report = original(manifest)
+                    if manifest is not None:
+                        report["index_build_pending"] = False
+                        report["index_admission_room"] = False
+                    return report
+
+                store.capacity_snapshot = ready
+            assert await coordinator.relieve_index_pressure() == 0
+            assert coordinator.entries[old].state == EntryState.STORED
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(run())
