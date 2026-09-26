@@ -110,6 +110,25 @@ def test_bound_positions_reject_alias_and_in_place_change():
         capture.capture(0, positions, torch.zeros(5, 32))
 
 
+def test_inference_positions_have_no_version_counter_but_are_checked_at_finish():
+    capture = collector((0,))
+    with torch.inference_mode():
+        positions = torch.arange(5, dtype=torch.int64)
+        assert positions.is_inference()
+        capture.bind_positions(positions)
+        capture.capture(0, positions, torch.ones(5, 32))
+        assert capture.finish()[0].positions == (3, 4)
+
+    changed = collector((0,))
+    with torch.inference_mode():
+        positions = torch.arange(5, dtype=torch.int64)
+        changed.bind_positions(positions)
+        changed.capture(0, positions, torch.ones(5, 32))
+        positions.add_(1)
+        with pytest.raises(PredictionConfigError, match="changed after binding"):
+            changed.finish()
+
+
 def test_bound_positions_validate_values_before_forward():
     capture = collector((0,))
     with pytest.raises(PredictionConfigError, match="complete prefix"):
