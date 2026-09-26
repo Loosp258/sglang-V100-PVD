@@ -116,6 +116,7 @@ def build_cuda_prediction_startup(
     draft_transient_bytes_bound: int,
     probe_transient_bytes_bound: int,
     target_scratch_budget: TransferBudget,
+    prefix_budget: TransferBudget | None = None,
     target_tokenizer: Any = None,
     draft_tokenizer: Any = None,
     tokenizer_loader: Callable[[str, str | None], Any] = _load_tokenizer,
@@ -142,6 +143,8 @@ def build_cuda_prediction_startup(
         raise PredictionConfigError("positive draft persistent budget required")
     if not isinstance(target_scratch_budget, TransferBudget):
         raise PredictionConfigError("shared target scratch budget required")
+    if prefix_budget is not None and not isinstance(prefix_budget, TransferBudget):
+        raise PredictionConfigError("separate target prefix cache budget required")
     for name, value in (
         ("max_prefix_tokens", max_prefix_tokens),
         ("predict_tokens", predict_tokens),
@@ -343,6 +346,7 @@ def build_cuda_prediction_startup(
             max_predict_tokens=predict_tokens,
             transient_bytes_bound=probe_transient_bytes_bound,
             budget=target_scratch_budget,
+            prefix_budget=prefix_budget,
             vocabulary=vocabulary,
         )
         # A query copy overlaps the probe's retained Q. At least this known

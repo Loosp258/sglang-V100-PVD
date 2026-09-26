@@ -4,6 +4,8 @@ Hooks here are an independent TEST oracle only. Production capture is explicit
 and batch-local, not hook-based. No production serving path calls this module.
 """
 
+from types import SimpleNamespace
+
 import torch
 
 
@@ -209,6 +211,67 @@ def validate_target_probe(runner, full_prefix):
             raise AssertionError("quarantined probe reused")
     except PredictionConfigError:
         pass
+
+    # A real tiny target exercises request-owned retained KV across two
+    # captures. The second capture extends only the newly committed token;
+    # speculative suffix rows must not survive either branch.
+    prefix_budget = TransferBudget(2 << 20, 1)
+    cached = OfflineLlamaTargetProbe(
+        runner,
+        probe.config,
+        **{
+            **kwargs,
+            "budget": TransferBudget(2 << 20, 1),
+            "prefix_budget": prefix_budget,
+        },
+    )
+    req = SimpleNamespace(rid="probe-r")
+    cached.register_cached_request(req)
+    with cached.branch():
+        first = cached.capture(prefix, prediction)
+    for expected, actual in zip(values, first, strict=True):
+        torch.testing.assert_close(actual.vectors, expected, rtol=2e-4, atol=2e-5)
+    assert prefix_budget.snapshot()["used_staging_bytes"] == cached.prefix_cache_bytes
+    record = cached._prefix_caches[req.rid]
+    assert record.tokens == prefix.tokens and len(record.rows) == len(prefix.tokens)
+    next_prefix = CommittedPrefix("probe-r", prefix.tokens + (19,), 1, "v2")
+    with cached.branch():
+        second = cached.capture(next_prefix, DraftPrediction("probe-r", "v2", (27,)))
+    for expected, actual in zip(actual_values, second, strict=True):
+        torch.testing.assert_close(actual.vectors, expected, rtol=2e-4, atol=2e-5)
+    assert record.tokens == next_prefix.tokens
+    assert len(record.rows) == len(next_prefix.tokens)
+    try:
+        cached.retire_cached_request(SimpleNamespace(rid=req.rid))
+    except PredictionConfigError:
+        pass
+    else:
+        raise AssertionError("a different Req incarnation retired the cache")
+    with cached.branch():
+        cached.capture_committed(committed, (5,))
+    assert prefix_budget.snapshot()["used_staging_bytes"] == 0
+    cached.retire_cached_request(req)
+    assert cached._prefix_caches == {}
+
+    # A full cache budget is a cache miss, never a request-level refusal.
+    pressure_budget = TransferBudget(1, 1)
+    pressure = OfflineLlamaTargetProbe(
+        runner,
+        probe.config,
+        **{
+            **kwargs,
+            "budget": TransferBudget(2 << 20, 1),
+            "prefix_budget": pressure_budget,
+        },
+    )
+    pressure.register_cached_request(req)
+    with pressure.branch():
+        fallback = pressure.capture(prefix, prediction)
+    for expected, actual in zip(values, fallback, strict=True):
+        torch.testing.assert_close(actual.vectors, expected, rtol=0, atol=0)
+    assert pressure_budget.snapshot()["used_staging_bytes"] == 0
+    assert pressure._prefix_caches[req.rid].resources is None
+    pressure.retire_cached_request(req)
     return {
         "target_probe": "passed",
         "layers": len(values),
@@ -218,5 +281,7 @@ def validate_target_probe(runner, full_prefix):
         "target_weights_pools_mapping_rng_unchanged": True,
         "failure_restores_context_budget_and_reuse": True,
         "cleanup_failure_quarantines_and_keeps_budget": True,
+        "incremental_private_prefix_matches_full_cpu_q": True,
+        "incremental_prefix_budget_retired": True,
         "serving_or_gpu_validated": False,
     }

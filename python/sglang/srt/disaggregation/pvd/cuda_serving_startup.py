@@ -93,6 +93,11 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     ):
         raise LifecycleError("positive Scheduler request bound required")
     if (
+        type(limits.probe_prefix_cache_bytes) is not int
+        or limits.probe_prefix_cache_bytes < 0
+    ):
+        raise LifecycleError("nonnegative target probe cache budget required")
+    if (
         args.pvd_kv_refresh_interval <= limits.lead_tokens
         or args.pvd_draft_predict_tokens < limits.lead_tokens
         or limits.max_sequence_tokens <= args.pvd_draft_predict_tokens
@@ -129,6 +134,11 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
         args.pvd_retrieval_scratch_budget_bytes,
         limits.target_scratch_max_reservations,
     )
+    prefix_budget = (
+        TransferBudget(limits.probe_prefix_cache_bytes, scheduler.max_running_requests)
+        if limits.probe_prefix_cache_bytes
+        else None
+    )
     placement = DraftPlacement(
         gpu_id=runner.gpu_id,
         tp_rank=0,
@@ -156,6 +166,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             draft_transient_bytes_bound=limits.draft_transient_bytes_bound,
             probe_transient_bytes_bound=limits.probe_transient_bytes_bound,
             target_scratch_budget=scratch_budget,
+            prefix_budget=prefix_budget,
         )
         if prediction.target_scratch_budget is not scratch_budget:
             raise LifecycleError("prediction did not retain the shared target budget")

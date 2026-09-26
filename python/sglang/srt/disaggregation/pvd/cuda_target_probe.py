@@ -74,8 +74,29 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
             "target_execution_lease_retained": self._execution_held,
             "private_state_retained": self._private_state is not None,
             "reservation_bytes": self.reservation_bytes,
+            "cached_requests": len(self._prefix_caches),
+            "prefix_cache_budget": None
+            if self.prefix_budget is None
+            else self.prefix_budget.snapshot(),
             "completion_policy": "device_synchronize",
         }
+
+    def retire_cached_request(self, req):
+        if self.prefix_budget is None:
+            return super().retire_cached_request(req)
+        self._require_main_thread()
+        if self._active or self._execution_held or self._quarantined:
+            raise PredictionConfigError("active or quarantined probe cannot close cache")
+        if not self._execution_lock.acquire(blocking=False):
+            raise PredictionConfigError("target execution is busy during cache close")
+        self._execution_held = True
+        try:
+            with torch.cuda.device(self.device):
+                return super().retire_cached_request(req)
+        finally:
+            if not self._quarantined:
+                self._execution_lock.release()
+                self._execution_held = False
 
     @contextmanager
     def branch(self):

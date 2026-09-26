@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import traceback
+from types import SimpleNamespace
 
 
 def validate(runner, *, checkpoint=False):
@@ -79,6 +80,51 @@ def validate(runner, *, checkpoint=False):
     with probe.branch():
         actual_queries = probe.capture_committed(committed, (5,))
         actual = [query.vectors.clone() for query in actual_queries]
+
+    prefix_budget = TransferBudget(32 << 20, 1)
+    cached_probe = probe_type(
+        runner,
+        ProbeConfig("cuda-smoke-target", (0, 1), head_start=1, head_count=2),
+        device="cuda:0",
+        execution_lock=execution_lock,
+        target_model_id="cuda-smoke-target",
+        max_tokens=16,
+        max_predict_tokens=2,
+        transient_bytes_bound=64 << 20,
+        budget=TransferBudget(128 << 20, 1),
+        prefix_budget=prefix_budget,
+    )
+    cached_req = SimpleNamespace(rid="probe")
+    cached_probe.register_cached_request(cached_req)
+    with cached_probe.branch():
+        first_cached = cached_probe.capture(prefix, prediction)
+    assert (
+        prefix_budget.snapshot()["used_staging_bytes"]
+        == cached_probe.prefix_cache_bytes
+    )
+    next_prefix = CommittedPrefix("probe", prefix.tokens + (19,), 1, "cached-v2")
+    with cached_probe.branch():
+        second_cached = cached_probe.capture(
+            next_prefix, DraftPrediction("probe", "cached-v2", (27,))
+        )
+    cached_error = 0.0
+    for original_query, cached_query in zip(predicted, first_cached, strict=True):
+        cached_error = max(
+            cached_error, float((original_query - cached_query.vectors).abs().max())
+        )
+        torch.testing.assert_close(
+            cached_query.vectors, original_query, rtol=5e-3, atol=2e-2
+        )
+    for original_query, cached_query in zip(actual, second_cached, strict=True):
+        cached_error = max(
+            cached_error, float((original_query - cached_query.vectors).abs().max())
+        )
+        torch.testing.assert_close(
+            cached_query.vectors, original_query, rtol=5e-3, atol=2e-2
+        )
+    cached_probe.retire_cached_request(cached_req)
+    assert prefix_budget.snapshot()["used_staging_bytes"] == 0
+    assert cached_probe.snapshot()["cached_requests"] == 0
     assert budget.snapshot()["used_staging_bytes"] == 0
     assert not execution_lock.locked()
     for current, old in before:
@@ -186,6 +232,8 @@ def validate(runner, *, checkpoint=False):
             else "full weights/pools, mapping and CUDA RNG unchanged"
         ),
         "probe_budget_restored": True,
+        "incremental_prefix_budget_restored": True,
+        "incremental_q_max_abs_error": cached_error,
     }
 
 
@@ -254,7 +302,7 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                     num_hidden_layers=2,
                     num_attention_heads=4,
                     num_key_value_heads=2,
-                max_position_embeddings=args.context_length,
+                    max_position_embeddings=args.context_length,
                     architectures=[
                         "LlamaForCausalLM"
                         if args.architecture == "llama"

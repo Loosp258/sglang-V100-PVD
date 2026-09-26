@@ -252,6 +252,9 @@ class CUDARefreshDriver:
         lock = controller.pipeline._lock
         if self._execution_lock is not None and lock is not self._execution_lock:
             raise LifecycleError("all requests must share the target execution lock")
+        probe = controller.pipeline.probe
+        if getattr(probe, "prefix_budget", None) is not None:
+            probe.register_cached_request(req)
         self._execution_lock = lock
         self._records[req.rid] = _Request(
             req,
@@ -401,6 +404,9 @@ class CUDARefreshDriver:
 
     async def _close_controller(self, record):
         await record.controller.aclose()
+        probe = record.controller.pipeline.probe
+        if getattr(probe, "prefix_budget", None) is not None:
+            probe.retire_cached_request(record.req)
         session = self._session_binding(record)
         if session is not None:
             # Keep keepalive on its original control loop. Never await its

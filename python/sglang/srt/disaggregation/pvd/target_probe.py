@@ -28,7 +28,10 @@ from sglang.srt.disaggregation.pvd.prediction import (
 )
 from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
-from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    TransferBudget,
+    TransferCapacityError,
+)
 
 
 class PostRopeQueryCapture:
@@ -207,6 +210,7 @@ class _LlamaTargetProbeCore(TargetProbe):
         transient_bytes_bound: int,
         budget: TransferBudget,
         vocabulary: VocabularySignature | None = None,
+        prefix_budget: TransferBudget | None = None,
     ):
         if self._model_architecture == "Qwen2ForCausalLM":
             from sglang.srt.models.qwen2 import Qwen2ForCausalLM
@@ -265,6 +269,9 @@ class _LlamaTargetProbeCore(TargetProbe):
         self.max_tokens = max_tokens
         self.max_predict_tokens = max_predict_tokens
         self.budget = budget
+        if prefix_budget is not None and not isinstance(prefix_budget, TransferBudget):
+            raise PredictionConfigError("separate prefix cache budget required")
+        self.prefix_budget = prefix_budget
         self.head_dim = runner.model_config.head_dim
         self.query_heads = hf.num_attention_heads
         self.kv_heads = hf.num_key_value_heads
@@ -289,6 +296,17 @@ class _LlamaTargetProbeCore(TargetProbe):
             * 4
         )
         self.reservation_bytes = kv + mapping + queries + transient_bytes_bound
+        self.prefix_cache_bytes = (
+            (max_tokens + 1)
+            * self.layers
+            * self.kv_heads
+            * self.head_dim
+            * 2
+            * torch.empty((), dtype=self.dtype).element_size()
+            + 2 * max_tokens * 4
+            + 65536
+        )
+        self._prefix_caches = {}
         self._active = False
         self._used = False
         self._state = None
@@ -359,13 +377,17 @@ class _LlamaTargetProbeCore(TargetProbe):
         if not self._tokens_valid(tokens):
             raise PredictionConfigError("probe token is outside the target vocabulary")
         self._used = True
+        cached = self._cached_record(prefix)
         self._state = PostRopeQueryCapture(
             self.config,
             prefix,
             len(prediction.tokens),
             query_heads=self.query_heads,
             head_dim=self.head_dim,
+            forward_start=len(prefix.tokens) if cached is not None else 0,
         )
+        if cached is not None:
+            return self._forward_cached(prefix, prediction.tokens, self._state, cached)
         return self._forward(tokens, self._state)
 
     def capture_committed(self, prefix, positions):
@@ -389,6 +411,12 @@ class _LlamaTargetProbeCore(TargetProbe):
             )
         if not self._tokens_valid(prefix.tokens):
             raise PredictionConfigError("probe token is outside the target vocabulary")
+        # Late-start Q may refer to positions already cached as K/V but not
+        # retained as Q. Evict before full recomputation rather than invent a
+        # query from an unrelated position or silently hold duplicate pools.
+        cached = self._prefix_caches.get(prefix.request_id)
+        if cached is not None:
+            self._drop_prefix_cache(cached)
         self._state = PostRopeQueryCapture(
             self.config,
             prefix,
@@ -408,6 +436,241 @@ class _LlamaTargetProbeCore(TargetProbe):
         return all(
             type(token) is int and 0 <= token < self.vocab_size for token in tokens
         )
+
+    def register_cached_request(self, req) -> None:
+        """Bind an optional private prefix to one live Req incarnation.
+
+        Registration allocates nothing. Only the CUDA refresh driver may call
+        this, after its own identity and admission checks. A reused rid cannot
+        inherit an earlier Req's cached KV.
+        """
+        self._require_main_thread()
+        if self.prefix_budget is None:
+            return
+        rid = getattr(req, "rid", None)
+        if not isinstance(rid, str) or not rid or rid in self._prefix_caches:
+            raise PredictionConfigError("unique request cache identity required")
+        self._prefix_caches[rid] = SimpleNamespace(
+            req=req,
+            owner=None,
+            resources=None,
+            slot=None,
+            rows=[],
+            tokens=(),
+            version=None,
+            committed_position=0,
+        )
+
+    def retire_cached_request(self, req) -> None:
+        """Fence and free the exact request's private prefix before Req release."""
+        self._require_main_thread()
+        if self.prefix_budget is None:
+            return
+        record = self._prefix_caches.get(getattr(req, "rid", None))
+        if record is None or record.req is not req or self._active or self._quarantined:
+            raise PredictionConfigError("exact inactive cached Req required")
+        self._drop_prefix_cache(record)
+        del self._prefix_caches[req.rid]
+
+    def _drop_prefix_cache(self, record) -> None:
+        if record.owner is None:
+            return
+        resources = record.resources
+        try:
+            self._drain_private()
+            if resources is not None and record.slot is not None:
+                resources.allocator.clear_mapping(record.slot)
+                resources.allocator.free_kv(record.rows)
+                resources.allocator.free_request(record.slot)
+            self._drain_private()
+        except BaseException:
+            # Possibly-live rows and their charge remain owned. CUDA branch
+            # also retains its target execution lock after quarantine.
+            self._quarantined = True
+            raise
+        if resources is not None:
+            vars(resources).clear()
+        self.prefix_budget.release(record.owner)
+        record.owner = record.resources = record.slot = None
+        record.rows = []
+        record.tokens = ()
+        record.version = None
+        record.committed_position = 0
+
+    def _cached_record(self, prefix):
+        if self.prefix_budget is None:
+            return None
+        record = self._prefix_caches.get(prefix.request_id)
+        if record is None:
+            return None
+        if record.owner is not None and (
+            prefix.tokens[: len(record.tokens)] != record.tokens
+            or prefix.committed_position < record.committed_position
+            or (prefix.version == record.version and prefix.tokens != record.tokens)
+        ):
+            self._drop_prefix_cache(record)
+        if record.owner is None:
+            owner = f"pvd-target-prefix:{uuid.uuid4().hex}"
+            try:
+                self.prefix_budget.reserve(owner, self.prefix_cache_bytes, 1)
+            except TransferCapacityError:
+                # Optional cache pressure never blocks the correct full-prefix
+                # path. An owner may retry on its next prediction round.
+                return None
+            record.owner = owner
+        return record
+
+    def _forward_cached(self, prefix, predicted_tokens, capture, record):
+        """Extend only authoritative tokens, then discard speculative KV.
+
+        This is only reachable for a request explicitly registered by the
+        CUDA refresh driver with a separate persistent budget. Each record's
+        pools and mapping are private; neither can alias a committed Req.
+        """
+        from sglang.srt.compilation.piecewise_context_manager import get_forward_context
+        from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
+            DraftForwardAdapter,
+            PrivatePoolAllocator,
+        )
+        from sglang.srt.disaggregation.pvd.draft_runner_sglang import DraftForwardInputs
+        from sglang.srt.layers.attention.torch_native_backend import (
+            TorchNativeAttnBackend,
+        )
+        from sglang.srt.mem_cache.allocator.token import TokenToKVPoolAllocator
+        from sglang.srt.mem_cache.memory_pool import MHATokenToKVPool, ReqToTokenPool
+        from sglang.srt.model_executor.forward_context import (
+            ForwardContext,
+            forward_context,
+        )
+
+        if get_forward_context() is not None:
+            raise PredictionConfigError(
+                "probe cannot execute inside a piecewise graph context"
+            )
+        resources = record.resources
+        if resources is None:
+            resources = SimpleNamespace()
+            record.resources = resources  # Published before any CUDA allocation.
+            try:
+                resources.requests = ReqToTokenPool(
+                    1, self.max_tokens, self.device, False
+                )
+                resources.pool = MHATokenToKVPool(
+                    self.max_tokens,
+                    1,
+                    self.dtype,
+                    self.kv_heads,
+                    self.head_dim,
+                    self.layers,
+                    self.device,
+                    False,
+                )
+                resources.kv = TokenToKVPoolAllocator(
+                    self.max_tokens, self.dtype, self.device, resources.pool, False
+                )
+                resources.allocator = PrivatePoolAllocator(
+                    resources.requests, resources.kv
+                )
+                resources.backend = TorchNativeAttnBackend(
+                    SimpleNamespace(
+                        device=self.device,
+                        req_to_token_pool=resources.requests,
+                        token_to_kv_pool=resources.pool,
+                    )
+                )
+                resources.builder = DraftForwardAdapter(
+                    None,
+                    architecture=self._model_architecture,
+                    attention_backend="torch_native",
+                    bytes_per_token=self.layers * self.kv_heads * self.head_dim * 2 * 4,
+                    device=self.device,
+                )
+                record.slot = resources.allocator.alloc_request()
+            except BaseException:
+                # A constructor may leave tensors in its traceback. Keep all
+                # charge and the execution lease until a recovery protocol can
+                # prove they are no longer live.
+                self._private_state = resources
+                self._quarantined = True
+                raise
+
+        def forward_chunk(chunk, *, start, rows, query_capture=None):
+            end = start + len(chunk)
+            batch = resources.builder.build_forward_batch(
+                DraftForwardInputs(
+                    "extend",
+                    tuple(chunk),
+                    tuple(range(start, end)),
+                    (end,),
+                    (record.slot,),
+                    tuple(rows),
+                    (start,),
+                    (len(chunk),),
+                )
+            )
+            resources.batch = batch
+            batch.pvd_compact_extend = start > 0
+            if query_capture is not None:
+                query_capture.bind_positions(batch.positions)
+                batch.pvd_query_capture = query_capture
+            resources.backend.init_forward_metadata(batch)
+            with (
+                torch.inference_mode(),
+                forward_context(ForwardContext(attn_backend=resources.backend)),
+            ):
+                self.model.model(batch.input_ids, batch.positions, batch)
+            result = query_capture.finish() if query_capture is not None else None
+            self._drain_private()
+            del resources.batch
+            return result
+
+        try:
+            committed_start = len(record.tokens)
+            new_committed = prefix.tokens[committed_start:]
+            if new_committed:
+                rows = resources.allocator.alloc_kv(len(new_committed))
+                record.rows.extend(rows)
+                resources.allocator.write_mapping(record.slot, committed_start, rows)
+                forward_chunk(new_committed, start=committed_start, rows=rows)
+                record.tokens = prefix.tokens
+                record.version = prefix.version
+                record.committed_position = prefix.committed_position
+            else:
+                record.version = prefix.version
+                record.committed_position = prefix.committed_position
+
+            suffix_rows = resources.allocator.alloc_kv(len(predicted_tokens))
+            record.rows.extend(suffix_rows)
+            try:
+                resources.allocator.write_mapping(
+                    record.slot, len(prefix.tokens), suffix_rows
+                )
+                result = forward_chunk(
+                    predicted_tokens,
+                    start=len(prefix.tokens),
+                    rows=suffix_rows,
+                    query_capture=capture,
+                )
+                return result
+            finally:
+                try:
+                    self._drain_private()
+                    resources.requests.req_to_token[
+                        record.slot,
+                        len(prefix.tokens) : len(prefix.tokens) + len(suffix_rows),
+                    ] = 0
+                    resources.allocator.free_kv(suffix_rows)
+                    self._drain_private()
+                    del record.rows[-len(suffix_rows) :]
+                except BaseException:
+                    self._private_state = resources
+                    self._quarantined = True
+                    raise
+        except BaseException as exc:
+            if not self._quarantined:
+                self._drop_prefix_cache(record)
+                traceback.clear_frames(exc.__traceback__)
+            raise
 
     def _forward(self, tokens, capture):
         profile_started = (
