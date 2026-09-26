@@ -222,6 +222,8 @@ def test_fused_pack_metadata_budget_is_held_until_cuda_fence(
     class FakeWorkspace:
         def __init__(self, selected, *, budget, owner, **unused):
             self.manifest_fingerprint = selected.fingerprint
+            self.layout_fingerprint = unused["layout"].fingerprint
+            self.shard = unused["shard"]
             self.device = torch.device("cpu")  # fake policy, real CPU bytes
             self.budget, self.owner = budget, owner
             budget.reserve(owner, 64, 0)

@@ -56,6 +56,8 @@ def copy_sparse_kv_into(
                 allow_cuda is not True
                 or not isinstance(fused_workspace, SparsePackWorkspace)
                 or fused_workspace.manifest_fingerprint != manifest.fingerprint
+                or fused_workspace.layout_fingerprint != layout.fingerprint
+                or fused_workspace.shard != shard
                 or fused_workspace.device != packed.device
             ):
                 raise SparsePayloadError(

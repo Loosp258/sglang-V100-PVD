@@ -79,6 +79,8 @@ class SparsePackWorkspace:
         self.destination_bytes = plan.destination_bytes
         self.device = torch.device(device)
         self.manifest_fingerprint = manifest.fingerprint
+        self.layout_fingerprint = layout.fingerprint
+        self.shard = shard
         self.owner = owner
         self.budget = budget
         self.group_count = len(plan.groups)

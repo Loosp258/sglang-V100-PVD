@@ -1,5 +1,7 @@
 """Independent CPU byte oracle for V's optional one-kernel sparse pack path."""
 
+import sys
+import types
 from dataclasses import replace
 
 import pytest
@@ -73,6 +75,39 @@ def test_unbudgeted_fused_workspace_is_refused_before_any_copy():
     target = torch.full((kwargs["manifest"].nbytes,), 211, dtype=torch.uint8)
     with pytest.raises(SparsePayloadError, match="matching CUDA workspace"):
         copy_sparse_kv_into(source, target, **kwargs, fused_workspace=object())
+    assert torch.all(target == 211)
+
+
+@pytest.mark.parametrize("mismatch", ["layout", "shard"])
+def test_fused_workspace_cannot_be_rebound_to_another_source(monkeypatch, mismatch):
+    _, source, kwargs = setup()
+    target = torch.full((kwargs["manifest"].nbytes,), 211, dtype=torch.uint8)
+    module = types.ModuleType("sglang.srt.disaggregation.pvd.triton_sparse_pack")
+
+    class FakeWorkspace:
+        manifest_fingerprint = kwargs["manifest"].fingerprint
+        layout_fingerprint = kwargs["layout"].fingerprint
+        shard = kwargs["shard"]
+        device = torch.device("cpu")
+
+    setattr(
+        FakeWorkspace,
+        "layout_fingerprint" if mismatch == "layout" else "shard",
+        object(),
+    )
+    module.SparsePackWorkspace = FakeWorkspace
+    module.launch_sparse_pack = lambda *args, **options: pytest.fail(
+        "a foreign workspace must not launch CUDA work"
+    )
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    with pytest.raises(SparsePayloadError, match="matching CUDA workspace"):
+        copy_sparse_kv_into(
+            source,
+            target,
+            **kwargs,
+            allow_cuda=True,
+            fused_workspace=FakeWorkspace(),
+        )
     assert torch.all(target == 211)
 
 
