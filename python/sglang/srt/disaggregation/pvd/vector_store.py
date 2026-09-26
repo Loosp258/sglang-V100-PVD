@@ -126,6 +126,11 @@ class ContiguousPageAllocator:
         with self._lock:
             return self._allocated_pages
 
+    @property
+    def largest_contiguous_free_pages(self) -> int:
+        with self._lock:
+            return max((count for _, count in self._free_ranges), default=0)
+
     def allocate(self, page_count: int) -> PageAllocation:
         if page_count <= 0:
             raise ValueError("page_count must be positive")
@@ -1878,6 +1883,9 @@ class VectorKVStore:
                 "max_legacy_absent_fences": self._max_legacy_absent_fences,
                 "total_pages": self.allocator.total_pages,
                 "available_pages": self.allocator.available_pages,
+                "largest_contiguous_free_pages": (
+                    self.allocator.largest_contiguous_free_pages
+                ),
                 "entries": [entry.to_dict() for entry in self.entries.values()],
                 "quarantined_index_sources": len(self._quarantined_index_sources),
                 "metrics": self.metrics.snapshot(),
@@ -1885,6 +1893,20 @@ class VectorKVStore:
         # Engine health may acquire the native submission manager's lock.
         snapshot["transport"] = self.transfer_engine.health()
         return snapshot
+
+    def capacity_snapshot(self) -> Dict[str, object]:
+        """Small, coherent control-plane preflight; no Entry list or MR data."""
+        with self._lock:
+            return {
+                "rank": self.rank,
+                "worker_epoch": self.worker_epoch,
+                "ready": not self._closed and self._isolated_reason is None,
+                "total_pages": self.allocator.total_pages,
+                "available_pages": self.allocator.available_pages,
+                "largest_contiguous_free_pages": (
+                    self.allocator.largest_contiguous_free_pages
+                ),
+            }
 
     def close(self) -> None:
         with self._lock:

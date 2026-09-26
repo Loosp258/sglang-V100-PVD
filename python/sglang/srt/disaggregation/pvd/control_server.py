@@ -268,6 +268,9 @@ class HttpShardClient(ShardClient):
     async def health(self) -> Mapping:
         return await self._request("GET", "/internal/health")
 
+    async def capacity(self) -> Mapping:
+        return await self._request("GET", "/internal/v1/capacity")
+
     async def close(self) -> None:
         self._closed = True
         if self._session is not None and self._owns_session:
@@ -719,6 +722,9 @@ def create_shard_app(
         snapshot["preflight"] = dict(preflight or {})
         return web.json_response(snapshot)
 
+    async def capacity(_request):
+        return web.json_response(await asyncio.to_thread(store.capacity_snapshot))
+
     app.add_routes(
         [
             web.post("/internal/v1/entries", create_entry),
@@ -739,6 +745,7 @@ def create_shard_app(
             web.post("/internal/v1/indexes/search", search_index),
             web.post("/internal/v1/indexes/search-batch", search_index_batch),
             web.get("/internal/v1/indexes", index_snapshot),
+            web.get("/internal/v1/capacity", capacity),
             web.get("/internal/health", health),
         ]
     )

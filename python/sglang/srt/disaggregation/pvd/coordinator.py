@@ -110,6 +110,10 @@ class ShardClient(abc.ABC):
     @abc.abstractmethod
     async def health(self) -> Mapping: ...
 
+    async def capacity(self) -> Mapping:
+        """Legacy adapters may supply the capacity fields via health."""
+        return await self.health()
+
     @abc.abstractmethod
     async def fence_delivery(self, identity: WriteIdentity) -> Mapping: ...
 
@@ -221,6 +225,9 @@ class LocalShardClient(ShardClient):
         snapshot = await asyncio.to_thread(self.store.snapshot)
         snapshot["preflight"] = self.preflight
         return snapshot
+
+    async def capacity(self) -> Mapping:
+        return await asyncio.to_thread(self.store.capacity_snapshot)
 
 
 @dataclass
@@ -352,6 +359,9 @@ class VectorCoordinator:
         # must not remain in a permanent registry after the last waiter exits.
         self._entry_create_locks = weakref.WeakValueDictionary()
         self._entry_cleanup_locks = weakref.WeakValueDictionary()
+        # Serialize capacity preflight, pressure eviction and both shard
+        # allocations. Separate Entry IDs must not each claim the same pages.
+        self._entry_allocation_lock = asyncio.Lock()
         self._pending_entry_cancellations: Dict[KVEntryKey, str] = {}
         self._delivery_reserve_locks = weakref.WeakValueDictionary()
         self._delivery_start_locks = weakref.WeakValueDictionary()
@@ -587,7 +597,78 @@ class VectorCoordinator:
                 manifest.key, asyncio.Lock()
             )
         async with create_lock:
-            return await self._create_entry_once(manifest, epochs)
+            async with self._entry_allocation_lock:
+                async with self._lock:
+                    existing = manifest.key in self.entries
+                if not existing:
+                    await self._ensure_entry_room(manifest)
+                return await self._create_entry_once(manifest, epochs)
+
+    async def _entry_room(self, manifest: KVEntryManifest) -> bool | None:
+        """Check physical contiguous capacity on both trusted V shards.
+
+        None means an older/unavailable shard health contract. In that case
+        create retains its existing fail-closed allocation/cancellation path.
+        """
+        replies = await asyncio.gather(
+            *(
+                (
+                    self.shards[rank].capacity()
+                    if callable(getattr(self.shards[rank], "capacity", None))
+                    else self.shards[rank].health()
+                )
+                for rank in (0, 1)
+            ),
+            return_exceptions=True,
+        )
+        for rank, reply in enumerate(replies):
+            if not isinstance(reply, Mapping) or reply.get("rank") != rank:
+                self.metrics.increment("coordinator_pressure_preflight_unavailable")
+                return None
+            available = reply.get("largest_contiguous_free_pages")
+            if type(available) is not int or available < 0:
+                self.metrics.increment("coordinator_pressure_preflight_unavailable")
+                return None
+        return all(
+            replies[rank]["largest_contiguous_free_pages"]
+            >= manifest.shard(rank).page_count
+            for rank in (0, 1)
+        )
+
+    async def _ensure_entry_room(self, manifest: KVEntryManifest) -> None:
+        room = await self._entry_room(manifest)
+        if room is not False:
+            return
+        now = time.monotonic()
+        async with self._lock:
+            candidates = sorted(
+                (
+                    entry
+                    for entry in self.entries.values()
+                    if entry.manifest.key != manifest.key
+                    and entry.state == EntryState.STORED
+                    and entry.active_delivery_count == 0
+                    and not any(
+                        deadline > now for deadline in entry.consumer_leases.values()
+                    )
+                ),
+                key=lambda entry: entry.created_at,
+            )
+        for entry in candidates:
+            try:
+                await self.release_entry(entry.manifest.key)
+            except Exception:
+                # A lease or Delivery may have appeared after the snapshot.
+                # release_entry is the final authority; try another candidate.
+                self.metrics.increment("coordinator_pressure_eviction_refused")
+                continue
+            self.metrics.increment("coordinator_pressure_evictions")
+            if await self._entry_room(manifest):
+                return
+        self.metrics.increment("coordinator_pressure_exhausted")
+        raise ResourceExhaustedError(
+            "V shards have no contiguous room and no safely evictable Entry"
+        )
 
     async def _create_entry_once(
         self, manifest: KVEntryManifest, uploader_epochs: Dict[int, str]
