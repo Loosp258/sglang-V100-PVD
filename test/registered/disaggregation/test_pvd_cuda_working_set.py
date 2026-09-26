@@ -100,6 +100,27 @@ def test_opt_in_contiguous_bank_copy_clones_once_and_owns_its_bytes(monkeypatch)
     assert budget.snapshot()["used_staging_bytes"] == 0
 
 
+def test_opt_in_contiguous_bank_copy_accepts_multidimensional_prompt_source(
+    monkeypatch,
+):
+    """The initial full-Prompt importer owns [groups, K/V, tokens, head_dim]."""
+    bank, budget, _ = policy_bank(monkeypatch, contiguous_stage_copy=True)
+    rows, _, _ = packed_payloads()
+    backing = torch.cat([row.tensor.reshape(-1) for row in rows]).view(2, 2, 4, 3)
+    shaped = [
+        SparseKVPayload(row.spec, backing[index]) for index, row in enumerate(rows)
+    ]
+    guard = ResourceGuard(backing, lambda: None)
+    bank.stage(shaped, source_guard=guard)
+    bank.install(0)
+    with bank.read() as groups:
+        for index, key in enumerate(((0, 0), (0, 1))):
+            assert torch.equal(groups[key][1], backing[index])
+    bank.close()
+    guard.request_release()
+    assert budget.snapshot()["used_staging_bytes"] == 0
+
+
 def test_opt_in_contiguous_bank_copy_refuses_gap_before_cuda_copy(monkeypatch):
     bank, budget, _ = policy_bank(monkeypatch, contiguous_stage_copy=True)
     rows, _, _ = packed_payloads()

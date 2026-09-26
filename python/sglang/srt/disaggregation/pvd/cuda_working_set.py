@@ -74,7 +74,10 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
         # One device copy replaces one clone per (layer, KV head). The typed
         # views keep this copied storage alive for the whole bank lifetime.
         self._pending_copy = backing.detach().clone()
-        copied = self._pending_copy.view(self.dtype)
+        # The initial full-Prompt importer owns a multidimensional backing
+        # [groups, K/V, tokens, head_dim]. Slice its linear storage in element
+        # offsets, not the leading group dimension.
+        copied = self._pending_copy.view(self.dtype).reshape(-1)
         offset = 0
         for key, (spec, tensor) in source.items():
             count = tensor.numel()

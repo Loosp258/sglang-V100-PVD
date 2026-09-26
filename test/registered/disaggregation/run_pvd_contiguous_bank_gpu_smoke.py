@@ -23,8 +23,9 @@ def _source(device, dtype, tokens, boundary):
     values = torch.arange(
         values_per_group * len(groups), device=device, dtype=torch.float32
     ).to(dtype)
-    backing = values.contiguous().view(torch.uint8)
-    typed = backing.view(dtype)
+    # The first full-Prompt importer supplies this four-dimensional shape.
+    # A flat-only fixture misses element offsets sliced as a group dimension.
+    backing = values.contiguous().view(len(groups), 2, len(tokens), head_dim)
     payloads = []
     for index, (layer, head) in enumerate(groups):
         spec = SparseKVSpec(
@@ -40,8 +41,7 @@ def _source(device, dtype, tokens, boundary):
             head,
             tokens,
         )
-        start = index * values_per_group
-        tensor = typed[start : start + values_per_group].view(2, len(tokens), head_dim)
+        tensor = backing[index]
         payloads.append(SparseKVPayload(spec, tensor))
     return tuple(payloads), ResourceGuard(backing, lambda: None)
 
