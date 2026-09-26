@@ -60,6 +60,7 @@ class TorchNativeAttnBackend(AttentionBackend):
         causal=False,
         is_cross_attn=False,
         sliding_window_size: Optional[int] = None,
+        compact_queries=False,
     ):
         """Run the extend forward by using torch native sdpa op.
 
@@ -110,13 +111,19 @@ class TorchNativeAttnBackend(AttentionBackend):
                 start_kv = 0
                 end_kv = start_kv + seq_len_kv
             per_req_query = query[:, start_q:end_q, :]
-            per_req_query_redudant = torch.empty(
-                (per_req_query.shape[0], seq_len_kv, per_req_query.shape[2]),
-                dtype=per_req_query.dtype,
-                device=per_req_query.device,
-            )
-
-            per_req_query_redudant[:, prefill_seq_len_q:, :] = per_req_query
+            if compact_queries:
+                # An incremental PVD probe owns the complete prefix KV, but
+                # only the new suffix has Q rows. The legacy path pads Q to
+                # seq_len_kv and computes a quadratic attention for rows it
+                # discards. Keep that legacy path for all other callers.
+                attention_query = per_req_query
+            else:
+                attention_query = torch.empty(
+                    (per_req_query.shape[0], seq_len_kv, per_req_query.shape[2]),
+                    dtype=per_req_query.dtype,
+                    device=per_req_query.device,
+                )
+                attention_query[:, prefill_seq_len_q:, :] = per_req_query
 
             # get key and value from cache. per_req_tokens contains the kv cache
             # index for each token in the sequence.
@@ -132,18 +139,30 @@ class TorchNativeAttnBackend(AttentionBackend):
 
             attn_mask = None
             is_causal = causal
+            if compact_queries and causal and prefill_seq_len_q:
+                query_positions = torch.arange(
+                    prefill_seq_len_q,
+                    prefill_seq_len_q + extend_seq_len_q,
+                    device=per_req_query.device,
+                ).unsqueeze(1)
+                key_positions = torch.arange(
+                    seq_len_kv, device=per_req_query.device
+                ).unsqueeze(0)
+                attn_mask = key_positions <= query_positions
+                is_causal = False
             if sliding_window_size is not None and sliding_window_size > -1:
                 attn_mask = self._make_sliding_window_mask(
-                    q_len=seq_len_kv,
+                    q_len=extend_seq_len_q if compact_queries else seq_len_kv,
                     kv_len=seq_len_kv,
                     sliding_window_size=sliding_window_size,
                     device=per_req_query.device,
+                    query_offset=prefill_seq_len_q if compact_queries else 0,
                 )
                 is_causal = False
 
-            per_req_out_redudant = (
+            per_req_out = (
                 scaled_dot_product_attention(
-                    per_req_query_redudant.unsqueeze(0),
+                    attention_query.unsqueeze(0),
                     per_req_key.unsqueeze(0),
                     per_req_value.unsqueeze(0),
                     attn_mask=attn_mask,
@@ -154,7 +173,11 @@ class TorchNativeAttnBackend(AttentionBackend):
                 .squeeze(0)
                 .movedim(query.dim() - 2, 0)
             )
-            output[start_q:end_q, :, :] = per_req_out_redudant[prefill_seq_len_q:, :, :]
+            output[start_q:end_q, :, :] = (
+                per_req_out
+                if compact_queries
+                else per_req_out[prefill_seq_len_q:, :, :]
+            )
             start_q, start_kv = end_q, end_kv
         return output
 
@@ -315,6 +338,7 @@ class TorchNativeAttnBackend(AttentionBackend):
                 and layer.sliding_window_size > -1
                 else None
             ),
+            compact_queries=getattr(forward_batch, "pvd_compact_extend", False),
         )
         return o
 
