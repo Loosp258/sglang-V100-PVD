@@ -3,6 +3,43 @@
 Updated / 更新：2026-09-26。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-26 Target-Q 增量实验 / Incremental target-Q experiment
+
+Qwen2.5-7B-Instruct、单块 V100S、固定 1094-token 输入、2 个预测 token、
+28 层/28 Q heads，热身后各测五轮。把每层的位置转 CPU 和有限值同步合并后，
+完整前缀 probe 中位数从 **309.349 ms** 到 **309.577 ms**，未观察到收益；
+因此不能把同步点减少声称为性能优化。随后在**隔离实验进程**中保留私有
+Prompt KV：分段前向但仍补齐无用 Q 的路径中位数 **126.162 ms**，只计算
+后缀 Q 的 compact attention 路径 **44.069 ms**；完整前缀基准约 309 ms。
+两种分段路径相对于完整前缀 Q 的最大绝对差均为 **0.03125**（FP16），
+分别有 1785 和 1330 个元素不满足 `atol=rtol=0.003` 的较严格门槛；
+都满足本实验放宽的 `atol=0.02, rtol=0.005` 门槛。
+这说明分段计算本身有数值差异，尚未证明检索 Top-K、生成质量或端到端收益。
+
+代码中已加入默认关闭的 compact EXTEND 和绝对位置 Q 捕获接口，但**没有**
+把私有前缀 KV 缓存接入请求生命周期。隔离实验没有服务端预算、请求关闭、
+回退/替换失效与未知 GPU 完成时的隔离机制，不能当作生产功能。
+实验进程已退出；本轮没有启动 P/V/Gateway 服务，也没有推送 GitHub。
+
+On one V100S with Qwen2.5-7B-Instruct, a fixed 1094-token prefix, two
+predicted tokens, and all 28 layers/28 Q heads, five warmed samples gave
+**309.349 ms** for the full-prefix probe before batching layer validation
+fences and **309.577 ms** after: no measurable gain. In a separate isolated
+process retaining private Prompt KV, split-forward suffix computation took a
+median **126.162 ms** with legacy padded Q versus **44.069 ms** with opt-in
+compact attention; the full-prefix baseline was about 309 ms. Both split
+paths differed from full-prefix Q by at most **0.03125** in FP16. They had
+1785 and 1330 elements respectively outside a strict `atol=rtol=0.003`
+window, though all passed the experimental `atol=0.02, rtol=0.005` gate.
+This is evidence of a compute opportunity, not proven retrieval recall,
+generation quality, or end-to-end improvement.
+
+The compact EXTEND and absolute-position Q-capture interfaces are opt-in and
+unused by serving. Request-owned cache lifetime, independent memory budget,
+prefix replacement/retraction invalidation, and uncertain-completion
+quarantine remain unimplemented. The isolated experiment process exited; no
+P/V/Gateway services were started, and nothing was pushed to GitHub.
+
 ## 2026-09-26 首次 Prompt 安装加速与剩余差距 / Initial Prompt install speedup and remaining gap
 
 调度器分阶段计时把此前约 3.97 秒的轮询空档定位到 D 的 `last_poll`：
