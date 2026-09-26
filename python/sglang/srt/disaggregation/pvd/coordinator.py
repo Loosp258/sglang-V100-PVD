@@ -643,7 +643,16 @@ class VectorCoordinator:
                 )
             )
         except Exception as exc:
-            await self.cancel_entry(manifest.key, f"shard allocation failed: {exc}")
+            try:
+                await self.cancel_entry(manifest.key, f"shard allocation failed: {exc}")
+            except Exception as cleanup_exc:
+                # A failed allocation may also leave a shard with an
+                # unconfirmed cancellation. Report BOTH errors: the cleanup
+                # error alone obscures the failure that started the abort.
+                raise CoordinatorError(
+                    f"shard allocation failed: {exc}; "
+                    f"shard cancellation unconfirmed: {cleanup_exc}"
+                ) from exc
             raise
 
         async with self._lock:

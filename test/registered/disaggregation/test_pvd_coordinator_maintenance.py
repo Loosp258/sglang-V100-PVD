@@ -1,9 +1,16 @@
 """Historical coordinator IDs remain fenced but leave maintenance scans."""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 import torch
+from sglang.srt.disaggregation.pvd.coordinator import CoordinatorError
+from sglang.srt.disaggregation.pvd.protocol import KVEntryKey
+from sglang.srt.disaggregation.pvd.vector_store import (
+    EntryConflictError,
+    ResourceExhaustedError,
+)
 from test_pvd3 import make_ready_entry, make_vector
 
 
@@ -77,5 +84,70 @@ def test_terminal_delivery_tombstone_is_not_rescanned_by_coordinator_reaper():
         assert coordinator.deliveries["terminal"] is delivery
         for store in stores:
             store.close()
+
+    asyncio.run(run())
+
+
+def test_failed_entry_create_reports_original_error_and_unconfirmed_cleanup():
+    async def run():
+        engine, stores, coordinator = make_vector()
+        try:
+            seed = await make_ready_entry(coordinator, engine, "seed")
+            manifest = replace(
+                coordinator.entries[seed].manifest,
+                key=KVEntryKey("model", "failed-create", "failed-create"),
+            )
+            shard0, shard1 = coordinator.shards[0], coordinator.shards[1]
+            original_create = shard0.create_entry
+            original_cancel = shard1.cancel_entry
+
+            async def fail_create(*args, **kwargs):
+                raise ValueError("original allocation failure")
+
+            async def fail_cancel(*args, **kwargs):
+                raise OSError("cleanup RPC unavailable")
+
+            shard0.create_entry = fail_create
+            shard1.cancel_entry = fail_cancel
+            with pytest.raises(CoordinatorError) as caught:
+                await coordinator.create_entry(manifest)
+            assert "original allocation failure" in str(caught.value)
+            assert "cleanup RPC unavailable" in str(caught.value)
+            assert isinstance(caught.value.__cause__, ValueError)
+            assert manifest.key in coordinator._pending_entry_cancellations
+
+            shard0.create_entry = original_create
+            shard1.cancel_entry = original_cancel
+            await coordinator.reap_expired()
+            assert manifest.key not in coordinator._pending_entry_cancellations
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(run())
+
+
+def test_absent_shard_cancellation_fences_late_create_and_is_bounded():
+    async def run():
+        engine, stores, coordinator = make_vector()
+        try:
+            seed = await make_ready_entry(coordinator, engine, "seed")
+            shard = stores[0]
+            shard._max_absent_entry_cancellations = 1
+            key = KVEntryKey("model", "never-allocated", "never-allocated")
+            manifest = replace(coordinator.entries[seed].manifest, key=key)
+            shard.cancel_entry(key, "peer allocation failed")
+            shard.cancel_entry(key, "retry")
+            assert shard.snapshot()["absent_entry_cancellations"] == 1
+            with pytest.raises(EntryConflictError, match="cancelled before allocation"):
+                shard.create_entry(manifest)
+            another = KVEntryKey("model", "another", "another")
+            with pytest.raises(ResourceExhaustedError, match="fence capacity"):
+                shard.cancel_entry(another, "capacity")
+            assert key not in shard.entries
+            assert another not in shard._absent_entry_cancellations
+        finally:
+            for store in stores:
+                store.close()
 
     asyncio.run(run())

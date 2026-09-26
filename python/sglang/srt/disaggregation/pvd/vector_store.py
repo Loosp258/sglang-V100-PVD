@@ -318,6 +318,7 @@ class VectorKVStore:
         max_delivery_records: int = 65536,
         max_legacy_absent_fences: int = 4096,
         max_absent_write_fences: int = 4096,
+        max_absent_entry_cancellations: int = 4096,
         allow_cuda_sparse_packing: bool = False,
         fused_cuda_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
@@ -355,6 +356,11 @@ class VectorKVStore:
             raise ValueError("max_legacy_absent_fences must be a positive integer")
         if type(max_absent_write_fences) is not int or max_absent_write_fences <= 0:
             raise ValueError("max_absent_write_fences must be a positive integer")
+        if (
+            type(max_absent_entry_cancellations) is not int
+            or max_absent_entry_cancellations <= 0
+        ):
+            raise ValueError("max_absent_entry_cancellations must be positive")
         if type(allow_cuda_sparse_packing) is not bool:
             raise ValueError("allow_cuda_sparse_packing must be a boolean")
         if type(fused_cuda_sparse_packing) is not bool or (
@@ -436,6 +442,11 @@ class VectorKVStore:
         # bound refuse NEW absence proofs; existing proofs remain retryable.
         self._absent_write_fences = {}
         self._max_absent_write_fences = max_absent_write_fences
+        # A create may fail on this rank after the peer has allocated. The
+        # coordinator still sends cancel to both ranks. Fence an absent key
+        # for this worker epoch so a delayed create cannot allocate afterward.
+        self._absent_entry_cancellations = set()
+        self._max_absent_entry_cancellations = max_absent_entry_cancellations
         self._lock = threading.RLock()
         self._refresh_metrics()
 
@@ -475,6 +486,8 @@ class VectorKVStore:
         with self._lock:
             if self._closed or self._isolated_reason:
                 raise EntryConflictError("V store is closed or isolated")
+            if manifest.key in self._absent_entry_cancellations:
+                raise EntryConflictError("entry was cancelled before allocation")
             existing = self.entries.get(manifest.key)
             if existing is not None:
                 if (
@@ -1599,7 +1612,18 @@ class VectorKVStore:
 
     def cancel_entry(self, key: KVEntryKey, reason: str) -> None:
         with self._lock:
-            entry = self._entry(key)
+            entry = self.entries.get(key)
+            if entry is None:
+                if key not in self._absent_entry_cancellations:
+                    if (
+                        len(self._absent_entry_cancellations)
+                        >= self._max_absent_entry_cancellations
+                    ):
+                        raise ResourceExhaustedError(
+                            "absent Entry cancellation fence capacity exceeded"
+                        )
+                    self._absent_entry_cancellations.add(key)
+                return
             self._cancel_entry_locked(entry, reason)
         self.progress_transfers()
 
@@ -1841,6 +1865,10 @@ class VectorKVStore:
                 "isolated_reason": self._isolated_reason,
                 "absent_write_fences": len(self._absent_write_fences),
                 "max_absent_write_fences": self._max_absent_write_fences,
+                "absent_entry_cancellations": len(self._absent_entry_cancellations),
+                "max_absent_entry_cancellations": (
+                    self._max_absent_entry_cancellations
+                ),
                 "pending_release_entries": len(self._release_pending),
                 "live_entries": len(self._live_entries),
                 "max_entry_records": self._max_entry_records,
