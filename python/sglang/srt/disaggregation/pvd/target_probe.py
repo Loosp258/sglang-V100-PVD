@@ -8,7 +8,10 @@ separate CUDA subclass adds placement, completion and target-execution locking.
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
+import time
 import traceback
 import uuid
 from contextlib import contextmanager
@@ -355,6 +358,12 @@ class _LlamaTargetProbeCore(TargetProbe):
         )
 
     def _forward(self, tokens, capture):
+        profile_started = (
+            time.perf_counter()
+            if os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1"
+            else None
+        )
+        setup_done = forward_done = None
         from sglang.srt.compilation.piecewise_context_manager import get_forward_context
         from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
             DraftForwardAdapter,
@@ -428,6 +437,8 @@ class _LlamaTargetProbeCore(TargetProbe):
             )
             resources.batch.pvd_query_capture = capture
             resources.backend.init_forward_metadata(resources.batch)
+            if profile_started is not None:
+                setup_done = time.perf_counter()
             with (
                 torch.inference_mode(),
                 forward_context(ForwardContext(attn_backend=resources.backend)),
@@ -438,7 +449,10 @@ class _LlamaTargetProbeCore(TargetProbe):
                     resources.batch.positions,
                     resources.batch,
                 )
-            return capture.finish()
+            result = capture.finish()
+            if profile_started is not None:
+                forward_done = time.perf_counter()
+            return result
         except BaseException as exc:
             self._private_failure = exc
             raise
@@ -462,6 +476,20 @@ class _LlamaTargetProbeCore(TargetProbe):
                     self._private_failure = None
                 vars(resources).clear()
                 self._private_state = None
+                if forward_done is not None:
+                    try:
+                        retired = time.perf_counter()
+                        logging.getLogger(__name__).info(
+                            "PVD timeline event=probe_stage tokens=%d "
+                            "setup_ms=%.3f forward_capture_ms=%.3f "
+                            "retire_ms=%.3f",
+                            len(tokens),
+                            (setup_done - profile_started) * 1000,
+                            (forward_done - setup_done) * 1000,
+                            (retired - forward_done) * 1000,
+                        )
+                    except Exception:
+                        pass  # Profiling cannot change Q ownership or result.
 
 
 class OfflineLlamaTargetProbe(_LlamaTargetProbeCore):

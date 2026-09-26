@@ -296,6 +296,25 @@ def test_qwen2_probe_uses_private_pool_and_same_post_rope_contract(monkeypatch):
     assert c.budget.snapshot()["used_staging_bytes"] == 0
 
 
+def test_opt_in_probe_timeline_separates_setup_forward_and_retirement(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv("PVD_PROFILE_REFRESH_TIMELINE", "1")
+    c = environment(monkeypatch)
+    with caplog.at_level("INFO", logger="sglang.srt.disaggregation.pvd.target_probe"):
+        with c.probe.branch():
+            c.probe.capture(c.prefix, c.prediction)
+    records = [
+        row.message for row in caplog.records if "event=probe_stage" in row.message
+    ]
+    assert len(records) == 1
+    assert "tokens=5" in records[0]
+    assert all(
+        f"{stage}_ms=" in records[0] for stage in ("setup", "forward_capture", "retire")
+    )
+    assert c.budget.snapshot()["used_staging_bytes"] == 0
+
+
 @pytest.mark.parametrize("failure", ["pool", "slot", "forward"])
 def test_failed_construction_or_forward_drops_traceback_storage_before_refund(
     monkeypatch, failure
