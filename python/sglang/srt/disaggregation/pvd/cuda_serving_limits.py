@@ -21,7 +21,7 @@ _NONNEGATIVE_INTEGER_FIELDS = (
 )
 _DURATION_FIELDS = ("request_timeout_seconds", "poll_interval_seconds")
 _FIELDS = frozenset(_INTEGER_FIELDS + _NONNEGATIVE_INTEGER_FIELDS + _DURATION_FIELDS)
-_OPTIONAL_FIELDS = frozenset(("attention_impl",))
+_OPTIONAL_FIELDS = frozenset(("attention_impl", "probe_prefix_cache_bytes"))
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ class CUDAServingLimits:
     target_scratch_max_reservations: int
     bank_max_reservations: int
     attention_impl: str = "online"
+    probe_prefix_cache_bytes: int = 0
 
 
 def _reject_constant(value):
@@ -167,5 +168,10 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
     ):
         raise ValueError("Triton attention requires tile size 8, 16, 32, 64 or 128")
     values["attention_impl"] = attention_impl
+
+    prefix_cache_bytes = config.get("probe_prefix_cache_bytes", 0)
+    if type(prefix_cache_bytes) is not int or prefix_cache_bytes < 0:
+        raise ValueError("probe_prefix_cache_bytes must be a nonnegative integer")
+    values["probe_prefix_cache_bytes"] = prefix_cache_bytes
 
     return CUDAServingLimits(**values)

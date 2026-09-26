@@ -49,8 +49,23 @@ def test_loads_exact_config_as_immutable_dataclass(tmp_path):
     assert limits.poll_interval_seconds == 0.01
     assert limits.draft_transient_bytes_bound == 0
     assert limits.attention_impl == "online"
+    assert limits.probe_prefix_cache_bytes == 0
     with pytest.raises(dataclasses.FrozenInstanceError):
         limits.lead_tokens = 3
+
+
+@pytest.mark.parametrize("invalid", [-1, True, 1.5, "4096"])
+def test_probe_prefix_cache_budget_refuses_invalid_values(tmp_path, invalid):
+    config = valid_config()
+    config["probe_prefix_cache_bytes"] = invalid
+    with pytest.raises(ValueError, match="probe_prefix_cache_bytes"):
+        load(write_config(tmp_path, config))
+
+
+def test_probe_prefix_cache_budget_is_explicit_and_disabled_by_default(tmp_path):
+    config = valid_config()
+    config["probe_prefix_cache_bytes"] = 256 << 20
+    assert load(write_config(tmp_path, config)).probe_prefix_cache_bytes == 256 << 20
 
 
 def test_v100s_chunk64_experiment_only_changes_attention_tile():
