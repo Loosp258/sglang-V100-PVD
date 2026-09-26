@@ -30,7 +30,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not (
         1 <= args.min_completion_tokens <= args.max_new_tokens <= 32
-        and 1 <= args.prompt_repetitions <= 10
+        and 1 <= args.prompt_repetitions <= 200
         and 0 < args.timeout_seconds <= 600
     ):
         parser.error("smoke bounds exceeded")
