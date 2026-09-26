@@ -1,7 +1,28 @@
 # PVD 当前实现与验收边界 / Current implementation and acceptance scope
 
-Updated / 更新：2026-09-26。历史交接文档保留演进记录；本页集中说明当前边界。
+Updated / 更新：2026-09-27。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
+
+## 2026-09-27 新租期复验 / New-lease retest
+
+新 CloudLab 租期已完成三机 Qwen2.5-7B-Instruct PVD 实验；机器、模型修订、
+环境变更、逐项数据与限制详见
+[新租期验收记录](PVD_CloudLab_2026-09-27_Validation_CN_EN.md)。双 V100S V rank
+的原生 CAGRA、P→V→D 和多轮预测刷新均真实运行；但 915-token/20-output
+的预测路径耗时 22.67 秒，对照完整 KV 为 2.18 秒，尚未证明端到端收益。
+374-token 的 CAGRA 冷建图延迟可用 V100S 实验启动器的 512-row 精确回退
+阈值降下，但两并发时预测路径仍慢于完整 KV。下文 2026-09-26
+“租期结束、无法重测”的叙述是**历史状态**，不是目前状态。
+
+The new lease enabled a three-node Qwen2.5-7B-Instruct retest; see the
+[new-lease evidence](PVD_CloudLab_2026-09-27_Validation_CN_EN.md) for the
+environment, model revisions, measurements and limits. Native CAGRA on both
+V100S V ranks, P→V→D delivery and repeated predictive refresh ran end to
+end. Nevertheless, a 915-prompt/20-output-token predictive request took
+22.67 s versus 2.18 s for full KV: no overall speedup is established. A
+512-row exact fallback avoids the 374-token CAGRA cold-build stall, but
+predictive serving still loses to full KV under two-client load. The
+September 26 lease-expiry remarks below are historical, not current status.
 
 ## 2026-09-26 最新验证状态 / Latest validation status
 
