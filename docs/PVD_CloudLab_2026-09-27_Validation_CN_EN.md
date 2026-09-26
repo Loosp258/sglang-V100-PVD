@@ -201,9 +201,33 @@ Because the previous individual-path runs used a different seed, this is
 target-Q capture remained about **0.39 s** per refresh and the whole search
 stage **0.39–0.82 s**. The grouped switch remains off by default.
 
+### 私有目标-probe 前缀缓存 A/B / Private target-probe prefix-cache A/B
+
+在上述 `grouped2048a` 的 P/V/Gateway、M=4、Top-4、2 客户端 × 2 轮
+负载中，仅将 D 的 `probe_prefix_cache_bytes` 从 0 改为 512 MiB。
+新配置文件为
+`pvd_qwen_v100s_serving_limits_triton_m4_probe_cache_long.json`；
+加载测试确认它与原 Triton 长配置只差这个显式预算（2 个定向测试通过）。
+使用同一 replay seed，**输入和四个输出的 SHA256 均完全一致**，所有
+SSE 完整。无缓存每轮墙钟 **7.34/8.06 s**；有缓存为 **6.00/7.09 s**。
+D 日志中典型预测 capture 从约 **0.39 s** 降到 **0.215 s**，但也有
+0.42–0.57 s 的冷/未命中阶段；search 和 delivery 仍波动。V 健康。
+跨 D 重启、样本仅两轮，不能把此差值当成稳定吞吐收益，也不能
+默认为开启；完整 KV 对照仍约 **2 s** 每两客户端轮，差距显著。
+
+For the same `grouped2048a` replay, only D's private target-probe
+`probe_prefix_cache_bytes` changed from zero to **512 MiB**. All four
+input/output hashes matched the no-cache run and every SSE stream completed.
+Two-client wall rounds moved from **7.34/8.06 s** to **6.00/7.09 s**.
+Typical D capture stages fell from roughly **0.39 s** to **0.215 s**, with
+some cold/miss stages at 0.42–0.57 s. The change crossed a D restart and
+only two rounds, so it is evidence of a useful mechanism, not a stable
+throughput estimate or a default-on decision. The full-KV control remains
+around **2 s** per two-client round on this workload.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
 2. **Quality:** the new real-Qwen target-Q test covers only one repeated-text prefix, two layers and eight GQA-head queries per length. It is not a broad recall distribution or generated-answer quality evidence. Compare generated outputs on varied, non-repetitive prompts and more query positions/layers before claiming quality.
 3. **Scale:** this experiment is P TP1, V 2 ranks, D TP1, single rail, one or two clients, max 2304 sequence tokens. TP asymmetry, dual-rail, long-running load, TTL pressure, multi-D routing, and full GPU-memory safety have not been established here.
-4. **Cache:** compare private probe prefix cache on/off with matched warmups, unique prompts and budget snapshots; exercise concurrent close, cancellation and retraction. The three-request run establishes only the narrow cleanup regression.
+4. **Cache:** the two-round same-seed A/B indicates lower capture time without changing these four outputs; repeat with matched warmups, more varied prompts and budget snapshots, then exercise concurrent close, cancellation and retraction. The earlier three-request run established only the narrow cleanup regression.
