@@ -24,6 +24,12 @@ case "$role" in
       echo 'Refusing to start: isolated V coordinator 9100 already exists' >&2
       exit 1
     fi
+    triton_sparse_args=()
+    case "${PVD_TRITON_SPARSE_PACKING:-0}" in
+      0) ;;
+      1) triton_sparse_args+=(--experimental-triton-sparse-packing) ;;
+      *) echo 'PVD_TRITON_SPARSE_PACKING must be 0 or 1' >&2; exit 2 ;;
+    esac
     nohup setsid "$root/deps/pvd-cagra25-venv/bin/python" -m sglang.srt.disaggregation.pvd.server \
       --world-size 2 --host 0.0.0.0 --advertise-host 10.0.1.2 \
       --coordinator-port 9100 --shard-port-base 9300 \
@@ -41,6 +47,7 @@ case "$role" in
       --prompt-index-exact-max-rows 64 \
       --prompt-index-cagra-itopk-size 64 \
       --experimental-cuda-sparse-packing \
+      "${triton_sparse_args[@]}" \
       --full-kv-fanin-max-slices 262144 \
       --full-kv-fanin-max-inflight 2 \
       --full-kv-fanin-max-records 1024 \
