@@ -70,6 +70,31 @@ their previous output hashes. These small, restart-separated samples do
 **not** show an end-to-end speedup. Grouped search remains opt-in while D
 probe, HTTP, delivery and boundary waits dominate the full path.
 
+### M=8 / lead=6 探索 / Longer prefetch-window experiment
+
+独立的 `pvd_qwen_v100s_serving_limits_triton_m8_lead6_long.json` 只将
+Triton 长上下文配置的 `lead_tokens` 从 2 改为 6，并须配合
+`PVD_REFRESH_INTERVAL=8`、`PVD_DRAFT_PREDICT_TOKENS=6`。配置加载测试
+验证 M=4 会被拒绝；同一 P/V/Gateway 和 374-token replay 下，
+单请求两轮耗时 **2.76/2.23 s**（M=4 为 **3.12/2.91 s**），
+两并发每轮墙钟 **3.85/3.68 s**（M=4 为 **5.54/5.13 s**）。
+20/20 SSE 均完整；单请求输出哈希与 M=4 相同，但两并发输出哈希
+**不同**。完整 KV 的两并发对照仍为 **1.85/1.70 s**。
+较少刷新可解释一部分总时长改善，但六步预测的近似误差和不同输出
+未做质量验收，不能把 M=8 配置设为默认或宣称达到最终目标。
+
+An isolated Triton long-context fixture changes only `lead_tokens` from
+2 to 6 and requires `PVD_REFRESH_INTERVAL=8` with
+`PVD_DRAFT_PREDICT_TOKENS=6`; its loader test rejects the M=4 pairing.
+With the same P/V/Gateway and 374-token replay, one-client rounds took
+**2.76/2.23 s** versus **3.12/2.91 s** at M=4. Two-client wall rounds
+took **3.85/3.68 s** versus **5.54/5.13 s** at M=4. Every stream had all
+20 SSE events. The single-client output hashes matched M=4, but the
+concurrent output hashes **changed**. Full KV still took **1.85/1.70 s**
+for the concurrent workload. Fewer refreshes plausibly reduce overhead;
+quality and approximate-retrieval error are not established, so M=8 is
+not a new default or evidence of the final performance target.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load; native CAGRA cold build is much slower. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. A larger exact threshold may be appropriate within the 2304-token experiment context, but must be measured rather than assumed.

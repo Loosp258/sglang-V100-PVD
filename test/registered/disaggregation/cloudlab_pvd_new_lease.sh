@@ -126,6 +126,15 @@ case "$role" in
   d)
     require_free_port 30003
     require_model "$model"
+    refresh_interval="${PVD_REFRESH_INTERVAL:-4}"
+    draft_predict_tokens="${PVD_DRAFT_PREDICT_TOKENS:-2}"
+    if [[ ! "$refresh_interval" =~ ^[1-9][0-9]?$ ]] ||
+       (( refresh_interval > 32 )) ||
+       [[ ! "$draft_predict_tokens" =~ ^[1-9][0-9]?$ ]] ||
+       (( draft_predict_tokens > 32 )); then
+      echo 'PVD_REFRESH_INTERVAL and PVD_DRAFT_PREDICT_TOKENS must be in [1, 32]' >&2
+      exit 2
+    fi
     export PVD_SEARCH_BACKGROUND_IO=1
     export PVD_CONTIGUOUS_SPARSE_BANK_COPY="${PVD_CONTIGUOUS_SPARSE_BANK_COPY:-0}"
     export SGLANG_HOST_IP="$d_ip"
@@ -151,7 +160,8 @@ case "$role" in
           --pvd-draft-device cuda:1 --pvd-draft-mem-fraction-static 0.1
           --pvd-draft-scratch-budget-bytes 268435456
           --pvd-draft-persistent-budget-bytes 2147483648
-          --pvd-draft-predict-tokens 2 --pvd-predictive-retrieval-config
+          --pvd-draft-predict-tokens "$draft_predict_tokens"
+          --pvd-predictive-retrieval-config
           --pvd-cuda-predictive-serving --pvd-cuda-serving-config "$limits"
           --pvd-retrieval-vector-space qwen25-7b-pvd
           --pvd-retrieval-top-k 4 --pvd-retrieval-max-union-tokens 32
@@ -176,7 +186,8 @@ case "$role" in
       --pvd-full-kv-fanin-max-slices 262144 \
       --pvd-full-kv-fanin-response-bytes 67108864 \
       "${rank_packed_args[@]}" \
-      --pvd-kv-refresh-interval 4 --num-reserved-decode-tokens 16 \
+      --pvd-kv-refresh-interval "$refresh_interval" \
+      --num-reserved-decode-tokens 16 \
       "${predictive_args[@]}" \
       --mem-fraction-static 0.5 --context-length 2304 \
       --max-total-tokens 2304 --max-running-requests 4 \

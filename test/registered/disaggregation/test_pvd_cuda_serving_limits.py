@@ -159,6 +159,21 @@ def test_v100s_sdpa_m8_lead6_experiment_extends_only_prefetch_window():
     assert limits.lead_tokens == 6
 
 
+def test_v100s_triton_long_m8_lead6_experiment_extends_only_prefetch_window():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_triton_long.json").read_text()
+    )
+    candidate = directory / "pvd_qwen_v100s_serving_limits_triton_m8_lead6_long.json"
+    assert json.loads(candidate.read_text()) == {**baseline, "lead_tokens": 6}
+    with pytest.raises(ValueError, match="less than refresh_interval"):
+        load_cuda_serving_limits(candidate, refresh_interval=4, predict_tokens=6)
+    limits = load_cuda_serving_limits(candidate, refresh_interval=8, predict_tokens=6)
+    assert limits.max_sequence_tokens == 2304
+    assert limits.attention_impl == "triton_grouped"
+    assert limits.lead_tokens == 6
+
+
 def test_v100s_long_context_fixture_uses_online_attention_and_longer_timeout():
     directory = Path(__file__).parent
     candidate_path = directory / "pvd_qwen_v100s_serving_limits_online_long.json"
