@@ -77,6 +77,30 @@ def test_full_prompt_import_gathers_per_layer_not_per_token(monkeypatch):
     group.close()
 
 
+def test_partial_head_prompt_layout_uses_bounded_head_gather(monkeypatch):
+    c, group, importer, source, budget, _ = setup(monkeypatch)
+    group._banks[0].expected_groups = frozenset({(0, 1)})
+    original_select = torch.index_select
+    outputs = []
+
+    def record_select(input, dim, index, *, out=None):
+        if out is not None:
+            outputs.append(tuple(out.shape))
+        return original_select(input, dim, index, out=out)
+
+    monkeypatch.setattr(torch, "index_select", record_select)
+    importer.install(source)
+    assert outputs == [(4, c.pool.k.shape[-1])] * 2
+    permit = group.runtime.begin_forward(0)
+    with group.read(0, 0) as groups:
+        assert set(groups) == {(0, 1)}
+        expected = torch.stack((c.pool.k[[8, 3, 6, 1], 1], c.pool.v[[8, 3, 6, 1], 1]))
+        torch.testing.assert_close(groups[(0, 1)][1], expected, atol=0, rtol=0)
+    assert group.runtime.finish_forward(permit, readers_drained=True, succeeded=True)
+    assert budget.snapshot()["reservations"] == 0
+    group.close()
+
+
 @pytest.mark.parametrize(
     "fault", ["entry", "count", "slot", "rows", "padding", "dtype"]
 )
