@@ -102,6 +102,18 @@ case "$role" in
           echo 'PVD_LONG_LIMITS_PATH must name an existing absolute config file' >&2
           exit 2
         fi
+        retrieval_top_k="${PVD_LONG_TOP_K:-4}"
+        retrieval_union_cap="${PVD_LONG_UNION_CAP:-32}"
+        for value in "$retrieval_top_k" "$retrieval_union_cap"; do
+          if [[ ! "$value" =~ ^[1-9][0-9]{0,3}$ ]] || (( value > 512 )); then
+            echo 'PVD_LONG_TOP_K and PVD_LONG_UNION_CAP must be integers in 1..512' >&2
+            exit 2
+          fi
+        done
+        if (( retrieval_union_cap < retrieval_top_k )); then
+          echo 'PVD_LONG_UNION_CAP must be at least PVD_LONG_TOP_K' >&2
+          exit 2
+        fi
         predictive_args=(
           --pvd-draft-model-path "$root/models/Qwen2.5-0.5B-Instruct"
           --pvd-draft-revision 7ae557604adf67be50417f59c2c2f167def9a775
@@ -111,7 +123,8 @@ case "$role" in
           --pvd-draft-predict-tokens 2 --pvd-predictive-retrieval-config
           --pvd-cuda-predictive-serving --pvd-cuda-serving-config "$serving_config"
           --pvd-retrieval-vector-space qwen25-7b-pvd
-          --pvd-retrieval-top-k 4 --pvd-retrieval-max-union-tokens 32
+          --pvd-retrieval-top-k "$retrieval_top_k"
+          --pvd-retrieval-max-union-tokens "$retrieval_union_cap"
           --pvd-retrieval-bank-budget-bytes 268435456
           --pvd-retrieval-scratch-budget-bytes 536870912
         )
