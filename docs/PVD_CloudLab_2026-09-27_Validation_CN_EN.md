@@ -172,6 +172,35 @@ CUDA_VISIBLE_DEVICES=0 PVD_CAGRA_RECALL_ROWS=2048 \
   --context-length 2304 --max-total-tokens 2304
 ```
 
+### 916 行 grouped exact / 916-row grouped exact
+
+进一步将仍为 opt-in 的 grouped exact 上限从 512 行扩至 2048 行；
+完整堆叠 K、分数和排序 scratch 在运行前按实际行数计入预算，超过 2048
+行仍回退到独立的分块 exact/CAGRA 路径。V100S 上针对 915/2048 行、
+32 个索引和 7 个查询行的 Top-K/峰值预算回归通过；索引/CAGRA-auto
+套件 **124 passed, 1 skipped**。在线 V 双 rank 的 916 行日志实际为
+`path=grouped_exact`，常见 manager 阶段约 **5–48 ms**，无传输隔离。
+
+固定 `--replay-seed grouped2048a`、默认负载句子重复 100 次、
+2 客户端 × 2 轮、每请求 20 输出，墙钟 **7.34/8.06 s**，四个 SSE
+完整。该 seed 未在旧逐项路径上重复，故这些数字**不是严格 A/B**；
+先前相近长度的逐项路径约 **7.4–7.7 s**。D 日志中每次刷新目标
+Q capture 仍约 **0.39 s**，search 总阶段约 **0.39–0.82 s**，其中
+单个 V HTTP 批次约 **24–133 ms**、V manager 通常远低于总 search。
+因此更大的 grouped kernel 没有建立端到端收益；开关继续默认关闭。
+
+The opt-in grouped exact cap now admits up to 2048 rows and precharges
+the entire stacked-K, score and sort footprint; larger indexes retain the
+separate bounded path. V100S Top-K/peak-budget checks at 915/2048 rows passed
+with **124 passing, one skipped** index/CAGRA-auto tests. Online V logs
+confirmed `path=grouped_exact` for a 916-row Entry, generally spending
+**5–48 ms** in the manager stage. Two clients over two `grouped2048a`
+replay rounds completed all SSE streams in **7.34/8.06 s** wall-clock.
+Because the previous individual-path runs used a different seed, this is
+**not a controlled A/B** and cannot establish an end-to-end speedup. D's
+target-Q capture remained about **0.39 s** per refresh and the whole search
+stage **0.39–0.82 s**. The grouped switch remains off by default.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

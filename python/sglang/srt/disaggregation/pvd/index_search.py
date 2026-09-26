@@ -553,14 +553,15 @@ class BruteForceIndexBackend(IndexBackend):
         if not isinstance(first, BuiltIndex):
             raise IndexSearchError("a built index is required")
         count, dim = first.count, first.dim
-        # A V100S Prompt shard can have hundreds of rows per head. The
-        # original 128-row cutoff silently routed the common 374-row shape
-        # through 24/32 separate searches even with grouped serving enabled.
-        # Bound the stacked sort to one regular exact-search chunk; the
-        # grouped footprint below charges its score/workspace before launch.
-        if first.metric != "ip" or count > min(self._chunk_rows, 512):
+        # The grouped path has its own explicit row cap and reserves its
+        # entire stacked-K/score/sort footprint before launch. It need not
+        # inherit the single-index sweep size: doing so sent 915-row Prompt
+        # indexes through dozens of individual searches despite the grouped
+        # opt-in. Keep the cap bounded for this V100S experiment; larger
+        # indexes still take the independently chunked individual path.
+        if first.metric != "ip" or count > 2048:
             raise IndexSearchError(
-                "grouped exact search supports IP indexes of at most 512 rows"
+                "grouped exact search supports IP indexes of at most 2048 rows"
             )
         if top_k > count:
             raise IndexSearchError("top_k exceeds indexed vector count")

@@ -49,7 +49,7 @@ def test_grouped_small_ip_search_matches_individual_searches():
         torch.testing.assert_close(scores, expected_scores, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("rows", [374, 512])
+@pytest.mark.parametrize("rows", [374, 512, 915, 2048])
 def test_grouped_prompt_sized_ip_search_matches_individual(rows):
     candidate = backend()
     rng = torch.Generator().manual_seed(rows)
@@ -72,10 +72,10 @@ def test_grouped_prompt_sized_ip_search_matches_individual(rows):
 def test_grouped_prompt_rows_above_bound_fall_back():
     candidate = backend()
     indexes = tuple(
-        candidate.build(torch.ones(513, 8), vector_space=SPACE, metric="ip")
+        candidate.build(torch.ones(2049, 8), vector_space=SPACE, metric="ip")
         for _ in range(2)
     )
-    with pytest.raises(IndexSearchError, match="at most 512 rows"):
+    with pytest.raises(IndexSearchError, match="at most 2048 rows"):
         candidate.grouped_search_footprint(indexes=indexes, num_queries=1, top_k=1)
 
 
@@ -92,7 +92,7 @@ def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
-@pytest.mark.parametrize("rows", [17, 374, 512])
+@pytest.mark.parametrize("rows", [17, 374, 512, 915, 2048])
 def test_grouped_small_ip_search_matches_individual_cuda(rows):
     candidate = BruteForceIndexBackend(device="cuda:0")
     rng = torch.Generator().manual_seed(47)
