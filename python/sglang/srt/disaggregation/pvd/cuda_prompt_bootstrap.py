@@ -272,16 +272,32 @@ class CUDAPromptBootstrap:
         self._held["backing"] = backing
         packed = ResourceGuard(backing, lambda: None)  # guard drops tensor storage
         self._held["packed_guard"] = packed
-        # Snapshot the already-validated absolute pool rows once. One gather
-        # per K/V head replaces prompt_tokens tiny GPU copy_ submissions per
-        # head, which otherwise blocks the Scheduler's refresh owner loop while
-        # a second request enters the waiting queue.
+        # Snapshot the already-validated absolute pool rows once. The common
+        # full-head layout gathers all heads of a layer directly into the
+        # strided backing view, in two submissions per layer. A partial-head
+        # layout keeps the bounded per-component gather instead.
         row_indices = torch.tensor(rows, dtype=torch.int64, device=self._bank.device)
-        for i, ((layer, head), pair) in enumerate(zip(groups, buffers, strict=True)):
-            for kind, tensor in enumerate(pair):
-                torch.index_select(
-                    tensor[:, head, :], 0, row_indices, out=backing[i, kind]
-                )
+        start = 0
+        while start < len(groups):
+            layer = groups[start][0]
+            end = start + 1
+            while end < len(groups) and groups[end][0] == layer:
+                end += 1
+            pair = buffers[start]
+            if tuple(head for _, head in groups[start:end]) == tuple(
+                range(pair[0].shape[1])
+            ):
+                for kind, tensor in enumerate(pair):
+                    target = backing[start:end, kind].permute(1, 0, 2)
+                    torch.index_select(tensor, 0, row_indices, out=target)
+            else:
+                for i in range(start, end):
+                    head = groups[i][1]
+                    for kind, tensor in enumerate(buffers[i]):
+                        torch.index_select(
+                            tensor[:, head, :], 0, row_indices, out=backing[i, kind]
+                        )
+            start = end
         self._fence()
         epoch = self.group.begin(0)
         payloads = tuple(

@@ -53,7 +53,7 @@ def test_full_prompt_import_needs_no_index_and_preserves_absolute_positions(
     group.close()
 
 
-def test_full_prompt_import_gathers_per_component_not_per_token(monkeypatch):
+def test_full_prompt_import_gathers_per_layer_not_per_token(monkeypatch):
     c, group, importer, source, budget, _ = setup(monkeypatch)
     original_select = torch.index_select
     gathered = []
@@ -65,10 +65,12 @@ def test_full_prompt_import_gathers_per_component_not_per_token(monkeypatch):
 
     monkeypatch.setattr(torch, "index_select", record_select)
     importer.install(source)
-    expected_components = 2 * len(group._banks[0].expected_groups)
-    assert len(gathered) == expected_components
+    expected_layers = len({layer for layer, _ in group._banks[0].expected_groups})
+    assert len(gathered) == 2 * expected_layers
     assert all(
-        dim == 0 and rows == (8, 3, 6, 1) and shape == (4, c.pool.k.shape[-1])
+        dim == 0
+        and rows == (8, 3, 6, 1)
+        and shape == (4, c.pool.k.shape[1], c.pool.k.shape[-1])
         for dim, rows, shape in gathered
     )
     assert budget.snapshot()["reservations"] == 0
