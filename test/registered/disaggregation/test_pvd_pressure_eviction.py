@@ -1,15 +1,18 @@
 """Pressure eviction keeps an Entry reusable until physical V space is needed."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from aiohttp.test_utils import TestServer
+from sglang.srt.disaggregation.pvd.index_search import BruteForceIndexBackend
 from sglang.srt.disaggregation.pvd.control_server import (
     HttpShardClient,
     create_shard_app,
 )
 from sglang.srt.disaggregation.pvd.request_state import EntryState
 from sglang.srt.disaggregation.pvd.vector_store import ResourceExhaustedError
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd3 import make_ready_entry, make_vector
 
 
@@ -66,7 +69,7 @@ def test_pressure_does_not_evict_a_consumer_lease_or_admit_without_room():
 
 def test_shard_capacity_api_is_compact_and_matches_physical_allocator():
     async def run():
-        _, stores, _coordinator = make_vector()
+        engine, stores, coordinator = make_vector()
         try:
             store = stores[1]
             async with TestServer(create_shard_app(store)) as server:
@@ -84,8 +87,88 @@ def test_shard_capacity_api_is_compact_and_matches_physical_allocator():
                     }
                     assert report["largest_contiguous_free_pages"] == 16
                     assert "entries" not in report
+                    key = await make_ready_entry(coordinator, engine, "capacity-post")
+                    manifest = coordinator.entries[key].manifest
+                    planned = await client.capacity(manifest)
+                    assert planned == store.capacity_snapshot(manifest)
+                    assert planned["index_admission_room"] is None
                 finally:
                     await client.close()
+        finally:
+            for store in stores:
+                store.close()
+
+    asyncio.run(run())
+
+
+def test_index_budget_preflight_counts_extraction_index_and_peak_scratch():
+    async def run():
+        engine, stores, coordinator = make_vector()
+        try:
+            key = await make_ready_entry(coordinator, engine, "index-estimate")
+            store = stores[0]
+            manifest = coordinator.entries[key].manifest
+            store.prompt_index = SimpleNamespace(
+                budget=TransferBudget(100, 1),
+                backend=BruteForceIndexBackend(device="cpu"),
+                metric="ip",
+            )
+            report = store.capacity_snapshot(manifest)
+            assert report["index_required_bytes"] > 100
+            assert report["index_available_bytes"] == 100
+            assert report["index_admission_room"] is False
+            store.prompt_index.budget = TransferBudget(1000, 1)
+            assert store.capacity_snapshot(manifest)["index_admission_room"] is True
+        finally:
+            for store in stores:
+                store.prompt_index = None
+                store.close()
+
+    asyncio.run(run())
+
+
+def test_index_only_pressure_eviction_preserves_dense_admission():
+    async def run():
+        engine, stores, coordinator = make_vector()
+        try:
+            originals = [store.capacity_snapshot for store in stores]
+            for store, original in zip(stores, originals, strict=True):
+
+                def limited(manifest=None, *, store=store, original=original):
+                    report = original(manifest)
+                    if manifest is not None:
+                        stored = sum(
+                            entry.state.value == "stored"
+                            for entry in store.entries.values()
+                        )
+                        report["index_admission_room"] = stored < 2
+                    return report
+
+                store.capacity_snapshot = limited
+            oldest = await make_ready_entry(coordinator, engine, "index-oldest")
+            await make_ready_entry(coordinator, engine, "index-second")
+            assert all(store.allocator.available_pages == 12 for store in stores)
+            newest = await make_ready_entry(coordinator, engine, "index-new")
+            assert coordinator.entries[oldest].state == EntryState.RELEASED
+            assert coordinator.entries[newest].state == EntryState.STORED
+            assert all(store.allocator.available_pages == 12 for store in stores)
+            await coordinator.renew_consumer(newest, "decode")
+            remaining = next(
+                key
+                for key, entry in coordinator.entries.items()
+                if entry.state == EntryState.STORED and key != newest
+            )
+            await coordinator.renew_consumer(remaining, "decode")
+            dense = await make_ready_entry(
+                coordinator, engine, "dense-even-if-index-full"
+            )
+            assert coordinator.entries[dense].state == EntryState.STORED
+            assert (
+                coordinator.metrics.snapshot()["counters"][
+                    "coordinator_index_capacity_deferred"
+                ]
+                == 1
+            )
         finally:
             for store in stores:
                 store.close()

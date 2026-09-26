@@ -268,8 +268,12 @@ class HttpShardClient(ShardClient):
     async def health(self) -> Mapping:
         return await self._request("GET", "/internal/health")
 
-    async def capacity(self) -> Mapping:
-        return await self._request("GET", "/internal/v1/capacity")
+    async def capacity(self, manifest: KVEntryManifest | None = None) -> Mapping:
+        if manifest is None:
+            return await self._request("GET", "/internal/v1/capacity")
+        return await self._request(
+            "POST", "/internal/v1/capacity", {"manifest": manifest.to_dict()}
+        )
 
     async def close(self) -> None:
         self._closed = True
@@ -725,6 +729,13 @@ def create_shard_app(
     async def capacity(_request):
         return web.json_response(await asyncio.to_thread(store.capacity_snapshot))
 
+    async def capacity_for_entry(request):
+        data = await _payload(request)
+        manifest = KVEntryManifest.from_dict(data["manifest"])
+        return web.json_response(
+            await asyncio.to_thread(store.capacity_snapshot, manifest)
+        )
+
     app.add_routes(
         [
             web.post("/internal/v1/entries", create_entry),
@@ -746,6 +757,7 @@ def create_shard_app(
             web.post("/internal/v1/indexes/search-batch", search_index_batch),
             web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/v1/capacity", capacity),
+            web.post("/internal/v1/capacity", capacity_for_entry),
             web.get("/internal/health", health),
         ]
     )

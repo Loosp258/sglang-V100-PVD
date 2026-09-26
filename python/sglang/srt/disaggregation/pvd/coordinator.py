@@ -110,7 +110,7 @@ class ShardClient(abc.ABC):
     @abc.abstractmethod
     async def health(self) -> Mapping: ...
 
-    async def capacity(self) -> Mapping:
+    async def capacity(self, manifest: KVEntryManifest | None = None) -> Mapping:
         """Legacy adapters may supply the capacity fields via health."""
         return await self.health()
 
@@ -226,8 +226,8 @@ class LocalShardClient(ShardClient):
         snapshot["preflight"] = self.preflight
         return snapshot
 
-    async def capacity(self) -> Mapping:
-        return await asyncio.to_thread(self.store.capacity_snapshot)
+    async def capacity(self, manifest: KVEntryManifest | None = None) -> Mapping:
+        return await asyncio.to_thread(self.store.capacity_snapshot, manifest)
 
 
 @dataclass
@@ -604,7 +604,7 @@ class VectorCoordinator:
                     await self._ensure_entry_room(manifest)
                 return await self._create_entry_once(manifest, epochs)
 
-    async def _entry_room(self, manifest: KVEntryManifest) -> bool | None:
+    async def _entry_room(self, manifest: KVEntryManifest) -> tuple[bool, bool] | None:
         """Check physical contiguous capacity on both trusted V shards.
 
         None means an older/unavailable shard health contract. In that case
@@ -613,7 +613,7 @@ class VectorCoordinator:
         replies = await asyncio.gather(
             *(
                 (
-                    self.shards[rank].capacity()
+                    self.shards[rank].capacity(manifest)
                     if callable(getattr(self.shards[rank], "capacity", None))
                     else self.shards[rank].health()
                 )
@@ -629,15 +629,17 @@ class VectorCoordinator:
             if type(available) is not int or available < 0:
                 self.metrics.increment("coordinator_pressure_preflight_unavailable")
                 return None
-        return all(
+        physical = all(
             replies[rank]["largest_contiguous_free_pages"]
             >= manifest.shard(rank).page_count
             for rank in (0, 1)
         )
+        index = all(reply.get("index_admission_room") is not False for reply in replies)
+        return physical, index
 
     async def _ensure_entry_room(self, manifest: KVEntryManifest) -> None:
         room = await self._entry_room(manifest)
-        if room is not False:
+        if room is None or all(room):
             return
         now = time.monotonic()
         async with self._lock:
@@ -663,8 +665,15 @@ class VectorCoordinator:
                 self.metrics.increment("coordinator_pressure_eviction_refused")
                 continue
             self.metrics.increment("coordinator_pressure_evictions")
-            if await self._entry_room(manifest):
+            room = await self._entry_room(manifest)
+            if room is None or all(room):
                 return
+        if room is not None and room[0]:
+            # A full-KV Delivery does not require an index. Preserve dense
+            # admission if every safe eviction was tried but index budget is
+            # still unavailable; predictive search will remain backpressured.
+            self.metrics.increment("coordinator_index_capacity_deferred")
+            return
         self.metrics.increment("coordinator_pressure_exhausted")
         raise ResourceExhaustedError(
             "V shards have no contiguous room and no safely evictable Entry"

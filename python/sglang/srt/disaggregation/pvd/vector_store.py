@@ -1894,10 +1894,12 @@ class VectorKVStore:
         snapshot["transport"] = self.transfer_engine.health()
         return snapshot
 
-    def capacity_snapshot(self) -> Dict[str, object]:
+    def capacity_snapshot(
+        self, manifest: Optional[KVEntryManifest] = None
+    ) -> Dict[str, object]:
         """Small, coherent control-plane preflight; no Entry list or MR data."""
         with self._lock:
-            return {
+            report = {
                 "rank": self.rank,
                 "worker_epoch": self.worker_epoch,
                 "ready": not self._closed and self._isolated_reason is None,
@@ -1907,6 +1909,36 @@ class VectorKVStore:
                     self.allocator.largest_contiguous_free_pages
                 ),
             }
+            if manifest is not None:
+                report["index_admission_room"] = None
+                index = self.prompt_index
+                if index is not None and index.budget is not None:
+                    shard = manifest.shard(self.rank)
+                    rows, dim = manifest.prompt_token_count, manifest.layout.head_dim
+                    heads = (
+                        shard.layer_end - shard.layer_start
+                    ) * manifest.layout.kv_heads_per_rank
+                    try:
+                        retained = heads * (
+                            rows * dim * 4
+                            + index.backend.build_footprint(
+                                rows, dim, metric=index.metric
+                            )
+                        )
+                        scratch = index.backend.build_scratch_footprint(
+                            rows, dim, metric=index.metric
+                        )
+                        budget = index.budget.snapshot()
+                        free = budget["staging_bytes"] - budget["used_staging_bytes"]
+                    except (KeyError, TypeError, ValueError):
+                        # An unsupported backend/shape must not prevent full
+                        # KV storage; the index build will report its failure.
+                        pass
+                    else:
+                        report["index_required_bytes"] = retained + scratch
+                        report["index_available_bytes"] = free
+                        report["index_admission_room"] = free >= retained + scratch
+            return report
 
     def close(self) -> None:
         with self._lock:
