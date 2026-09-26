@@ -84,11 +84,31 @@ case "$role" in
     root=/mnt/sglang-data/yiliu124-node-2-sglang-pvd
     work="$root/pvd-long-acceptance-20260925"
     checkout="${PVD_D_CHECKOUT:-$root/src/sglang-PVD-validate-8a96123b0-long}"
-    serving_config="${PVD_LONG_LIMITS_PATH:-$work/limits.json}"
-    if [[ "$serving_config" != /* || ! -f "$serving_config" ]]; then
-      echo 'PVD_LONG_LIMITS_PATH must name an existing absolute config file' >&2
-      exit 2
-    fi
+    predictive_args=()
+    case "${PVD_LONG_MODE:-predictive}" in
+      predictive)
+        serving_config="${PVD_LONG_LIMITS_PATH:-$work/limits.json}"
+        if [[ "$serving_config" != /* || ! -f "$serving_config" ]]; then
+          echo 'PVD_LONG_LIMITS_PATH must name an existing absolute config file' >&2
+          exit 2
+        fi
+        predictive_args=(
+          --pvd-draft-model-path "$root/models/Qwen2.5-0.5B-Instruct"
+          --pvd-draft-revision 7ae557604adf67be50417f59c2c2f167def9a775
+          --pvd-draft-device cuda:1 --pvd-draft-mem-fraction-static 0.1
+          --pvd-draft-scratch-budget-bytes 268435456
+          --pvd-draft-persistent-budget-bytes 2147483648
+          --pvd-draft-predict-tokens 2 --pvd-predictive-retrieval-config
+          --pvd-cuda-predictive-serving --pvd-cuda-serving-config "$serving_config"
+          --pvd-retrieval-vector-space qwen25-7b-pvd
+          --pvd-retrieval-top-k 4 --pvd-retrieval-max-union-tokens 32
+          --pvd-retrieval-bank-budget-bytes 268435456
+          --pvd-retrieval-scratch-budget-bytes 536870912
+        )
+        ;;
+      full) ;;
+      *) echo 'PVD_LONG_MODE must be predictive or full' >&2; exit 2 ;;
+    esac
     # Long online target forwards can exceed the search client's HTTP timeout.
     # Keep V search I/O advancing while the scheduler executes that forward.
     export PVD_SEARCH_BACKGROUND_IO="${PVD_SEARCH_BACKGROUND_IO:-1}"
@@ -120,18 +140,7 @@ case "$role" in
       --pvd-full-kv-fanin-response-bytes 67108864 \
       "${rank_packed_args[@]}" \
       --pvd-kv-refresh-interval 4 --num-reserved-decode-tokens 16 \
-      --pvd-draft-model-path "$root/models/Qwen2.5-0.5B-Instruct" \
-      --pvd-draft-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
-      --pvd-draft-device cuda:1 --pvd-draft-mem-fraction-static 0.1 \
-      --pvd-draft-scratch-budget-bytes 268435456 \
-      --pvd-draft-persistent-budget-bytes 2147483648 \
-      --pvd-draft-predict-tokens 2 --pvd-predictive-retrieval-config \
-      --pvd-cuda-predictive-serving \
-      --pvd-cuda-serving-config "$serving_config" \
-      --pvd-retrieval-vector-space qwen25-7b-pvd \
-      --pvd-retrieval-top-k 4 --pvd-retrieval-max-union-tokens 32 \
-      --pvd-retrieval-bank-budget-bytes 268435456 \
-      --pvd-retrieval-scratch-budget-bytes 536870912 \
+      "${predictive_args[@]}" \
       --mem-fraction-static 0.5 --context-length 2304 \
       --max-total-tokens 2304 --max-running-requests 4 \
       --max-prefill-tokens 2304 \
