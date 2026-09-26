@@ -150,17 +150,36 @@ def check(device, rank, dtype, *, multiblock):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--current-device",
+        default=None,
+        help="Optional thread-current CUDA device to test cross-device launch safety",
+    )
     args = parser.parse_args(argv)
     device = torch.device(args.device)
     if device.type != "cuda" or device.index is None or not torch.cuda.is_available():
         parser.error("a real indexed CUDA device is required")
+    if args.current_device is not None:
+        torch.cuda.set_device(args.current_device)
+    current_before = torch.cuda.current_device()
     results = [
         check(device, rank, dtype, multiblock=multiblock)
         for rank in (0, 1)
         for dtype in (torch.float16, torch.bfloat16, torch.float32)
         for multiblock in (False, True)
     ]
-    print(json.dumps({"device": str(device), "checks": results}, indent=2))
+    if torch.cuda.current_device() != current_before:
+        raise AssertionError("sparse pack did not restore the caller's CUDA device")
+    print(
+        json.dumps(
+            {
+                "device": str(device),
+                "current_device": current_before,
+                "checks": results,
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

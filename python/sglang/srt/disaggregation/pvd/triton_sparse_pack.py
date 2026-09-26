@@ -141,16 +141,19 @@ def launch_sparse_pack(
         or source.numel() != 2 * layers * rows * heads * head_dim * element_bytes
     ):
         raise SparsePayloadError("invalid fused sparse pack source/workspace")
-    _gather_pack_sparse_bytes[
-        (workspace.group_count, triton.cdiv(workspace.max_group_bytes, 1024))
-    ](
-        source,
-        destination,
-        workspace.token_ids,
-        workspace.group_meta,
-        rows,
-        heads,
-        layers,
-        head_dim * element_bytes,
-        1024,
-    )
+    # A V worker group shares one process across GPUs. Triton launches against
+    # the thread-current CUDA device, which need not be this shard's device.
+    with torch.cuda.device(workspace.device):
+        _gather_pack_sparse_bytes[
+            (workspace.group_count, triton.cdiv(workspace.max_group_bytes, 1024))
+        ](
+            source,
+            destination,
+            workspace.token_ids,
+            workspace.group_meta,
+            rows,
+            heads,
+            layers,
+            head_dim * element_bytes,
+            1024,
+        )
