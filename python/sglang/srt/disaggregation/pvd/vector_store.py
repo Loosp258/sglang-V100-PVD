@@ -1029,6 +1029,11 @@ class VectorKVStore:
             with self._lock:
                 delivery.transfer_handle = handle
         except Exception as exc:
+            logger.exception(
+                "PVD V delivery source/submit failed: rank=%s delivery_id=%s",
+                self.rank,
+                delivery_id,
+            )
             with self._lock:
                 uncertain = (
                     attempted
