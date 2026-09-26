@@ -280,6 +280,42 @@ healthy V ranks and unchanged hashes. The matching full-KV D control took
 was not; this is neither a stable throughput claim nor the final latency
 target. Neither 64 items nor 2 GiB becomes a default.
 
+### 首批检索版本发现 A/B / First-batch version discovery A/B
+
+本轮在本地 commit `40f77b5ca` 与 `657568e97` 增加 V 侧同一读租约内的
+无版本 pin 批量检索，并让 D 的首次刷新直接对每个 V shard 并行发整批查询。
+V 回包的所有结果必须属于同一 index/mapping 版本；混合版本、混合 pin、
+取消与错误回包均拒绝发布。后续轮次继续显式 pin。CloudLab 隔离环境的
+搜索/索引回归 **255 passed**，Ruff 通过。两次提交均仅在本地，未推送。
+
+固定 `--replay-seed firstbatch-ab-20260927`、921-token prompt、2 客户端
+× 3 轮、每请求 20 token，保持 P/V/Gateway 运行，只重启 D 并替换隔离
+验证目录的 `search_client.py`、`probe_search.py`。V 使用 2048 行 exact
+阈值、2 GiB index 预算与 grouped exact，D 使用 M=4、512 MiB 私有
+target-probe 缓存与 64 项 batch。旧单条 seed 再批量的每轮墙钟为
+**6.34/5.06/5.12 s**；新无 pin 首批整批为 **5.63/5.06/5.00 s**。
+六个请求的输入和输出哈希逐一相同，120/120 SSE token 完整。D 日志确认
+draft、目标 Q probe 和刷新边界安装；V 日志确认 HTTP batch 200。
+只有第一轮有约 0.71 s 的观察差值；暖轮差异很小，样本量也不足以作
+稳定性能结论，更没有超过完整 KV 基线。实验的 `mode_verified_by_script`
+字段为 false，模式由 D 启动参数和日志另行核对。
+
+The local commits `40f77b5ca` and `657568e97` let an initial unpinned batch
+discover one V index/mapping version under a single reader lease, removing the
+separate seed-search round trip. D sends first batches to different V shards
+concurrently and continues to pin subsequent rounds. Mixed pins or versions,
+cancellation and malformed replies fail closed. Search/index tests passed
+**255/255** on CloudLab; Ruff passed. Neither commit was pushed to GitHub.
+
+With the same fixed seed, 921-token prompts, two clients, three rounds and
+20 tokens/request, P/V/Gateway stayed up while D alone was restarted. The
+old path took **6.34/5.06/5.12 s** wall time per round; the new path took
+**5.63/5.06/5.00 s**. All six input/output hashes matched and all 120 SSE
+tokens arrived. D confirmed draft/probe/boundary activity; V returned batch
+HTTP 200. Only the first round shows a notable observed improvement (~0.71 s);
+warm rounds are essentially unchanged and this is not evidence of a stable
+speedup over full-KV Decode.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
