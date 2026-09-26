@@ -12,9 +12,14 @@ M=4、预测 Top-4、Triton sparse packing 与连续 bank copy。固定
 V `cagra-auto` 的 exact 阈值从 64 提至 2048。原生 CAGRA 的每 rank
 56-head 构建约 8.645 秒，请求端到端 22.168/22.966 秒；GPU exact
 路径的构建为 0.028–0.053 秒，请求端到端 **9.429/8.240 秒**。
-两个 exact 请求的 20 个输出 ID 相同。先前完整 Prompt KV 基线为
-**4.353/3.880 秒**；预测路径仍慢约 2 倍，而且先前预测输出从第
-7 个 token 起与完整 KV 分歧。此实验仅证明该行数区间的逐 head
+两个 exact 请求的 20 个输出 ID 相同。先前 CAGRA 配置下的完整
+Prompt KV 基线为 **4.353/3.880 秒**。随后保持 V exact 与其余 P/V/Gateway
+配置不变，仅将 D 切到完整 KV，同输入耗时 **1.785/1.371 秒**。
+再将 D 设为 Top-16/并集上限 128 的两次预测请求耗时
+**9.238/8.604 秒**，输出 ID 自身一致，但和完整 KV 仍从第 7 个
+生成 token 起分歧。两种检索配置都显著慢于同配置完整 KV；此前
+3.9–4.4 秒的完整 KV 数字混入了 V 的 CAGRA 建图成本，不能用于
+最新配置的直接性能对照。此实验仅证明该行数区间的逐 head
 CAGRA 建图是严重冷态瓶颈，**不证明** PVD 比完整 KV 快、检索质量
 等价、并发收益或“网络如本地”。exact 阈值只在隔离侧车显式启用，
 不是生产默认值。D 日志中热态单次刷新约 0.74–0.75 秒，其中 target
@@ -29,9 +34,15 @@ exact cutoff changed from 64 to 2048. Building 56 native CAGRA head
 indexes took about 8.645 s per rank; end-to-end requests took
 22.168/22.966 s. GPU exact builds took 0.028–0.053 s; end-to-end
 requests took **9.429/8.240 s**, with identical 20-token outputs across
-those two exact runs. The earlier full-Prompt-KV baseline was
-**4.353/3.880 s**, and prior predictive output diverged from full KV at
-generated token 7. This establishes a severe cold CAGRA-build cost at
+those two exact runs. The earlier full-Prompt-KV baseline with native
+CAGRA was **4.353/3.880 s**. Holding V exact and P/V/Gateway fixed,
+switching D alone to full KV gave **1.785/1.371 s**. Two Top-16/union-cap-128
+predictive requests took **9.238/8.604 s** with repeatable output IDs,
+but still diverged from full KV at generated token 7. Both sparse modes
+remain substantially slower than the matched full-KV baseline. The older
+3.9–4.4 s full-KV numbers included V's CAGRA-build overhead and are not
+the matched baseline for the latest configuration. This establishes a
+severe cold CAGRA-build cost at
 this size, **not** a PVD speedup, equal generation quality, concurrency
 benefit, or network-as-local result. The cutoff is an isolated sidecar
 opt-in, not the production default. Warm D refreshes still cost about
