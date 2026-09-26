@@ -49,6 +49,36 @@ def test_grouped_small_ip_search_matches_individual_searches():
         torch.testing.assert_close(scores, expected_scores, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.parametrize("rows", [374, 512])
+def test_grouped_prompt_sized_ip_search_matches_individual(rows):
+    candidate = backend()
+    rng = torch.Generator().manual_seed(rows)
+    indexes = tuple(
+        candidate.build(
+            torch.randn(rows, 128, generator=rng),
+            vector_space=SPACE,
+            metric="ip",
+        )
+        for _ in range(24)
+    )
+    queries = tuple(torch.randn(7, 128, generator=rng) for _ in indexes)
+    grouped = candidate.search_grouped(indexes, queries, top_k=4)
+    for index, query, (row_ids, scores) in zip(indexes, queries, grouped):
+        expected_ids, expected_scores = candidate.search(index, query, top_k=4)
+        assert torch.equal(row_ids, expected_ids)
+        torch.testing.assert_close(scores, expected_scores, atol=1e-4, rtol=1e-5)
+
+
+def test_grouped_prompt_rows_above_bound_fall_back():
+    candidate = backend()
+    indexes = tuple(
+        candidate.build(torch.ones(513, 8), vector_space=SPACE, metric="ip")
+        for _ in range(2)
+    )
+    with pytest.raises(IndexSearchError, match="at most 512 rows"):
+        candidate.grouped_search_footprint(indexes=indexes, num_queries=1, top_k=1)
+
+
 def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
     candidate = backend()
     vectors = torch.ones(4, 3)
@@ -62,12 +92,13 @@ def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
-def test_grouped_small_ip_search_matches_individual_cuda():
+@pytest.mark.parametrize("rows", [17, 374, 512])
+def test_grouped_small_ip_search_matches_individual_cuda(rows):
     candidate = BruteForceIndexBackend(device="cuda:0")
     rng = torch.Generator().manual_seed(47)
     indexes = tuple(
         candidate.build(
-            torch.randn(17, 128, generator=rng).to("cuda:0"),
+            torch.randn(rows, 128, generator=rng).to("cuda:0"),
             vector_space=SPACE,
             metric="ip",
         )

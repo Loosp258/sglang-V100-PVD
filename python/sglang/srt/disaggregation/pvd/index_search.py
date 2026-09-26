@@ -553,8 +553,15 @@ class BruteForceIndexBackend(IndexBackend):
         if not isinstance(first, BuiltIndex):
             raise IndexSearchError("a built index is required")
         count, dim = first.count, first.dim
-        if first.metric != "ip" or count > min(self._chunk_rows, 128):
-            raise IndexSearchError("grouped exact search supports small IP indexes")
+        # A V100S Prompt shard can have hundreds of rows per head. The
+        # original 128-row cutoff silently routed the common 374-row shape
+        # through 24/32 separate searches even with grouped serving enabled.
+        # Bound the stacked sort to one regular exact-search chunk; the
+        # grouped footprint below charges its score/workspace before launch.
+        if first.metric != "ip" or count > min(self._chunk_rows, 512):
+            raise IndexSearchError(
+                "grouped exact search supports IP indexes of at most 512 rows"
+            )
         if top_k > count:
             raise IndexSearchError("top_k exceeds indexed vector count")
         for index in indexes:

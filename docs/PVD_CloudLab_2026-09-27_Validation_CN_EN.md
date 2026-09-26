@@ -38,6 +38,38 @@ For a 915-token Entry, V logged 56 head indexes per rank. Building them took 10.
 
 The V health endpoint reported both shards ready, transport healthy, no unknown in-flight transfers, no quarantine, and a healthy maintenance reaper after these requests. Its stored Entry/page counts were nonzero due to the configured 300-second TTL; a snapshot alone cannot distinguish useful reuse from pressure. The D cache-on run removed the earlier *second-request cleanup crash* as an observed failure on this workload, but does not prove all cancellation, eviction or concurrent cache cases.
 
+### 374 行 grouped-exact 复验 / 374-row grouped-exact retest
+
+`PVD_GROUPED_EXACT_SEARCH=1` 在原代码里仍把超过 128 行的索引退回逐项检索；
+374-token 请求的 V 日志实际为 `path=individual`，24/32 项批次的
+`manager_total` 常见约 60–140 ms。将已存在的有预算 grouped kernel 上限
+扩至 512 行后，V100S 上 374/512 行 Top-K 与逐项路径一致，GPU 实际
+PyTorch 峰值未超过声明的 scratch 上限；相关索引/CAGRA-auto 回归
+**120 passed, 1 skipped**。在线日志确认 `path=grouped_exact`，多次
+`manager_total` 约 9–50 ms，V 双 rank 健康、无隔离/未知传输。
+
+相同 replay 输入下，扩展前的分组开关（实际 individual）单客户端两轮
+**2.81/3.03 s**，扩展后 **3.12/2.91 s**；两客户端每轮墙钟扩展前
+**4.97/5.25 s**，扩展后 **5.54/5.13 s**。四个并发输出哈希及 SSE
+完整性均保持。样本太少且受重启与竞争影响，**不能宣称端到端提速**；
+这说明只缩短 V 算子没有解决 D 的 probe、HTTP、交付和边界等待。
+开关仍默认关闭；没有把 512 行分组路径宣称为生产默认值。
+
+The existing `PVD_GROUPED_EXACT_SEARCH=1` still fell back to individual
+search above 128 rows: the 374-token logs actually said `path=individual`.
+Extending the budgeted grouped kernel to 512 rows passed V100S Top-K and
+PyTorch peak-allocation checks at 374/512 rows, plus **120 passing and one
+skipped** index/CAGRA-auto tests. Online logs then showed
+`path=grouped_exact`, with many V manager batches at roughly 9–50 ms
+instead of the prior 60–140 ms. Both V ranks remained healthy.
+
+With matching replay inputs, one-client rounds changed from **2.81/3.03 s**
+to **3.12/2.91 s**; two-client wall rounds changed from **4.97/5.25 s** to
+**5.54/5.13 s**. All four concurrent requests kept complete SSE streams and
+their previous output hashes. These small, restart-separated samples do
+**not** show an end-to-end speedup. Grouped search remains opt-in while D
+probe, HTTP, delivery and boundary waits dominate the full path.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load; native CAGRA cold build is much slower. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. A larger exact threshold may be appropriate within the 2304-token experiment context, but must be measured rather than assumed.
