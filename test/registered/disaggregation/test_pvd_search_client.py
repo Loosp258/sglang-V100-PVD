@@ -93,6 +93,63 @@ def test_pinned_batch_roundtrip_preserves_each_head_identity_and_order():
     asyncio.run(run())
 
 
+def test_unpinned_batch_discovers_one_version_under_one_v_reader():
+    async def run():
+        index, store, identity, query, scope = fixture()
+        other = replace(identity, kv_head=1)
+        record = index._entries[identity.entry_transfer_id]
+        other_query = record.vectors[(0, 1)].vectors[3:4].tolist()
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                results = await client.search_many(
+                    ((identity, query, 1, scope), (other, other_query, 1, scope))
+                )
+                assert tuple(result.identity.kv_head for result in results) == (0, 1)
+                assert {result.index_version for result in results} == {
+                    index.gate_for(identity.entry_transfer_id).descriptor.index_version
+                }
+                assert len({result.id_mapping_version for result in results}) == 1
+                assert all(result.token_ids == (3,) for result in results)
+                assert all("index_version" not in result.validated for result in results)
+                assert all("id_mapping_version" not in result.validated for result in results)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_unpinned_batch_rejects_mixed_reply_versions():
+    async def run():
+        _, _, identity, query, scope = fixture()
+
+        async def answer(request):
+            body = await request.json()
+            replies = [valid_body(item) for item in body["items"]]
+            replies[1]["index_version"] = "another-build"
+            return web.json_response(
+                {
+                    "batch_protocol": body["batch_protocol"],
+                    "batch_id": body["batch_id"],
+                    "results": replies,
+                }
+            )
+
+        app = web.Application()
+        app.router.add_post("/internal/v1/indexes/search-batch", answer)
+        async with TestServer(app) as server:
+            client = PVDShardSearchClient(str(server.make_url("")))
+            try:
+                with pytest.raises(SearchReplyError, match="mixed index versions"):
+                    await client.search_many(
+                        ((identity, query, 1, scope), (identity, query, 1, scope))
+                    )
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
 def test_pinned_batch_accepts_complete_qwen_rank_without_splitting():
     async def run():
         _, store, identity, query, scope = fixture()
@@ -401,12 +458,13 @@ def test_batch_encodes_once_and_sends_the_checked_json_bytes(monkeypatch, caplog
     asyncio.run(run())
 
 
-def test_batch_refuses_unpinned_request_before_network():
+def test_batch_refuses_half_pinned_request_before_network():
     async def run():
         _, _, identity, query, scope = fixture()
         client = PVDShardSearchClient("http://127.0.0.1:1")
-        with pytest.raises(ValueError, match="both version pins"):
-            await client.search_many(((identity, query, 1, scope),))
+        half_pinned = replace(identity, expected_index_version="v1")
+        with pytest.raises(ValueError, match="both version pins or neither"):
+            await client.search_many(((half_pinned, query, 1, scope),))
         assert client._session is None
         await client.close()
 

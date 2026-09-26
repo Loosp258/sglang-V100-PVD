@@ -778,6 +778,46 @@ def test_search_batch_profiling_preserves_results_and_reports_stages(
     asyncio.run(scenario())
 
 
+def test_unpinned_batch_uses_atomic_manager_path_without_grouped_opt_in(monkeypatch):
+    import asyncio
+
+    async def scenario():
+        index = manager()
+        store, manifest, _, _ = stored_entry(index)
+        store.progress_prompt_indexes()
+        (layer, head), vector = sorted(
+            index._entries[manifest.key.transfer_id].vectors.items()
+        )[0]
+        item = {
+            "search_protocol": "pvd.search.v1",
+            "search_id": "unversioned-0",
+            "transfer_id": manifest.key.transfer_id,
+            "vector_space": SPACE,
+            "positional_encoding": ROPE_APPLIED,
+            "layer": layer,
+            "kv_head": head,
+            "queries": vector.vectors[5:6].tolist(),
+            "top_k": 1,
+        }
+        request = {
+            "batch_protocol": "pvd.search.batch.v1",
+            "batch_id": "unversioned-batch",
+            "items": [item, {**item, "search_id": "unversioned-1"}],
+        }
+        monkeypatch.delenv("PVD_GROUPED_EXACT_SEARCH", raising=False)
+        async with shard_client(store) as http:
+            result = await http.post("/internal/v1/indexes/search-batch", json=request)
+            assert result.status == 200
+            replies = (await result.json())["results"]
+            assert len({row["index_version"] for row in replies}) == 1
+            assert all("index_version" not in row["validated"] for row in replies)
+            mixed = {**request, "items": [item, {**item, "expected_index_version": "v"}]}
+            refused = await http.post("/internal/v1/indexes/search-batch", json=mixed)
+            assert refused.status == 400
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "payload,expected",
     [

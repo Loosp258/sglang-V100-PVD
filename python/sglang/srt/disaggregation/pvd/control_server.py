@@ -628,12 +628,15 @@ def create_shard_app(
             or not isinstance(item.get("queries"), list)
             or not 1 <= len(item["queries"]) <= 64
             or any(
-                not isinstance(item.get(name), str) or not item[name].strip()
+                name in item
+                and (not isinstance(item[name], str) or not item[name].strip())
                 for name in ("expected_index_version", "expected_id_mapping_version")
             )
+            or ("expected_index_version" in item)
+            != ("expected_id_mapping_version" in item)
             for item in items
         ):
-            raise ValueError("batch items require bounded pinned search identities")
+            raise ValueError("batch items require bounded, consistently pinned search identities")
         if sum(len(item["queries"]) for item in items) > 512:
             raise ValueError("search batch exceeds 512 query rows")
         if sum(len(item["queries"]) * item["top_k"] for item in items) > 16384:
@@ -654,7 +657,13 @@ def create_shard_app(
         if any(tuple(item.get(name) for name in shared) != first for item in items[1:]):
             raise ValueError("batch items must share Entry, space and version pins")
         batch_started = time.perf_counter() if profile else 0.0
-        if os.environ.get("PVD_GROUPED_EXACT_SEARCH") == "1":
+        # An unpinned batch discovers its version under one manager reader
+        # lease. The old per-item path could observe a rebuild between items;
+        # it is only valid when the caller pinned the version in advance.
+        if (
+            os.environ.get("PVD_GROUPED_EXACT_SEARCH") == "1"
+            or "expected_index_version" not in items[0]
+        ):
             prepared = [_parse_search_data(item) for item in items]
             index = prepared[0][0]
             if any(row[0] is not index for row in prepared):

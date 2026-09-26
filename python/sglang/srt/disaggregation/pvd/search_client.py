@@ -336,11 +336,10 @@ class PVDShardSearchClient:
             payload, search_id, count = self._prepare_search(
                 identity, queries=queries, top_k=top_k, scope=scope
             )
-            if (
-                identity.expected_index_version is None
-                or identity.expected_id_mapping_version is None
+            if (identity.expected_index_version is None) != (
+                identity.expected_id_mapping_version is None
             ):
-                raise ValueError("batch search requires both version pins")
+                raise ValueError("batch search requires both version pins or neither")
             prepared.append((identity, scope, top_k, payload, search_id, count))
         first = prepared[0][0]
         if any(
@@ -360,7 +359,7 @@ class PVDShardSearchClient:
             )
             for identity, *_ in prepared[1:]
         ):
-            raise ValueError("batch searches require one pinned Entry/space/version")
+            raise ValueError("batch searches require one Entry/space/version scope")
         if (
             sum(item[5] for item in prepared) > 512
             or sum(item[5] * item[2] for item in prepared) > 16384
@@ -405,7 +404,12 @@ class PVDShardSearchClient:
                     )
                 else:
                     answers.append(await self.search_many(part))
-            return answers[0] + answers[1]
+            combined = answers[0] + answers[1]
+            if first.expected_index_version is None and len(
+                {(reply.index_version, reply.id_mapping_version) for reply in combined}
+            ) != 1:
+                raise SearchReplyError("unpinned batch returned mixed index versions")
+            return combined
         if profile:
             replied_at = time.perf_counter()
         results = body.get("results")
@@ -436,6 +440,10 @@ class PVDShardSearchClient:
                 (time.perf_counter() - replied_at) * 1000,
                 (time.perf_counter() - started) * 1000,
             )
+        if first.expected_index_version is None and len(
+            {(reply.index_version, reply.id_mapping_version) for reply in validated}
+        ) != 1:
+            raise SearchReplyError("unpinned batch returned mixed index versions")
         return validated
 
     @staticmethod
