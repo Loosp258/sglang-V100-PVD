@@ -43,6 +43,7 @@ class PostRopeQueryCapture:
         query_heads: int,
         head_dim: int,
         committed_positions: tuple[int, ...] | None = None,
+        forward_start: int = 0,
     ):
         for value in ((predicted,) if committed_positions is None else ()) + (
             query_heads,
@@ -80,6 +81,13 @@ class PostRopeQueryCapture:
             self.sequence_length = len(prefix.tokens)
         self.query_heads = query_heads
         self.head_dim = head_dim
+        if type(forward_start) is not int or not 0 <= forward_start <= min(
+            self.positions
+        ):
+            raise PredictionConfigError(
+                "probe forward start must precede every captured Q position"
+            )
+        self.forward_start = forward_start
         self.version = uuid.uuid4().hex
         self._queries = {}
         self._finite_flags = []
@@ -100,11 +108,14 @@ class PostRopeQueryCapture:
             not isinstance(positions, torch.Tensor)
             or positions.ndim != 1
             or positions.dtype != torch.int64
-            or positions.numel() != self.sequence_length
+            or positions.numel() != self.sequence_length - self.forward_start
             or not torch.equal(
                 positions,
                 torch.arange(
-                    self.sequence_length, dtype=torch.int64, device=positions.device
+                    self.forward_start,
+                    self.sequence_length,
+                    dtype=torch.int64,
+                    device=positions.device,
                 ),
             )
         ):
@@ -121,7 +132,7 @@ class PostRopeQueryCapture:
             return
         if layer in self._queries:
             raise PredictionConfigError("probe layer was captured twice")
-        expected = tuple(range(self.sequence_length))
+        expected = tuple(range(self.forward_start, self.sequence_length))
         if self._bound_positions is not None:
             if (
                 positions is not self._bound_positions
@@ -136,7 +147,7 @@ class PostRopeQueryCapture:
             raise PredictionConfigError("probe Q shape does not match target heads")
         selected = (
             q.reshape(len(expected), self.query_heads, self.head_dim)[
-                list(self.positions),
+                [position - self.forward_start for position in self.positions],
                 self.config.head_start : self.config.head_start
                 + self.config.head_count,
             ]

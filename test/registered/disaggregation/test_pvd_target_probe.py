@@ -119,6 +119,55 @@ def test_bound_positions_validate_values_before_forward():
         capture.bind_positions(torch.arange(5, dtype=torch.int64))
 
 
+def test_incremental_capture_keeps_absolute_positions_and_local_q_rows():
+    prefix = CommittedPrefix("r", (1, 2, 3), 0, "v")
+    capture = PostRopeQueryCapture(
+        ProbeConfig("target", (0,), head_start=1, head_count=2),
+        prefix,
+        2,
+        query_heads=4,
+        head_dim=8,
+        forward_start=3,
+    )
+    positions = torch.tensor([3, 4], dtype=torch.int64)
+    capture.bind_positions(positions)
+    q = torch.arange(64.0).reshape(2, 32)
+    capture.capture(0, positions, q)
+    result = capture.finish()[0]
+    assert result.positions == (3, 4)
+    torch.testing.assert_close(result.vectors, q.reshape(2, 4, 8)[:, 1:3])
+
+
+def test_incremental_committed_capture_can_start_before_requested_rows():
+    prefix = CommittedPrefix("r", (1, 2, 3, 4, 5), 2, "v2")
+    capture = PostRopeQueryCapture(
+        ProbeConfig("target", (0,)),
+        prefix,
+        0,
+        query_heads=2,
+        head_dim=4,
+        committed_positions=(3, 4),
+        forward_start=2,
+    )
+    q = torch.arange(24.0).reshape(3, 8)
+    capture.capture(0, torch.tensor([2, 3, 4]), q)
+    assert capture.finish()[0].positions == (3, 4)
+    torch.testing.assert_close(capture.finish()[0].vectors, q.reshape(3, 2, 4)[1:, :1])
+
+
+@pytest.mark.parametrize("start", [-1, True, 4, 5])
+def test_incremental_capture_refuses_missing_query_rows(start):
+    with pytest.raises(PredictionConfigError, match="forward start"):
+        PostRopeQueryCapture(
+            ProbeConfig("target", (0,)),
+            CommittedPrefix("r", (1, 2, 3), 0, "v"),
+            1,
+            query_heads=2,
+            head_dim=4,
+            forward_start=start,
+        )
+
+
 def test_head_bounds_are_checked():
     with pytest.raises(PredictionConfigError, match="Q heads"):
         PostRopeQueryCapture(
