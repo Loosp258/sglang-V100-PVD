@@ -68,6 +68,18 @@ def test_probe_prefix_cache_budget_is_explicit_and_disabled_by_default(tmp_path)
     assert load(write_config(tmp_path, config)).probe_prefix_cache_bytes == 256 << 20
 
 
+def test_cloudlab_cached_probe_fixture_differs_only_by_opt_in_budget():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "cloudlab_pvd_limits_triton_grouped.json").read_text()
+    )
+    cached_path = directory / "cloudlab_pvd_limits_triton_grouped_cache.json"
+    cached = json.loads(cached_path.read_text())
+    assert cached == {**baseline, "probe_prefix_cache_bytes": 512 << 20}
+    limits = load_cuda_serving_limits(cached_path, refresh_interval=4, predict_tokens=2)
+    assert limits.probe_prefix_cache_bytes == 512 << 20
+
+
 def test_v100s_chunk64_experiment_only_changes_attention_tile():
     directory = Path(__file__).parent
     baseline = json.loads(
