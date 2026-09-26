@@ -102,6 +102,71 @@ def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
     assert [rows.tolist() for rows, _ in results] == [[[0, 1, 2]]] * 2
 
 
+@pytest.mark.parametrize("rows, heads", [(17, 4), (915, 16)])
+def test_grouped_topk_reduce_is_exactly_stable_and_opt_in(monkeypatch, rows, heads):
+    candidate = backend()
+    rng = torch.Generator().manual_seed(rows + heads)
+    indexes = tuple(
+        candidate.build(
+            torch.randn(rows, 16, generator=rng), vector_space=SPACE, metric="ip"
+        )
+        for _ in range(heads)
+    )
+    queries = tuple(torch.randn(7, 16, generator=rng) for _ in indexes)
+    baseline = candidate.search_grouped(indexes, queries, top_k=4)
+    monkeypatch.setenv("PVD_GROUPED_EXACT_TOPK_REDUCE", "1")
+    reduced = candidate.search_grouped(indexes, queries, top_k=4)
+    for (want_rows, want_scores), (rows_out, scores_out) in zip(
+        baseline, reduced, strict=True
+    ):
+        assert torch.equal(rows_out, want_rows)
+        assert torch.equal(scores_out, want_scores)
+    ties = tuple(
+        candidate.build(torch.ones(rows, 16), vector_space=SPACE, metric="ip")
+        for _ in range(2)
+    )
+    tie_results = candidate.search_grouped(
+        ties, (torch.ones(2, 16),) * 2, top_k=4
+    )
+    assert all(result[0].tolist() == [[0, 1, 2, 3]] * 2 for result in tie_results)
+    # The opt-in path is intentionally bounded to small Top-K; larger values
+    # retain the original full stable sort and its exact result.
+    full_nine = candidate.search_grouped(ties, (torch.ones(2, 16),) * 2, top_k=9)
+    assert all(result[0].tolist() == [list(range(9))] * 2 for result in full_nine)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
+def test_grouped_topk_reduce_matches_stable_sort_on_cuda(monkeypatch):
+    candidate = BruteForceIndexBackend(device="cuda:0")
+    rng = torch.Generator().manual_seed(915)
+    indexes = tuple(
+        candidate.build(
+            torch.randn(915, 128, generator=rng).to("cuda:0"),
+            vector_space=SPACE,
+            metric="ip",
+        )
+        for _ in range(56)
+    )
+    queries = tuple(
+        torch.randn(7, 128, generator=rng).to("cuda:0") for _ in indexes
+    )
+    baseline = candidate.search_grouped(indexes, queries, top_k=4)
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    monkeypatch.setenv("PVD_GROUPED_EXACT_TOPK_REDUCE", "1")
+    reduced = candidate.search_grouped(indexes, queries, top_k=4)
+    torch.cuda.synchronize()
+    assert torch.cuda.max_memory_allocated() - before <= candidate.grouped_search_footprint(
+        indexes=indexes, num_queries=7, top_k=4
+    )
+    for (want_rows, want_scores), (rows_out, scores_out) in zip(
+        baseline, reduced, strict=True
+    ):
+        assert torch.equal(rows_out, want_rows)
+        assert torch.equal(scores_out, want_scores)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
 @pytest.mark.parametrize(
     "rows, heads", [(17, 32), (374, 32), (512, 32), (915, 56), (2048, 56)]

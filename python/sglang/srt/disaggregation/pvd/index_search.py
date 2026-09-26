@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import abc
 import math
+import os
 import time
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Sequence, Tuple
@@ -615,7 +616,21 @@ class BruteForceIndexBackend(IndexBackend):
             raise IndexSearchError("queries contains non-finite values")
         stacked_k = torch.stack([index.handle for index in indexes])
         scores = torch.bmm(stacked_q, stacked_k.transpose(1, 2))
-        ordered, rows = torch.sort(scores, dim=-1, descending=True, stable=True)
+        if os.environ.get("PVD_GROUPED_EXACT_TOPK_REDUCE") == "1" and top_k <= 8:
+            # torch.max(dim) picks the first (lowest) row on equal scores.
+            # Only the requested winners are reduced; full stable sort pays
+            # for ordering every Prompt token despite Top-4 consumption.
+            # scores owns its bmm result, so masking never changes an index.
+            winners, values = [], []
+            for _ in range(top_k):
+                value, row = scores.max(dim=-1)
+                values.append(value)
+                winners.append(row)
+                scores.scatter_(-1, row.unsqueeze(-1), float("-inf"))
+            rows = torch.stack(winners, dim=-1)
+            ordered = torch.stack(values, dim=-1)
+        else:
+            ordered, rows = torch.sort(scores, dim=-1, descending=True, stable=True)
         return tuple(
             (rows[i, :, :top_k].contiguous(), ordered[i, :, :top_k].contiguous())
             for i in range(len(indexes))

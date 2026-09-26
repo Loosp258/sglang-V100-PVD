@@ -365,6 +365,27 @@ make those numbers different from pure network RTT. The next critical-path
 work is to keep Q capture off committed Decode's execution path and collapse
 V search/selection/pack/send, not only remove first-window discovery RPCs.
 
+### V grouped exact Top-4 归约试验 / V grouped exact Top-4 reduction experiment
+
+新增显式 opt-in `PVD_GROUPED_EXACT_TOPK_REDUCE=1`：在已有 grouped GEMM
+的分数张量上，对 Top-K≤8 重复取最大值并屏蔽获胜 token，不再稳定全排序
+全部 Prompt 行；`torch.max(dim=-1)` 在同分时选最低行号，Top-K>8
+及默认路径仍使用稳定排序。CPU 的随机/全同分测试、V100S 的
+56×915×7×128 数值与峰值显存测试均通过。独立 V100S 微基准
+（20 次交替顺序、每次 CUDA 同步）在 915 行、Top-4 下稳定排序
+中位 **2.47 ms**，归约 **1.08 ms**，结果逐元素相同。
+这只节省约 **1.39 ms/批**；D 端单次搜索等待常为数百毫秒，不能
+据此推断端到端收益或开启默认开关。尚需三机对照与更多同分/模型负载。
+
+The opt-in `PVD_GROUPED_EXACT_TOPK_REDUCE=1` repeatedly reduces only the
+requested Top-K winners from the existing grouped score tensor. The first
+row wins exact ties; Top-K>8 and the default retain stable full sort.
+CPU random/all-tie tests and a V100S 56×915×7×128 equality/peak-memory test
+passed. A synchronized, alternating-order 20-run V100S microbenchmark at
+Top-4 measured **2.47 ms** median for stable sort versus **1.08 ms** for
+the reduction, with identical outputs. Saving about **1.39 ms/batch** is
+not an end-to-end speedup claim; the switch remains off by default.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
