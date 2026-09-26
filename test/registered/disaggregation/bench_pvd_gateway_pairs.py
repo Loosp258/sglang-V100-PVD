@@ -1,8 +1,11 @@
 """Bounded paired-request wall-clock A/B for an already-running PVD gateway.
 
 Run the identical invocation before and after restarting only D with an
-alternative serving-limits file. This is client-side latency, not a kernel or
-network-only benchmark. The script starts no services and changes no server.
+alternative serving-limits file. Warmups are excluded from the measurements;
+``unique`` changes only the per-round suffix, preserving a matched input
+schedule across A/B runs while avoiding exact whole-prompt replay. This is
+client-side latency, not a kernel or network-only benchmark. The script
+starts no services and changes no server.
 """
 
 import argparse
@@ -42,6 +45,7 @@ def request(url, prompt, output_tokens, timeout):
         meta = {}
     return {
         "status": status,
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "sha256": hashlib.sha256(text.encode()).hexdigest(),
         "output_chars": len(text),
         "prompt_tokens": meta.get("prompt_tokens"),
@@ -49,21 +53,37 @@ def request(url, prompt, output_tokens, timeout):
     }
 
 
+def prompts_for_round(repetitions, round_index, schedule):
+    if schedule not in ("fixed", "unique"):
+        raise ValueError("prompt schedule must be fixed or unique")
+    suffix = "" if schedule == "fixed" else f" Trial {round_index}."
+    return ["EEFTRITON " * repetitions + f" Case {i}.{suffix}" for i in (0, 1)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://10.0.1.2:8001/generate")
     parser.add_argument("--rounds", type=int, default=5)
+    parser.add_argument("--warmup-rounds", type=int, default=0)
+    parser.add_argument(
+        "--prompt-schedule", choices=("fixed", "unique"), default="fixed"
+    )
     parser.add_argument("--repetitions", type=int, default=500)
     parser.add_argument("--output-tokens", type=int, default=8)
     parser.add_argument("--timeout", type=float, default=300.0)
     args = parser.parse_args(argv)
-    if not (1 <= args.rounds <= 20 and 1 <= args.repetitions <= 1000):
-        parser.error("bounded rounds and prompt repetitions required")
+    if not (
+        1 <= args.rounds <= 20
+        and 0 <= args.warmup_rounds <= 5
+        and 1 <= args.repetitions <= 1000
+    ):
+        parser.error("bounded rounds, warmups and prompt repetitions required")
     if not (1 <= args.output_tokens <= 128 and 1 <= args.timeout <= 600):
         parser.error("bounded output length and timeout required")
-    prompts = ["EEFTRITON " * args.repetitions + f" Case {i}." for i in (0, 1)]
     rounds = []
-    for _ in range(args.rounds):
+    warmups = []
+    for index in range(-args.warmup_rounds, args.rounds):
+        prompts = prompts_for_round(args.repetitions, index, args.prompt_schedule)
         started = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
@@ -71,19 +91,20 @@ def main(argv=None):
                 for p in prompts
             ]
             responses = [future.result(timeout=args.timeout + 5) for future in futures]
-        rounds.append(
-            {
-                "wall_seconds": round(time.perf_counter() - started, 3),
-                "responses": responses,
-            }
-        )
+        row = {
+            "wall_seconds": round(time.perf_counter() - started, 3),
+            "responses": responses,
+        }
+        (warmups if index < 0 else rounds).append(row)
     print(
         json.dumps(
             {
                 "schema": "pvd-gateway-pair-ab-v1",
                 "url": args.url,
                 "repetitions": args.repetitions,
+                "prompt_schedule": args.prompt_schedule,
                 "output_tokens_requested": args.output_tokens,
+                "warmups": warmups,
                 "rounds": rounds,
                 "median_wall_seconds": round(
                     statistics.median(row["wall_seconds"] for row in rounds), 3
