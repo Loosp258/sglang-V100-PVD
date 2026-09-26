@@ -253,6 +253,29 @@ def validate_target_probe(runner, full_prefix):
     cached.retire_cached_request(req)
     assert cached._prefix_caches == {}
 
+    # The scheduler forward can create inference tensors, while an asyncio
+    # owner-loop close runs later outside inference mode. Retiring its private
+    # request map must not attempt an out-of-mode in-place write.
+    async_budget = TransferBudget(2 << 20, 1)
+    async_cached = OfflineLlamaTargetProbe(
+        runner,
+        probe.config,
+        **{
+            **kwargs,
+            "budget": TransferBudget(2 << 20, 1),
+            "prefix_budget": async_budget,
+        },
+    )
+    async_req = SimpleNamespace(rid="probe-r")
+    async_cached.register_cached_request(async_req)
+    with torch.inference_mode(), async_cached.branch():
+        async_cached.capture(prefix, prediction)
+    assert async_cached._prefix_caches[
+        async_req.rid
+    ].resources.requests.req_to_token.is_inference()
+    async_cached.retire_cached_request(async_req)
+    assert async_budget.snapshot()["used_staging_bytes"] == 0
+
     # A full cache budget is a cache miss, never a request-level refusal.
     pressure_budget = TransferBudget(1, 1)
     pressure = OfflineLlamaTargetProbe(

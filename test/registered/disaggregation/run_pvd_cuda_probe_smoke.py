@@ -96,8 +96,11 @@ def validate(runner, *, checkpoint=False):
     )
     cached_req = SimpleNamespace(rid="probe")
     cached_probe.register_cached_request(cached_req)
-    with cached_probe.branch():
+    with torch.inference_mode(), cached_probe.branch():
         first_cached = cached_probe.capture(prefix, prediction)
+    assert cached_probe._prefix_caches[
+        cached_req.rid
+    ].resources.requests.req_to_token.is_inference()
     assert (
         prefix_budget.snapshot()["used_staging_bytes"]
         == cached_probe.prefix_cache_bytes

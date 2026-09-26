@@ -485,7 +485,11 @@ class _LlamaTargetProbeCore(TargetProbe):
         self._drop_prefix_cache(record)
         del self._prefix_caches[req.rid]
 
+    @torch.inference_mode()
     def _drop_prefix_cache(self, record) -> None:
+        # The owner loop can retire this cache outside the target forward's
+        # inference context. Its private request map may itself be an
+        # inference tensor, so all pool mutations must re-enter that mode.
         if record.owner is None:
             return
         resources = record.resources
@@ -533,6 +537,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             record.owner = owner
         return record
 
+    @torch.inference_mode()
     def _forward_cached(self, prefix, predicted_tokens, capture, record):
         """Extend only authoritative tokens, then discard speculative KV.
 
