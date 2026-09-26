@@ -566,28 +566,97 @@ class ProbeSearchSession:
                     raise ValueError("index changed within a probe window")
                 return reply
 
+            async def search_batch(indices, versions):
+                requests = tuple(group_request(index, versions) for index in indices)
+                while True:
+                    self._match(window)
+                    try:
+                        remaining = ready_deadline - time.monotonic()
+                        if index_ready_wait_seconds and remaining <= 0:
+                            raise TimeoutError("V index readiness deadline expired")
+                        call = client.search_many(requests)
+                        if index_ready_wait_seconds:
+                            try:
+                                replies = await asyncio.wait_for(call, timeout=remaining)
+                            except asyncio.TimeoutError as exc:
+                                raise TimeoutError(
+                                    "V index readiness deadline expired"
+                                ) from exc
+                        else:
+                            replies = await call
+                    except SearchRefused as exc:
+                        remaining = ready_deadline - time.monotonic()
+                        if not exc.retryable or remaining <= 0:
+                            raise
+                        await asyncio.sleep(min(0.2, remaining))
+                    else:
+                        if index_ready_wait_seconds and time.monotonic() >= ready_deadline:
+                            raise TimeoutError("V index readiness deadline expired")
+                        break
+                self._match(window)
+                if len(replies) != len(requests):
+                    raise ValueError("V batch response count changed")
+                for reply, request in zip(replies, requests, strict=True):
+                    if reply.identity != request[0] or (
+                        versions is not None
+                        and (reply.index_version, reply.id_mapping_version) != versions
+                    ):
+                        raise ValueError("V batch reply identity or version changed")
+                if versions is None and len(
+                    {(reply.index_version, reply.id_mapping_version) for reply in replies}
+                ) != 1:
+                    raise ValueError("V batch reply identity or version changed")
+                return tuple(zip(indices, replies, strict=True))
+
             results = [None] * len(query_groups)
-            # One first search per V source establishes that source's version
-            # before any other request to the SAME source is submitted. The
-            # sources have independent version namespaces, so send their
-            # first searches together: waiting for rank 0 before even issuing
-            # rank 1 can add a scheduler-loop stall to every refresh.
+            # For an unversioned source, one atomic V batch can both discover
+            # its version and answer the first bounded set of queries. This
+            # removes the seed-search RTT from the common first refresh while
+            # retaining the same-version fence and later pinned searches.
             seed_groups = {}
             for index, members in enumerate(query_groups):
                 source = source_scopes[members[0]]
                 if source not in source_versions:
-                    seed_groups.setdefault(source, index)
+                    seed_groups.setdefault(source, []).append(index)
+            seed_calls = {}
+            for source, indices in seed_groups.items():
+                first_batch, rows, cells, result_count = [], 0, 0, 0
+                if batch_item_limit is not None:
+                    for index in indices:
+                        _, query_rows, top_k, scope = group_request(index, None)
+                        count = len(query_rows)
+                        if (
+                            len(first_batch) >= batch_item_limit
+                            or rows + count > MAX_BATCH_QUERY_ROWS
+                            or cells + count * scope.head_dim > MAX_BATCH_QUERY_CELLS
+                            or result_count + count * top_k > MAX_BATCH_RESULT_TOKENS
+                        ):
+                            break
+                        first_batch.append(index)
+                        rows += count
+                        cells += count * scope.head_dim
+                        result_count += count * top_k
+                chosen = tuple(first_batch) if len(first_batch) >= 2 else (indices[0],)
+                seed_calls[source] = (
+                    chosen,
+                    search_batch(chosen, None)
+                    if len(chosen) >= 2
+                    else search_group(chosen[0], None),
+                )
             seed_tasks = {
-                source: asyncio.create_task(search_group(index, None))
-                for source, index in seed_groups.items()
+                source: asyncio.create_task(coroutine)
+                for source, (_, coroutine) in seed_calls.items()
             }
             try:
                 if seed_tasks:
                     seed_replies = await asyncio.gather(*seed_tasks.values())
-                    for (source, index), reply in zip(
-                        seed_groups.items(), seed_replies, strict=True
+                    for (source, (indices, _)), answer in zip(
+                        seed_calls.items(), seed_replies, strict=True
                     ):
-                        results[index] = reply
+                        replies = answer if len(indices) >= 2 else ((indices[0], answer),)
+                        for index, reply in replies:
+                            results[index] = reply
+                        reply = replies[0][1]
                         source_versions[source] = (
                             reply.index_version,
                             reply.id_mapping_version,
@@ -611,54 +680,6 @@ class ProbeSearchSession:
                 for index, members in enumerate(query_groups):
                     if results[index] is None:
                         pending.setdefault(source_scopes[members[0]], []).append(index)
-
-                async def search_batch(indices, versions):
-                    requests = tuple(
-                        group_request(index, versions) for index in indices
-                    )
-                    while True:
-                        self._match(window)
-                        try:
-                            remaining = ready_deadline - time.monotonic()
-                            if index_ready_wait_seconds and remaining <= 0:
-                                raise TimeoutError("V index readiness deadline expired")
-                            call = client.search_many(requests)
-                            if index_ready_wait_seconds:
-                                try:
-                                    replies = await asyncio.wait_for(
-                                        call, timeout=remaining
-                                    )
-                                except asyncio.TimeoutError as exc:
-                                    raise TimeoutError(
-                                        "V index readiness deadline expired"
-                                    ) from exc
-                            else:
-                                replies = await call
-                        except SearchRefused as exc:
-                            remaining = ready_deadline - time.monotonic()
-                            if not exc.retryable or remaining <= 0:
-                                raise
-                            await asyncio.sleep(min(0.2, remaining))
-                        else:
-                            if (
-                                index_ready_wait_seconds
-                                and time.monotonic() >= ready_deadline
-                            ):
-                                raise TimeoutError("V index readiness deadline expired")
-                            break
-                    self._match(window)
-                    if len(replies) != len(requests):
-                        raise ValueError("V batch response count changed")
-                    for reply, request in zip(replies, requests, strict=True):
-                        if (
-                            reply.identity != request[0]
-                            or (reply.index_version, reply.id_mapping_version)
-                            != versions
-                        ):
-                            raise ValueError(
-                                "V batch reply identity or version changed"
-                            )
-                    return tuple(zip(indices, replies, strict=True))
 
                 for source, indices in pending.items():
                     batch, rows, cells, results_bound = [], 0, 0, 0

@@ -341,7 +341,7 @@ def test_actual_http_two_source_versions_and_gqa_union(corrupt):
 @pytest.mark.parametrize(
     "mode", ["ok", "corrupt", "cancel", "cancel_seed", "parallel_seeds"]
 )
-def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode):
+def test_real_http_routed_batch_discovers_each_v_source_atomically(mode):
     async def run():
         pool, storage, manifest, _, _ = build_entry()
         indexes, stores = {}, {}
@@ -374,21 +374,19 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
 
                 async def one(identity, *, _rank=rank, _original=original_single, **kw):
                     singles.append((_rank, identity))
-                    if mode == "cancel_seed" and _rank == 1:
-                        entered.set()
-                        await asyncio.Future()
-                    if mode == "parallel_seeds":
-                        seed_sources.add(_rank)
-                        if len(seed_sources) == 2:
-                            both_seeds_started.set()
-                        await asyncio.wait_for(both_seeds_started.wait(), 2)
                     return await _original(identity, **kw)
 
                 async def many(requests, *, _rank=rank, _original=original_batch):
                     batches.append((_rank, tuple(item[0] for item in requests)))
-                    if mode == "cancel" and _rank == 1:
+                    unpinned = requests[0][0].expected_index_version is None
+                    if mode in ("cancel", "cancel_seed") and _rank == 1 and unpinned:
                         entered.set()
                         await asyncio.Future()
+                    if mode == "parallel_seeds" and unpinned:
+                        seed_sources.add(_rank)
+                        if len(seed_sources) == 2:
+                            both_seeds_started.set()
+                        await asyncio.wait_for(both_seeds_started.wait(), 2)
                     replies = await _original(requests)
                     if mode == "corrupt" and _rank == 1:
                         return (
@@ -462,23 +460,22 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
             await session.search(prepared, routing)
             selection = session.take_selection(window)
             assert len(selection.selections) == 8
-            assert {rank for rank, _ in singles} == {0, 1}
-            assert len(singles) == 2
+            assert singles == []
             if mode == "parallel_seeds":
                 assert both_seeds_started.is_set()
             assert len(batches) == 2
             assert set(routing.verified_versions()) == {0, 1}
             for rank, identities in batches:
-                assert len(identities) == 3
+                assert len(identities) == 4
                 assert all(identity.kv_head // 2 == rank for identity in identities)
-                assert all(identity.expected_index_version for identity in identities)
+                assert all(identity.expected_index_version is None for identity in identities)
                 assert all(
-                    identity.expected_id_mapping_version for identity in identities
+                    identity.expected_id_mapping_version is None for identity in identities
                 )
 
             # The same Entry and selected V endpoints survive another refresh
             # window. Both source versions have already been verified, so all
-            # groups can be sent pinned in two batches without new singles.
+            # groups can be sent pinned in two batches without singles.
             next_session = ProbeSearchSession("request", manifest.key.transfer_id)
             next_window = next_session.begin(
                 prefix, target_tokens=4, query_positions=(5,)
@@ -491,9 +488,14 @@ def test_real_http_routed_batch_pins_each_v_source_before_grouped_requests(mode)
             )
             await next_session.search(next_prepared, routing)
             assert len(next_session.take_selection(next_window).selections) == 8
-            assert len(singles) == 2
+            assert singles == []
             assert len(batches) == 4
             assert sorted(len(identities) for _, identities in batches[2:]) == [4, 4]
+            assert all(
+                identity.expected_index_version and identity.expected_id_mapping_version
+                for _, identities in batches[2:]
+                for identity in identities
+            )
             pinned = routing.verified_versions()
             with pytest.raises(ValueError, match="version changed"):
                 routing.remember_verified_versions(
