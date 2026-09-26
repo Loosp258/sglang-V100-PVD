@@ -3,6 +3,65 @@
 Updated / 更新：2026-09-26。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-26 首次 Prompt 安装加速与剩余差距 / Initial Prompt install speedup and remaining gap
+
+调度器分阶段计时把此前约 3.97 秒的轮询空档定位到 D 的 `last_poll`：
+它同时处理第二个请求的 waiting-queue 准入。首次 Prompt 安装原本按
+`(layer, KV head, K/V, token)` 逐个执行 GPU `copy_`；在约 1094-token
+输入下产生大量小操作，阻塞同一线程的刷新 owner loop。提交
+`9dfa94843` 将其改为每个 K/V head 一次有序 `index_select`；
+`275be8efb` 再对完整 head 布局改为每层 K/V 各一次 gather，
+保留部分 head 布局的逐 head 路径。CPU 测试验证绝对 token 顺序、
+K/V 数值、源 pool 不变与调用粒度；V100S 三机验证了真实 CUDA 路径。
+
+保持 P/V/Gateway 配置与固定 `EEFTRITON` 输入不变，每轮两个并发请求，
+各约 1094 个 Prompt token、生成 8 token；前后验证之间重启过整套隔离
+服务，后两种 gather 版本仅重启 D，因此数字不是严格的同进程配对实验。
+在这组 5 轮对照中，逐 token 版本约 **11.12–11.72 秒/轮**，
+逐 head gather 为 **3.50–3.96 秒/轮**，逐 layer gather 为
+**3.50–3.96 秒/轮**。各 10/10 请求完成，8-token 输出哈希与
+完整 KV 样本相同。逐 layer 版本没有可测的额外端到端收益；
+它不是第二次加速的证据。修复后不再观察到约 4 秒的首次准入空档，
+但仍有约 0.5–1 秒的刷新轮询耗时，需继续拆解。
+
+同输入、两个并发请求、各生成 20 token 的一次对照：最新预测路径
+**8.33 秒/轮**，完整 KV **2.32 秒/轮**；20-token 输出哈希不同。
+因此现在既没有端到端性能优势，也不能声称完整的生成质量等价。
+最新 PVD 专项 CPU 回归为 **3118 passed、44 skipped、21 subtests passed**；
+skip 中含需要本地 GPU 的测试，三机真实运行只覆盖上述样本。
+所有此次隔离实验的 P/V/D/Gateway 服务已停止，端口已核实释放；
+没有推送 GitHub，也没有改生产默认值。
+
+Scheduler-phase profiling traced the former ~3.97 s poll gap to D's
+`last_poll` while admitting a second waiting request. Initial Prompt
+installation used one GPU `copy_` per token, K/V component, head and layer,
+blocking the same thread that pumps refresh progress. Commit `9dfa94843`
+replaced these tiny submissions with ordered gathers per K/V head;
+`275be8efb` additionally gathers all heads of a full layer at once, with
+a per-head fallback for partial layouts. CPU tests check absolute row order,
+exact K/V values, source-pool immutability and gather granularity; the
+three V100S nodes exercised the real CUDA path.
+
+With P/V/Gateway settings and fixed `EEFTRITON` inputs held constant, five
+rounds of two concurrent ~1094-token prompts and eight generated tokens
+each took **11.12–11.72 s/round** with token-wise copying,
+**3.50–3.96 s/round** with per-head gathers, and **3.50–3.96 s/round**
+with per-layer gathers. Each configuration completed 10/10 requests; the
+eight-token output hashes matched the sampled full-KV run. Per-layer
+gathering showed no measurable additional end-to-end gain. The isolated
+stack was restarted between the old and new runs; only D restarted between
+the two gather versions, so this is not a strict same-process pairing.
+The ~4 s
+admission stall disappeared, but ~0.5–1 s refresh-poll phases remain.
+For one matched two-client, 20-output round, the latest predictive path
+took **8.33 s** versus **2.32 s** for full KV, with different 20-token
+output hashes. Thus neither an end-to-end speedup nor general output
+equivalence has been established. The latest focused CPU suite reported
+**3118 passed, 44 skipped, 21 subtests passed**; the live GPU evidence is
+limited to the stated samples. All isolated P/V/D/Gateway experiment
+services were stopped and their ports checked. No GitHub push or
+production-default change was made.
+
 ## 2026-09-26 并发长 Prompt 对照与刷新轮询 / Concurrent long-prompt A/B and refresh polling
 
 三台隔离 CloudLab V100S 节点使用 Qwen2.5-7B-Instruct、P/D TP1、V 双 GPU、
