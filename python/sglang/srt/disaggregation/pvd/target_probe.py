@@ -82,7 +82,37 @@ class PostRopeQueryCapture:
         self.head_dim = head_dim
         self.version = uuid.uuid4().hex
         self._queries = {}
+        self._finite_flags = []
+        self._bound_positions = None
+        self._bound_position_version = None
         self._closed = False
+
+    def bind_positions(self, positions: torch.Tensor) -> None:
+        """Validate the private forward's positions once, before model execution.
+
+        Every target layer receives this same tensor. Checking its identity and
+        mutation version during capture avoids a device-to-host copy per layer.
+        Standalone collectors still validate the actual values on each call.
+        """
+        if self._closed or self._bound_positions is not None or self._queries:
+            raise PredictionConfigError("probe positions cannot be rebound")
+        if (
+            not isinstance(positions, torch.Tensor)
+            or positions.ndim != 1
+            or positions.dtype != torch.int64
+            or positions.numel() != self.sequence_length
+            or not torch.equal(
+                positions,
+                torch.arange(
+                    self.sequence_length, dtype=torch.int64, device=positions.device
+                ),
+            )
+        ):
+            raise PredictionConfigError(
+                "probe positions must cover the complete prefix and prediction"
+            )
+        self._bound_positions = positions
+        self._bound_position_version = positions._version
 
     def capture(self, layer: int, positions: torch.Tensor, q: torch.Tensor) -> None:
         if self._closed:
@@ -92,7 +122,13 @@ class PostRopeQueryCapture:
         if layer in self._queries:
             raise PredictionConfigError("probe layer was captured twice")
         expected = tuple(range(self.sequence_length))
-        if tuple(positions.tolist()) != expected:
+        if self._bound_positions is not None:
+            if (
+                positions is not self._bound_positions
+                or positions._version != self._bound_position_version
+            ):
+                raise PredictionConfigError("probe positions changed after binding")
+        elif tuple(positions.tolist()) != expected:
             raise PredictionConfigError(
                 "probe positions must cover the complete prefix and prediction"
             )
@@ -107,8 +143,9 @@ class PostRopeQueryCapture:
             .detach()
             .clone()
         )
-        if not torch.isfinite(selected).all():
-            raise PredictionConfigError("probe Q contains non-finite values")
+        # Defer the host-visible reduction until finish(): one GPU/CPU fence
+        # for all layers, not one synchronization for each layer's Q tensor.
+        self._finite_flags.append(torch.isfinite(selected).all())
         self._queries[layer] = QueryVectors(
             vector_space=self.config.target_model_id,
             version=self.version,
@@ -126,11 +163,15 @@ class PostRopeQueryCapture:
     def finish(self) -> tuple[QueryVectors, ...]:
         if self._closed or set(self._queries) != set(self.config.layers):
             raise PredictionConfigError("probe did not capture every requested layer")
+        if not bool(torch.stack(self._finite_flags).all().item()):
+            raise PredictionConfigError("probe Q contains non-finite values")
         return tuple(self._queries[layer] for layer in self.config.layers)
 
     def close(self) -> None:
         self._closed = True
         self._queries.clear()
+        self._finite_flags.clear()
+        self._bound_positions = None
 
 
 class _LlamaTargetProbeCore(TargetProbe):
@@ -435,6 +476,7 @@ class _LlamaTargetProbeCore(TargetProbe):
                     (len(tokens),),
                 )
             )
+            capture.bind_positions(resources.batch.positions)
             resources.batch.pvd_query_capture = capture
             resources.backend.init_forward_metadata(resources.batch)
             if profile_started is not None:

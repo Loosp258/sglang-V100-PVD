@@ -77,8 +77,46 @@ def test_wrong_head_shape_is_refused(shape):
 
 
 def test_nonfinite_queries_are_refused():
+    capture = collector((0,))
+    capture.capture(0, torch.arange(5), torch.full((5, 32), float("nan")))
     with pytest.raises(PredictionConfigError, match="non-finite"):
-        collector().capture(0, torch.arange(5), torch.full((5, 32), float("nan")))
+        capture.finish()
+
+
+def test_bound_positions_avoid_per_layer_host_transfer(monkeypatch):
+    capture = collector()
+    positions = torch.arange(5, dtype=torch.int64)
+    capture.bind_positions(positions)
+
+    def forbidden(_tensor):
+        raise AssertionError("bound positions must not be copied to Python per layer")
+
+    monkeypatch.setattr(torch.Tensor, "tolist", forbidden)
+    q = torch.arange(160.0).reshape(5, 32)
+    capture.capture(0, positions, q)
+    capture.capture(1, positions, q + 1)
+    result = capture.finish()
+    torch.testing.assert_close(result[0].vectors, q.reshape(5, 4, 8)[3:, 1:3])
+
+
+def test_bound_positions_reject_alias_and_in_place_change():
+    capture = collector((0,))
+    positions = torch.arange(5, dtype=torch.int64)
+    capture.bind_positions(positions)
+    with pytest.raises(PredictionConfigError, match="changed after binding"):
+        capture.capture(0, positions.clone(), torch.zeros(5, 32))
+    positions.add_(1)
+    with pytest.raises(PredictionConfigError, match="changed after binding"):
+        capture.capture(0, positions, torch.zeros(5, 32))
+
+
+def test_bound_positions_validate_values_before_forward():
+    capture = collector((0,))
+    with pytest.raises(PredictionConfigError, match="complete prefix"):
+        capture.bind_positions(torch.arange(1, 6, dtype=torch.int64))
+    capture.bind_positions(torch.arange(5, dtype=torch.int64))
+    with pytest.raises(PredictionConfigError, match="rebound"):
+        capture.bind_positions(torch.arange(5, dtype=torch.int64))
 
 
 def test_head_bounds_are_checked():
