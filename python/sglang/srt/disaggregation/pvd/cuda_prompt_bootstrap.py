@@ -272,10 +272,16 @@ class CUDAPromptBootstrap:
         self._held["backing"] = backing
         packed = ResourceGuard(backing, lambda: None)  # guard drops tensor storage
         self._held["packed_guard"] = packed
+        # Snapshot the already-validated absolute pool rows once. One gather
+        # per K/V head replaces prompt_tokens tiny GPU copy_ submissions per
+        # head, which otherwise blocks the Scheduler's refresh owner loop while
+        # a second request enters the waiting queue.
+        row_indices = torch.tensor(rows, dtype=torch.int64, device=self._bank.device)
         for i, ((layer, head), pair) in enumerate(zip(groups, buffers, strict=True)):
             for kind, tensor in enumerate(pair):
-                for token, row in enumerate(rows):
-                    backing[i, kind, token].copy_(tensor[row, head])
+                torch.index_select(
+                    tensor[:, head, :], 0, row_indices, out=backing[i, kind]
+                )
         self._fence()
         epoch = self.group.begin(0)
         payloads = tuple(

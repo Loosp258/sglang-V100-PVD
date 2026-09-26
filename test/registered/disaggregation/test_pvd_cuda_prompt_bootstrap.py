@@ -53,7 +53,31 @@ def test_full_prompt_import_needs_no_index_and_preserves_absolute_positions(
     group.close()
 
 
-@pytest.mark.parametrize("fault", ["entry", "count", "slot", "rows", "padding", "dtype"])
+def test_full_prompt_import_gathers_per_component_not_per_token(monkeypatch):
+    c, group, importer, source, budget, _ = setup(monkeypatch)
+    original_select = torch.index_select
+    gathered = []
+
+    def record_select(input, dim, index, *, out=None):
+        if out is not None:
+            gathered.append((dim, tuple(index.tolist()), tuple(out.shape)))
+        return original_select(input, dim, index, out=out)
+
+    monkeypatch.setattr(torch, "index_select", record_select)
+    importer.install(source)
+    expected_components = 2 * len(group._banks[0].expected_groups)
+    assert len(gathered) == expected_components
+    assert all(
+        dim == 0 and rows == (8, 3, 6, 1) and shape == (4, c.pool.k.shape[-1])
+        for dim, rows, shape in gathered
+    )
+    assert budget.snapshot()["reservations"] == 0
+    group.close()
+
+
+@pytest.mark.parametrize(
+    "fault", ["entry", "count", "slot", "rows", "padding", "dtype"]
+)
 def test_bad_source_never_makes_decode_ready(monkeypatch, fault):
     c, group, importer, source, budget, _ = setup(monkeypatch)
     if fault == "entry":
