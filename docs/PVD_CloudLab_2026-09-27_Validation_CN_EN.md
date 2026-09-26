@@ -16,6 +16,13 @@ Target: `Qwen/Qwen2.5-7B-Instruct` revision `a09a35458c702b33eeacc393d103063234e
 
 V's base Conda environment lacked cuVS. An isolated V-side venv supplies `cuvs-cu12==25.2.0`, `libcuvs-cu12==25.2.1`, `rmm-cu12==25.2.0`, and `cupy-cuda12x==13.3.0`; the launcher exposes only its package/library paths to V. The NVIDIA-index wheels were used because the configured base mirror lacked this older version. A synthetic native CAGRA smoke passed on both V GPUs (recall@10 0.94375/0.93125 against exact on that synthetic set); the project backend smoke on V GPU0 built two 4096×128 indexes and found 32/32 self-hits. This **does not** establish retrieval quality for real Qwen queries. A compatible `smg` Gateway was built from this checkout on V; installing Ubuntu's matching `libprotobuf-dev` was needed for `google/protobuf/*.proto` during compilation.
 
+The later real-Qwen recall gate installed the same pinned cuVS wheels only in
+an isolated D-side venv, leaving the serving Conda environment unchanged.
+After the experiments, all experiment-owned P/V/D/Gateway process groups
+were stopped. A final three-node check found no remaining GPU compute
+processes or PVD listeners on ports 30002/30003/9100/9300/9301/8001;
+model files, isolated environments, validation worktrees and logs were kept.
+
 Run roles with `bash test/registered/disaggregation/cloudlab_pvd_new_lease.sh {v|p|d|gateway}` from each role's validation worktree. Start V, P, D, then Gateway, checking `http://10.10.1.2:9100/health`, P/D `/health`, and Gateway `/v1/models`. On D, `PVD_MODE=predictive` is the default; `PVD_MODE=full` is the full-KV control. On V, `PVD_PROMPT_INDEX_EXACT_MAX_ROWS` defaults to 512 for this V100S launcher and can be set to 64 to reproduce the first CAGRA experiment. The launcher refuses a mismatched checkout HEAD, inactive rail, occupied port, or incomplete local model. Treat its P/D/V/Gateway process groups as experiment-owned; inspect the exact PID/PGID before stopping them. Logs are under each node's `validation/logs/` and are not in Git.
 
 ## 实测 / Observations
