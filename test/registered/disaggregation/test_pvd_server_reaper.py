@@ -19,6 +19,7 @@ def test_rank_reaper_retries_failed_steps_and_reports_health_recovery():
         expired = 0
         indexed = 0
         coordinator_rounds = 0
+        pressure_rounds = 0
         recovered = asyncio.Event()
 
         def reap_expired(*, reap_entries):
@@ -38,11 +39,18 @@ def test_rank_reaper_retries_failed_steps_and_reports_health_recovery():
             if coordinator_rounds >= 2:
                 recovered.set()
 
+        async def relieve_pressure():
+            nonlocal pressure_rounds
+            pressure_rounds += 1
+
         store = SimpleNamespace(
             reap_expired=reap_expired,
             progress_prompt_indexes=progress_indexes,
         )
-        coordinator = SimpleNamespace(reap_expired=reap_coordinator)
+        coordinator = SimpleNamespace(
+            reap_expired=reap_coordinator,
+            relieve_index_pressure=relieve_pressure,
+        )
         health = _MaintenanceReaperHealth()
         task = asyncio.create_task(_reaper(store, 0.001, coordinator, health))
         try:
@@ -51,6 +59,7 @@ def test_rank_reaper_retries_failed_steps_and_reports_health_recovery():
             assert expired >= 2
             # The remaining steps still run after one step fails.
             assert indexed >= 2
+            assert pressure_rounds >= 2
             status = health.snapshot()
             assert status["failed_rounds"] == 1
             assert status["successful_rounds"] >= 1
@@ -105,6 +114,7 @@ def test_group_reaper_continues_other_shards_after_one_shard_raises():
         rank0_calls = 0
         rank1_calls = 0
         coordinator_calls = 0
+        pressure_calls = 0
         rank1_reaped = asyncio.Event()
         coordinator_reaped = asyncio.Event()
 
@@ -131,12 +141,19 @@ def test_group_reaper_continues_other_shards_after_one_shard_raises():
             coordinator_calls += 1
             coordinator_reaped.set()
 
+        async def relieve_pressure():
+            nonlocal pressure_calls
+            pressure_calls += 1
+
         health = _MaintenanceReaperHealth()
         task = asyncio.create_task(
             _group_reaper(
                 [make_store(0), make_store(1)],
                 0.001,
-                SimpleNamespace(reap_expired=reap_coordinator),
+                SimpleNamespace(
+                    reap_expired=reap_coordinator,
+                    relieve_index_pressure=relieve_pressure,
+                ),
                 health,
             )
         )
@@ -146,6 +163,7 @@ def test_group_reaper_continues_other_shards_after_one_shard_raises():
             assert rank1_reaped.is_set()
             assert rank1_calls >= 1
             assert coordinator_calls >= 1
+            assert pressure_calls >= 1
             assert health.snapshot()["failed_rounds"] == 1
         finally:
             task.cancel()
