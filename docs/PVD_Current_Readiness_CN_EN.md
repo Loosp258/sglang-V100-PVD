@@ -1,7 +1,43 @@
 # PVD 当前实现与验收边界 / Current implementation and acceptance scope
 
-Updated / 更新：2026-09-24。历史交接文档保留演进记录；本页集中说明当前边界。
+Updated / 更新：2026-09-26。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
+
+## 2026-09-26 长 Prompt 索引策略对照 / Long-prompt index-policy comparison
+
+三台 CloudLab V100S 节点在隔离 worktree `4dff91e79` 上运行相同的
+Qwen2.5-7B-Instruct、单条 `mlx5_0` rail、P/D TP1、V 双 GPU、
+M=4、预测 Top-4、Triton sparse packing 与连续 bank copy。固定
+1089-token Prompt、贪心生成 20 token，P/D/Gateway 参数不变，仅将
+V `cagra-auto` 的 exact 阈值从 64 提至 2048。原生 CAGRA 的每 rank
+56-head 构建约 8.645 秒，请求端到端 22.168/22.966 秒；GPU exact
+路径的构建为 0.028–0.053 秒，请求端到端 **9.429/8.240 秒**。
+两个 exact 请求的 20 个输出 ID 相同。先前完整 Prompt KV 基线为
+**4.353/3.880 秒**；预测路径仍慢约 2 倍，而且先前预测输出从第
+7 个 token 起与完整 KV 分歧。此实验仅证明该行数区间的逐 head
+CAGRA 建图是严重冷态瓶颈，**不证明** PVD 比完整 KV 快、检索质量
+等价、并发收益或“网络如本地”。exact 阈值只在隔离侧车显式启用，
+不是生产默认值。D 日志中热态单次刷新约 0.74–0.75 秒，其中 target
+Q 捕获约 0.46 秒、搜索约 0.21–0.22 秒、交付约 0.06–0.07 秒，
+是下一步优化和验收的基线。HTTP 200 本身不构成 RDMA 证明。
+
+On three isolated CloudLab V100S nodes at `4dff91e79`, the model,
+single `mlx5_0` rail, P/D TP1, two-GPU V, M=4, predictive Top-4,
+Triton sparse packing and contiguous bank copy were held fixed. For a
+1089-token prompt and 20 greedy output tokens, only V's `cagra-auto`
+exact cutoff changed from 64 to 2048. Building 56 native CAGRA head
+indexes took about 8.645 s per rank; end-to-end requests took
+22.168/22.966 s. GPU exact builds took 0.028–0.053 s; end-to-end
+requests took **9.429/8.240 s**, with identical 20-token outputs across
+those two exact runs. The earlier full-Prompt-KV baseline was
+**4.353/3.880 s**, and prior predictive output diverged from full KV at
+generated token 7. This establishes a severe cold CAGRA-build cost at
+this size, **not** a PVD speedup, equal generation quality, concurrency
+benefit, or network-as-local result. The cutoff is an isolated sidecar
+opt-in, not the production default. Warm D refreshes still cost about
+0.74–0.75 s each (target-Q capture ~0.46 s, search ~0.21–0.22 s,
+delivery ~0.06–0.07 s); these are the next optimization baseline.
+HTTP 200 alone does not prove RDMA transport.
 
 ## 2026-09-25 稀疏 attention tile 实验 / Sparse-attention tile experiment
 
