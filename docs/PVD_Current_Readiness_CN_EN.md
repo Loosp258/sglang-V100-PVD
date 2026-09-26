@@ -3,6 +3,56 @@
 Updated / 更新：2026-09-26。历史交接文档保留演进记录；本页集中说明当前边界。
 Historical handoffs contain earlier states; this page consolidates the current scope.
 
+## 2026-09-26 最新验证状态 / Latest validation status
+
+请求所有权下的私有 target-probe Prompt KV 缓存现已作为**显式可选项**接入 D：
+`probe_prefix_cache_bytes=0` 为默认关闭，非零时使用独立预算，按正式请求身份
+持有前缀，仅增量计算新提交 token 与预测后缀；预测后缀不进入持久缓存。
+请求结束、前缀替换及不能确认完成的清理分别执行回收、失效或隔离。
+本地 tiny-model CPU smoke 验证了两轮 Q、预算回收及“推理模式内创建、模式外
+关闭”；全套 PVD CPU 回归为 **3149 passed、44 skipped、21 subtests passed**。
+单机 V100S/Qwen2.5-7B CUDA smoke 验证了两层 Q 和预算回收，缓存 Q 与
+完整前缀 Q 的最大绝对差为 **0.015625**（FP16）。这些均不是三机性能验收。
+
+三机实验中，`24a56be35` 修复了正式 Decode 的 inference tensor 位置校验
+异常。缓存关闭、固定两条各 1055 Prompt token/8 输出 token 的请求，
+首次冷轮为 **25.456 秒**；其后五轮为 **3.632、3.402、3.566、3.582、
+3.552 秒**，中位数 **3.566 秒**，10/10 请求返回 200 且输出哈希稳定。
+缓存开启配置与关闭配置只相差 512 MiB `probe_prefix_cache_bytes`：
+第一条请求完成，第二条请求因缓存清理在推理模式外原地写入推理张量，
+D 进入隔离并退出。因此**没有有效的缓存开启端到端 A/B 结果**。
+`cb75d8690` 在本地修复该清理路径并通过 CPU 回归，尚未在三机重测。
+`71b28e387` 的验收脚本增加显式预热和逐轮唯一输入，避免把首轮 JIT 与
+重复整段 Prompt 的效应误认作缓存收益；它也尚未在三机运行。
+CloudLab 租期结束后，三节点 SSH 均超时；无法确认遗留进程状态，亦无法
+完成重新部署、长上下文/并发、CAGRA 或完整 KV 对照。
+
+The request-owned private target-probe Prompt KV cache is now opt-in on D:
+`probe_prefix_cache_bytes=0` disables it by default. A separate budget owns
+the committed prefix; predicted suffix KV is retired every round. Close,
+prefix replacement, and uncertain cleanup have explicit retirement,
+invalidation, or quarantine. Tiny-model CPU smoke covered two rounds, Q,
+budget return, and creation inside inference mode followed by close outside;
+the full PVD CPU suite passed **3149 tests**, with **44 skipped** and **21
+subtests passed**. An isolated Qwen2.5-7B/V100S CUDA smoke checked two layers
+and budget return; cached versus full-prefix Q differed by at most **0.015625**
+in FP16. None of this is a three-node performance acceptance.
+
+In a three-node run, `24a56be35` removed a Decode inference-tensor position
+failure. With the cache off, two fixed concurrent 1055-prompt/8-output-token
+requests took **25.456 s** cold, then **3.632, 3.402, 3.566, 3.582, and
+3.552 s** (median **3.566 s**) over five warm rounds; all 10 requests returned
+200 with stable output hashes. The cache-on configuration differed only by a
+512 MiB cache budget. One request completed, but the second triggered an
+out-of-inference-mode private-map cleanup failure and D quarantined itself.
+There is therefore **no valid cache-on end-to-end A/B result**. Local commit
+`cb75d8690` fixes that path and passed CPU tests, but has not been retested
+across three nodes. Commit `71b28e387` adds explicit warmups and unique
+per-round inputs to the client harness; it too has not run on the three nodes.
+After the CloudLab lease expired, SSH to all three nodes timed out. The
+remaining process state is unknown. Redeployment, long-context/concurrency,
+CAGRA, and full-KV comparison remain unverified.
+
 ## 2026-09-26 Target-Q 增量实验 / Incremental target-Q experiment
 
 Qwen2.5-7B-Instruct、单块 V100S、固定 1094-token 输入、2 个预测 token、
@@ -16,10 +66,9 @@ Prompt KV：分段前向但仍补齐无用 Q 的路径中位数 **126.162 ms**�
 都满足本实验放宽的 `atol=0.02, rtol=0.005` 门槛。
 这说明分段计算本身有数值差异，尚未证明检索 Top-K、生成质量或端到端收益。
 
-代码中已加入默认关闭的 compact EXTEND 和绝对位置 Q 捕获接口，但**没有**
-把私有前缀 KV 缓存接入请求生命周期。隔离实验没有服务端预算、请求关闭、
-回退/替换失效与未知 GPU 完成时的隔离机制，不能当作生产功能。
-实验进程已退出；本轮没有启动 P/V/Gateway 服务，也没有推送 GitHub。
+以下为本轮早期隔离实验的历史记录：当时 compact EXTEND 和绝对位置 Q
+捕获接口虽已加入，但私有前缀 KV 缓存尚未接入请求生命周期。上方“最新验证
+状态”记录后续实现及三机暴露的缺陷；不得把本段早期实验当作生产证明。
 
 On one V100S with Qwen2.5-7B-Instruct, a fixed 1094-token prefix, two
 predicted tokens, and all 28 layers/28 Q heads, five warmed samples gave
@@ -34,11 +83,10 @@ window, though all passed the experimental `atol=0.02, rtol=0.005` gate.
 This is evidence of a compute opportunity, not proven retrieval recall,
 generation quality, or end-to-end improvement.
 
-The compact EXTEND and absolute-position Q-capture interfaces are opt-in and
-unused by serving. Request-owned cache lifetime, independent memory budget,
-prefix replacement/retraction invalidation, and uncertain-completion
-quarantine remain unimplemented. The isolated experiment process exited; no
-P/V/Gateway services were started, and nothing was pushed to GitHub.
+At this earlier isolated-experiment stage, compact EXTEND and absolute Q
+capture existed, but the request-owned cache was not yet integrated. The
+latest-status section above supersedes that implementation status. This
+experiment alone is not production or end-to-end performance evidence.
 
 ## 2026-09-26 首次 Prompt 安装加速与剩余差距 / Initial Prompt install speedup and remaining gap
 
