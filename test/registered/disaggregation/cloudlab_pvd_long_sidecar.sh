@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Start only the isolated CloudLab long-context acceptance sidecars.
-# Existing 9000/8000/30000/30001 services are deliberately untouched.
+# Start isolated CloudLab long-context acceptance sidecars.
+# The short-context 9000/8000/30000/30001 ports are never used here.
 set -euo pipefail
 
 role="${1:-}"
@@ -12,6 +12,33 @@ if [[ ! "$log_tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
 fi
 
 case "$role" in
+  p)
+    root=/mnt/sglang-data/yiliu124-node-0-sglang-pvd
+    work="$root/pvd-long-acceptance-20260925"
+    checkout="${PVD_P_CHECKOUT:-$root/src/sglang-PVD-validate-8a96123b0-long}"
+    export PYTHONPATH="$checkout/python:$root/deps/pvd-validation-mooncake"
+    export SGLANG_HOST_IP=10.0.1.1
+    if pgrep -f 'sglang.launch_server.*--port 30002' >/dev/null; then
+      echo 'Refusing to start: isolated P server 30002 already exists' >&2
+      exit 1
+    fi
+    nohup setsid "$root/conda-envs/sglang-v100/bin/python" -m sglang.launch_server \
+      --model-path /proj/edgecut-PG0/models/Qwen2.5-7B-Instruct \
+      --dtype float16 --tp-size 1 --base-gpu-id 1 \
+      --page-size 1 --attention-backend torch_native \
+      --host 10.0.1.1 --port 30002 \
+      --disaggregation-mode prefill --disaggregation-topology pvd \
+      --pvd-vector-coordinator-url http://10.0.1.2:9100 \
+      --pvd-model-instance-id qwen25-7b-pvd \
+      --pvd-rank-rails mlx5_0 --disaggregation-transfer-backend mooncake \
+      --pvd-transfer-staging-budget-bytes 67108864 \
+      --pvd-transfer-max-inflight 16 \
+      --mem-fraction-static 0.5 --context-length 2304 \
+      --max-total-tokens 2304 --max-running-requests 4 \
+      --max-prefill-tokens 2304 \
+      --disable-cuda-graph --disable-overlap-schedule \
+      --log-level info >"$work/p-$log_tag.log" 2>&1 </dev/null &
+    ;;
   v)
     root=/mnt/sglang-data/yiliu124-node-1-sglang-pvd
     work="$root/pvd-long-acceptance-20260925"
@@ -111,8 +138,23 @@ case "$role" in
       --disable-cuda-graph --disable-overlap-schedule \
       --log-level info >"$work/d-$log_tag.log" 2>&1 </dev/null &
     ;;
+  gateway)
+    root=/mnt/sglang-data/yiliu124-node-1-sglang-pvd
+    work="$root/pvd-long-acceptance-20260925"
+    gateway="${PVD_GATEWAY_BIN:-$root/deps/pvd-gateway-target-fbd77287b/release/smg}"
+    if pgrep -f 'smg launch.*--port 8001' >/dev/null; then
+      echo 'Refusing to start: isolated Gateway 8001 already exists' >&2
+      exit 1
+    fi
+    nohup setsid "$gateway" launch --host 10.0.1.2 --port 8001 \
+      --prometheus-port 29001 --pvd-disaggregation \
+      --pvd-vector-coordinator-url http://10.0.1.2:9100 \
+      --prefill http://10.0.1.1:30002 none \
+      --decode http://10.0.1.3:30003 --log-level info \
+      >"$work/gateway-$log_tag.log" 2>&1 </dev/null &
+    ;;
   *)
-    echo 'Usage: cloudlab_pvd_long_sidecar.sh {v|d}' >&2
+    echo 'Usage: cloudlab_pvd_long_sidecar.sh {p|v|d|gateway}' >&2
     exit 2
     ;;
 esac
