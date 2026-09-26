@@ -726,8 +726,8 @@ class PromptIndexManager:
         an atomic admission/lifetime boundary. No device allocation or
         backend call occurs until every caller identity has been checked.
         """
-        if not 2 <= len(requests) <= 32:
-            raise IndexSearchError("search_many requires 2..32 requests")
+        if not 2 <= len(requests) <= 64:
+            raise IndexSearchError("search_many requires 2..64 requests")
         first_identity = requests[0][0]
         if not isinstance(first_identity, SearchRequestIdentity):
             raise IndexSearchError("each search needs a caller identity")

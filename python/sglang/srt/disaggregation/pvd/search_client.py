@@ -324,8 +324,8 @@ class PVDShardSearchClient:
         """One bounded pinned RPC; each result remains independently checked."""
         profile = os.environ.get("PVD_PROFILE_D_SEARCH_BATCH") == "1"
         started = time.perf_counter() if profile else 0.0
-        if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 32:
-            raise ValueError("search batch requires 1..32 requests")
+        if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 64:
+            raise ValueError("search batch requires 1..64 requests")
         prepared = []
         for request in requests:
             if not isinstance(request, (list, tuple)) or len(request) != 4:
@@ -379,9 +379,33 @@ class PVDShardSearchClient:
             raise ValueError("search batch request exceeds 3 MiB")
         if profile:
             encoded_at = time.perf_counter()
-        body = await self._post_json(
-            "/internal/v1/indexes/search-batch", payload, encoded_payload=encoded
-        )
+        try:
+            body = await self._post_json(
+                "/internal/v1/indexes/search-batch", payload, encoded_payload=encoded
+            )
+        except SearchRefused as exc:
+            if exc.code != "index_capacity" or len(requests) == 1:
+                raise
+            # The V index manager reserved the entire batch scratch before
+            # allocating. A capacity refusal is therefore safe to retry in
+            # smaller, sequentially admitted pieces. Do not publish a partial
+            # selection: the caller sees results only after both halves pass
+            # their normal pinned-identity checks.
+            middle = len(requests) // 2
+            answers = []
+            for part in (requests[:middle], requests[middle:]):
+                if len(part) == 1:
+                    identity, queries, top_k, scope = part[0]
+                    answers.append(
+                        (
+                            await self.search(
+                                identity, queries=queries, top_k=top_k, scope=scope
+                            ),
+                        )
+                    )
+                else:
+                    answers.append(await self.search_many(part))
+            return answers[0] + answers[1]
         if profile:
             replied_at = time.perf_counter()
         results = body.get("results")

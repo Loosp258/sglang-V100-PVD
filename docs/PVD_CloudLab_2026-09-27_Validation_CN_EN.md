@@ -225,6 +225,54 @@ only two rounds, so it is evidence of a useful mechanism, not a stable
 throughput estimate or a default-on decision. The full-KV control remains
 around **2 s** per two-client round on this workload.
 
+### 批量检索背压 / Search-batch backpressure
+
+尝试把单 V rank 的有版本 pin 检索批次从 32 提到 64 项，以便将 Qwen
+每 rank 56 个 layer/KV-head 搜索压成一个 HTTP 批次。单元和 V100S
+峰值测试覆盖 56 个索引、915/2048 行及有界 64 项协议。在默认 1 GiB
+V 索引预算下直接启用 64 项**失败**：第二轮出现大量 HTTP 507
+`index_capacity`，原客户端原样重试导致 180 秒超时。原因可由预算
+构成解释：CAGRA-auto 的全局 native 额度先占约 640 MiB，余量须同时
+容纳多个 Entry 的索引副本与 56 项整批 scratch；并发时可能不足。
+
+新增容量拒绝时的有界、顺序拆批回退：仅对 `index_capacity` 拆半，
+必要时单项调用原接口；每个子批仍检查原 Entry 与版本 pin，全部成功
+前不发布部分结果。包含单项回退的测试及相关回归在 V100S 上
+**377 passed, 1 skipped**。1 GiB/64 项在线复测四个 SSE 完整，但
+仍发生 **44 次 507**，两轮 **6.05/6.32 s**，所以调度默认值恢复
+**32 项**，64 项需要显式 `PVD_SEARCH_BATCH_MAX_ITEMS=64`。
+
+V 索引预算改为有界可配置，启动脚本默认仍 **1 GiB**；在这两张 V100S
+当前可用显存约 31 GiB/卡的条件下，显式
+`PVD_PROMPT_INDEX_BUDGET_BYTES=2147483648` 与 64 项配合，
+同一 `grouped2048a`、M=4、512 MiB 私有 probe 缓存的两轮为
+**6.08/5.35 s**，V 日志确认 55/56 项 grouped 请求，**0 次 507**，
+双 rank 健康。四个输出哈希均与 32 项和完整 KV 路径一致。
+只切换 D 为完整 KV、保持 P/V/Gateway 的同 seed 对照为
+**2.06/1.96 s**。64 项 + 2 GiB 在第二轮较快、第一轮不快；样本太少，
+不能宣称稳定收益，更没有达到完整 KV 性能。2 GiB 不设为默认。
+
+The attempt to send all 56 Qwen layer/KV-head searches per V rank in one
+version-pinned HTTP batch exposed a real budget interaction. At the default
+**1 GiB** index budget, 64-item batches incurred repeated HTTP 507
+`index_capacity`; the first unmodified retry loop timed out at 180 seconds.
+The CAGRA-auto shared native reservation consumes roughly 640 MiB before
+Entry copies and batch scratch are charged. A new bounded, sequential split
+on capacity refusal preserves all version pins and publishes no partial
+result. Related tests passed **377/377** with one skip. The 1 GiB online
+retry completed four streams but logged **44 capacity refusals** and took
+**6.05/6.32 s** for two-client rounds. The scheduler therefore defaults to
+**32 items**; 64 is explicit opt-in only.
+
+The isolated launcher now permits a bounded 1–4 GiB V index budget while
+defaulting to 1 GiB. With an explicitly selected **2 GiB** budget and
+`PVD_SEARCH_BATCH_MAX_ITEMS=64`, the same `grouped2048a` replay completed
+in **6.08/5.35 s**, with real 55/56-item grouped batches, **zero 507s**,
+healthy V ranks and unchanged hashes. The matching full-KV D control took
+**2.06/1.96 s**. One round was faster than the 32-item cached run and one
+was not; this is neither a stable throughput claim nor the final latency
+target. Neither 64 items nor 2 GiB becomes a default.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

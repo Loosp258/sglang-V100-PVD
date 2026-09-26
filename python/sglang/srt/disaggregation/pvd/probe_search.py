@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import time
 import uuid
 from contextlib import nullcontext
@@ -45,6 +46,13 @@ MAX_BATCH_SHARD_SEARCHES = 32
 MAX_BATCH_QUERY_ROWS = 512
 MAX_BATCH_QUERY_CELLS = 100_000
 MAX_BATCH_RESULT_TOKENS = 16_384
+
+
+def _batch_shard_search_limit():
+    value = os.environ.get("PVD_SEARCH_BATCH_MAX_ITEMS", str(MAX_BATCH_SHARD_SEARCHES))
+    if value not in ("16", "32", "64"):
+        raise ValueError("PVD_SEARCH_BATCH_MAX_ITEMS must be 16, 32 or 64")
+    return int(value)
 
 
 def _text(name, value):
@@ -462,6 +470,12 @@ class ProbeSearchSession:
                 RoutedShardSearchClient,
             )
 
+            batch_item_limit = (
+                _batch_shard_search_limit()
+                if isinstance(client, RoutedShardSearchClient) and client.supports_batch
+                else None
+            )
+
             source_scopes = tuple(
                 client.version_scope(query.route.identity)
                 if isinstance(client, RoutedShardSearchClient)
@@ -592,7 +606,7 @@ class ProbeSearchSession:
                     return await search_group(index, versions)
 
             jobs = []
-            if isinstance(client, RoutedShardSearchClient) and client.supports_batch:
+            if batch_item_limit is not None:
                 pending = {}
                 for index, members in enumerate(query_groups):
                     if results[index] is None:
@@ -667,7 +681,7 @@ class ProbeSearchSession:
                             jobs.append(((index,), source, False))
                             continue
                         if batch and (
-                            len(batch) >= MAX_BATCH_SHARD_SEARCHES
+                            len(batch) >= batch_item_limit
                             or rows + row_count > MAX_BATCH_QUERY_ROWS
                             or cells + cell_count > MAX_BATCH_QUERY_CELLS
                             or results_bound + result_count > MAX_BATCH_RESULT_TOKENS

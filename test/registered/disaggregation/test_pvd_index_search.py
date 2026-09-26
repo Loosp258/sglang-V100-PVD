@@ -53,13 +53,14 @@ def test_grouped_small_ip_search_matches_individual_searches():
 def test_grouped_prompt_sized_ip_search_matches_individual(rows):
     candidate = backend()
     rng = torch.Generator().manual_seed(rows)
+    heads = 56 if rows >= 915 else 24
     indexes = tuple(
         candidate.build(
             torch.randn(rows, 128, generator=rng),
             vector_space=SPACE,
             metric="ip",
         )
-        for _ in range(24)
+        for _ in range(heads)
     )
     queries = tuple(torch.randn(7, 128, generator=rng) for _ in indexes)
     grouped = candidate.search_grouped(indexes, queries, top_k=4)
@@ -79,6 +80,16 @@ def test_grouped_prompt_rows_above_bound_fall_back():
         candidate.grouped_search_footprint(indexes=indexes, num_queries=1, top_k=1)
 
 
+def test_grouped_more_than_one_rank_head_set_is_refused():
+    candidate = backend()
+    indexes = tuple(
+        candidate.build(torch.ones(4, 8), vector_space=SPACE, metric="ip")
+        for _ in range(65)
+    )
+    with pytest.raises(IndexSearchError, match="2..64 indexes"):
+        candidate.grouped_search_footprint(indexes=indexes, num_queries=1, top_k=1)
+
+
 def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
     candidate = backend()
     vectors = torch.ones(4, 3)
@@ -92,8 +103,10 @@ def test_grouped_exact_keeps_lower_row_first_on_equal_scores():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
-@pytest.mark.parametrize("rows", [17, 374, 512, 915, 2048])
-def test_grouped_small_ip_search_matches_individual_cuda(rows):
+@pytest.mark.parametrize(
+    "rows, heads", [(17, 32), (374, 32), (512, 32), (915, 56), (2048, 56)]
+)
+def test_grouped_small_ip_search_matches_individual_cuda(rows, heads):
     candidate = BruteForceIndexBackend(device="cuda:0")
     rng = torch.Generator().manual_seed(47)
     indexes = tuple(
@@ -102,7 +115,7 @@ def test_grouped_small_ip_search_matches_individual_cuda(rows):
             vector_space=SPACE,
             metric="ip",
         )
-        for _ in range(32)
+        for _ in range(heads)
     )
     queries = tuple(
         torch.randn(7, 128, generator=rng).to("cuda:0") for _ in indexes

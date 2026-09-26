@@ -615,8 +615,8 @@ def create_shard_app(
         if not isinstance(batch_id, str) or not 1 <= len(batch_id) <= 128:
             raise ValueError("batch_id must be a non-empty bounded string")
         items = data.get("items")
-        if not isinstance(items, list) or not 1 <= len(items) <= 32:
-            raise ValueError("search batch requires 1..32 items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 64:
+            raise ValueError("search batch requires 1..64 items")
         if any(not isinstance(item, dict) for item in items):
             raise ValueError("search batch items must be objects")
         if any(

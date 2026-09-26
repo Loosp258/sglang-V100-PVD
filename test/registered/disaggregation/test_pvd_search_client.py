@@ -93,6 +93,88 @@ def test_pinned_batch_roundtrip_preserves_each_head_identity_and_order():
     asyncio.run(run())
 
 
+def test_pinned_batch_accepts_complete_qwen_rank_without_splitting():
+    async def run():
+        _, store, identity, query, scope = fixture()
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                first = await client.search(
+                    identity, queries=query, top_k=1, scope=scope
+                )
+                pinned = replace(
+                    identity,
+                    expected_index_version=first.index_version,
+                    expected_id_mapping_version=first.id_mapping_version,
+                )
+                results = await client.search_many(
+                    tuple((pinned, query, 1, scope) for _ in range(56))
+                )
+                assert len(results) == 56
+                assert all(result.token_ids == (3,) for result in results)
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("count,admitted", [(56, 14), (2, 1)])
+def test_capacity_refusal_splits_pinned_batch_without_partial_publication(
+    count, admitted
+):
+    async def run():
+        _, _, identity, query, scope = fixture()
+        pinned = replace(
+            identity, expected_index_version="v1", expected_id_mapping_version="m1"
+        )
+        calls = []
+
+        async def answer(request):
+            body = await request.json()
+            items = body["items"] if "items" in body else [body]
+            calls.append((request.path, len(items)))
+            if len(items) > admitted:
+                return web.json_response(
+                    {"error": "scratch budget full", "code": "index_capacity"},
+                    status=507,
+                )
+            replies = []
+            for item in items:
+                reply = valid_body(item)
+                reply["validated"] += ["index_version", "id_mapping_version"]
+                replies.append(reply)
+            if "items" not in body:
+                return web.json_response(replies[0])
+            return web.json_response(
+                {
+                    "batch_protocol": body["batch_protocol"],
+                    "batch_id": body["batch_id"],
+                    "results": replies,
+                }
+            )
+
+        app = web.Application()
+        app.router.add_post("/internal/v1/indexes/search-batch", answer)
+        app.router.add_post("/internal/v1/indexes/search", answer)
+        async with TestServer(app) as server:
+            client = PVDShardSearchClient(str(server.make_url("")))
+            try:
+                results = await client.search_many(
+                    tuple((pinned, query, 1, scope) for _ in range(count))
+                )
+            finally:
+                await client.close()
+        assert len(results) == count
+        assert all(result.token_ids == (3,) for result in results)
+        assert calls[0][1] == count
+        assert len(calls) <= 2 * count
+        assert calls[-1][1] == admitted
+        if admitted == 1:
+            assert sum(path.endswith("/search") for path, _ in calls) == 2
+
+    asyncio.run(run())
+
+
 def test_background_search_http_progresses_while_owner_loop_is_stopped(
     monkeypatch, caplog
 ):
@@ -401,7 +483,7 @@ def test_batch_server_rejects_unbounded_or_mixed_work_before_index_search(
                 {**item, "search_id": "item-1", "expected_index_version": "other"},
             ]
         elif failure == "too_many_items":
-            items = [{**item, "search_id": f"item-{i}"} for i in range(33)]
+            items = [{**item, "search_id": f"item-{i}"} for i in range(65)]
         else:
             items = [
                 {**item, "search_id": f"item-{i}", "queries": query * 64}

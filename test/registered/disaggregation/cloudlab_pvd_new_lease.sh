@@ -82,9 +82,15 @@ case "$role" in
   v)
     require_free_port 9100
     exact_max_rows="${PVD_PROMPT_INDEX_EXACT_MAX_ROWS:-512}"
+    index_budget="${PVD_PROMPT_INDEX_BUDGET_BYTES:-1073741824}"
     if [[ ! "$exact_max_rows" =~ ^[1-9][0-9]{0,3}$ ]] ||
        (( exact_max_rows < 16 || exact_max_rows > 2304 )); then
       echo 'PVD_PROMPT_INDEX_EXACT_MAX_ROWS must be an integer in [16, 2304]' >&2
+      exit 2
+    fi
+    if [[ ! "$index_budget" =~ ^[1-9][0-9]{0,9}$ ]] ||
+       (( index_budget < 1073741824 || index_budget > 4294967296 )); then
+      echo 'PVD_PROMPT_INDEX_BUDGET_BYTES must be in [1 GiB, 4 GiB]' >&2
       exit 2
     fi
     cuvs_site="$root/deps/pvd-cagra25-venv/lib/python3.12/site-packages"
@@ -108,7 +114,7 @@ case "$role" in
       --total-pages 8192 --page-bytes 57344 \
       --transfer-staging-budget-bytes 67108864 --transfer-max-inflight 16 \
       --prompt-index-vector-space qwen25-7b-pvd \
-      --prompt-index-budget-bytes 1073741824 \
+      --prompt-index-budget-bytes "$index_budget" \
       --prompt-index-backend cagra-auto \
       --prompt-index-cagra-native-bytes 536870912 \
       --prompt-index-cagra-global-native-bytes 671088640 \

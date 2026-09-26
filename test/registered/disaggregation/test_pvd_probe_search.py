@@ -20,6 +20,7 @@ from sglang.srt.disaggregation.pvd.probe_search import (
     ProbeSearchRoute,
     ProbeSearchSession,
     StaleProbeSearch,
+    _batch_shard_search_limit,
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.search_client import (
@@ -30,6 +31,22 @@ from sglang.srt.disaggregation.pvd.search_client import (
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_prompt_index import shard_client
 from test_pvd_search_client import fixture
+
+
+@pytest.mark.parametrize("value, expected", [(None, 32), ("16", 16), ("64", 64)])
+def test_batch_item_limit_is_bounded_and_default_safe(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("PVD_SEARCH_BATCH_MAX_ITEMS", raising=False)
+    else:
+        monkeypatch.setenv("PVD_SEARCH_BATCH_MAX_ITEMS", value)
+    assert _batch_shard_search_limit() == expected
+
+
+@pytest.mark.parametrize("value", ["0", "65", "twenty", " 64"])
+def test_batch_item_limit_refuses_invalid_override(monkeypatch, value):
+    monkeypatch.setenv("PVD_SEARCH_BATCH_MAX_ITEMS", value)
+    with pytest.raises(ValueError, match="PVD_SEARCH_BATCH_MAX_ITEMS"):
+        _batch_shard_search_limit()
 
 
 class ScratchProbe(TargetProbe):

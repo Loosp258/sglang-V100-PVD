@@ -186,8 +186,8 @@ class RoutedShardSearchClient:
     async def search_many(self, requests):
         if not self.supports_batch:
             raise ShardSearchError("routed batch search is not enabled")
-        if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 32:
-            raise ValueError("routed batch requires 1..32 requests")
+        if not isinstance(requests, (list, tuple)) or not 1 <= len(requests) <= 64:
+            raise ValueError("routed batch requires 1..64 requests")
         rank = None
         for identity, _, _, scope in requests:
             source = self.version_scope(identity)

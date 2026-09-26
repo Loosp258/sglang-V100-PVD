@@ -545,8 +545,8 @@ class BruteForceIndexBackend(IndexBackend):
     def _group_shape(
         self, indexes: Sequence[BuiltIndex], num_queries: int, top_k: int
     ) -> Tuple[int, int]:
-        if not 2 <= len(indexes) <= 32:
-            raise IndexSearchError("grouped exact search requires 2..32 indexes")
+        if not 2 <= len(indexes) <= 64:
+            raise IndexSearchError("grouped exact search requires 2..64 indexes")
         _require_positive_int("num_queries", num_queries)
         _require_positive_int("top_k", top_k)
         first = indexes[0]
