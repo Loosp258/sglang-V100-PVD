@@ -57,6 +57,15 @@ case "$role" in
       1) triton_sparse_args+=(--experimental-triton-sparse-packing) ;;
       *) echo 'PVD_TRITON_SPARSE_PACKING must be 0 or 1' >&2; exit 2 ;;
     esac
+    exact_index_args=()
+    if [[ -n "${PVD_LONG_EXACT_MAX_ROWS:-}" ]]; then
+      if [[ ! "$PVD_LONG_EXACT_MAX_ROWS" =~ ^[1-9][0-9]{0,3}$ ]] ||
+         (( PVD_LONG_EXACT_MAX_ROWS < 16 || PVD_LONG_EXACT_MAX_ROWS > 2304 )); then
+        echo 'PVD_LONG_EXACT_MAX_ROWS must be an integer in 16..2304' >&2
+        exit 2
+      fi
+      exact_index_args+=(--prompt-index-exact-max-rows "$PVD_LONG_EXACT_MAX_ROWS")
+    fi
     nohup setsid "$root/deps/pvd-cagra25-venv/bin/python" -m sglang.srt.disaggregation.pvd.server \
       --world-size 2 --host 0.0.0.0 --advertise-host 10.0.1.2 \
       --coordinator-port 9100 --shard-port-base 9300 \
@@ -73,6 +82,7 @@ case "$role" in
       --prompt-index-cagra-intermediate-degree 16 \
       --prompt-index-exact-max-rows 64 \
       --prompt-index-cagra-itopk-size 64 \
+      "${exact_index_args[@]}" \
       --experimental-cuda-sparse-packing \
       "${triton_sparse_args[@]}" \
       --full-kv-fanin-max-slices 262144 \
