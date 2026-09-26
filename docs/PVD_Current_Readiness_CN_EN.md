@@ -32,6 +32,17 @@ skip 中含需要本地 GPU 的测试，三机真实运行只覆盖上述样本�
 所有此次隔离实验的 P/V/D/Gateway 服务已停止，端口已核实释放；
 没有推送 GitHub，也没有改生产默认值。
 
+随后使用 `9b133c03e` 的显式诊断开关在 V100S 上拆分四次
+约 1100-token 的 target-Q probe：私有池构造 **14.3–15.4 ms**，
+目标模型前向加 Q 提取 **293–296 ms**，清理 **6.1–6.3 ms**。
+这些是 CPU 侧阶段墙钟，不是 GPU kernel profiler 结果。单靠让私有池
+常驻，最多触及约 15 ms 的构造段，并不能消除主要瓶颈；
+因此没有草率增加常驻显存。下一项真正可能改变数量级的研究是
+在请求所有权下复用目标 probe 的已提交前缀 KV，只计算新的正式 token
+与预测后缀，同时证明版本/位置一致、请求结束与回退失效、独立预算、
+与正式 Req/KV 隔离及未知完成时的隔离。该增量 probe **尚未实现**，
+不能以现有数据承诺加速或质量等价。该诊断侧车也已停止。
+
 Scheduler-phase profiling traced the former ~3.97 s poll gap to D's
 `last_poll` while admitting a second waiting request. Initial Prompt
 installation used one GPU `copy_` per token, K/V component, head and layer,
@@ -51,8 +62,7 @@ eight-token output hashes matched the sampled full-KV run. Per-layer
 gathering showed no measurable additional end-to-end gain. The isolated
 stack was restarted between the old and new runs; only D restarted between
 the two gather versions, so this is not a strict same-process pairing.
-The ~4 s
-admission stall disappeared, but ~0.5–1 s refresh-poll phases remain.
+The ~4 s admission stall disappeared, but ~0.5–1 s refresh-poll phases remain.
 For one matched two-client, 20-output round, the latest predictive path
 took **8.33 s** versus **2.32 s** for full KV, with different 20-token
 output hashes. Thus neither an end-to-end speedup nor general output
@@ -61,6 +71,20 @@ equivalence has been established. The latest focused CPU suite reported
 limited to the stated samples. All isolated P/V/D/Gateway experiment
 services were stopped and their ports checked. No GitHub push or
 production-default change was made.
+
+An additional opt-in V100S run at `9b133c03e` split four ~1100-token
+target-Q probes into **14.3–15.4 ms** private-pool setup,
+**293–296 ms** target forward plus Q capture, and **6.1–6.3 ms** retirement.
+These are CPU-side stage wall times, not GPU-kernel profiler measurements.
+Keeping private pools resident would affect only the small setup portion,
+so no unbudgeted persistent GPU allocation was added. The more consequential
+candidate is a request-owned incremental target probe that reuses committed
+prefix KV and computes only new committed tokens and the predicted suffix.
+That would require exact position/version checks, invalidation on close or
+prefix replacement, separate budgets, isolation from committed Req/KV state,
+and quarantine after uncertain completion. It is **not implemented** and
+these measurements do not promise speedup or quality equivalence. The
+diagnostic sidecars were also stopped.
 
 ## 2026-09-26 并发长 Prompt 对照与刷新轮询 / Concurrent long-prompt A/B and refresh polling
 
