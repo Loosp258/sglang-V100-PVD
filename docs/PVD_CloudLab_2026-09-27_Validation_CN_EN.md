@@ -95,9 +95,49 @@ for the concurrent workload. Fewer refreshes plausibly reduce overhead;
 quality and approximate-retrieval error are not established, so M=8 is
 not a new default or evidence of the final performance target.
 
+### 915 行 exact 阈值与压力对照 / 915-row exact threshold and pressure control
+
+保持 P、V、Gateway、Qwen2.5-7B 及请求生成方式不变，将 V 的实验性
+`PVD_PROMPT_INDEX_EXACT_MAX_ROWS` 从 512 提至 2048。915 行 Entry 的
+56 个 head index / rank 改走 exact 路径，每个 rank 的构建约
+**0.02–0.05 s**，避开先前 native CAGRA 的 **7.69–10.68 s** 冷构建。
+这只是此规模下的阈值实验：exact 搜索随行数增长，不能据此全局替代
+CAGRA。
+
+同一 915-token、20 输出 replay，M=4 预测单请求 **4.54/4.01 s**，
+输出哈希与先前 CAGRA M=4 和完整 KV 的该输入相同；先前 native CAGRA
+为 **22.67 s**。M=8/lead=6 的两轮为 **3.13/3.01 s**，但哈希不同，
+因此仍是未经质量验收的探索。M=4 两客户端一轮为 **7.32 s**；随后
+连续三轮相同的两客户端压力测试每轮 **7.71/7.58/7.40 s**，六个请求
+均完整。V 的 `coordinator_pressure_evictions=5`，两 rank 健康、无未知
+传输或隔离，说明该有限负载下回收路径运行，但不是长期稳定性证明。
+
+随后只将 D 切换为完整 Prompt KV，三轮相同两客户端、相同 seed 的
+墙钟为 **2.093/1.955/1.938 s**。在这些重复性 prompt 上，输入及
+输出 SHA256 与预测 exact 路径匹配；预测路径仍约慢 **3.7 倍**。
+比较跨 D 重启，样本量小，不能推广到其他负载或证明通用输出质量。
+它足以说明：消掉 CAGRA 冷构建后，现有 D probe、检索请求、交付和
+刷新边界仍未达到“网络如本地”的目标。开关默认值保持 512。
+
+With V's experimental exact threshold raised from 512 to 2048, each
+rank built the 915-row Entry's 56 head indexes in roughly **0.02–0.05 s**,
+avoiding the earlier **7.69–10.68 s** native CAGRA cold build. At M=4,
+one-client 20-token runs took **4.54/4.01 s** with the same output hash as
+the earlier CAGRA M=4 and full-KV run on that input. M=8/lead=6 took
+**3.13/3.01 s** but changed the output hash and remains exploratory.
+Three two-client M=4 pressure rounds took **7.71/7.58/7.40 s**; all six
+streams completed. V reported five pressure evictions and no unknown
+transfers or quarantine. Switching only D to full KV gave
+**2.093/1.955/1.938 s** for the matching three rounds, with matching
+input/output hashes on these repetitive prompts. Sparse PVD was still
+about **3.7× slower**. Restart effects, small sample size and repetitive
+input limit this comparison; it neither establishes general quality nor
+justifies changing the default threshold. Exact search also scales with
+Entry length, so this is not a general replacement for CAGRA.
+
 ## 未完成 / Remaining work
 
-1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load; native CAGRA cold build is much slower. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. A larger exact threshold may be appropriate within the 2304-token experiment context, but must be measured rather than assumed.
+1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
 2. **Quality:** synthetic CAGRA recall and output hashes on repetitive prompts are not real-query recall or task-quality evidence. Measure Qwen query recall against exact, and compare generated outputs under varied prompts.
 3. **Scale:** this experiment is P TP1, V 2 ranks, D TP1, single rail, one or two clients, max 2304 sequence tokens. TP asymmetry, dual-rail, long-running load, TTL pressure, multi-D routing, and full GPU-memory safety have not been established here.
 4. **Cache:** compare private probe prefix cache on/off with matched warmups, unique prompts and budget snapshots; exercise concurrent close, cancellation and retraction. The three-request run establishes only the narrow cleanup regression.
