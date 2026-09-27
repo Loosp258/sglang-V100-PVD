@@ -256,8 +256,8 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
     ):
         parser.error("--model-path must be an absolute local checkpoint directory")
     if not (
-        16 <= args.context_length <= 4096
-        and args.context_length <= args.max_total_tokens <= 8192
+        16 <= args.context_length <= 20480
+        and args.context_length <= args.max_total_tokens <= 20480
     ):
         parser.error("bounded context/total-token capacity required")
     report = {

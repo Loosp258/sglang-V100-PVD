@@ -14,11 +14,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd import draft_forward_adapter
-from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.cuda_target_probe import (
     CUDALlamaTargetProbe,
     CUDAQwen2TargetProbe,
 )
+from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prediction import (
     CommittedPrefix,
     DraftPrediction,
@@ -400,3 +400,34 @@ def test_real_smoke_reports_blocked_without_cuda(monkeypatch, capsys):
     assert report["status"] == "blocked"
     assert not report["production_gpu_rdma_validated"]
     assert "evidence" not in report
+
+
+def test_real_smoke_accepts_bounded_long_context_without_cuda(
+    monkeypatch, capsys, tmp_path
+):
+    import run_pvd_cuda_probe_smoke
+
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert (
+        run_pvd_cuda_probe_smoke.main(
+            [
+                "--model-path",
+                str(checkpoint),
+                "--context-length",
+                "9216",
+                "--max-total-tokens",
+                "9216",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["reason"] == (
+        "requires a serving-capable Linux CUDA environment"
+    )
+    with pytest.raises(SystemExit):
+        run_pvd_cuda_probe_smoke.main(
+            ["--context-length", "20481", "--max-total-tokens", "20481"]
+        )
