@@ -131,3 +131,10 @@ tokenizer 摘要
 实验 ticket、server 和 handler 均使用这组真实内容摘要，哈希约
 10.7 s（启动期成本，不计入推理延迟）。仍未接入 Decode Scheduler、
 V 检索/RDMA 或同条件性能比较。
+
+路由签发检查点 / Routed ticket issuance: `probe_lane_routing.py` 从 D
+已验证的 V search routes 派生 ticket，而非让 sidecar 自行选 V 或让
+上层手填层/head。只接受完整的 layer × 连续 Q-head 矩形覆盖，逐条
+校验 Entry、目标向量空间、post-RoPE、GQA→KV-head 映射与维度，
+并从实际 query positions 计算回复字节上限。纯逻辑测试通过；
+Scheduler 尚未调用此函数。
