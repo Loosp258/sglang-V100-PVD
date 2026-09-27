@@ -22,6 +22,7 @@ d_staging_bytes="${PVD_D_STAGING_BYTES:-268435456}"
 v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
 probe_scratch_bytes="${PVD_PROBE_SCRATCH_BYTES:-536870912}"
 draft_scratch_bytes="${PVD_DRAFT_SCRATCH_BYTES:-268435456}"
+prefill_chunk_tokens="${PVD_PREFILL_CHUNK_TOKENS:-2048}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
 # link has the same path and pinned tokenizer bytes, while P/D links include
 # their own local weight shards.
@@ -44,7 +45,8 @@ if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
    [[ ! "$probe_scratch_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
    (( probe_scratch_bytes < 536870912 || probe_scratch_bytes > 4294967296 )) ||
    [[ ! "$draft_scratch_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
-   (( draft_scratch_bytes < 268435456 || draft_scratch_bytes > 2147483648 )); then
+   (( draft_scratch_bytes < 268435456 || draft_scratch_bytes > 2147483648 )) ||
+   [[ ! "$prefill_chunk_tokens" =~ ^(64|128|256|512|1024|2048)$ ]]; then
   echo 'invalid bounded long-context capacity settings' >&2
   exit 2
 fi
@@ -96,7 +98,8 @@ case "$role" in
       --pvd-transfer-max-inflight 16 \
       --mem-fraction-static 0.5 --context-length "$context_tokens" \
       --max-total-tokens "$context_tokens" --max-running-requests 4 \
-      --max-prefill-tokens "$context_tokens" --disable-cuda-graph \
+      --max-prefill-tokens "$context_tokens" \
+      --chunked-prefill-size "$prefill_chunk_tokens" --disable-cuda-graph \
       --disable-overlap-schedule --log-level info \
       >"$log_dir/p-$tag.log" 2>&1 </dev/null &
     ;;
