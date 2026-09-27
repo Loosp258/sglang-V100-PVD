@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import multiprocessing
 import os
 import socket
 import stat
@@ -61,6 +62,83 @@ def client(tmp_path, *, server_pid=None, budget=None):
         expected_server_pid=os.getpid() if server_pid is None else server_pid,
         reply_budget=budget or TransferBudget(1 << 20, 4),
     )
+
+
+def _child_server(directory, parent_pid, control):
+    async def run():
+        service = await ProbeLaneUnixServer(
+            directory,
+            "probe.sock",
+            expected_client_pid=parent_pid,
+            target_model_id="target-checkpoint",
+            weights_sha256="a" * 64,
+            tokenizer_sha256="b" * 64,
+            handler=reply_for,
+        ).start()
+        try:
+            control.send(os.getpid())
+            await asyncio.to_thread(control.recv)
+        finally:
+            await service.aclose()
+            control.close()
+
+    asyncio.run(run())
+
+
+def _start_child_server(socket_dir):
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    process = context.Process(
+        target=_child_server, args=(socket_dir, os.getpid(), child)
+    )
+    process.start()
+    child.close()
+    if not parent.poll(10):
+        process.terminate()
+        process.join(timeout=5)
+        parent.close()
+        raise AssertionError("probe sidecar did not start")
+    assert parent.recv() == process.pid
+    return process, parent
+
+
+def _stop_child_server(process, control):
+    try:
+        if process.is_alive():
+            control.send("stop")
+            process.join(timeout=10)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+        assert process.exitcode == 0
+    finally:
+        control.close()
+
+
+def test_real_process_credentials_and_stale_pid_after_restart(socket_dir):
+    first, first_control = _start_child_server(socket_dir)
+    try:
+        old_client = client(socket_dir, server_pid=first.pid)
+
+        async def request_once(selected):
+            async with selected.request(ticket()) as rows:
+                return tuple(row.layer for row in rows)
+
+        assert asyncio.run(request_once(old_client)) == (0, 1)
+    finally:
+        _stop_child_server(first, first_control)
+    assert not (socket_dir / "probe.sock").exists()
+
+    second, second_control = _start_child_server(socket_dir)
+    try:
+        with pytest.raises(ProbeLaneProtocolError, match="PID/UID"):
+            asyncio.run(request_once(old_client))
+        assert asyncio.run(request_once(client(socket_dir, server_pid=second.pid))) == (
+            0,
+            1,
+        )
+    finally:
+        _stop_child_server(second, second_control)
 
 
 def test_unix_probe_round_trip_permissions_and_retirement(socket_dir):

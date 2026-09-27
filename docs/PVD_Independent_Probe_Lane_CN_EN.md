@@ -80,7 +80,9 @@ Ticket 帧限制 256 KiB；回复原始 Q 最多 16 MiB，并限制元数据
 权限 0700 的专用目录、0600 socket、Linux `SO_PEERCRED` 同 UID 与
 指定 PID 校验、有限帧、deadline、单 handler 串行执行、有界连接数
 及按 inode 校验后的关闭清理。假预测器的 Unix 往返与协议测试
-合计 **44 passed**；Ruff E/F/I 和格式通过。客户端在读取回复前
+合计 **45 passed**；Ruff E/F/I 和格式通过。其中使用独立
+`spawn` 进程验证了真实 `SO_PEERCRED` 往返，以及 sidecar 重启
+后旧 PID 客户端拒绝新进程；不是只在同进程模拟。客户端在读取回复前
 必须以显式 `TransferBudget` 预留 host Q 字节和一个并发槽，
 `async with request(...)` 的作用域结束时归还，包括超时与调用方
 异常；调用方必须在作用域内转换/消费 Q，不能在退出后继续持有。
