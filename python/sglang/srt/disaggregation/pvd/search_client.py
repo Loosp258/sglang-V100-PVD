@@ -20,6 +20,10 @@ from dataclasses import dataclass
 import aiohttp
 import orjson
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
+from sglang.srt.disaggregation.pvd.search_wire import (
+    MAX_PACKED_QUERY_CELLS,
+    pack_query_rows,
+)
 
 SEARCH_PROTOCOL = "pvd.search.v1"
 SEARCH_BATCH_PROTOCOL = "pvd.search.batch.v1"
@@ -371,6 +375,14 @@ class PVDShardSearchClient:
             "batch_id": batch_id,
             "items": [item[3] for item in prepared],
         }
+        if os.environ.get("PVD_PACKED_QUERY_BATCH") == "1":
+            if (
+                sum(item[5] * item[1].head_dim for item in prepared)
+                > MAX_PACKED_QUERY_CELLS
+            ):
+                raise ValueError("packed search batch exceeds query-cell bound")
+            for item in payload["items"]:
+                item.update(pack_query_rows(item.pop("queries")))
         if profile:
             prepared_at = time.perf_counter()
         encoded = orjson.dumps(payload)

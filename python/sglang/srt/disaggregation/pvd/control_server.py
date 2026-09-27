@@ -35,6 +35,11 @@ from sglang.srt.disaggregation.pvd.protocol import (
     WriteIdentity,
 )
 from sglang.srt.disaggregation.pvd.request_state import InvalidStateTransition
+from sglang.srt.disaggregation.pvd.search_wire import (
+    MAX_PACKED_QUERY_CELLS,
+    PACKED_QUERY_ENCODING,
+    unpack_query_rows,
+)
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferCapacityError,
     TransportState,
@@ -518,41 +523,42 @@ def create_shard_app(
                     f"a search request must state its {field}; this rank will "
                     "not supply the identity it is meant to verify"
                 )
-        queries = data.get("queries")
-        if not isinstance(queries, list) or not queries:
-            raise ValueError("queries must be a non-empty list of vectors")
-        if len(queries) > max_queries:
-            raise ValueError(f"at most {max_queries} queries per request")
-        if not all(isinstance(row, list) and row for row in queries):
-            raise ValueError("queries must be equal-length lists of numbers")
-        if len({len(row) for row in queries}) != 1:
-            raise ValueError("queries must be equal-length lists of numbers")
-        # One bounded host conversion validates all Q cells, then the worker
-        # creates a zero-copy CPU tensor view. The old per-scalar math checks
-        # and second torch.tensor copy cost ~20 ms per 56-item Qwen batch.
-        # NumPy may coerce a mixed bool/float list to floats, so reject bools
-        # explicitly before the array conversion can erase their type.
-        if any(type(value) is bool for row in queries for value in row):
-            raise ValueError("queries must contain finite float32 numbers")
-        raw = np.asarray(queries)
-        if raw.ndim != 2:
-            raise ValueError("queries must be equal-length lists of numbers")
-        if raw.dtype.kind not in "iuf":
-            # Object arrays can contain valid large Python ints, so retain
-            # the numeric protocol while rejecting mixed strings/None.
-            if any(
-                type(value) not in (int, float)
-                for row in queries
-                for value in row
-            ):
+        if "query_encoding" in data:
+            if "queries" in data:
+                raise ValueError("packed and JSON queries cannot be mixed")
+            queries = unpack_query_rows(data)
+        else:
+            queries = data.get("queries")
+            if not isinstance(queries, list) or not queries:
+                raise ValueError("queries must be a non-empty list of vectors")
+            if len(queries) > max_queries:
+                raise ValueError(f"at most {max_queries} queries per request")
+            if not all(isinstance(row, list) and row for row in queries):
+                raise ValueError("queries must be equal-length lists of numbers")
+            if len({len(row) for row in queries}) != 1:
+                raise ValueError("queries must be equal-length lists of numbers")
+            # One bounded host conversion validates all Q cells, then the
+            # worker creates a zero-copy CPU tensor view. NumPy may coerce a
+            # mixed bool/float list, so reject bools before conversion.
+            if any(type(value) is bool for row in queries for value in row):
                 raise ValueError("queries must contain finite float32 numbers")
-        try:
-            with np.errstate(over="ignore", invalid="ignore"):
-                queries = np.asarray(queries, dtype=np.float32)
-        except (OverflowError, TypeError, ValueError) as exc:
-            raise ValueError("queries must contain finite float32 numbers") from exc
-        if not np.isfinite(queries).all():
-            raise ValueError("queries must contain finite float32 numbers")
+            raw = np.asarray(queries)
+            if raw.ndim != 2:
+                raise ValueError("queries must be equal-length lists of numbers")
+            if raw.dtype.kind not in "iuf":
+                if any(
+                    type(value) not in (int, float)
+                    for row in queries
+                    for value in row
+                ):
+                    raise ValueError("queries must contain finite float32 numbers")
+            try:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    queries = np.asarray(queries, dtype=np.float32)
+            except (OverflowError, TypeError, ValueError) as exc:
+                raise ValueError("queries must contain finite float32 numbers") from exc
+            if not np.isfinite(queries).all():
+                raise ValueError("queries must contain finite float32 numbers")
         top_k = data.get("top_k", 1)
         if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
             raise ValueError("top_k must be a positive integer")
@@ -637,14 +643,27 @@ def create_shard_app(
             raise ValueError("search batch requires 1..64 items")
         if any(not isinstance(item, dict) for item in items):
             raise ValueError("search batch items must be objects")
+        def row_count(item):
+            if item.get("query_encoding") == PACKED_QUERY_ENCODING:
+                if (
+                    "queries" in item
+                    or type(item.get("query_rows")) is not int
+                    or type(item.get("query_dim")) is not int
+                    or not 1 <= item["query_dim"] <= MAX_PACKED_QUERY_CELLS
+                ):
+                    raise ValueError("packed batch item has invalid query rows")
+                return item["query_rows"]
+            if "query_encoding" in item or not isinstance(item.get("queries"), list):
+                raise ValueError("batch item has invalid query representation")
+            return len(item["queries"])
+
         if any(
             item.get("search_protocol") != "pvd.search.v1"
             or not isinstance(item.get("search_id"), str)
             or not 1 <= len(item["search_id"]) <= 128
             or type(item.get("top_k")) is not int
             or not 1 <= item["top_k"] <= 512
-            or not isinstance(item.get("queries"), list)
-            or not 1 <= len(item["queries"]) <= 64
+            or not 1 <= row_count(item) <= 64
             or any(
                 name in item
                 and (not isinstance(item[name], str) or not item[name].strip())
@@ -654,11 +673,19 @@ def create_shard_app(
             != ("expected_id_mapping_version" in item)
             for item in items
         ):
-            raise ValueError("batch items require bounded, consistently pinned search identities")
-        if sum(len(item["queries"]) for item in items) > 512:
+            raise ValueError(
+                "batch items require bounded, consistently pinned search identities"
+            )
+        if sum(row_count(item) for item in items) > 512:
             raise ValueError("search batch exceeds 512 query rows")
-        if sum(len(item["queries"]) * item["top_k"] for item in items) > 16384:
+        if sum(row_count(item) * item["top_k"] for item in items) > 16384:
             raise ValueError("search batch exceeds result-token bound")
+        if sum(
+            row_count(item) * item.get("query_dim", 0)
+            for item in items
+            if "query_encoding" in item
+        ) > MAX_PACKED_QUERY_CELLS:
+            raise ValueError("packed search batch exceeds query-cell bound")
         search_ids = [item.get("search_id") for item in items]
         if len(set(search_ids)) != len(items):
             raise ValueError("duplicate search_id in batch")
@@ -712,7 +739,7 @@ def create_shard_app(
                     "PVD V search-batch path=%s items=%d query_rows=%d stage_ms=%s",
                     path,
                     len(items),
-                    sum(len(item["queries"]) for item in items),
+                    sum(row_count(item) for item in items),
                     _stage_ms(timings),
                 )
         else:
@@ -733,7 +760,7 @@ def create_shard_app(
                 logger.info(
                     "PVD V search-batch items=%d query_rows=%d stage_ms=%s",
                     len(items),
-                    sum(len(item["queries"]) for item in items),
+                    sum(row_count(item) for item in items),
                     _stage_ms(totals),
                 )
         reply = {

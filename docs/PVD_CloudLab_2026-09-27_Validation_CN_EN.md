@@ -411,6 +411,36 @@ versus **6.12/5.25/5.14 s** before this change, with all hashes/SSE intact.
 This is a measured V control-path improvement, not an established end-to-end
 win or evidence of the final latency target.
 
+### 有界 float32 Q 批量传输 / Bounded packed-float32 Q batches
+
+新增默认关闭的 `PVD_PACKED_QUERY_BATCH=1`，仅把 D→V search-batch 中的
+Q 行改成 little-endian float32 + base64；身份、版本 pin、逻辑 token/page
+结果与后续 Mooncake KV 传输不变。V 在索引调用前验证行数、维度、
+编码长度、实际字节数与有限值，并拒绝同时出现 packed/JSON Q。
+旧 JSON 客户端仍可用。搜索/索引回归 **245 passed**，Ruff E/F/I 通过。
+
+同一 P/V/Gateway，固定 `firstbatch-ab-20260927`、921-token Prompt、
+双客户端 × 3 轮、每请求 20 token，仅重启 D 切换 opt-in：JSON 墙钟
+**6.06/5.18/5.12 s**，packed **5.67/4.99/4.96 s**。
+24/32 项 V-shard batch 的编码请求从约 **311–419 kB** 降到
+**126–168 kB**（均按日志中的十进制字节计）。
+六个输入/输出哈希逐一相同，120/120 SSE 完整。D 端打包准备约多
+1–2 ms，而编码约少 0.7–0.9 ms；网络/排队时间波动明显。不能将三轮
+差值归因为稳定链路提速，更不能宣称整体超过约 2 秒的完整 KV 控制。
+
+The opt-in `PVD_PACKED_QUERY_BATCH=1` changes only the search-batch Q rows
+to little-endian float32 encoded as base64. V validates shape, encoded and
+decoded lengths, finiteness, and exclusive representation before index use.
+Identity, version fencing, logical selection and Mooncake KV delivery are
+unchanged; legacy JSON requests remain accepted. Search/index regressions
+passed **245/245**, with Ruff E/F/I clean. On the same live P/V/Gateway and
+fixed two-client, three-round, 921-prompt-token replay, JSON took
+**6.06/5.18/5.12 s** and packed Q **5.67/4.99/4.96 s** per round. Encoded
+24/32-item shard requests shrank from roughly **311–419 kB** to
+**126–168 kB**. All six hashes and 120 SSE events matched. The small,
+restart-separated sample and queueing variance do not establish a stable
+end-to-end win; full-KV Decode remains much faster.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

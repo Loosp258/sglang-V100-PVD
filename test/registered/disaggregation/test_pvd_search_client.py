@@ -4,15 +4,15 @@ import asyncio
 import json
 import logging
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import torch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
-from sglang.srt.disaggregation.pvd.index_search import BruteForceIndexBackend
 from sglang.srt.disaggregation.pvd import search_client as search_client_module
+from sglang.srt.disaggregation.pvd.index_search import BruteForceIndexBackend
 from sglang.srt.disaggregation.pvd.search_client import (
     PVDShardSearchClient,
     SearchRefused,
@@ -20,6 +20,10 @@ from sglang.srt.disaggregation.pvd.search_client import (
     SearchScope,
     SearchTransportError,
     ShardSearchError,
+)
+from sglang.srt.disaggregation.pvd.search_wire import (
+    pack_query_rows,
+    unpack_query_rows,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_prompt_index import ident, manager, shard_client, stored_entry
@@ -111,10 +115,106 @@ def test_unpinned_batch_discovers_one_version_under_one_v_reader():
                 }
                 assert len({result.id_mapping_version for result in results}) == 1
                 assert all(result.token_ids == (3,) for result in results)
-                assert all("index_version" not in result.validated for result in results)
-                assert all("id_mapping_version" not in result.validated for result in results)
+                assert all(
+                    "index_version" not in result.validated for result in results
+                )
+                assert all(
+                    "id_mapping_version" not in result.validated for result in results
+                )
             finally:
                 await client.close()
+
+    asyncio.run(run())
+
+
+def test_packed_query_batch_roundtrip_preserves_logical_selection(monkeypatch):
+    async def run():
+        index, store, identity, query, scope = fixture()
+        other = replace(identity, kv_head=1)
+        record = index._entries[identity.entry_transfer_id]
+        other_query = record.vectors[(0, 1)].vectors[3:4].tolist()
+        async with shard_client(store) as http:
+            client = PVDShardSearchClient(str(http.make_url("")))
+            try:
+                plain = await client.search_many(
+                    ((identity, query, 1, scope), (other, other_query, 1, scope))
+                )
+                monkeypatch.setenv("PVD_PACKED_QUERY_BATCH", "1")
+                packed = await client.search_many(
+                    ((identity, query, 1, scope), (other, other_query, 1, scope))
+                )
+                assert [row.token_ids for row in packed] == [
+                    row.token_ids for row in plain
+                ]
+                assert [row.page_ids for row in packed] == [
+                    row.page_ids for row in plain
+                ]
+                assert [row.scores for row in packed] == [
+                    row.scores for row in plain
+                ]
+                assert [row.validated for row in packed] == [
+                    row.validated for row in plain
+                ]
+            finally:
+                await client.close()
+
+    asyncio.run(run())
+
+
+def test_packed_query_wire_rejects_malformed_and_nonfinite():
+    import base64
+
+    import numpy as np
+
+    valid = pack_query_rows(((0.25, -1.5),))
+    assert unpack_query_rows(valid).tolist() == [[0.25, -1.5]]
+    for changed in (
+        {**valid, "query_rows": True},
+        {**valid, "query_dim": 3},
+        {**valid, "query_data": valid["query_data"][:-1] + "!"},
+        {**valid, "query_encoding": "f32be-base64-v1"},
+        {**valid, "query_rows": 1000},
+        {
+            **valid,
+            "query_data": base64.b64encode(
+                np.array([[float("nan"), 0]], dtype="<f4").tobytes()
+            ).decode(),
+        },
+    ):
+        with pytest.raises(ValueError):
+            unpack_query_rows(changed)
+
+
+def test_packed_batch_http_rejects_ambiguous_or_corrupt_rows():
+    async def run():
+        import uuid
+
+        _, store, identity, query, scope = fixture()
+        async with shard_client(store) as http, ClientSession() as session:
+            client = PVDShardSearchClient(str(http.make_url("")), session=session)
+            item, _, _ = client._prepare_search(
+                identity, queries=query, top_k=1, scope=scope
+            )
+            original = item.pop("queries")
+            item.update(pack_query_rows(original))
+            batch = {
+                "batch_protocol": "pvd.search.batch.v1",
+                "batch_id": uuid.uuid4().hex,
+                "items": [item],
+            }
+            for change in (
+                {"queries": original},
+                {"query_rows": True},
+                {"query_dim": 100_001},
+                {"query_data": item["query_data"][:-1] + "!"},
+            ):
+                bad = {**batch, "items": [{**item, **change}]}
+                async with session.post(
+                    str(http.make_url("/internal/v1/indexes/search-batch")),
+                    json=bad,
+                ) as response:
+                    assert response.status == 400
+            await client.close()
 
     asyncio.run(run())
 
