@@ -1,0 +1,182 @@
+"""Deterministic, bounded fact-retrieval quality probe through a PVD Gateway.
+
+Run the same seed once with predictive sparse D and once with full-KV D.
+The report contains expected-answer checks and hashes, not raw model output.
+It does not establish general generation quality or retrieval recall.
+"""
+
+import argparse
+import concurrent.futures
+import hashlib
+import json
+import random
+import re
+import statistics
+import time
+import urllib.error
+import urllib.request
+
+ITEMS = (
+    "amber lantern",
+    "cobalt compass",
+    "cedar journal",
+    "silver kite",
+    "violet ticket",
+    "marble clock",
+    "copper flute",
+    "linen atlas",
+    "glass teapot",
+    "granite badge",
+    "willow brush",
+    "indigo ribbon",
+)
+CITIES = (
+    "Oslo",
+    "Quito",
+    "Kyoto",
+    "Nairobi",
+    "Lima",
+    "Tallinn",
+    "Accra",
+    "Porto",
+    "Seoul",
+    "Hanoi",
+    "Riga",
+    "Cusco",
+)
+
+
+def make_prompt(seed: str, case: int, *, records: int) -> tuple[str, str]:
+    """Make unique codes and distractors; ask for a fact near a random position."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", seed):
+        raise ValueError("seed must be a bounded filename-safe string")
+    if (
+        type(case) is not int
+        or case < 0
+        or type(records) is not int
+        or not 16 <= records <= 96
+    ):
+        raise ValueError("case and record count are out of bounds")
+    rng = random.Random(f"{seed}:{case}")
+    codes = rng.sample(range(10_000, 100_000), records)
+    chosen = rng.randrange(records)
+    lines = [
+        "Each archive record below has a distinct five-digit access code. "
+        "Use only the record ID asked for at the end."
+    ]
+    for index, code in enumerate(codes):
+        item = ITEMS[(index * 7 + case) % len(ITEMS)]
+        origin = CITIES[(index * 5 + case) % len(CITIES)]
+        destination = CITIES[(index * 3 + case + 1) % len(CITIES)]
+        lines.append(
+            f"Record ID R{index:03d}: the {item} travels from {origin} "
+            f"to {destination}; its access code is {code}."
+        )
+    lines.append(
+        f"What is the five-digit access code for record ID R{chosen:03d}? "
+        "Reply with that code first, without explaining your choice."
+    )
+    return "\n".join(lines), str(codes[chosen])
+
+
+def _request(url: str, text: str, expected: str, max_tokens: int, timeout: float):
+    body = json.dumps(
+        {
+            "text": text,
+            "stream": False,
+            "sampling_params": {
+                "temperature": 0,
+                "max_new_tokens": max_tokens,
+                "ignore_eos": True,
+            },
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        url.rstrip("/") + "/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started = time.perf_counter()
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        if response.status != 200:
+            raise ValueError(f"Gateway returned HTTP {response.status}")
+        raw = response.read((1 << 20) + 1)
+    if len(raw) > 1 << 20:
+        raise ValueError("Gateway response exceeds 1 MiB")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+        raise ValueError("Gateway returned no generated text")
+    output = payload["text"]
+    if len(output) > 100_000:
+        raise ValueError("Gateway generated unbounded text")
+    first_code = re.search(r"(?<!\d)\d{5}(?!\d)", output)
+    meta = payload.get("meta_info")
+    if not isinstance(meta, dict) or type(meta.get("prompt_tokens")) is not int:
+        raise ValueError("Gateway returned no token accounting")
+    return {
+        "input_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+        "expected_code": expected,
+        "first_code": first_code.group() if first_code is not None else None,
+        "first_code_matches": first_code is not None and first_code.group() == expected,
+        "prompt_tokens": meta["prompt_tokens"],
+        "completion_tokens": meta.get("completion_tokens"),
+        "elapsed_seconds": time.perf_counter() - started,
+    }
+
+
+def collect(
+    url: str, seed: str, *, cases: int, records: int, max_tokens: int, timeout: float
+):
+    if not url.startswith(("http://", "https://")) or not 1 <= cases <= 16:
+        raise ValueError("bounded Gateway URL and case count required")
+    if not 1 <= max_tokens <= 64 or not 0 < timeout <= 600:
+        raise ValueError("bounded generation and timeout required")
+    prompts = [make_prompt(seed, i, records=records) for i in range(cases)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, cases)) as pool:
+        results = list(
+            pool.map(
+                lambda pair: _request(url, pair[0], pair[1], max_tokens, timeout),
+                prompts,
+            )
+        )
+    return {
+        "schema": "pvd.fact_recall.v1",
+        "seed": seed,
+        "cases": cases,
+        "records_per_case": records,
+        "correct": sum(item["first_code_matches"] for item in results),
+        "median_elapsed_seconds": statistics.median(
+            item["elapsed_seconds"] for item in results
+        ),
+        "results": results,
+        "mode_verified_by_script": False,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gateway-url", required=True)
+    parser.add_argument("--seed", required=True)
+    parser.add_argument("--cases", type=int, default=6)
+    parser.add_argument("--records", type=int, default=48)
+    parser.add_argument("--max-new-tokens", type=int, default=20)
+    parser.add_argument("--timeout-seconds", type=float, default=180.0)
+    args = parser.parse_args()
+    try:
+        result = collect(
+            args.gateway_url,
+            args.seed,
+            cases=args.cases,
+            records=args.records,
+            max_tokens=args.max_new_tokens,
+            timeout=args.timeout_seconds,
+        )
+    except (ValueError, OSError, urllib.error.URLError) as exc:
+        parser.exit(1, f"fact-recall probe failed: {exc}\n")
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

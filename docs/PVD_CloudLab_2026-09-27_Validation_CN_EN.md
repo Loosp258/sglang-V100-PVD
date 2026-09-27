@@ -441,9 +441,40 @@ fixed two-client, three-round, 921-prompt-token replay, JSON took
 restart-separated sample and queueing variance do not establish a stable
 end-to-end win; full-KV Decode remains much faster.
 
+### 事实检索型 Prompt 的答案与延迟对照 / Fact-recall prompt A/B
+
+新增 `run_pvd_fact_recall.py`：固定 seed 生成 48 条带唯一五位代码的事实，
+每个 case 查询随机一条；只记录输入/输出哈希和生成文本中**第一个**五位
+代码是否正确，不保存原始生成文本。生成器和汇总的 5 项本地逻辑测试通过，
+Ruff E/F/I 通过。它是结构化事实检索负载，不能代表开放式回答质量。
+
+三机保持相同 P/V/Gateway、Qwen2.5-7B、`quality_20260927` seed，
+6 个不同 case、约 1413–1425 token Prompt、20 token 输出；D 分别以
+M=4/Top-4 packed-Q 稀疏预测和完整 KV 启动。两模式的第一个五位代码都
+**6/6 正确**；两模式各重跑一次，模式内六个输出哈希逐一稳定，模式间
+**0/6 完整输出哈希相同**。因此短重复输入的哈希一致不能推广到本负载；
+这也不等于目标代码答案错误。稀疏两次中位请求耗时约 **6.14/6.10 s**，
+完整 KV 两次约 **2.37/2.13 s**；脚本每轮最多两个并发请求，但没有
+同步起跑屏障，因此这些数值是有限样本的诊断，不是严格吞吐基准。
+当前稀疏路径仍显著慢于完整 KV。
+
+The deterministic fact-recall probe asks for one of 48 unique five-digit
+record codes in each of six distinct ~1413–1425-token prompts, with 20
+generated tokens. It checks the **first** five-digit code in the answer,
+records hashes but not raw generated text, and has five passing logic tests
+plus Ruff E/F/I. With P/V/Gateway fixed, sparse predictive M4/Top-4 and
+full-KV D each answered **6/6** codes correctly. Two runs per mode had
+identical hashes within that mode, but **none of the six full generated
+outputs matched across modes**. This shows that matching hashes on repeated
+short prompts are not a general quality guarantee; the requested fact still
+matched in this narrow task. Median request latencies were about
+**6.14/6.10 s** for sparse versus **2.37/2.13 s** for full KV. The probe
+uses at most two concurrent clients without a start barrier, so these are
+diagnostic timings, not a throughput claim.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
-2. **Quality:** the new real-Qwen target-Q test covers only one repeated-text prefix, two layers and eight GQA-head queries per length. It is not a broad recall distribution or generated-answer quality evidence. Compare generated outputs on varied, non-repetitive prompts and more query positions/layers before claiming quality.
+2. **Quality:** the real-Qwen target-Q recall test still covers one repeated-text prefix, two layers and eight GQA-head queries per length. The six new fact prompts answer their first code correctly in both modes, but all six full output hashes differ across sparse/full KV. Expand to a broad recall distribution, diverse natural prompts and answer-level metrics before claiming quality equivalence.
 3. **Scale:** this experiment is P TP1, V 2 ranks, D TP1, single rail, one or two clients, max 2304 sequence tokens. TP asymmetry, dual-rail, long-running load, TTL pressure, multi-D routing, and full GPU-memory safety have not been established here.
 4. **Cache:** the two-round same-seed A/B indicates lower capture time without changing these four outputs; repeat with matched warmups, more varied prompts and budget snapshots, then exercise concurrent close, cancellation and retraction. The earlier three-request run established only the narrow cleanup regression.
