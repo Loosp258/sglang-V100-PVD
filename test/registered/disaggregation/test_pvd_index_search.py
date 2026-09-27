@@ -49,7 +49,7 @@ def test_grouped_small_ip_search_matches_individual_searches():
         torch.testing.assert_close(scores, expected_scores, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("rows", [374, 512, 915, 2048])
+@pytest.mark.parametrize("rows", [374, 512, 915, 2048, 2095, 2304])
 def test_grouped_prompt_sized_ip_search_matches_individual(rows):
     candidate = backend()
     rng = torch.Generator().manual_seed(rows)
@@ -73,10 +73,10 @@ def test_grouped_prompt_sized_ip_search_matches_individual(rows):
 def test_grouped_prompt_rows_above_bound_fall_back():
     candidate = backend()
     indexes = tuple(
-        candidate.build(torch.ones(2049, 8), vector_space=SPACE, metric="ip")
+        candidate.build(torch.ones(2305, 8), vector_space=SPACE, metric="ip")
         for _ in range(2)
     )
-    with pytest.raises(IndexSearchError, match="at most 2048 rows"):
+    with pytest.raises(IndexSearchError, match="at most 2304 rows"):
         candidate.grouped_search_footprint(indexes=indexes, num_queries=1, top_k=1)
 
 
@@ -157,8 +157,11 @@ def test_grouped_topk_reduce_matches_stable_sort_on_cuda(monkeypatch):
     monkeypatch.setenv("PVD_GROUPED_EXACT_TOPK_REDUCE", "1")
     reduced = candidate.search_grouped(indexes, queries, top_k=4)
     torch.cuda.synchronize()
-    assert torch.cuda.max_memory_allocated() - before <= candidate.grouped_search_footprint(
-        indexes=indexes, num_queries=7, top_k=4
+    assert (
+        torch.cuda.max_memory_allocated() - before
+        <= candidate.grouped_search_footprint(
+            indexes=indexes, num_queries=7, top_k=4
+        )
     )
     for (want_rows, want_scores), (rows_out, scores_out) in zip(
         baseline, reduced, strict=True
@@ -169,7 +172,16 @@ def test_grouped_topk_reduce_matches_stable_sort_on_cuda(monkeypatch):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
 @pytest.mark.parametrize(
-    "rows, heads", [(17, 32), (374, 32), (512, 32), (915, 56), (2048, 56)]
+    "rows, heads",
+    [
+        (17, 32),
+        (374, 32),
+        (512, 32),
+        (915, 56),
+        (2048, 56),
+        (2095, 56),
+        (2304, 56),
+    ],
 )
 def test_grouped_small_ip_search_matches_individual_cuda(rows, heads):
     candidate = BruteForceIndexBackend(device="cuda:0")

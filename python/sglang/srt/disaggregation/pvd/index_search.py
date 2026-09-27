@@ -560,9 +560,11 @@ class BruteForceIndexBackend(IndexBackend):
         # indexes through dozens of individual searches despite the grouped
         # opt-in. Keep the cap bounded for this V100S experiment; larger
         # indexes still take the independently chunked individual path.
-        if first.metric != "ip" or count > 2048:
+        # The V100S serving fixture caps context at 2304 and its explicit
+        # grouped reservation covers this entire shape before launch.
+        if first.metric != "ip" or count > 2304:
             raise IndexSearchError(
-                "grouped exact search supports IP indexes of at most 2048 rows"
+                "grouped exact search supports IP indexes of at most 2304 rows"
             )
         if top_k > count:
             raise IndexSearchError("top_k exceeds indexed vector count")

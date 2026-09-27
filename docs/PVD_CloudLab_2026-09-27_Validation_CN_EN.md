@@ -759,6 +759,37 @@ Delivery took **0.094/0.090 s** and observed-boundary-to-install about
 next architectural performance task; shaving V kernel milliseconds alone
 cannot hide a one-second synchronous D capture.
 
+### 2304 行分组 exact 扩展 / Grouped exact at 2304 rows
+
+将显式启用的 grouped-exact IP 搜索上限从 2048 扩至 2304 行，
+覆盖本实验 2095–2113-token Prompt；超限仍退回逐 head 路径，
+预留显存仍按已有 `grouped_search_footprint` 检查。V100S 上
+真实 CUDA 数值与预算测试 **7 passed**，完整索引测试
+**115 passed, 2 skipped**，Ruff E/F/I 通过。该开关没有成为默认值。
+
+同一六请求、双客户端、同步发起、M16/Top-4 负载，分组路径
+首代码 **6/6 正确**，中位 **4.66 s**，总 wall **17.12 s**；
+再跑两条同样请求为 **2/2**、中位 **4.47 s**。对照逐 head
+exact 两轮分别为中位 **5.08/4.48 s**、总 wall
+**18.21/16.82 s**。分组 V search-batch 的一些暖态
+`manager_total` 在约 6–21 ms，亦出现约 48–53 ms；这组小样本
+**没有证明稳定的端到端加速**，更没有达到完整 KV 基线。
+两种路径输出哈希未发现变化。保留作为有界 opt-in 实验，优先
+解决 D 同步 probe 阻塞。
+
+The explicit grouped-exact IP row cap was raised from 2048 to 2304,
+covering this fixture's 2095–2113-token prompts. Larger indexes still
+fall back to per-head search and the existing footprint admission remains.
+On V100S, real CUDA parity/budget tests passed **7/7**, the complete index
+suite **115 passed, 2 skipped**, and Ruff E/F/I was clean. The path remains
+opt-in. For six synchronized two-client M16/Top-4 requests it was **6/6**
+correct, with **4.66 s** median latency and **17.12 s** total wall time;
+a two-request repeat was **2/2**, median **4.47 s**. Per-head exact control
+replays were **5.08/4.48 s** median and **18.21/16.82 s** total wall time.
+Warm grouped V batches often spent about 6–21 ms in the manager, but some
+spent 48–53 ms. This small experiment does **not** establish a reliable
+end-to-end gain or match full-KV latency; output hashes did not change.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
