@@ -136,6 +136,20 @@ case "$role" in
   d)
     require_free_port 30003
     require_model "$model"
+    d_base_gpu=1
+    d_draft_device=cuda:1
+    case "${PVD_PROBE_SIDECAR:-0}" in
+      0) ;;
+      1)
+        # Expose only physical GPU 1 to the committed D Scheduler. Its child
+        # sidecar is separately restricted to physical GPU 0 by the strict
+        # probe_sidecar config; both processes then address their GPU as 0.
+        export CUDA_VISIBLE_DEVICES=1
+        d_base_gpu=0
+        d_draft_device=cuda:0
+        ;;
+      *) echo 'PVD_PROBE_SIDECAR must be 0 or 1' >&2; exit 2 ;;
+    esac
     refresh_interval="${PVD_REFRESH_INTERVAL:-4}"
     draft_predict_tokens="${PVD_DRAFT_PREDICT_TOKENS:-2}"
     retrieval_top_k="${PVD_RETRIEVAL_TOP_K:-4}"
@@ -173,10 +187,15 @@ case "$role" in
           echo "missing predictive serving config: $limits" >&2
           exit 2
         fi
+        if [[ "${PVD_PROBE_SIDECAR:-0}" == 1 ]] &&
+           ! jq -e '.probe_sidecar != null' "$limits" >/dev/null; then
+          echo 'PVD_PROBE_SIDECAR requires a probe_sidecar limits object' >&2
+          exit 2
+        fi
         predictive_args=(
           --pvd-draft-model-path "$draft"
           --pvd-draft-revision 7ae557604adf67be50417f59c2c2f167def9a775
-          --pvd-draft-device cuda:1 --pvd-draft-mem-fraction-static 0.1
+          --pvd-draft-device "$d_draft_device" --pvd-draft-mem-fraction-static 0.1
           --pvd-draft-scratch-budget-bytes 268435456
           --pvd-draft-persistent-budget-bytes 2147483648
           --pvd-draft-predict-tokens "$draft_predict_tokens"
@@ -194,7 +213,7 @@ case "$role" in
     esac
     nohup setsid "$python" -m sglang.launch_server \
       --model-path "$model" --device cuda --dtype float16 \
-      --tp-size 1 --base-gpu-id 1 --page-size 1 \
+      --tp-size 1 --base-gpu-id "$d_base_gpu" --page-size 1 \
       --attention-backend torch_native --host "$d_ip" --port 30003 \
       --disaggregation-mode decode --disaggregation-topology pvd \
       --pvd-vector-coordinator-url "http://$v_ip:9100" \

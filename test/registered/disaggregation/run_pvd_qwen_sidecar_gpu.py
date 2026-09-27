@@ -31,6 +31,7 @@ def main(argv=None):
     parser.add_argument("--probe-budget-bytes", type=int, required=True)
     parser.add_argument("--probe-transient-bytes-bound", type=int, required=True)
     parser.add_argument("--reply-budget-bytes", type=int, required=True)
+    parser.add_argument("--max-connections", type=int, default=4)
     args = parser.parse_args(argv)
     root = Path(args.socket_dir)
     if (
@@ -41,6 +42,7 @@ def main(argv=None):
         or not args.target_model_id.strip()
         or not root.is_dir()
         or root.is_symlink()
+        or not 1 <= args.max_connections <= 8
     ):
         parser.error("bounded model, peer and private socket directory required")
     for name in (
@@ -113,8 +115,10 @@ def main(argv=None):
                 weights_sha256=identity.weights_sha256,
                 tokenizer_sha256=identity.tokenizer_sha256,
                 handler=handler,
-                reply_budget=TransferBudget(args.reply_budget_bytes, 1),
-                max_connections=2,
+                reply_budget=TransferBudget(
+                    args.reply_budget_bytes, args.max_connections
+                ),
+                max_connections=args.max_connections,
             ).start()
             try:
                 print(

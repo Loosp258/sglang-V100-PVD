@@ -347,6 +347,43 @@ def test_unix_server_admits_and_refunds_reply_budget(socket_dir):
     asyncio.run(run())
 
 
+def test_two_waiting_sidecar_requests_hold_distinct_reply_reservations(socket_dir):
+    async def run():
+        release_first = asyncio.Event()
+        entered = asyncio.Event()
+        budget = TransferBudget(1 << 20, 2)
+
+        async def handler(bound):
+            if not entered.is_set():
+                entered.set()
+                await release_first.wait()
+            return reply_for(bound)
+
+        service = await server(socket_dir, handler, reply_budget=budget).start()
+
+        async def exchange():
+            async with client(socket_dir).request(ticket()) as rows:
+                assert rows
+
+        try:
+            first = asyncio.create_task(exchange())
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            second = asyncio.create_task(exchange())
+            for _ in range(100):
+                if budget.snapshot()["reservations"] == 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert budget.snapshot()["reservations"] == 2
+            release_first.set()
+            await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+            assert budget.snapshot()["reservations"] == 0
+        finally:
+            release_first.set()
+            await service.aclose()
+
+    asyncio.run(run())
+
+
 def test_unix_server_refuses_capacity_before_handler(socket_dir):
     async def run():
         called = []

@@ -249,6 +249,8 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                     str(limits.probe_transient_bytes_bound),
                     "--reply-budget-bytes",
                     str(sidecar_config.reply_budget_bytes),
+                    "--max-connections",
+                    str(min(scheduler.max_running_requests, 8)),
                 ],
                 checkpoint=checkpoint,
                 target_model_id=args.pvd_retrieval_vector_space,

@@ -206,3 +206,15 @@ client/checkpoint 经 waiting-queue admission 交给 refresh driver，
 当前第一版**仍在 D 正式进程加载本地 draft**，因此这一接线只移走
 refresh Q 的计算位置，暂不节约该 draft 的 GPU1 常驻显存；性能
 是否改善必须用同条件工作负载测量，不可根据结构推断。
+
+三机首次 opt-in 验证（未完成并发验收）：隔离工作树
+`pvd-sidecar-88c72ed79` 上 P/V/D/Gateway 均启动，D 正式模型位于
+物理 GPU1，sidecar 目标+draft 位于物理 GPU0；首次 104-token/12-token
+请求完整生成并发生两次 V search/sparse delivery，但冷 Triton/Q
+编译使总时长 **65.88 s**。随后 103-token/20-token 的单客户端三轮
+为 **2.67/3.07/2.88 s**，只作同模式观察，尚未与 full-KV 同输入
+对照。双客户端首轮出现一路 **5/20 token 后 abort**，因此不能宣称
+并发通过。检查到实验 sidecar 服务端的回复预算仅允许 1 个在途、
+连接上限为 2；现已改为与 D 的显式请求上限对齐，并增加两个并发
+回复预算预留的真 Unix socket 回归。容量是否为此次 abort 的唯一
+原因尚未证明，须复跑并读取诊断日志。

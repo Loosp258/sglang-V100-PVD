@@ -147,6 +147,7 @@ def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(
         assert kwargs["cuda_visible_devices"] == "0"
         assert kwargs["target_model_id"] == "target-qwen"
         assert args[args.index("--model-path") + 1] == str(tmp_path)
+        assert args[args.index("--max-connections") + 1] == "2"
         return fake_sidecar
 
     monkeypatch.setattr(startup, "launch_probe_sidecar", launch)
