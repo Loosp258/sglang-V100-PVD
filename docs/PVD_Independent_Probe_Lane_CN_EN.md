@@ -91,3 +91,11 @@ ticket nonce 至其 deadline，拒绝重复提交，记录数设上限且过期�
 这还不是 GPU0 模型显存预算，也不能代替服务端队列预算。PID 绑定是
 本机进程身份校验，不是远端认证；目前仍未启动 GPU0 模型进程，
 也未把 D Scheduler 请求送入此通道。
+
+检索接入检查点 / Search-entry checkpoint: `ProbeSearchSession.prepare_from_lane`
+现在可在回复预算作用域内接收经过 Unix 协议验证的 CPU Q，重验
+window、deadline、Entry、模型空间、RoPE、layer/Q-head/GQA 和维度，
+然后进入原有 `search()` / `take_selection()` 逻辑检索 V。使用假
+sidecar 与真实 V HTTP/exact index 的测试确认本地 draft/target probe
+没有被调用；连同既有 probe-search 回归共 **69 passed**。这仍不包含
+GPU0 模型执行、Scheduler 异步派发或与正式 Decode 的计算重叠。

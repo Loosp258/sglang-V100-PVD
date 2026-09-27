@@ -21,6 +21,7 @@ from sglang.srt.disaggregation.pvd.prediction import (
     CommittedPrefix,
     PredictionConfigError,
     PredictionPipeline,
+    QueryVectors,
 )
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED, QueryHeadMapping
@@ -257,7 +258,8 @@ class ProbeSearchSession:
             or tuple(sorted(set(query_positions))) != query_positions
         ):
             raise ValueError(
-                "query positions must be 1..64 distinct ascending positions within the declared query source"
+                "query positions must be 1..64 distinct ascending positions "
+                "within the declared query source"
             )
         self._observed = prefix.committed_position
         window = ProbeWindow(
@@ -410,7 +412,8 @@ class ProbeSearchSession:
                         )
                     ):
                         raise ValueError(
-                            "probe requires CPU float Q [positions, query_heads, head_dim]"
+                            "probe requires CPU float Q "
+                            "[positions, query_heads, head_dim]"
                         )
                     local_head = route.query_head - query.head_start
                     if not 0 <= local_head < query.head_count:
@@ -428,6 +431,114 @@ class ProbeSearchSession:
                     )
                     prepared.append(PreparedProbeQuery(route, query.version, rows))
             self._match(window)
+            result = PreparedProbeSearch(window, tuple(prepared))
+            self._prepared = result
+            return result
+        except BaseException:
+            if self._pending is window:
+                self.invalidate()
+            raise
+
+    def prepare_from_lane(
+        self,
+        window: ProbeWindow,
+        ticket,
+        queries,
+        *,
+        routes: tuple[ProbeSearchRoute, ...],
+        head_mapping: QueryHeadMapping,
+    ) -> PreparedProbeSearch:
+        """Adopt only a fully verified private-lane Q while its budget is held.
+
+        The caller must invoke this inside ``ProbeLaneUnixClient.request`` and
+        keep that scope open through search/selection consumption. This method
+        does not own the sidecar, start an asynchronous refresh or install KV.
+        """
+        from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
+            ProbeLaneTicket,
+        )
+
+        self._match(window)
+        if self._prepared is not None:
+            raise ValueError("window was already prepared")
+        try:
+            if (
+                not isinstance(ticket, ProbeLaneTicket)
+                or ticket.window is not window
+                or time.monotonic() >= ticket.deadline_monotonic
+                or not isinstance(head_mapping, QueryHeadMapping)
+            ):
+                raise StaleProbeSearch("foreign or expired probe lane ticket")
+            if (
+                not isinstance(routes, tuple)
+                or not routes
+                or len(routes) * len(window.query_positions) > MAX_PREPARED_QUERY_ROWS
+                or any(not isinstance(route, ProbeSearchRoute) for route in routes)
+                or not isinstance(queries, tuple)
+                or len(queries) != len(ticket.layers)
+                or ticket.layers != tuple(sorted({r.identity.layer for r in routes}))
+            ):
+                raise ValueError("private lane route/Q coverage is incomplete")
+            by_layer = {}
+            for layer, query in zip(ticket.layers, queries, strict=True):
+                if not isinstance(query, QueryVectors):
+                    raise TypeError("private lane requires verified QueryVectors")
+                tensor = query.vectors
+                if (
+                    query.layer != layer
+                    or query.vector_space != ticket.target_model_id
+                    or query.version != f"{window.prefix.version}:probe:{ticket.nonce}"
+                    or query.request_id != window.prefix.request_id
+                    or query.prefix_version != window.prefix.version
+                    or query.positional_encoding != ROPE_APPLIED
+                    or query.positions != window.query_positions
+                    or query.valid_length != len(window.query_positions)
+                    or query.head_start != ticket.head_start
+                    or query.head_count != ticket.head_count
+                    or not isinstance(tensor, torch.Tensor)
+                    or tensor.device.type != "cpu"
+                    or tensor.dtype != torch.float32
+                    or tensor.requires_grad
+                    or tuple(tensor.shape)
+                    != (
+                        len(window.query_positions),
+                        ticket.head_count,
+                        ticket.head_dim,
+                    )
+                    or not torch.isfinite(tensor).all()
+                ):
+                    raise ValueError("private lane Q identity or shape mismatch")
+                by_layer[layer] = query
+            prepared = []
+            seen = set()
+            for route in routes:
+                if not isinstance(route, ProbeSearchRoute):
+                    raise TypeError("explicit ProbeSearchRoute required")
+                identity = route.identity
+                key = (identity.layer, route.query_head)
+                if (
+                    key in seen
+                    or identity.entry_transfer_id != window.entry_transfer_id
+                    or identity.vector_space != ticket.target_model_id
+                    or identity.positional_encoding != ROPE_APPLIED
+                    or head_mapping.kv_head_for(route.query_head) != identity.kv_head
+                    or route.scope.head_dim != ticket.head_dim
+                    or not ticket.head_start
+                    <= route.query_head
+                    < ticket.head_start + ticket.head_count
+                ):
+                    raise ValueError("private lane route identity or head mismatch")
+                seen.add(key)
+                query = by_layer[identity.layer]
+                local_head = route.query_head - ticket.head_start
+                rows = tuple(
+                    tuple(float(value) for value in query.vectors[index, local_head])
+                    for index in range(len(window.query_positions))
+                )
+                prepared.append(PreparedProbeQuery(route, query.version, rows))
+            self._match(window)
+            if time.monotonic() >= ticket.deadline_monotonic:
+                raise StaleProbeSearch("private lane Q expired during preparation")
             result = PreparedProbeSearch(window, tuple(prepared))
             self._prepared = result
             return result
@@ -577,7 +688,9 @@ class ProbeSearchSession:
                         call = client.search_many(requests)
                         if index_ready_wait_seconds:
                             try:
-                                replies = await asyncio.wait_for(call, timeout=remaining)
+                                replies = await asyncio.wait_for(
+                                    call, timeout=remaining
+                                )
                             except asyncio.TimeoutError as exc:
                                 raise TimeoutError(
                                     "V index readiness deadline expired"
@@ -590,7 +703,10 @@ class ProbeSearchSession:
                             raise
                         await asyncio.sleep(min(0.2, remaining))
                     else:
-                        if index_ready_wait_seconds and time.monotonic() >= ready_deadline:
+                        if (
+                            index_ready_wait_seconds
+                            and time.monotonic() >= ready_deadline
+                        ):
                             raise TimeoutError("V index readiness deadline expired")
                         break
                 self._match(window)
@@ -602,9 +718,16 @@ class ProbeSearchSession:
                         and (reply.index_version, reply.id_mapping_version) != versions
                     ):
                         raise ValueError("V batch reply identity or version changed")
-                if versions is None and len(
-                    {(reply.index_version, reply.id_mapping_version) for reply in replies}
-                ) != 1:
+                if (
+                    versions is None
+                    and len(
+                        {
+                            (reply.index_version, reply.id_mapping_version)
+                            for reply in replies
+                        }
+                    )
+                    != 1
+                ):
                     raise ValueError("V batch reply identity or version changed")
                 return tuple(zip(indices, replies, strict=True))
 
@@ -653,7 +776,9 @@ class ProbeSearchSession:
                     for (source, (indices, _)), answer in zip(
                         seed_calls.items(), seed_replies, strict=True
                     ):
-                        replies = answer if len(indices) >= 2 else ((indices[0], answer),)
+                        replies = (
+                            answer if len(indices) >= 2 else ((indices[0], answer),)
+                        )
                         for index, reply in replies:
                             results[index] = reply
                         reply = replies[0][1]
