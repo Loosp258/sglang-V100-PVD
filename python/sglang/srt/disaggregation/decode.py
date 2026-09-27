@@ -1619,6 +1619,11 @@ class SchedulerDisaggregationDecodeMixin:
         for req in reqs:
             if req.finished():
                 continue
+            logger.warning(
+                "PVD CUDA Decode abort request_id=%s reason=%s",
+                req.rid,
+                str(reason)[:512],
+            )
             prepare_abort(
                 req,
                 f"PVD CUDA Decode stopped: {reason}",
