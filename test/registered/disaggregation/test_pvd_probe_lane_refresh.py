@@ -7,6 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
 from pvd_controlled_prefetch import ControlledFixture
 from sglang.srt.disaggregation.pvd.probe_lane_identity import (
     ProbeLaneCheckpointIdentity,
@@ -20,19 +21,22 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_controlled_prefetch import components
 
 
-def test_private_q_lane_runs_existing_v_search_and_sparse_install(caplog):
+@pytest.mark.parametrize("boundary_start", [False, True])
+def test_private_q_lane_runs_existing_v_search_and_sparse_install(
+    caplog, boundary_start
+):
     caplog.set_level(
         "INFO", logger="sglang.srt.disaggregation.pvd.cpu_prefetch_request"
     )
 
     async def run():
         fixture = ControlledFixture(*components())
-        prefix = fixture.refresh_prefix(3)
+        prefix = fixture.refresh_prefix(4 if boundary_start else 3)
         checkpoint = ProbeLaneCheckpointIdentity("a" * 64, "b" * 64, 100, 10)
         called = []
 
         def handler(bound):
-            called.append(bound.nonce)
+            called.append((bound.nonce, bound.window.query_source))
             source = fixture.request.pipeline.probe._queries(
                 bound.window.prefix, bound.window.query_positions
             )
@@ -77,7 +81,7 @@ def test_private_q_lane_runs_existing_v_search_and_sparse_install(caplog):
                 async with fixture.clients() as clients:
                     epoch = await fixture.request.refresh(
                         prefix,
-                        query_positions=(len(prefix.tokens),),
+                        query_positions=(len(prefix.tokens) - int(boundary_start),),
                         clients=clients,
                         pack_source=fixture.pack_source,
                         lane_client=lane,
@@ -87,6 +91,9 @@ def test_private_q_lane_runs_existing_v_search_and_sparse_install(caplog):
                     assert epoch.target_tokens == 4
                     assert fixture.request.try_install({0: 4, 1: 4})
                     assert len(called) == 1
+                    assert called[0][1] == (
+                        "committed" if boundary_start else "predicted"
+                    )
                     assert fixture.request.pipeline.provider.calls == []
                     assert fixture.request.pipeline.probe.calls == []
                     assert len(fixture.packed_specs) == 4
@@ -98,6 +105,8 @@ def test_private_q_lane_runs_existing_v_search_and_sparse_install(caplog):
 
     asyncio.run(run())
     assert any(
-        "query_source=predicted probe_source=private_lane" in record.message
+        "query_source="
+        + ("committed" if boundary_start else "predicted")
+        + " probe_source=private_lane" in record.message
         for record in caplog.records
     )

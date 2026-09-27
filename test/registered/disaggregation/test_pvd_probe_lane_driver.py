@@ -5,6 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
 import torch
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import TargetExecutionArbiter
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
@@ -24,7 +25,10 @@ from test_pvd_cuda_refresh_driver import pump, req
 from test_pvd_cuda_sparse_delivery import case, complete
 
 
-def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch):
+@pytest.mark.parametrize("ending", ["install", "cancel", "retract"])
+def test_driver_releases_target_arbiter_while_private_q_is_pending(
+    monkeypatch, ending
+):
     monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", "4")
     driver = CUDARefreshDriver(
         TargetExecutionArbiter(), max_requests=2, max_prefix_tokens=64
@@ -69,6 +73,7 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch):
                 queries,
             )
 
+        server_budget = TransferBudget(1 << 20, 1)
         service = ProbeLaneUnixServer(
             directory,
             "probe.sock",
@@ -77,7 +82,7 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch):
             weights_sha256=checkpoint.weights_sha256,
             tokenizer_sha256=checkpoint.tokenizer_sha256,
             handler=handler,
-            reply_budget=TransferBudget(1 << 20, 1),
+            reply_budget=server_budget,
         )
         driver._loop.run_until_complete(service.start())
         lane = ProbeLaneUnixClient(
@@ -102,17 +107,31 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch):
             assert captures == []
             formal_forward = driver.arbiter.acquire()
             driver.arbiter.release(formal_forward)
+            if ending == "cancel":
+                driver.cancel(request, "test cancellation")
+            elif ending == "retract":
+                request.is_retracted = True
+                driver.poll()
             release.set()
-            pump(driver, c, lambda: driver._records[request.rid].ready)
-            request.output_ids.append(6)
-            pump(
-                driver,
-                c,
-                lambda: control.group.coordinator.snapshot()["installed_tokens"] == 4,
-            )
+            if ending == "install":
+                pump(driver, c, lambda: driver._records[request.rid].ready)
+                request.output_ids.append(6)
+                pump(
+                    driver,
+                    c,
+                    lambda: control.group.coordinator.snapshot()["installed_tokens"]
+                    == 4,
+                )
+            else:
+                pump(driver, c, lambda: not driver._records)
+                assert control.group.coordinator.snapshot()["installed_tokens"] == 0
+                assert c.registry.snapshot() == {}
+                assert c.registry.budget.snapshot()["reservations"] == 0
+                assert c.sink.snapshot()["pending_rounds"] == 0
             assert captures == []
             assert not driver.arbiter.busy
             assert lane.reply_budget.snapshot()["reservations"] == 0
+            assert server_budget.snapshot()["reservations"] == 0
         finally:
             release.set()
             driver.begin_shutdown()
