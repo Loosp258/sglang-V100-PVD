@@ -20,6 +20,9 @@ from sglang.srt.disaggregation.pvd.probe_search import ProbeWindow
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+MAX_LANE_PREFIX_TOKENS = 16384
+MAX_LANE_REPLY_BYTES = 16 * 1024 * 1024
+MAX_LANE_PREDICT_TOKENS = 32
 
 
 class ProbeLaneProtocolError(ValueError):
@@ -67,7 +70,11 @@ class ProbeLaneTicket:
         max_reply_bytes: int,
         deadline_monotonic: float,
     ) -> ProbeLaneTicket:
-        if not isinstance(window, ProbeWindow) or not window.prefix.tokens:
+        if (
+            not isinstance(window, ProbeWindow)
+            or not window.prefix.tokens
+            or len(window.prefix.tokens) > MAX_LANE_PREFIX_TOKENS
+        ):
             raise ProbeLaneProtocolError("nonempty immutable ProbeWindow required")
         if (
             not window.incarnation
@@ -77,6 +84,8 @@ class ProbeLaneTicket:
             or not window.query_positions
             or len(window.query_positions) > 64
             or tuple(sorted(set(window.query_positions))) != window.query_positions
+            or type(window.target_tokens) is not int
+            or window.target_tokens < window.prefix.committed_position
         ):
             raise ProbeLaneProtocolError("invalid window identity or positions")
         if not isinstance(target_model_id, str) or not target_model_id.strip():
@@ -89,6 +98,7 @@ class ProbeLaneTicket:
         if (
             not isinstance(layers, tuple)
             or not layers
+            or len(layers) > 128
             or any(type(layer) is not int or layer < 0 for layer in layers)
             or tuple(sorted(set(layers))) != layers
             or type(head_start) is not int
@@ -102,6 +112,8 @@ class ProbeLaneTicket:
         required_bytes = (
             len(layers) * len(window.query_positions) * head_count * head_dim * 4
         )
+        if max_reply_bytes > MAX_LANE_REPLY_BYTES:
+            raise ProbeLaneProtocolError("Q reply exceeds global byte bound")
         if required_bytes > max_reply_bytes:
             raise ProbeLaneProtocolError("Q reply exceeds admitted byte bound")
         if (
@@ -116,7 +128,9 @@ class ProbeLaneTicket:
         ):
             raise ProbeLaneProtocolError("committed Q must be inside the prefix")
         if window.query_source == "predicted" and any(
-            position < len(window.prefix.tokens) for position in window.query_positions
+            position < len(window.prefix.tokens)
+            or position >= len(window.prefix.tokens) + MAX_LANE_PREDICT_TOKENS
+            for position in window.query_positions
         ):
             raise ProbeLaneProtocolError("predicted Q must follow the prefix")
         return cls(
@@ -194,6 +208,7 @@ def verify_reply(
             not isinstance(vectors, torch.Tensor)
             or vectors.device.type != "cpu"
             or vectors.dtype != torch.float32
+            or vectors.requires_grad
             or tuple(vectors.shape)
             != (len(positions), ticket.head_count, ticket.head_dim)
             or not torch.isfinite(vectors).all()

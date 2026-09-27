@@ -67,3 +67,11 @@ compute overlap exists merely because the protocol types are present.
 post-RoPE、非有限/错 dtype/错位置的 Q，并复制为 D 自有 CPU
 tensor。V100S 环境的纯协议测试 **18 passed**，Ruff E/F/I 和
 格式检查通过。它尚未实现认证、IPC、模型执行或 Scheduler 接入。
+
+线格式检查点 / Wire checkpoint: `probe_lane_wire.py` 使用标准库
+JSON 元数据与定长二进制 FP32 Q 行，不新增 `msgpack` 依赖。
+Ticket 帧限制 256 KiB；回复原始 Q 最多 16 MiB，并限制元数据
+开销。解码拒绝重复 JSON key、非有限常量、超长/截断帧、错模型、
+错 nonce、缺层和错 Q 长度；数据验证后复制到 D 所有的 tensor。
+纯协议与编解码测试合计 **36 passed**，Ruff E/F/I 和格式通过。
+仍无 socket 连接、认证或实际独立模型执行。

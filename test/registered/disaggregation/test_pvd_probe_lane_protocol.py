@@ -132,6 +132,7 @@ def test_reply_rejects_missing_layer_nonfinite_or_wrong_device_dtype():
         torch.full((1, 2, 4), float("nan")),
         torch.ones((1, 2, 4), dtype=torch.float16),
         torch.ones((2, 2, 4)),
+        torch.ones((1, 2, 4), requires_grad=True),
     ):
         bad = dataclasses.replace(reply.queries[0], vectors=vectors)
         with pytest.raises(ProbeLaneProtocolError, match="malformed"):
@@ -157,6 +158,22 @@ def test_ticket_rejects_wrong_query_source_position_and_unpinned_model():
     with pytest.raises(ProbeLaneProtocolError, match="follow the prefix"):
         ProbeLaneTicket.issue(
             wrong,
+            target_model_id="target-checkpoint",
+            weights_sha256="a" * 64,
+            tokenizer_sha256="b" * 64,
+            layers=(0, 1),
+            head_start=2,
+            head_count=2,
+            head_dim=4,
+            max_reply_bytes=64,
+            deadline_monotonic=time.monotonic() + 30,
+        )
+    too_far = dataclasses.replace(
+        committed.window, query_source="predicted", query_positions=(35,)
+    )
+    with pytest.raises(ProbeLaneProtocolError, match="follow the prefix"):
+        ProbeLaneTicket.issue(
+            too_far,
             target_model_id="target-checkpoint",
             weights_sha256="a" * 64,
             tokenizer_sha256="b" * 64,
