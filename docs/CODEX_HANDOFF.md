@@ -266,7 +266,8 @@ opted into/verified separately.
    boundary fallback. Confirm no stale Q, no leaked reply budget and no
    abandoned RDMA destination/MR. The earlier one-stream abort must become
    attributable rather than merely disappearing after the bound increase.
-   **2026-09-27 progress (still open):** `d042ec364`/`dc9ccf227` add
+   **2026-09-27 fault gate verified; historical abort cause remains unknown:**
+   `d042ec364`/`dc9ccf227` add
    `probe_source=private_lane|inline` to D refresh timings, bounded categorical
    sidecar rejection forwarding and lifecycle logs. `1befeef2e`/`610b9fdb7`
    test two live replies plus a capacity refusal, boundary committed-prefix
@@ -284,10 +285,23 @@ opted into/verified separately.
    `decode_unavailable` at waiting admission in 1.95 s, before any refresh
    could install stale Q. Repeated exit logs in that run motivated
    `5ab196426`, which reports one exit per owner; its real-child test passed
-   **10 tests** with Ruff E/F/I clean. That last log-bound fix has not yet
-   been rerun on GPU. Both experiments were stopped; GPUs and target ports
-   returned to idle, and only their own empty socket directories were
-   removed. Two older empty `/tmp/pvd-probe-*` directories were preserved.
+   **10 tests** with Ruff E/F/I clean. At final `826fe46c7`, a warm 20-output
+   request completed, then a new 128-output request reached
+   `refresh_scheduled` and an established sidecar Unix connection. Killing
+   only that sidecar PID produced D's request-scoped
+   `probe_source=private_lane error_type=ProbeLaneProtocolError` failure before
+   boundary 4; there was no `refresh_ready` or installed boundary for that
+   request. Gateway returned 503 after D errors/retries. The exit was logged
+   once. V's two shards each reported zero transfer reservations, in-flight
+   and unknown transfers afterward; Entry records remained under the 300 s
+   TTL, so their mere presence is not evidence of a leak. The old aborted
+   stream cannot be assigned a unique historical cause because its rejection
+   detail was swallowed. The same capacity condition now reproduces with an
+   explicit `reply_capacity` category in deterministic tests. All three real
+   experiments were stopped; GPUs and target ports returned to idle, and
+   only their own sidecar socket paths were removed. Two older empty
+   `/tmp/pvd-probe-*` directories were preserved. No same-input baseline or
+   performance gain is claimed.
 3. **Run controlled A/B on the same exact inputs**: full Prompt KV, existing
    inline predictive path, and sidecar predictive path; 20 and 128 output
    tokens; short, ~1k and ~2k Prompt; 1/2/4 clients; repeated warmed trials
