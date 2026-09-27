@@ -53,6 +53,59 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
     def _drain_private(self):
         torch.cuda.synchronize(self.device)
 
+    @contextmanager
+    def _cooperative_step(self):
+        if self._quarantined or self._execution_held:
+            raise PredictionConfigError("cooperative probe is busy or quarantined")
+        if not self._execution_lock.acquire(blocking=False):
+            raise PredictionConfigError("target execution is busy")
+        self._execution_held = True
+        try:
+            with torch.cuda.device(self.device), torch.inference_mode():
+                yield
+        finally:
+            if not self._quarantined:
+                self._execution_lock.release()
+                self._execution_held = False
+
+    def capture_steps(self, prefix, prediction):
+        """Yield after each fenced private target-prefix forward.
+
+        The owner Scheduler may run its unchanged formal Decode batch between
+        yields. Closing this iterator retires any partly built private prefix.
+        """
+        branch = super().branch()
+        entered = False
+        steps = None
+        try:
+            with self._cooperative_step():
+                branch.__enter__()
+                entered = True
+                steps = self.capture_cached_steps(prefix, prediction)
+            while True:
+                with self._cooperative_step():
+                    try:
+                        next(steps)
+                    except StopIteration as finished:
+                        return finished.value
+                yield None
+        finally:
+            if entered:
+                if self._execution_held:
+                    # A failed CUDA cleanup retains the lease and budget.
+                    try:
+                        if steps is not None:
+                            steps.close()
+                    finally:
+                        branch.__exit__(None, None, None)
+                else:
+                    with self._cooperative_step():
+                        try:
+                            if steps is not None:
+                                steps.close()
+                        finally:
+                            branch.__exit__(None, None, None)
+
     def quarantine_query_copy(self):
         """A consumer cannot prove completion of a read from captured Q.
 

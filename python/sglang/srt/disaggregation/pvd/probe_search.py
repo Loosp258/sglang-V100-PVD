@@ -347,6 +347,40 @@ class ProbeSearchSession:
         in their branch scopes. No claim is made about CUDA RNG, GPU workspace,
         model fidelity or isolation of adapters that retain live external state.
         """
+        if not isinstance(pipeline, PredictionPipeline):
+            raise TypeError("explicit pipeline required")
+        branch = (
+            pipeline.committed_query_branch(window.prefix, window.query_positions)
+            if window.query_source == "committed"
+            else pipeline.query_branch(window.prefix)
+        )
+        return self._prepare_from_branch(
+            window, pipeline, routes=routes, head_mapping=head_mapping, branch=branch
+        )
+
+    def prepare_from_queries(
+        self,
+        window: ProbeWindow,
+        pipeline: PredictionPipeline,
+        queries: tuple,
+        *,
+        routes: tuple[ProbeSearchRoute, ...],
+        head_mapping: QueryHeadMapping,
+    ) -> PreparedProbeSearch:
+        """Validate Q returned by a detached prediction branch before search."""
+        if not isinstance(queries, tuple):
+            raise TypeError("completed query tuple required")
+        return self._prepare_from_branch(
+            window,
+            pipeline,
+            routes=routes,
+            head_mapping=head_mapping,
+            branch=nullcontext(queries),
+        )
+
+    def _prepare_from_branch(
+        self, window, pipeline, *, routes, head_mapping, branch
+    ) -> PreparedProbeSearch:
         self._match(window)
         if self._prepared is not None:
             raise ValueError("window was already prepared")
@@ -382,11 +416,6 @@ class ProbeSearchSession:
                     raise ValueError("duplicate layer/query-head route")
                 keys.add(key)
             prepared = []
-            branch = (
-                pipeline.committed_query_branch(window.prefix, window.query_positions)
-                if window.query_source == "committed"
-                else pipeline.query_branch(window.prefix)
-            )
             with self._prepare_scope(routes, window), branch as queries:
                 by_layer = {q.layer: q for q in queries}
                 for route in routes:

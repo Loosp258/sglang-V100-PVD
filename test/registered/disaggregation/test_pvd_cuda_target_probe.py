@@ -330,6 +330,47 @@ def test_cached_target_prefix_prefill_bounds_each_forward(monkeypatch):
     assert not c.probe._prefix_caches
 
 
+def test_cooperative_cached_probe_releases_target_between_prefix_forwards(monkeypatch):
+    monkeypatch.setattr(target_probe, "_TARGET_PREFIX_CHUNK_TOKENS", 4)
+    c = environment(monkeypatch, prefix_cache=True)
+    req = SimpleNamespace(rid="r")
+    c.probe.register_cached_request(req)
+    prefix = CommittedPrefix("r", tuple(range(1, 10)), 0, "version")
+    prediction = DraftPrediction("r", "version", (10, 11))
+    steps = c.probe.capture_steps(prefix, prediction)
+    for completed in range(1, 4):
+        next(steps)
+        assert len(c.forward_shapes) == completed
+        assert not c.lock.locked()
+        assert c.probe._active
+        # The ordinary formal batch may use the same target between steps.
+        assert c.lock.acquire(blocking=False)
+        c.lock.release()
+    with pytest.raises(StopIteration) as finished:
+        next(steps)
+    assert finished.value.value[0].positions == (9, 10)
+    assert len(c.forward_shapes) == 4
+    assert not c.lock.locked() and not c.probe._active
+    c.probe.retire_cached_request(req)
+
+
+def test_cancelled_cooperative_probe_retires_partial_private_prefix(monkeypatch):
+    monkeypatch.setattr(target_probe, "_TARGET_PREFIX_CHUNK_TOKENS", 4)
+    c = environment(monkeypatch, prefix_cache=True)
+    req = SimpleNamespace(rid="r")
+    c.probe.register_cached_request(req)
+    prefix = CommittedPrefix("r", tuple(range(1, 10)), 0, "version")
+    steps = c.probe.capture_steps(
+        prefix, DraftPrediction("r", "version", (10, 11))
+    )
+    next(steps)
+    steps.close()
+    assert not c.lock.locked() and not c.probe._active
+    assert c.probe._prefix_caches["r"].tokens == ()
+    assert c.budget.snapshot()["used_staging_bytes"] == 0
+    c.probe.retire_cached_request(req)
+
+
 def test_opt_in_probe_timeline_separates_setup_forward_and_retirement(
     monkeypatch, caplog
 ):

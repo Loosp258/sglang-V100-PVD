@@ -87,6 +87,31 @@ def test_refresh_phase_diagnostics_follow_actual_success(caplog):
     )
 
 
+def test_precomputed_prediction_queries_search_without_repeating_model_work():
+    async def run():
+        fixture = ControlledFixture(*components())
+        try:
+            async with fixture.clients() as clients:
+                prefix = fixture.refresh_prefix(3)
+                with fixture.request.pipeline.query_branch(prefix) as queries:
+                    pass
+                epoch = await fixture.request.refresh(
+                    prefix,
+                    query_positions=(len(prefix.tokens),),
+                    clients=clients,
+                    pack_source=fixture.pack_source,
+                    prepared_queries=queries,
+                )
+                assert epoch.target_tokens == 4
+                assert fixture.request.pipeline.provider.calls == [(prefix.request_id, 2)]
+                assert len(fixture.request.pipeline.probe.calls) == 1
+                assert fixture.request.try_install({0: 4, 1: 4})
+        finally:
+            fixture.close()
+
+    asyncio.run(run())
+
+
 class DelayedClient:
     def __init__(self, client):
         self.client = client

@@ -375,6 +375,12 @@ class _LlamaTargetProbeCore(TargetProbe):
                 self.budget.release(owner)
 
     def capture(self, prefix: CommittedPrefix, prediction: DraftPrediction):
+        tokens, cached = self._start_capture(prefix, prediction)
+        if cached is not None:
+            return self._forward_cached(prefix, prediction.tokens, self._state, cached)
+        return self._forward(tokens, self._state)
+
+    def _start_capture(self, prefix, prediction):
         self._require_main_thread()
         if not self._active or self._used:
             raise PredictionConfigError("capture requires an unused probe branch")
@@ -394,8 +400,8 @@ class _LlamaTargetProbeCore(TargetProbe):
             )
         if not self._tokens_valid(tokens):
             raise PredictionConfigError("probe token is outside the target vocabulary")
-        self._used = True
         cached = self._cached_record(prefix)
+        self._used = True
         self._state = PostRopeQueryCapture(
             self.config,
             prefix,
@@ -404,9 +410,16 @@ class _LlamaTargetProbeCore(TargetProbe):
             head_dim=self.head_dim,
             forward_start=len(prefix.tokens) if cached is not None else 0,
         )
-        if cached is not None:
-            return self._forward_cached(prefix, prediction.tokens, self._state, cached)
-        return self._forward(tokens, self._state)
+        return tokens, cached
+
+    def capture_cached_steps(self, prefix, prediction):
+        """Start a private cached capture whose prefix forwards can yield."""
+        _, cached = self._start_capture(prefix, prediction)
+        if cached is None:
+            raise PredictionConfigError(
+                "cooperative target capture requires reserved private prefix cache"
+            )
+        return self._forward_cached_steps(prefix, prediction.tokens, self._state, cached)
 
     def capture_committed(self, prefix, positions):
         self._require_main_thread()
@@ -664,11 +677,20 @@ class _LlamaTargetProbeCore(TargetProbe):
 
     @torch.inference_mode()
     def _forward_cached(self, prefix, predicted_tokens, capture, record):
+        steps = self._forward_cached_steps(prefix, predicted_tokens, capture, record)
+        while True:
+            try:
+                next(steps)
+            except StopIteration as finished:
+                return finished.value
+
+    def _forward_cached_steps(self, prefix, predicted_tokens, capture, record):
         """Extend only authoritative tokens, then discard speculative KV.
 
         This is only reachable for a request explicitly registered by the
         CUDA refresh driver with a separate persistent budget. Each record's
         pools and mapping are private; neither can alias a committed Req.
+        A yielded step has completed its CUDA fence and left ForwardContext.
         """
         from sglang.srt.compilation.piecewise_context_manager import get_forward_context
         from sglang.srt.disaggregation.pvd.draft_forward_adapter import (
@@ -785,6 +807,7 @@ class _LlamaTargetProbeCore(TargetProbe):
                         start=committed_start + offset,
                         rows=rows[offset : offset + len(chunk)],
                     )
+                    yield None
                 record.tokens = prefix.tokens
                 record.version = prefix.version
                 record.committed_position = prefix.committed_position

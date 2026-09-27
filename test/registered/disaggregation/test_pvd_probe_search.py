@@ -122,6 +122,45 @@ def prepare(session, window, pipeline, route, heads=1):
     )
 
 
+def test_completed_branch_queries_keep_request_identity_and_skip_second_probe():
+    _, _, session, window, pipeline, probe, route = setup()
+    vector = torch.tensor(probe.vector, dtype=torch.float32)
+    query = QueryVectors(
+        vector_space=pipeline.probe_config.target_model_id,
+        version="completed-branch",
+        layer=0,
+        head_start=0,
+        head_count=1,
+        positions=(4, 5),
+        valid_length=2,
+        vectors=torch.stack((vector, vector)).unsqueeze(1),
+        prefix_version=window.prefix.version,
+        positional_encoding="rope_applied",
+        request_id=window.prefix.request_id,
+    )
+    prepared = session.prepare_from_queries(
+        window,
+        pipeline,
+        (query,),
+        routes=(route,),
+        head_mapping=QueryHeadMapping(1, 1),
+    )
+    assert prepared.queries[0].query_version == "completed-branch"
+    assert prepared.queries[0].rows == (tuple(float(v) for v in vector),)
+    assert probe.closed == 0
+
+    _, _, stale_session, stale_window, pipeline, probe, route = setup()
+    with pytest.raises(ValueError, match="prefix identity"):
+        stale_session.prepare_from_queries(
+            stale_window,
+            pipeline,
+            (replace(query, prefix_version="other-prefix"),),
+            routes=(route,),
+            head_mapping=QueryHeadMapping(1, 1),
+        )
+    assert probe.closed == 0
+
+
 def test_full_model_route_count_is_bounded_by_rows_not_sixty_four():
     _, _, session, window, pipeline, probe, route = setup(heads=784)
     probe.budget = TransferBudget(131072, 1)

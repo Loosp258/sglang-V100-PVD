@@ -113,6 +113,7 @@ class _PrefetchRequestCore:
         lane_client=None,
         lane_checkpoint=None,
         lane_deadline_monotonic=None,
+        prepared_queries=None,
     ):
         """Predict ahead of boundary; a first start AT it uses committed Q.
 
@@ -127,6 +128,10 @@ class _PrefetchRequestCore:
             raise ValueError("choose exactly one local source or owned Delivery sink")
         if self._active is not None or self._tasks:
             raise ValueError("one outstanding refresh per request")
+        if prepared_queries is not None and (
+            lane_client is not None or execution_scope is not None
+        ):
+            raise ValueError("completed local queries exclude lane and inline capture")
         if lane_client is not None:
             from sglang.srt.disaggregation.pvd.probe_lane_identity import (
                 ProbeLaneCheckpointIdentity,
@@ -183,7 +188,15 @@ class _PrefetchRequestCore:
                 start = len(routes)
                 routes.extend(self._routes[rank])
                 partitions[rank] = tuple(range(start, len(routes)))
-            if lane_client is None:
+            if prepared_queries is not None:
+                prepared = self._session.prepare_from_queries(
+                    window,
+                    self.pipeline,
+                    prepared_queries,
+                    routes=tuple(routes),
+                    head_mapping=self.mapping,
+                )
+            elif lane_client is None:
                 # The scheduler-owned scope covers synchronous draft/probe
                 # only; it MUST NOT remain held over HTTP waits.
                 with nullcontext() if execution_scope is None else execution_scope():
@@ -271,7 +284,11 @@ class _PrefetchRequestCore:
                 "union_seconds=%.6f delivery_seconds=%.6f "
                 "total_seconds=%.6f",
                 query_source,
-                "private_lane" if lane_client is not None else "inline",
+                (
+                    "precomputed"
+                    if prepared_queries is not None
+                    else "private_lane" if lane_client is not None else "inline"
+                ),
                 len(self._routes),
                 capture_seconds,
                 search_seconds,
@@ -290,7 +307,11 @@ class _PrefetchRequestCore:
                     "probe_source=%s error_type=%s",
                     prefix.request_id,
                     query_source,
-                    "private_lane" if lane_client is not None else "inline",
+                    (
+                        "precomputed"
+                        if prepared_queries is not None
+                        else "private_lane" if lane_client is not None else "inline"
+                    ),
                     type(exc).__name__,
                 )
             except Exception:
