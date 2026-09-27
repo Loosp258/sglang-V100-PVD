@@ -23,7 +23,7 @@ were stopped. A final three-node check found no remaining GPU compute
 processes or PVD listeners on ports 30002/30003/9100/9300/9301/8001;
 model files, isolated environments, validation worktrees and logs were kept.
 
-Run roles with `bash test/registered/disaggregation/cloudlab_pvd_new_lease.sh {v|p|d|gateway}` from each role's validation worktree. Start V, P, D, then Gateway, checking `http://10.10.1.2:9100/health`, P/D `/health`, and Gateway `/v1/models`. On D, `PVD_MODE=predictive` is the default; `PVD_MODE=full` is the full-KV control. On V, `PVD_PROMPT_INDEX_EXACT_MAX_ROWS` defaults to 512 for this V100S launcher and can be set to 64 to reproduce the first CAGRA experiment. The launcher refuses a mismatched checkout HEAD, inactive rail, occupied port, or incomplete local model. Treat its P/D/V/Gateway process groups as experiment-owned; inspect the exact PID/PGID before stopping them. Logs are under each node's `validation/logs/` and are not in Git.
+Run roles with `bash test/registered/disaggregation/cloudlab_pvd_new_lease.sh {v|p|d|gateway}` from each role's validation worktree. Start V, P, D, then Gateway, checking `http://10.10.1.2:9100/health`, P/D `/health`, and Gateway `/v1/models`. On D, `PVD_MODE=predictive` is the default; `PVD_MODE=full` is the full-KV control. On V, `PVD_PROMPT_INDEX_EXACT_MAX_ROWS` now defaults to 2304 for this **2304-context V100S launcher only**; set it to 64 to reproduce the first CAGRA experiment, or 2048 to exercise CAGRA on a 2095-row Entry. The launcher refuses a mismatched checkout HEAD, inactive rail, occupied port, or incomplete local model. Treat its P/D/V/Gateway process groups as experiment-owned; inspect the exact PID/PGID before stopping them. Logs are under each node's `validation/logs/` and are not in Git.
 
 ## 实测 / Observations
 
@@ -661,8 +661,9 @@ exact 索引构建合计分别约 **0.053/0.035 s**。随后六个不同
 exact 稀疏 M16 与完整 KV 的完整输出 **3/6** 哈希相同。
 这些小样本说明：短寿命 Entry 强制冷建 CAGRA 是严重尾延迟，
 但 exact 规避冷建图后仍未证明稀疏路径更快。静态 2304 阈值
-不解决更长索引的准入，也可能增加多 Entry 常驻内存；没有修改
-服务端默认值。
+不解决更长索引的准入，也可能增加多 Entry 常驻内存；只更新了
+此 2304-context CloudLab 实验启动器的默认阈值和 index 预算
+（512→2304、1→2 GiB），没有修改通用 V 服务端默认值。
 
 For a 2095-token prompt just above V's current 2048-row exact threshold,
 the first native CAGRA run answered correctly but took **26.60 s**;
@@ -676,7 +677,25 @@ under the same P/V/Gateway answered **6/6** in **2.26/2.29 s** median;
 only **3/6** complete outputs matched exact sparse M16. Exact-first
 admission is clearly preferable for these short-lived Entries, but the
 static threshold does not solve longer indexes or prove sustainable memory
-pressure, and no serving default was changed.
+pressure. Only this 2304-context CloudLab launcher's defaults were changed
+(exact threshold 512→2304, index budget 1→2 GiB); the general V server
+defaults and explicit native-CAGRA overrides were not changed.
+
+更新后的隔离 V 启动器通过 `bash -n`，在不提供阈值/预算环境变量时，
+实测进程参数为 `--prompt-index-exact-max-rows 2304`、
+`--prompt-index-budget-bytes 2147483648`；新的 2095-token Entry 在
+两 rank 均报告 `path=exact`、建索引约 0.053/0.035 秒。此时 D
+切到完整 KV 做启动器冒烟验证，一条请求首代码正确、耗时约 2.19 秒；
+这不是稀疏模式的额外性能样本。该默认仅适用于这份 CloudLab V100S
+启动脚本，用户仍可显式降低阈值验证原生 CAGRA。
+
+The updated isolated V launcher passed `bash -n`. Without threshold or
+budget environment overrides, the live process used exact-max-rows 2304
+and index-budget-bytes 2147483648; a new 2095-token Entry reported
+`path=exact` on both ranks with ~0.053/0.035-second builds. D was in
+full-KV mode for this launcher smoke (one correct request, ~2.19 s), so it
+is not another sparse-performance sample. Explicit lower thresholds remain
+available for native CAGRA acceptance.
 
 ## 未完成 / Remaining work
 

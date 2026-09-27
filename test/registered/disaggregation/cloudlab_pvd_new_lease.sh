@@ -81,8 +81,12 @@ case "$role" in
     ;;
   v)
     require_free_port 9100
-    exact_max_rows="${PVD_PROMPT_INDEX_EXACT_MAX_ROWS:-512}"
-    index_budget="${PVD_PROMPT_INDEX_BUDGET_BYTES:-1073741824}"
+    # This lease caps model context at 2304. A cold native CAGRA build for a
+    # 2095-row, one-shot Entry took >20 s end-to-end; exact search returned
+    # the same answer in <4 s. Keep CAGRA selectable via an explicit lower
+    # threshold for its separate recall/long-index acceptance experiments.
+    exact_max_rows="${PVD_PROMPT_INDEX_EXACT_MAX_ROWS:-2304}"
+    index_budget="${PVD_PROMPT_INDEX_BUDGET_BYTES:-2147483648}"
     if [[ ! "$exact_max_rows" =~ ^[1-9][0-9]{0,3}$ ]] ||
        (( exact_max_rows < 16 || exact_max_rows > 2304 )); then
       echo 'PVD_PROMPT_INDEX_EXACT_MAX_ROWS must be an integer in [16, 2304]' >&2
