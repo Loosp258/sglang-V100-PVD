@@ -7,6 +7,7 @@ launch. No automatic fallback or model download is performed.
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -15,6 +16,16 @@ from pathlib import Path
 
 
 def main(argv=None):
+    # The parent forwards only selected child diagnostics. Configure these
+    # loggers explicitly: this standalone entrypoint has no serving logger.
+    for name in (
+        "sglang.srt.disaggregation.pvd.cuda_probe_search",
+        "sglang.srt.disaggregation.pvd.draft_sglang",
+    ):
+        diagnostic_logger = logging.getLogger(name)
+        diagnostic_logger.setLevel(logging.INFO)
+        diagnostic_logger.addHandler(logging.StreamHandler(sys.stderr))
+        diagnostic_logger.propagate = False
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--draft-model-path", required=True)
