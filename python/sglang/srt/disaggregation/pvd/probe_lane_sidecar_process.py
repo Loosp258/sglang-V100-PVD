@@ -183,6 +183,10 @@ def launch_probe_sidecar(
                                 child.pid,
                                 bounded,
                             )
+                    elif "PVD CUDA prediction stages:" in bounded:
+                        logger.info(
+                            "PVD probe sidecar child pid=%d %s", child.pid, bounded
+                        )
                     if len(line) > 4096 or not line.startswith("{"):
                         continue
                     try:

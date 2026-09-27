@@ -52,7 +52,8 @@ def _setup(monkeypatch, *, wrong_lock=False, wrong_budget=False, fail_target=Fal
         pvd_retrieval_metric="ip",
         max_total_tokens=128,
     )
-    manager = object()
+    control_loop = object()
+    manager = NS(control=NS(loop=control_loop))
     scheduler = NS(
         server_args=args,
         tp_worker=NS(model_runner=runner),
@@ -97,6 +98,7 @@ def _setup(monkeypatch, *, wrong_lock=False, wrong_budget=False, fail_target=Fal
 
     monkeypatch.setattr(startup, "build_cuda_prediction_startup", prediction_factory)
     monkeypatch.setattr(startup, "install_cuda_target_components", target_factory)
+    observed["control_loop"] = control_loop
     return scheduler, limits, observed
 
 
@@ -148,12 +150,15 @@ def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(
         assert kwargs["target_model_id"] == "target-qwen"
         assert args[args.index("--model-path") + 1] == str(tmp_path)
         assert args[args.index("--max-connections") + 1] == "2"
+        assert args[args.index("--probe-prefix-cache-budget-bytes") + 1] == "512"
+        assert kwargs["background_loop"] is observed["control_loop"]
         return fake_sidecar
 
     monkeypatch.setattr(startup, "launch_probe_sidecar", launch)
     sidecar_limits = ProbeSidecarLimits("/tmp/probe.py", "/tmp", "0", 16 << 20, 180)
     installed = startup.install_cuda_predictive_serving(
-        scheduler, replace(limits, probe_sidecar=sidecar_limits)
+        scheduler,
+        replace(limits, probe_sidecar=sidecar_limits, probe_prefix_cache_bytes=512),
     )
     admitted = observed["target"]["prepare_cuda_admission"](object())
     assert admitted.lane_client is fake_sidecar.client
