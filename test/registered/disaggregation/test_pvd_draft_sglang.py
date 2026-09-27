@@ -15,6 +15,7 @@ import torch
 from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.draft_runner_sglang import (
     DEFAULT_CAPABILITIES,
+    PREFILL_CHUNK_TOKENS,
     DraftForwardInputs,
     SGLangDraftHandle,
     SGLangDraftRunnerFactory,
@@ -913,6 +914,60 @@ def test_the_prefix_forward_carries_the_whole_snapshot_from_position_zero():
     assert first.req_pool_indices == (handle.request_index,)
 
 
+def test_long_uncached_prefix_is_chunked_with_absolute_positions_and_rows():
+    tokens = tuple(range(1300))
+    alloc = FakeAllocator(rows=2048, width=2048)
+    executor = FakeExecutor(sequence=(11, 22, 33))
+    handle = SGLangDraftHandle(
+        "long-prefill",
+        executor,
+        alloc,
+        max_prefix_tokens=2048,
+        max_tokens=4,
+        capabilities=DEFAULT_CAPABILITIES,
+    )
+
+    prepared = handle.prepare_prefix(tokens)
+
+    assert [len(call.input_ids) for call in executor.calls] == [512, 512, 276]
+    assert all(len(call.input_ids) <= PREFILL_CHUNK_TOKENS for call in executor.calls)
+    assert [call.seq_lens for call in executor.calls] == [(512,), (1024,), (1300,)]
+    assert [call.extend_prefix_lens for call in executor.calls] == [
+        (0,),
+        (512,),
+        (1024,),
+    ]
+    assert [call.extend_seq_lens for call in executor.calls] == [
+        (512,),
+        (512,),
+        (276,),
+    ]
+    assert [call.positions for call in executor.calls] == [
+        tuple(range(0, 512)),
+        tuple(range(512, 1024)),
+        tuple(range(1024, 1300)),
+    ]
+    assert [call.input_ids for call in executor.calls] == [
+        tokens[:512],
+        tokens[512:1024],
+        tokens[1024:],
+    ]
+    assert [call.out_cache_loc for call in executor.calls] == [
+        tuple(handle.owned_kv[:512]),
+        tuple(handle.owned_kv[512:1024]),
+        tuple(handle.owned_kv[1024:]),
+    ]
+    assert handle.mapped_tokens == len(tokens)
+    assert prepared.last_logits.argmax().item() == 33
+    assert torch.equal(
+        alloc.req_to_token[handle.request_index, : len(tokens)],
+        torch.tensor(handle.owned_kv, dtype=torch.int32),
+    )
+
+    handle.release()
+    assert not alloc.live_kv and not alloc.live_requests
+
+
 def test_each_step_advances_position_and_sequence_length_by_exactly_one():
     handle, executor, alloc, produced = run_once(tokens=(10, 11, 12), want=3)
     steps = executor.calls[1:]
@@ -1088,6 +1143,103 @@ def test_the_sidecar_cache_prefills_appends_then_hits_under_one_owner():
     assert len(alloc.live_requests) == 1
 
     made.retire_sidecar_cache()
+    assert not alloc.live_kv and not alloc.live_requests
+    assert cache_budget.snapshot()["used_staging_bytes"] == 0
+    assert cache_budget.snapshot()["used_inflight"] == 0
+
+
+def test_long_sidecar_prefix_chunks_prefill_and_append_then_reuses_final_logits():
+    alloc = FakeAllocator(rows=4096, width=4096)
+    executor = FakeExecutor(sequence=(11, 22, 33, 44, 55))
+    cache_budget = TransferBudget(2 << 20, 1)
+    fac = factory(
+        executor=executor,
+        allocator=alloc,
+        prefix_cache_budget=cache_budget,
+    )
+    made = provider(fac)
+    made.set_sidecar_cache_identity("request", "incarnation-a")
+    initial_tokens = tuple(range(1300))
+    appended_tokens = tuple(range(1900))
+
+    with made.branch():
+        initial_result = made.predict(
+            snapshot_committed("request", list(initial_tokens), 1300, "prefix-v1"), 1
+        )
+    with made.branch():
+        append_result = made.predict(
+            snapshot_committed("request", list(appended_tokens), 1900, "prefix-v1"),
+            1,
+        )
+    calls_after_append = len(executor.calls)
+    with made.branch():
+        hit_result = made.predict(
+            snapshot_committed("request", list(appended_tokens), 1900, "prefix-v1"),
+            1,
+        )
+
+    assert [len(call.input_ids) for call in executor.calls] == [512, 512, 276, 512, 88]
+    assert all(len(call.input_ids) <= PREFILL_CHUNK_TOKENS for call in executor.calls)
+    assert [call.seq_lens for call in executor.calls] == [
+        (512,),
+        (1024,),
+        (1300,),
+        (1812,),
+        (1900,),
+    ]
+    assert [call.extend_prefix_lens for call in executor.calls] == [
+        (0,),
+        (512,),
+        (1024,),
+        (1300,),
+        (1812,),
+    ]
+    assert [call.positions[0] for call in executor.calls] == [0, 512, 1024, 1300, 1812]
+    assert [initial_result.tokens, append_result.tokens, hit_result.tokens] == [
+        (33,),
+        (55,),
+        (55,),
+    ]
+    assert len(executor.calls) == calls_after_append == 5
+    assert fac.prefix_cache_snapshot()["retained_tokens"] == 1900
+    assert len(alloc.live_kv) == 1900
+    assert len(alloc.live_requests) == 1
+
+    made.retire_sidecar_cache()
+    assert not alloc.live_kv and not alloc.live_requests
+    assert cache_budget.snapshot()["used_inflight"] == 0
+
+
+def test_a_failed_long_cache_chunk_invalidates_and_retires_the_partial_prefill():
+    class FailsOnSecondChunk(FakeExecutor):
+        def forward(self, inputs):
+            if len(self.calls) == 1:
+                self.calls.append(inputs)
+                return torch.zeros(self.vocab)
+            self.calls.append(inputs)
+            raise RuntimeError("second prefill chunk failed")
+
+    alloc = FakeAllocator(rows=2048, width=2048)
+    executor = FailsOnSecondChunk()
+    cache_budget = TransferBudget(2 << 20, 1)
+    fac = factory(
+        executor=executor,
+        allocator=alloc,
+        prefix_cache_budget=cache_budget,
+    )
+    made = provider(fac)
+    made.set_sidecar_cache_identity("request", "incarnation-a")
+    tokens = tuple(range(1300))
+
+    with pytest.raises(RuntimeError, match="second prefill chunk failed"):
+        with made.branch():
+            made.predict(
+                snapshot_committed("request", list(tokens), len(tokens), "prefix-v1"),
+                1,
+            )
+
+    assert len(executor.calls) == 2
+    assert fac.prefix_cache_snapshot()["retained_tokens"] == 0
     assert not alloc.live_kv and not alloc.live_requests
     assert cache_budget.snapshot()["used_staging_bytes"] == 0
     assert cache_budget.snapshot()["used_inflight"] == 0

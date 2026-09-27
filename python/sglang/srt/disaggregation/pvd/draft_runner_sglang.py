@@ -72,6 +72,11 @@ DEFAULT_CAPABILITIES = DraftCapabilities(
     max_predict_tokens=32,
 )
 
+# TorchNative attention materializes an attention result for the query rows in
+# one extend. Keep sidecar prefix prefill bounded even when the full prefix is
+# long enough that one extend would exhaust the draft device's free memory.
+PREFILL_CHUNK_TOKENS = 512
+
 
 @dataclass(frozen=True)
 class DraftForwardInputs:
@@ -525,6 +530,47 @@ class SGLangDraftHandle:
 
     # -- prefix -------------------------------------------------------------
 
+    def _forward_prefix_chunks(
+        self,
+        tokens: Tuple[int, ...],
+        *,
+        prefix_length: int,
+        new_rows: Sequence[int],
+    ) -> Any:
+        """Forward a new prefix suffix in bounded, position-aware chunks.
+
+        ``new_rows`` contains the KV rows for ``tokens[prefix_length:]`` and
+        has already been mapped to this request. Each extend sees the complete
+        KV prefix available through its final position, while its query and
+        output rows cover only the current chunk. Nonzero extend starts enable
+        compact causal attention in the production adapter.
+        """
+        if not tokens:
+            raise DraftLifecycleError("a prefix needs at least one token")
+        if len(new_rows) != len(tokens) - prefix_length:
+            raise DraftLifecycleError("prefix rows do not match the new suffix")
+
+        last_logits = None
+        start = prefix_length
+        while start < len(tokens):
+            end = min(start + PREFILL_CHUNK_TOKENS, len(tokens))
+            row_start = start - prefix_length
+            row_end = end - prefix_length
+            inputs = DraftForwardInputs(
+                forward_mode="extend",
+                input_ids=tuple(int(token) for token in tokens[start:end]),
+                positions=tuple(range(start, end)),
+                seq_lens=(end,),
+                req_pool_indices=(self._request_index,),
+                out_cache_loc=tuple(new_rows[row_start:row_end]),
+                extend_prefix_lens=(start,),
+                extend_seq_lens=(end - start,),
+            )
+            self.forwards.append(inputs)
+            last_logits = self._executor.forward(inputs)
+            start = end
+        return last_logits
+
     def prepare_prefix(self, tokens: Tuple[int, ...]) -> PreparedDraftPrefix:
         """Prepare a cache append for an identified sidecar Req, else prefill."""
         self._require_open()
@@ -549,19 +595,12 @@ class SGLangDraftHandle:
                         last_logits=lease.cached_logits,
                         request_index=self._request_index,
                     )
-                inputs = DraftForwardInputs(
-                    forward_mode="extend",
-                    input_ids=tuple(int(t) for t in tokens[lease.prefix_length :]),
-                    positions=tuple(range(lease.prefix_length, length)),
-                    seq_lens=(length,),
-                    req_pool_indices=(self._request_index,),
-                    out_cache_loc=lease.new_rows,
-                    extend_prefix_lens=(lease.prefix_length,),
-                    extend_seq_lens=(length - lease.prefix_length,),
-                )
-                self.forwards.append(inputs)
                 try:
-                    logits = self._executor.forward(inputs)
+                    logits = self._forward_prefix_chunks(
+                        tokens,
+                        prefix_length=lease.prefix_length,
+                        new_rows=lease.new_rows,
+                    )
                     self._prefix_cache.publish(self._cache_identity, tokens, logits)
                 except BaseException:
                     self._prefix_cache.mark_invalid()
@@ -586,20 +625,11 @@ class SGLangDraftHandle:
         # allocator: no committed request's mapping is read or written.
         self._allocator.write_mapping(self._request_index, 0, locations)
         self._mapped = length
-        inputs = DraftForwardInputs(
-            forward_mode="extend",
-            input_ids=tuple(int(t) for t in tokens),
-            # Absolute sequence positions, from zero: this is a fresh
-            # computation of the whole prefix, not a continuation of one.
-            positions=tuple(range(length)),
-            seq_lens=(length,),
-            req_pool_indices=(self._request_index,),
-            out_cache_loc=tuple(locations),
-            extend_prefix_lens=(0,),
-            extend_seq_lens=(length,),
+        logits = self._forward_prefix_chunks(
+            tokens,
+            prefix_length=0,
+            new_rows=locations,
         )
-        self.forwards.append(inputs)
-        logits = self._executor.forward(inputs)
         self._prefix_cache_action = "recomputed"
         return PreparedDraftPrefix(
             length=length, last_logits=logits, request_index=self._request_index
