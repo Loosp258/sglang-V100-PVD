@@ -277,9 +277,7 @@ def execute(workspace, peer, resources, **overrides):
     workspace.execute(peer, **{**options, **overrides})
 
 
-def test_first_sparse_attention_execution_is_timed_once_per_layer(
-    monkeypatch, caplog
-):
+def test_first_sparse_attention_execution_is_timed_once_per_layer(monkeypatch, caplog):
     peers, workspace, _, _, resources, _ = ready(monkeypatch)
     with caplog.at_level(
         logging.INFO, logger="sglang.srt.disaggregation.pvd.cuda_sparse_attention"

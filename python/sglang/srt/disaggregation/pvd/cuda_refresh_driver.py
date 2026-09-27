@@ -1,9 +1,10 @@
 """Owner-thread CUDA refresh polling over authoritative Req output_ids.
 
-This explicit driver is not a serving-mode switch. The caller must share its
-target arbiter/lock with CUDA batch execution and poll BETWEEN synchronous
-forwards. The normal result processor remains the only token writer. Retiring
-a registration drains its controller, not the caller's Req/KV allocator rows.
+This explicit driver is not a serving-mode switch. Formal batch execution
+owns the target arbiter/lock. An optional private prediction worker has a
+separate lock and CUDA stream. The normal result processor remains the only
+token writer. Retiring a registration drains its controller, not the caller's
+Req/KV allocator rows.
 """
 
 import asyncio
@@ -23,6 +24,8 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
 )
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
+
+from .concurrent_prediction_worker import PredictionJob
 
 logger = logging.getLogger(__name__)
 
@@ -1245,10 +1248,7 @@ class CUDARefreshDriver:
                     and record.lane_client is None
                     and n < boundary
                 )
-                concurrent = (
-                    self._concurrent_prediction
-                    and record.lane_client is None
-                )
+                concurrent = self._concurrent_prediction and record.lane_client is None
                 identity = record.controller.group.coordinator.identity
                 prefix = CommittedPrefix(
                     record.req.rid,
@@ -1274,7 +1274,7 @@ class CUDARefreshDriver:
                     record.prediction_steps = record.controller.pipeline.iter_queries(
                         prefix
                     )
-                elif record.lane_client is None:
+                elif record.lane_client is None and not concurrent:
                     record.capture_lease = self.arbiter.acquire()
                 coroutine = record.controller.refresh(
                     prefix,
@@ -1300,10 +1300,6 @@ class CUDARefreshDriver:
                     self._release_capture(record)
                     raise
                 if concurrent:
-                    from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
-                        PredictionJob,
-                    )
-
                     record.concurrent_prediction_job = self._prediction_worker.submit(
                         PredictionJob(
                             request_id=record.req.rid,

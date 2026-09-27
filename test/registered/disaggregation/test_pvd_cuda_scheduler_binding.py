@@ -443,10 +443,10 @@ def test_stopped_record_emits_abort_before_poll_can_remove_it(monkeypatch):
         t.b.driver.cancel(t.c.request)
         original = t.b.driver.poll
 
-        def observe():
+        def observe(*, allow_prediction=True):
             assert t.c.request.finished()
             assert t.events[0][0] == "abort"
-            return original()
+            return original(allow_prediction=allow_prediction)
 
         monkeypatch.setattr(t.b.driver, "poll", observe)
         t.binding.poll()
@@ -481,7 +481,7 @@ def test_actual_loop_polls_and_routes_result_once(monkeypatch, paused, has_batch
         t.s.on_idle = lambda: events.append("idle")
         t.s.run_batch = lambda _: pytest.fail("must use bridge")
         t.s.process_batch_result = lambda *_: pytest.fail("must not process twice")
-        monkeypatch.setattr(t.binding, "poll", lambda: events.append("poll"))
+        monkeypatch.setattr(t.binding, "poll", lambda **_: events.append("poll"))
         monkeypatch.setattr(t.binding, "run", lambda _: events.append("bridge"))
         with pytest.raises(End):
             scheduler_methods()["event_loop_normal_disagg_decode"](t.s)
@@ -556,7 +556,7 @@ def test_live_pool_replacement_and_graph_enable_are_refused(monkeypatch):
 
 def test_run_preserves_original_scheduler_result_wrapper(monkeypatch):
     with setup(monkeypatch) as t:
-        batch, result = object(), object()
+        batch, result = NS(reqs=[]), object()
         t.s.batch_result_processor = object()
         t.s.run_batch = lambda b: result if b is batch else pytest.fail("batch")
         t.s.process_batch_result = object()

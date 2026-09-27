@@ -8,12 +8,12 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+    ConcurrentPredictionWorker,
+)
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
     LifecycleError,
     TargetExecutionArbiter,
-)
-from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
-    ConcurrentPredictionWorker,
 )
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import (
@@ -321,7 +321,10 @@ def test_concurrent_prediction_uses_private_owner_and_releases_query_to_v(monkey
 
         worker = ConcurrentPredictionWorker(predict)
         driver._concurrent_prediction = True
-        driver.bind_prediction_worker(worker, threading.RLock())
+        # This fixture admitted its request before exposing the control
+        # object. Production binds the worker before admission.
+        driver._prediction_worker = worker
+        driver._prediction_lock = threading.RLock()
         request.output_ids.extend([3] * 3)  # n=3, boundary=4.
         record = driver._records[request.rid]
         # The scheduler's formal-priority poll still queues the separate

@@ -10,14 +10,14 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+    PredictionCancelledError,
+)
 from sglang.srt.disaggregation.pvd.cuda_probe_search import (
     CUDAPredictionPipeline,
     CUDAProbeSearchSession,
 )
 from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
-from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
-    PredictionCancelledError,
-)
 from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prediction import (
     DraftPrediction,
@@ -75,6 +75,7 @@ def bridge(monkeypatch):
             yield
 
     monkeypatch.setattr(torch.random, "fork_rng", fork)
+
     class FakeStream:
         def synchronize(self):
             calls.append("cuda:0")
@@ -212,7 +213,7 @@ def test_cuda_policy_capture_to_actual_http_preserves_rows_identity_and_rng(
         rng = torch.random.get_rng_state().clone()
         prepared = prepare(session, window, pipeline, route)
         assert torch.equal(rng, torch.random.get_rng_state())
-        assert (0,) in calls and "cuda:0" in calls
+        assert (0,) in calls and "cuda:0" not in calls
         assert pipeline.probe.tensor is None
         assert budget.snapshot()["used_staging_bytes"] == 0
         async with shard_client(store) as http:
@@ -246,7 +247,9 @@ def test_worker_capture_avoids_rng_fork_and_hands_off_bounded_cpu_queries(
     monkeypatch.setattr(pipeline.probe, "branch", private_branch)
     pipeline.probe.device = "cpu"
     pipeline.probe.head_dim = 8
-    monkeypatch.setattr(pipeline.probe, "_drain_private", lambda: events.append("fence"))
+    monkeypatch.setattr(
+        pipeline.probe, "_drain_private", lambda: events.append("fence")
+    )
 
     @contextmanager
     def draft_branch():
@@ -453,12 +456,11 @@ def test_copy_unknown_retains_source_destination_and_reservation(monkeypatch):
         def synchronize(self):
             raise RuntimeError("copy completion unknown")
 
-    monkeypatch.setattr(
-        torch.cuda, "current_stream", lambda device: BrokenStream()
-    )
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: BrokenStream())
     with pytest.raises(RuntimeError, match="completion unknown"):
         with session._prepare_scope((route,), window):
-            session._query_rows(source, (1,), 0, pipeline)
+            session._copy_retained = [source, torch.empty_like(source)]
+            session._finish_copy(pipeline)
     assert quarantined == [True] and session._copy_unknown
     assert session._copy_retained[0] is source and len(session._copy_retained) == 2
     session.close()
@@ -477,7 +479,7 @@ def test_cuda_query_copy_batches_routed_heads_per_layer(monkeypatch):
                 tuple(float(v) for v in source[1, head]),
             )
         assert budget.snapshot()["used_staging_bytes"] == 192
-        assert calls.count("cuda:0") == 1
+        assert calls.count("cuda:0") == 0
     assert budget.snapshot()["used_staging_bytes"] == 0
     assert not session._copy_retained
 
@@ -494,7 +496,7 @@ def test_cuda_query_copy_respects_nonzero_query_head_start(monkeypatch):
         assert session._query_rows(source, (1,), 0, pipeline) == (
             tuple(float(v) for v in source[1, 0]),
         )
-        assert calls.count("cuda:0") == 1
+        assert calls.count("cuda:0") == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
@@ -601,7 +603,7 @@ def test_failed_copy_is_fenced_before_refunding(monkeypatch):
     monkeypatch.setattr(torch.Tensor, "copy_", fail)
     with pytest.raises(RuntimeError, match="copy submission"):
         prepare(session, window, pipeline, route)
-    assert "cuda:0" in calls
+    assert "cuda:0" not in calls
     assert budget.snapshot()["reservations"] == 0
     assert not session._copy_retained and not session._copy_unknown
 

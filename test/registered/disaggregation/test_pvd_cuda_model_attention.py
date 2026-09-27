@@ -605,6 +605,7 @@ def test_cold_model_stage_profile_fences_and_ignores_other_layers(monkeypatch, c
     monkeypatch.setattr(
         attention_module, "time", SimpleNamespace(perf_counter=lambda: next(times))
     )
+
     class Stream:
         def __init__(self, device):
             self.device = device
