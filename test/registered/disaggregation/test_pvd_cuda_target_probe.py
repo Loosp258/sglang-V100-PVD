@@ -223,7 +223,7 @@ def environment(
         transient_bytes_bound=1024,
         budget=budget,
         vocabulary=vocabulary,
-        prefix_budget=TransferBudget(65536, 1) if prefix_cache else None,
+        prefix_budget=TransferBudget(131072, 1) if prefix_cache else None,
     )
     holders["probe"] = probe
     drains = []
