@@ -472,6 +472,28 @@ matched in this narrow task. Median request latencies were about
 uses at most two concurrent clients without a start barrier, so these are
 diagnostic timings, not a throughput claim.
 
+### Top-K 质量—成本实验 / Top-K quality-cost experiment
+
+CloudLab D 启动器新增有界环境参数 `PVD_RETRIEVAL_TOP_K`（1–16）和
+`PVD_RETRIEVAL_UNION_TOKENS`（Top-K–128），默认仍为 4/32；
+`bash -n` 通过。保持同一 P/V/Gateway、事实型 seed、packed Q、M=4
+与其余参数，只把 D 设为 Top-8/union-64。两轮均为第一个代码 **6/6
+正确**，模式内输出哈希稳定，但相对完整 KV **0/6** 哈希相同，
+相对 Top-4 也 **0/6** 相同；中位请求耗时约 **6.28/6.28 s**，
+Top-4 约 **6.14/6.10 s**，完整 KV 约 **2.37/2.13 s**。
+这个小实验不支持把 Top-8 设为默认，也表明仅增加检索 token
+不能保证完整生成文本接近完整 KV。
+
+The launcher now accepts bounded `PVD_RETRIEVAL_TOP_K` (1–16) and
+`PVD_RETRIEVAL_UNION_TOKENS` (Top-K–128), defaulting to 4/32; `bash -n`
+passed. Changing only D to Top-8/union-64 for the same packed-Q M4 fact
+replay answered the first code **6/6** in both runs, with stable hashes
+within Top-8. Yet **0/6** full outputs matched full KV or Top-4.
+Median request latency was about **6.28/6.28 s**, versus **6.14/6.10 s**
+for Top-4 and **2.37/2.13 s** for full KV. This narrow negative result
+does not justify a default change; adding retrieved tokens alone does not
+guarantee full-output equivalence.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

@@ -134,11 +134,20 @@ case "$role" in
     require_model "$model"
     refresh_interval="${PVD_REFRESH_INTERVAL:-4}"
     draft_predict_tokens="${PVD_DRAFT_PREDICT_TOKENS:-2}"
+    retrieval_top_k="${PVD_RETRIEVAL_TOP_K:-4}"
+    retrieval_union_tokens="${PVD_RETRIEVAL_UNION_TOKENS:-32}"
     if [[ ! "$refresh_interval" =~ ^[1-9][0-9]?$ ]] ||
        (( refresh_interval > 32 )) ||
        [[ ! "$draft_predict_tokens" =~ ^[1-9][0-9]?$ ]] ||
        (( draft_predict_tokens > 32 )); then
       echo 'PVD_REFRESH_INTERVAL and PVD_DRAFT_PREDICT_TOKENS must be in [1, 32]' >&2
+      exit 2
+    fi
+    if [[ ! "$retrieval_top_k" =~ ^[1-9][0-9]?$ ]] ||
+       (( retrieval_top_k > 16 )) ||
+       [[ ! "$retrieval_union_tokens" =~ ^[1-9][0-9]{0,2}$ ]] ||
+       (( retrieval_union_tokens < retrieval_top_k || retrieval_union_tokens > 128 )); then
+      echo 'PVD_RETRIEVAL_TOP_K must be in [1, 16] and union in [top_k, 128]' >&2
       exit 2
     fi
     export PVD_SEARCH_BACKGROUND_IO=1
@@ -170,7 +179,8 @@ case "$role" in
           --pvd-predictive-retrieval-config
           --pvd-cuda-predictive-serving --pvd-cuda-serving-config "$limits"
           --pvd-retrieval-vector-space qwen25-7b-pvd
-          --pvd-retrieval-top-k 4 --pvd-retrieval-max-union-tokens 32
+          --pvd-retrieval-top-k "$retrieval_top_k"
+          --pvd-retrieval-max-union-tokens "$retrieval_union_tokens"
           --pvd-retrieval-bank-budget-bytes 268435456
           --pvd-retrieval-scratch-budget-bytes 536870912
         )
