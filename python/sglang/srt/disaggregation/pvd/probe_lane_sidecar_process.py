@@ -63,7 +63,9 @@ class ProbeSidecarProcess:
             try:
                 self.process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                logger.warning("PVD probe sidecar kill after timeout pid=%d", self.process.pid)
+                logger.warning(
+                    "PVD probe sidecar kill after timeout pid=%d", self.process.pid
+                )
                 self.process.kill()
                 self.process.wait(timeout=timeout)
         self._output_thread.join(timeout=timeout)

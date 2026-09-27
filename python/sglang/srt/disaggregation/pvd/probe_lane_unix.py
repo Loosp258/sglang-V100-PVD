@@ -201,7 +201,9 @@ class ProbeLaneUnixServer:
         self._rejection_counts[reason] = count
         if count & (count - 1) == 0:
             try:
-                logger.warning("PVD probe lane reject reason=%s count=%d", reason, count)
+                logger.warning(
+                    "PVD probe lane reject reason=%s count=%d", reason, count
+                )
             except Exception:
                 pass  # Logging cannot change rejection or reply ownership.
 
