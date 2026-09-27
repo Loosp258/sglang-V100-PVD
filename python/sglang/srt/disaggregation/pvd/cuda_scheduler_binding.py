@@ -7,7 +7,6 @@ factory must supply the installed backend and receiver-claimed requests.
 import uuid
 
 import torch
-
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
@@ -316,7 +315,8 @@ class CUDADecodeSchedulerBinding:
             # another generated KV row and remains scheduler-owned.
             self.scheduler._abort_pvd_cuda_requests(
                 list(decode_batch.reqs),
-                "CUDA Decode KV capacity exhausted; asynchronous retraction is unsupported",
+                "CUDA Decode KV capacity exhausted; asynchronous retraction "
+                "is unsupported",
             )
             batch.filter_batch(v1_spec_info_filtered=True)
             return None

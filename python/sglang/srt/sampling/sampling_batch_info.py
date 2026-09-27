@@ -6,9 +6,8 @@ import logging
 import weakref
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-import torch
-
 import sglang.srt.sampling.penaltylib as penaltylib
+import torch
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from sglang.srt.sampling.penaltylib.repetition_penalty import apply_scaling_penalties
 from sglang.srt.sampling.sampling_params import TOP_K_ALL

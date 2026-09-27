@@ -1,12 +1,12 @@
 """Real binding/Decode method bodies on CPU; model/transport remain doubles."""
 
+import logging
 from concurrent.futures import Future
 from contextlib import contextmanager
 from http import HTTPStatus
 from types import SimpleNamespace as NS
 
 import pytest
-import torch
 from sglang.srt.disaggregation.pvd import cuda_scheduler_binding as module
 from sglang.srt.disaggregation.pvd.conn import PVDSelectedRouteBinding
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
@@ -22,6 +22,7 @@ from test_pvd_cuda_request_release import source
 
 
 def method(name, **namespace):
+    namespace.setdefault("logger", logging.getLogger(__name__))
     return source(
         "python/sglang/srt/disaggregation/decode.py",
         name,
@@ -111,6 +112,9 @@ def setup(monkeypatch, *, attach=True):
             release_kv_cache=release,
         )
         s._abort_pvd_cuda_requests = lambda reqs, reason: abort_method(s, reqs, reason)
+        s._pvd_prune_running_batch_requests = lambda: method(
+            "_pvd_prune_running_batch_requests"
+        )(s)
         s.output_streamer = NS(
             stream_output=lambda reqs, logprob: events.append(("stream", reqs[0].rid))
         )

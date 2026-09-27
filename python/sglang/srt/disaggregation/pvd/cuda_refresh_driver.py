@@ -612,7 +612,9 @@ class CUDARefreshDriver:
                 or retirement is None
                 or retirement.state != "attached"
             ):
-                raise LifecycleError("Prompt-KV seed requires an attached full receiver")
+                raise LifecycleError(
+                    "Prompt-KV seed requires an attached full receiver"
+                )
             seed_scope = record.controller.pipeline.probe.prompt_seed_scope(
                 record.req, retirement.pool_owner
             )

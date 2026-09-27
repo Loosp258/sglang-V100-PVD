@@ -508,13 +508,13 @@ class TestFromScheduleBatch(CustomTestCase):
         self.assertEqual(canonical_frequency[1, 4].item(), 0.5)
         self.assertEqual(canonical_frequency[2, 3].item(), 0.75)
         self.assertEqual(canonical_frequency[2, 5].item(), 0.75)
-        self.assertEqual(
+        self.assertAlmostEqual(
             info.penalizer_orchestrator.penalizers[
                 BatchedPresencePenalizer
             ].cumulated_presence_penalties[1, 4].item(),
             0.2,
         )
-        self.assertEqual(
+        self.assertAlmostEqual(
             info.penalizer_orchestrator.penalizers[
                 BatchedRepetitionPenalizer
             ].cumulated_repetition_penalties[2, 5].item(),
@@ -528,7 +528,9 @@ class TestFromScheduleBatch(CustomTestCase):
         )
 
     @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
-    def test_schedule_batch_decode_view_preserves_canonical_rows(self, mock_server_args):
+    def test_schedule_batch_decode_view_preserves_canonical_rows(
+        self, mock_server_args
+    ):
         mock_server_args.return_value.enable_deterministic_inference = False
         mock_server_args.return_value.enable_custom_logit_processor = False
         reqs = [
@@ -542,7 +544,9 @@ class TestFromScheduleBatch(CustomTestCase):
             req.finished.return_value = False
         canonical = ScheduleBatch(
             reqs=reqs,
-            model_config=SimpleNamespace(is_encoder_decoder=False, vocab_size=VOCAB_SIZE),
+            model_config=SimpleNamespace(
+                is_encoder_decoder=False, vocab_size=VOCAB_SIZE
+            ),
             spec_algorithm=None,
             device=DEVICE,
             req_pool_indices=torch.tensor([10, 11, 12]),
@@ -581,11 +585,11 @@ class TestFromScheduleBatch(CustomTestCase):
         canonical_frequency = canonical.sampling_info.penalizer_orchestrator.penalizers[
             BatchedFrequencyPenalizer
         ].cumulated_frequency_penalties
-        self.assertEqual(canonical_frequency[0, 1].item(), 0.2)
-        self.assertEqual(canonical_frequency[1, 2].item(), 0.4)
-        self.assertEqual(canonical_frequency[1, 4].item(), 0.4)
-        self.assertEqual(canonical_frequency[2, 3].item(), 0.6)
-        self.assertEqual(canonical_frequency[2, 5].item(), 0.6)
+        self.assertAlmostEqual(canonical_frequency[0, 1].item(), 0.2)
+        self.assertAlmostEqual(canonical_frequency[1, 2].item(), 0.4)
+        self.assertAlmostEqual(canonical_frequency[1, 4].item(), 0.4)
+        self.assertAlmostEqual(canonical_frequency[2, 3].item(), 0.6)
+        self.assertAlmostEqual(canonical_frequency[2, 5].item(), 0.6)
 
     @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
     def test_basic_construction(self, mock_server_args):
