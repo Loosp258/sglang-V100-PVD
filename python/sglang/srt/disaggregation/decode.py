@@ -1680,6 +1680,7 @@ class SchedulerDisaggregationDecodeMixin:
         from time import monotonic as _monotonic
 
         profile_phases = _os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1"
+        profile_full_kv = _os.environ.get("PVD_PROFILE_FULL_KV_BATCH") == "1"
         if profile_phases:
             from logging import getLogger as _get_logger
 
@@ -1735,8 +1736,32 @@ class SchedulerDisaggregationDecodeMixin:
                 if cuda_binding is not None:
                     cuda_binding.run(batch)
                 else:
+                    time_full_kv = profile_full_kv and batch.forward_mode.is_decode()
+                    if time_full_kv:
+                        started = _monotonic()
+                        committed_tokens = tuple(
+                            len(req.output_ids) for req in batch.reqs
+                        )
                     result = self.run_batch(batch)
+                    if time_full_kv:
+                        run_ended = _monotonic()
                     self.process_batch_result(batch, result)
+                    if time_full_kv:
+                        ended = _monotonic()
+                        logger.info(
+                            "PVD timeline event=full_kv_batch members=%d "
+                            "committed_tokens=%s t_start=%.6f t_run_end=%.6f "
+                            "t_end=%.6f run_seconds=%.6f process_seconds=%.6f "
+                            "seconds=%.6f",
+                            len(committed_tokens),
+                            committed_tokens,
+                            started,
+                            run_ended,
+                            ended,
+                            run_ended - started,
+                            ended - run_ended,
+                            ended - started,
+                        )
                 if profile_phases:
                     phase_done("run_batch")
             elif (cpu_release_state is None or not cpu_release_state["requests"]) and (

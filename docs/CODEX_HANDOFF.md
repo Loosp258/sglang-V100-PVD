@@ -782,20 +782,20 @@ validation are incomplete. Its single-case improvement was 0.725 s of Decode
 and 0.744 s wall, with identical PVD output hash.
 
 The remote-only timeline aggregate for cache-on explains the remaining gap.
-Across 127 formal target batches, model-forward spans summed to 10.709 s,
-while the first-to-last formal forward spanned 18.398 s. Thus 7.689 s lay
-outside those measured target forwards. The first 64 forwards cost 8.598 s:
-their per-forward p50 was 0.1268 s for tokens 0–31 and 0.1272 s for 32–63.
-After installing the sparse bank, the last 63 forwards cost 2.112 s with
-p50 about 0.033–0.034 s. Full KV's client-observed token-gap p50 was about
-0.084 s throughout; it is a different timing scope than D's model-forward
-measurement. The private prediction-step trace spanned 9.945 s while formal
-Decode continued to interleave. Four V search HTTP calls overlapped in a
-0.512 s wall window. The final token-63 forward ended 1.045 s before the
+Across 127 formal target batches, measured batch durations summed to 10.709 s,
+while the first-to-last formal batch spanned 18.398 s. Thus 7.689 s lay
+between measured target batches. This timing scope includes the PVD executor
+bind, `run_batch`, and result processing; it is not a pure model-forward or
+CUDA-kernel measurement. The first 64 batches cost 8.598 s, with per-batch
+p50 0.1268 s for indices 0–31 and 0.1272 s for 32–63. After installing the
+sparse bank, the last 63 batches cost 2.112 s with p50 about 0.033–0.034 s.
+The private prediction-step trace spanned 9.945 s while formal Decode
+continued to interleave. Four V search HTTP calls overlapped in a 0.512 s
+wall window. The final pre-refresh formal batch ended 1.045 s before the
 refresh became ready. Prediction/search spans are **not additive** to the
-7.689 s because work overlaps. The evidence shows both a slower pre-refresh
-PVD attention path and substantial same-GPU prediction/scheduling time; the
-faster sparse tail nearly offsets the pre-refresh formal-forward cost, but
+7.689 s because work overlaps. The evidence shows both slower pre-refresh
+PVD formal batches and substantial same-GPU prediction/scheduling time; the
+faster sparse tail nearly offsets the pre-refresh formal-batch cost, but
 cannot offset that additional time. It does not isolate each CUDA kernel.
 
 The full-bank PVD adapter uses its own per-Q-head Triton attention and
@@ -817,3 +817,68 @@ changed Python files. No Git push occurred. Next compare a coupled shorter
 lead/prediction profile and test full-bank fast-path eligibility, while
 checking full-output parity and retrieval recall. Preserve the seven
 pre-existing dirty tracked files.
+
+## 14. 2026-09-28 matched PVD versus full-KV Decode steps
+
+Reran section 13's same 15,875-token input and 128-output case with the
+same P TP2 and V TP2 services. PVD is the metadata-cache-on run above;
+the full-KV control was restarted with opt-in
+`PVD_PROFILE_FULL_KV_BATCH=1`. Both had 127 logged formal Decode batches.
+The full-KV client report is wall 19.448 s, TTFT 8.192 s, Decode 11.256 s;
+the matched PVD client report is 26.923 s, 8.522 s, and 18.400 s.
+Both returned the expected first code; full output hashes differ. All times
+below are seconds. A segment's gap includes the idle time *before* its first
+batch (except batch 0); it is not time within `run_batch`.
+
+| Decode part, batch indices | PVD formal batches | Full-KV formal batches | PVD gaps | Full-KV gaps |
+| --- | ---: | ---: | ---: | ---: |
+| 0–31 | 4.5248 | 2.8172 | 0.2097 | 0.0330 |
+| 32–63 | 4.0729 | 2.6686 | 6.0050 | 0.0326 |
+| 64–95 | 1.0669 | 2.6728 | 1.2719 | 0.4091 |
+| 96–126 | 1.0447 | 2.5911 | 0.2021 | 0.0317 |
+| Total | 10.7094 | 10.7497 | 7.6887 | 0.5064 |
+
+The total formal-batch time differs by only -0.0403 s for PVD. The
+7.1823 s excess batch-gap time accounts for the approximately 7.145 s
+client Decode disadvantage within run-to-run and timestamp differences.
+Before the first refresh, PVD formal batches sum to 8.5977 s versus
+5.4858 s for full KV (+3.1119 s). After refresh they sum to 2.1116 s
+versus 5.2639 s (-3.1523 s). PVD batch p50 is about 0.127 s before
+refresh and 0.033–0.034 s after it; full KV remains about 0.083 s.
+The PVD full-bank adapter uses a separate per-Q-head Triton path, generated
+row checks, and completion fences, but those contributions have not been
+individually measured. The measured PVD batch also includes executor bind;
+full KV measures `run_batch` plus result processing. Neither number is a
+pure attention-kernel duration.
+
+The main 32–63 gap is 6.005 s for PVD versus 0.033 s for full KV. During
+this window the private prediction-step trace spans 9.945 s across 65
+steps, interleaved with formal Decode. Its span overlaps the measured formal
+batches and must not be added to them. The four V search HTTP calls overlap
+in 0.512 s wall time; their individual durations sum to 0.972 s, also
+non-additive. At the M64 boundary PVD's largest single gap is 1.065 s
+before formal batch 64; the preceding formal batch ended about 1.045 s
+before `refresh_ready`. Full KV's analogous largest gap is 0.377 s and
+includes its full-bank refresh. Thus PVD's V search is reasonably short,
+but same-GPU prediction/scheduling and an unhidden first-refresh wait make
+the overall Decode slower.
+
+TTFT is a client-observed composite: PVD 8.522 s, full KV 8.192 s,
+delta +0.330 s. It includes Gateway, P Prefill, V index/fan-in, D import,
+and first output. This run did not log separate P Prefill or D import
+durations, so no substage attribution is justified. V logged initial
+full-Prompt fan-in around 0.329–0.336 s per rank for both modes and index
+build around 0.159–0.175 s per rank. These V operations can overlap other
+stages and cannot be added to TTFT. The PVD wall disadvantage is 7.475 s:
+0.330 s in TTFT plus 7.145 s in Decode.
+
+`decode.py` now has a default-off full-KV formal-batch timer. The analyzer
+accepts `--batch-event full_kv_batch` and reports batch/gap sums by ordinal
+batch index so the 127 batches align despite different committed-token
+labels. Logs remain on the remote lease: PVD D
+`validation/logs/d-metacache16on.log`, full-KV D
+`validation/logs/d-stepfull16v2.log`, and full-KV V client report
+`validation/logs/stepfull16v2_case1.json`. The detailed log was analyzed
+remotely; only aggregates were copied into this handoff. Next isolate the
+PVD full-bank adapter overhead and reduce prediction-induced gaps, then
+repeat multiple cases and verify exact output parity and retrieval recall.
