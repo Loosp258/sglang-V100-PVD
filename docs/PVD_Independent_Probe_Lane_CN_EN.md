@@ -176,3 +176,11 @@ install 意外混用旧源码；实验必须设置当前 checkout 的 `PYTHONPAT
 未让生产 D Scheduler 建立连接，也未运行三机检索/传输或性能比较。
 The next gate is a supervised Scheduler-to-sidecar binding with fail-closed
 identity, peer-PID and lifetime checks; a ready socket alone is insufficient.
+
+进程所有权检查点 / Process-ownership seam: `probe_lane_sidecar_process.py`
+由父 D 进程生成 0700 目录、子进程和精确 peer PID，限时读取启动回执，
+核对 PID、socket、checkpoint 内容摘要与 GPU0，返回已绑定的 Unix client；
+失败时终止它自己创建的子进程并清理目录。7 项 Linux CPU 真子进程
+回归覆盖正常退出、错误 PID/摘要、早退及禁止覆盖父进程身份。它仍是
+**显式调用的启动组件**，尚未在生产 Scheduler 内启用；真实模型双进程
+的启动/请求/停止完整联测及 D GPU1 并发加速仍待验证。
