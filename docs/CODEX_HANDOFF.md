@@ -10,12 +10,13 @@ until the final goal is met and the user permits it.
 ## 1. Repository and preservation rules
 
 - Local workspace: `D:\code\sglang-V100-PVD`; branch `pvd-disaggregation`.
-- At this handoff, `HEAD=4fc27b27b` and `origin/pvd-disaggregation=05d7a2afe`;
-  **55 local commits are ahead**, none pushed in this work. `origin` is
+- The last code commit before this handoff is `4fc27b27b`; the handoff was
+  committed locally as `35350660d`. `origin/pvd-disaggregation=05d7a2afe`;
+  **57 local commits are ahead** after this accuracy correction, none pushed
+  in this work. `origin` is
   `https://github.com/Loosp258/sglang-V100-PVD.git` (the user's fork).
-- This document is new and must be locally committed as its own handoff step.
-  Recheck `git status`/`git log` first; after committing it the ahead count
-  should rise to 56. Do not stage unrelated work.
+- Recheck `git status`/`git log` at the start of a new session; this document
+  was committed separately from the code. Do not stage unrelated work.
 - Pre-existing, unrelated dirty tracked files belong to the user and must be
   preserved: `pvd/client.py`, `pvd/transfer_authorization.py`,
   `pvd/transfer_lifecycle.py`, `entrypoints/openai/protocol.py`,
