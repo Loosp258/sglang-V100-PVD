@@ -98,7 +98,6 @@ def _setup(monkeypatch, *, wrong_lock=False, wrong_budget=False, fail_target=Fal
 
     monkeypatch.setattr(startup, "build_cuda_prediction_startup", prediction_factory)
     monkeypatch.setattr(startup, "install_cuda_target_components", target_factory)
-    observed["control_loop"] = control_loop
     return scheduler, limits, observed
 
 
@@ -151,7 +150,10 @@ def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(
         assert args[args.index("--model-path") + 1] == str(tmp_path)
         assert args[args.index("--max-connections") + 1] == "2"
         assert args[args.index("--probe-prefix-cache-budget-bytes") + 1] == "512"
-        assert kwargs["background_loop"] is observed["control_loop"]
+        assert (
+            kwargs["background_loop"]
+            is scheduler.disagg_decode_prealloc_queue.kv_manager.control.loop
+        )
         return fake_sidecar
 
     monkeypatch.setattr(startup, "launch_probe_sidecar", launch)
