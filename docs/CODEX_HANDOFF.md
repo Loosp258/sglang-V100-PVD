@@ -328,3 +328,56 @@ Every subsequent step: preserve the unrelated dirty worktree, run focused
 tests and relevant real GPU/RDMA checks, commit locally, do **not** push.
 If the final goal is still unproven, report the exact remaining blocker and
 evidence rather than calling the project complete.
+
+## 7. 2026-09-27 Decode-overlap checkpoint (later than section 6)
+
+The next work after the earlier fault gate used an isolated checkout on P/V/D;
+no code was pushed. `6d6c29e75` moved sidecar Unix I/O to a control loop,
+`31303afe7` moved V delivery HTTP I/O there, `2ebc53974` added a bounded
+target-Q prefix cache, and `426095fba` added a separate, incarnation-scoped
+draft prefix cache. `b8a6f7d0a` enabled child stage diagnostics. The opt-in
+cache budgets in the D validation JSON are 144 MiB target and 64 MiB draft.
+The sidecar GPU0 and formal D GPU1 run concurrently; the caches retain only
+request-owned prompt prefix rows, and each speculative branch frees its own
+suffix. `c418e7a4d` raised the explicitly bounded CUDA prediction horizon to
+32 tokens; `ac3169962` lets the fact-recall validation script request at most
+256 output tokens so a second M64 boundary can be measured. The V Linux
+focused startup/draft suite at `c418e7a4d` passed **233 tests** (one unrelated
+pytest config warning); Ruff E/F/I and format checks passed. Earlier dual-cache
+and Unix/control suites passed **234** and **30** tests, respectively.
+
+Same-input one-client V100S checks used seed `overlap485d`, 48 facts, 1413
+Prompt tokens, first expected code `20900`, and P/V/Gateway held constant
+except for the required Gateway restart after each D restart. These are
+individual observations, not randomized performance distributions:
+
+| D path | 20 output | 128 output | Boundary evidence |
+| --- | ---: | ---: | --- |
+| Full Prompt KV (`485d725f9`) | 1.31 s warm (1.50 s cold) | 5.36 s | No sparse refresh |
+| Sidecar M16/lead8, no prefix cache (`485d725f9`) | 2.23 s warm | 11.37 s | Refresh repeated full-prefix work |
+| Sidecar M16/lead8, target-Q cache only (`2ebc53974`) | 3.04 s | 9.33–9.41 s | Warm capture about 0.50 s |
+| Sidecar M16/lead8, both caches (`20183ea4d`/`b8a6f7d0a`) | 3.04 s | 9.13 s (diagnostic rerun 9.87 s) | Draft append about 0.156 s; warm refresh about 0.75 s; boundary wait about 0.30 s |
+| Sidecar M32/lead16/predict16, both caches (`b8a6f7d0a`) | 1.50 s | 7.75 s, then 7.05 s | Warm refresh 0.97–1.00 s; boundary wait 0.19–0.22 s |
+| Sidecar M64/lead32/predict32, both caches (`c418e7a4d`) | 1.50 s | 6.82 s, then 6.37 s | Cold refresh 1.87 s; boundary wait 0.39 s. A 192-output run finished in 9.07 s; its later cached refresh took 1.50 s and boundary wait 0.09 s. |
+
+All fact probes above returned the expected first code. D logs explicitly
+reported `probe_source=private_lane`, cache `prefill` then `append`, and
+installed sparse boundaries. The script's `mode_verified_by_script` field is
+always false; the process arguments and D logs establish the mode. The
+128-token output hashes differ between full KV and sparse modes, so first-code
+success is only a narrow quality check. At M64 the 20-output request has no
+refresh and is near full-KV cold latency; 128-output latency remains about
+19% above the earlier full-KV observation even on the faster repeat. The
+later M64 refresh overlaps most of formal Decode, but its observed boundary
+wait is still 0.09 s, and each new request incurs cold-prefix work. Do **not**
+claim full overlap, quality parity, or a speedup over full KV.
+
+Next: prewarm both sidecar prefixes during the first formal Decode window or
+otherwise remove the first-refresh cold stall without changing committed
+state; reduce V search/delivery latency enough to cover the remaining warm
+boundary gap. Then run interleaved, repeated full-KV/sidecar A/B with output
+quality and true-Q recall, multiple Prompt lengths and clients, plus the
+original phase-4 duplicate D-GPU1 draft removal and phase-5 V/CAGRA work.
+The 32-token horizon remains an opt-in experimental bound; later-position
+draft errors and budget pressure need broader real-GPU tests before it can be
+called production-ready.
