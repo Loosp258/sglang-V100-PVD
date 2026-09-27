@@ -315,7 +315,9 @@ class _SidecarPrefixCache:
             # partial result can be fenced and freed by retire().
             self._rows.extend(rows)
             if len(rows) != len(tokens) - start:
-                raise DraftLifecycleError("allocator returned an incomplete cache suffix")
+                raise DraftLifecycleError(
+                    "allocator returned an incomplete cache suffix"
+                )
             self._allocator.write_mapping(self._slot, start, rows)
         except BaseException as exc:
             # If allocation or mapping failed, retire the whole cache before
@@ -480,7 +482,9 @@ class SGLangDraftHandle:
             or len(identity) != 2
             or any(not isinstance(value, str) or not value for value in identity)
         ):
-            raise DraftLifecycleError("exact request/incarnation cache identity required")
+            raise DraftLifecycleError(
+                "exact request/incarnation cache identity required"
+            )
         self._cache_identity = identity
 
     def scratch_bytes(self) -> int:
@@ -558,9 +562,7 @@ class SGLangDraftHandle:
                 self.forwards.append(inputs)
                 try:
                     logits = self._executor.forward(inputs)
-                    self._prefix_cache.publish(
-                        self._cache_identity, tokens, logits
-                    )
+                    self._prefix_cache.publish(self._cache_identity, tokens, logits)
                 except BaseException:
                     self._prefix_cache.mark_invalid()
                     raise

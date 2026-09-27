@@ -1169,9 +1169,9 @@ def test_a_partial_cache_allocation_is_fenced_and_freed_before_fallback():
     with made.branch():
         made.predict(prefix(tokens=(10, 11, 12)), 2)
 
-    assert [call.input_ids for call in executor.calls if call.forward_mode == "extend"] == [
-        (10, 11, 12)
-    ]
+    assert [
+        call.input_ids for call in executor.calls if call.forward_mode == "extend"
+    ] == [(10, 11, 12)]
     assert fac.prefix_cache_snapshot()["retained_tokens"] == 0
     assert cache_budget.snapshot()["used_staging_bytes"] == 0
     assert cache_budget.snapshot()["used_inflight"] == 0
@@ -1183,7 +1183,6 @@ def test_execution_is_serialized_across_concurrent_branches():
     import threading
 
     overlap = []
-    inside = threading.Semaphore(0)
 
     class Slow(FakeExecutor):
         def forward(self, inputs):
