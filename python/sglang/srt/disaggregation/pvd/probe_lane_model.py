@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 
 import torch
 from sglang.srt.disaggregation.pvd.cuda_probe_search import CUDAPredictionPipeline
@@ -107,6 +108,40 @@ class ProbeLaneCUDAHandler:
         self.tokenizer_sha256 = tokenizer_sha256
         self.owner_thread = threading.get_ident()
         self.device = torch.device(pipeline.probe.device)
+        self._cached_req = None
+        self._cached_incarnation = None
+        self._cached_used_at = None
+
+    def retire_idle_cache(self, *, max_idle_seconds: float = 5.0) -> None:
+        if threading.get_ident() != self.owner_thread:
+            raise ProbeLaneProtocolError("CUDA sidecar handler changed owner thread")
+        if (
+            self._cached_req is not None
+            and self._cached_used_at is not None
+            and time.monotonic() - self._cached_used_at >= max_idle_seconds
+        ):
+            self.close()
+
+    def close(self) -> None:
+        if threading.get_ident() != self.owner_thread:
+            raise ProbeLaneProtocolError("CUDA sidecar handler changed owner thread")
+        if self._cached_req is not None:
+            self.pipeline.probe.retire_cached_request(self._cached_req)
+            self._cached_req = None
+            self._cached_incarnation = None
+            self._cached_used_at = None
+
+    def _prepare_cache(self, window) -> None:
+        if self.pipeline.probe.prefix_budget is None:
+            return
+        identity = (window.prefix.request_id, window.incarnation)
+        if self._cached_incarnation != identity:
+            self.close()
+            req = SimpleNamespace(rid=window.prefix.request_id)
+            self.pipeline.probe.register_cached_request(req)
+            self._cached_req = req
+            self._cached_incarnation = identity
+        self._cached_used_at = time.monotonic()
 
     def __call__(self, ticket: ProbeLaneTicket) -> ProbeLaneReply:
         if threading.get_ident() != self.owner_thread:
@@ -128,6 +163,7 @@ class ProbeLaneCUDAHandler:
         ):
             raise ProbeLaneProtocolError("CUDA sidecar ticket/model identity differs")
         window = ticket.window
+        self._prepare_cache(window)
         branch = (
             self.pipeline.committed_query_branch(window.prefix, window.query_positions)
             if window.query_source == "committed"

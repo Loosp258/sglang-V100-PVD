@@ -1,11 +1,17 @@
 """Pure selection tests for the isolated real-CUDA handler's reply shape."""
 
 import dataclasses
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 import torch
 from sglang.srt.disaggregation.pvd.prediction import QueryVectors
-from sglang.srt.disaggregation.pvd.probe_lane_model import _materialize_reply
+from sglang.srt.disaggregation.pvd.probe_lane_model import (
+    ProbeLaneCUDAHandler,
+    _materialize_reply,
+)
 from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
     ProbeLaneProtocolError,
     verify_reply,
@@ -53,3 +59,50 @@ def test_handler_reply_rejects_missing_position_and_foreign_layer():
         _materialize_reply(bound, (missing, source[1]))
     with pytest.raises(ProbeLaneProtocolError, match="layer coverage"):
         _materialize_reply(bound, (source[0], source[0]))
+
+
+def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
+    class Probe:
+        prefix_budget = object()
+
+        def __init__(self):
+            self.live = None
+            self.events = []
+
+        def register_cached_request(self, req):
+            assert self.live is None
+            self.live = req
+            self.events.append(("register", req))
+
+        def retire_cached_request(self, req):
+            assert self.live is req
+            self.live = None
+            self.events.append(("retire", req))
+
+    probe = Probe()
+    handler = ProbeLaneCUDAHandler.__new__(ProbeLaneCUDAHandler)
+    handler.pipeline = SimpleNamespace(probe=probe)
+    handler.owner_thread = threading.get_ident()
+    handler._cached_req = None
+    handler._cached_incarnation = None
+    handler._cached_used_at = None
+    first = SimpleNamespace(prefix=SimpleNamespace(request_id="rid"), incarnation="a")
+    second = SimpleNamespace(prefix=first.prefix, incarnation="b")
+
+    handler._prepare_cache(first)
+    first_req = probe.live
+    handler._prepare_cache(first)
+    assert probe.live is first_req
+    assert len(probe.events) == 1
+
+    handler._prepare_cache(second)
+    assert probe.events[:2] == [("register", first_req), ("retire", first_req)]
+    assert probe.live is not first_req
+    assert handler._cached_incarnation == ("rid", "b")
+
+    handler._cached_used_at = time.monotonic() - 10
+    handler.retire_idle_cache()
+    assert probe.live is None
+    assert handler._cached_incarnation is None
+    handler.close()
+    assert len(probe.events) == 4

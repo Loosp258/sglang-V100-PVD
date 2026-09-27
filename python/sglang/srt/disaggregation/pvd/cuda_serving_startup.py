@@ -245,6 +245,8 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                     str(limits.draft_transient_bytes_bound),
                     "--probe-budget-bytes",
                     str(args.pvd_retrieval_scratch_budget_bytes),
+                    "--probe-prefix-cache-budget-bytes",
+                    str(limits.probe_prefix_cache_bytes),
                     "--probe-transient-bytes-bound",
                     str(limits.probe_transient_bytes_bound),
                     "--reply-budget-bytes",

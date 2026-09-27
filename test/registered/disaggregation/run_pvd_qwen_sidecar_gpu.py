@@ -29,6 +29,7 @@ def main(argv=None):
     parser.add_argument("--draft-persistent-budget-bytes", type=int, required=True)
     parser.add_argument("--draft-transient-bytes-bound", type=int, required=True)
     parser.add_argument("--probe-budget-bytes", type=int, required=True)
+    parser.add_argument("--probe-prefix-cache-budget-bytes", type=int, default=0)
     parser.add_argument("--probe-transient-bytes-bound", type=int, required=True)
     parser.add_argument("--reply-budget-bytes", type=int, required=True)
     parser.add_argument("--max-connections", type=int, default=4)
@@ -55,6 +56,8 @@ def main(argv=None):
     ):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
+    if args.probe_prefix_cache_budget_bytes < 0:
+        parser.error("--probe-prefix-cache-budget-bytes must be nonnegative")
 
     def serve(target_runner, *, checkpoint=False):
         if not checkpoint:
@@ -76,6 +79,11 @@ def main(argv=None):
 
         identity = checkpoint_identity(os.path.realpath(args.model_path))
         scratch = TransferBudget(args.probe_budget_bytes, 2)
+        prefix_budget = (
+            TransferBudget(args.probe_prefix_cache_budget_bytes, 1)
+            if args.probe_prefix_cache_budget_bytes
+            else None
+        )
         startup = build_cuda_prediction_startup(
             target_runner,
             draft_model_path=args.draft_model_path,
@@ -95,7 +103,14 @@ def main(argv=None):
             draft_transient_bytes_bound=args.draft_transient_bytes_bound,
             probe_transient_bytes_bound=args.probe_transient_bytes_bound,
             target_scratch_budget=scratch,
+            prefix_budget=prefix_budget,
         )
+        if (
+            prefix_budget is not None
+            and startup.pipeline.probe.prefix_cache_bytes
+            > args.probe_prefix_cache_budget_bytes
+        ):
+            raise ValueError("sidecar prefix cache exceeds its explicit budget")
         handler = ProbeLaneCUDAHandler(
             startup.pipeline,
             weights_sha256=identity.weights_sha256,
@@ -120,6 +135,14 @@ def main(argv=None):
                 ),
                 max_connections=args.max_connections,
             ).start()
+
+            async def reap_idle_cache():
+                while not stop.is_set():
+                    await asyncio.sleep(1)
+                    handler.retire_idle_cache()
+
+            reaper = asyncio.create_task(reap_idle_cache())
+            stopped = asyncio.create_task(stop.wait())
             try:
                 print(
                     json.dumps(
@@ -134,9 +157,17 @@ def main(argv=None):
                     ),
                     flush=True,
                 )
-                await stop.wait()
+                done, _ = await asyncio.wait(
+                    (stopped, reaper), return_when=asyncio.FIRST_COMPLETED
+                )
+                if reaper in done:
+                    reaper.result()
             finally:
+                reaper.cancel()
+                stopped.cancel()
+                await asyncio.gather(reaper, stopped, return_exceptions=True)
                 await service.aclose()
+                handler.close()
             return {"sidecar_stopped_cleanly": True}
 
         return asyncio.run(run())
