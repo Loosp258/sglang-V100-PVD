@@ -23,6 +23,7 @@ v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
 probe_scratch_bytes="${PVD_PROBE_SCRATCH_BYTES:-536870912}"
 draft_scratch_bytes="${PVD_DRAFT_SCRATCH_BYTES:-268435456}"
 prefill_chunk_tokens="${PVD_PREFILL_CHUNK_TOKENS:-2048}"
+p_tp_size="${PVD_P_TP_SIZE:-1}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
 # link has the same path and pinned tokenizer bytes, while P/D links include
 # their own local weight shards.
@@ -46,7 +47,8 @@ if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
    (( probe_scratch_bytes < 536870912 || probe_scratch_bytes > 4294967296 )) ||
    [[ ! "$draft_scratch_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
    (( draft_scratch_bytes < 268435456 || draft_scratch_bytes > 2147483648 )) ||
-   [[ ! "$prefill_chunk_tokens" =~ ^(64|128|256|512|1024|2048)$ ]]; then
+   [[ ! "$prefill_chunk_tokens" =~ ^(64|128|256|512|1024|2048)$ ]] ||
+   [[ ! "$p_tp_size" =~ ^(1|2)$ ]]; then
   echo 'invalid bounded long-context capacity settings' >&2
   exit 2
 fi
@@ -86,14 +88,21 @@ case "$role" in
     require_free_port 30002
     require_model "$model"
     export SGLANG_HOST_IP="$p_ip"
+    p_base_gpu_id=1
+    p_rank_rails="$rail"
+    if [[ "$p_tp_size" == 2 ]]; then
+      p_base_gpu_id=0
+      p_rank_rails="$rail,$rail"
+    fi
     nohup setsid "$python" -m sglang.launch_server \
-      --model-path "$model" --dtype float16 --tp-size 1 --base-gpu-id 1 \
+      --model-path "$model" --dtype float16 --tp-size "$p_tp_size" \
+      --base-gpu-id "$p_base_gpu_id" \
       --page-size 1 --attention-backend torch_native \
       --host "$p_ip" --port 30002 \
       --disaggregation-mode prefill --disaggregation-topology pvd \
       --pvd-vector-coordinator-url "http://$v_ip:9100" \
       --pvd-model-instance-id qwen25-7b-pvd \
-      --pvd-rank-rails "$rail" --disaggregation-transfer-backend mooncake \
+      --pvd-rank-rails "$p_rank_rails" --disaggregation-transfer-backend mooncake \
       --pvd-transfer-staging-budget-bytes 67108864 \
       --pvd-transfer-max-inflight 16 \
       --mem-fraction-static 0.5 --context-length "$context_tokens" \
