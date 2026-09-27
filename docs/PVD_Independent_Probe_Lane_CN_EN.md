@@ -147,3 +147,12 @@ deadline 的检索拒绝安装。假 sidecar + 真实本地 V HTTP/index 的
 完整 refresh/install 测试通过，原受控刷新回归合计 **26 passed**。
 还没有在生产 Scheduler 选择这个分支；D GPU1 仍会加载本地 draft，
 因此现阶段**不能声称计算重叠或显存节省**。
+
+Scheduler driver 检查点 / Driver handoff: `CUDARefreshDriver.register()`
+可显式绑定已启动的 Unix client 与 checkpoint；仅此模式在触发
+refresh 时**不获取正式 target arbiter lease**，并跳过 D 本地 probe
+prefix cache 的建立/退休。同进程预测的旧路径保持原锁语义。
+CPU fake 的完整 driver 回归在 sidecar 回复被延迟时成功取得并释放
+正式 forward lease，随后完成 V 搜索与安装；39 项 driver 测试通过。
+这验证了状态机不会人为阻塞正式 forward，**不是**真实 GPU 算子
+并行或端到端加速证据。生产启动尚未向 driver 注册 lane client。

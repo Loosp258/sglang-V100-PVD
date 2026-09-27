@@ -68,6 +68,8 @@ class _Request:
     outputs: tuple
     slot: int
     timeout: float
+    lane_client: object = None
+    lane_checkpoint: object = None
     refresh: object = None
     close_task: object = None
     capture_lease: object = None
@@ -169,6 +171,8 @@ class CUDARefreshDriver:
         initial_import_pending=False,
         initial_session=None,
         pool_owner=None,
+        lane_client=None,
+        lane_checkpoint=None,
     ):
         self._owner()
         if type(initial_import_pending) is not bool:
@@ -261,11 +265,27 @@ class CUDARefreshDriver:
             raise LifecycleError(
                 "exact routes, sufficient draft horizon and finite timeout required"
             )
+        if lane_client is not None:
+            from sglang.srt.disaggregation.pvd.probe_lane_identity import (
+                ProbeLaneCheckpointIdentity,
+            )
+            from sglang.srt.disaggregation.pvd.probe_lane_unix import (
+                ProbeLaneUnixClient,
+            )
+
+            if not isinstance(lane_client, ProbeLaneUnixClient) or not isinstance(
+                lane_checkpoint, ProbeLaneCheckpointIdentity
+            ):
+                raise LifecycleError("exact private probe lane binding required")
+            if self._clock is not time.monotonic:
+                raise LifecycleError("private lane deadline requires monotonic clock")
+        elif lane_checkpoint is not None:
+            raise LifecycleError("checkpoint identity requires a private probe lane")
         lock = controller.pipeline._lock
         if self._execution_lock is not None and lock is not self._execution_lock:
             raise LifecycleError("all requests must share the target execution lock")
         probe = controller.pipeline.probe
-        if getattr(probe, "prefix_budget", None) is not None:
+        if lane_client is None and getattr(probe, "prefix_budget", None) is not None:
             probe.register_cached_request(req)
         self._execution_lock = lock
         self._records[req.rid] = _Request(
@@ -276,6 +296,8 @@ class CUDARefreshDriver:
             outputs,
             req.req_pool_idx,
             float(timeout_seconds),
+            lane_client=lane_client,
+            lane_checkpoint=lane_checkpoint,
             provisional=initial_import_pending,
             provisional_source=initial_session,
             provisional_pool_owner=pool_owner,
@@ -417,7 +439,10 @@ class CUDARefreshDriver:
     async def _close_controller(self, record):
         await record.controller.aclose()
         probe = record.controller.pipeline.probe
-        if getattr(probe, "prefix_budget", None) is not None:
+        if (
+            record.lane_client is None
+            and getattr(probe, "prefix_budget", None) is not None
+        ):
             probe.retire_cached_request(record.req)
         session = self._session_binding(record)
         if session is not None:
@@ -699,14 +724,24 @@ class CUDARefreshDriver:
                 n,
                 f"{record.controller.group.coordinator.identity[1]}:{n}",
             )
-            record.capture_lease = self.arbiter.acquire()
+            if record.lane_client is None:
+                record.capture_lease = self.arbiter.acquire()
             record.deadline = self._clock() + record.timeout
             coroutine = record.controller.refresh(
                 prefix,
                 query_positions=(len(prefix.tokens) + boundary - n - 1,),
                 clients=record.clients,
-                execution_scope=lambda: self._capture(record),
+                execution_scope=(
+                    None
+                    if record.lane_client is not None
+                    else lambda: self._capture(record)
+                ),
                 index_ready_wait_seconds=record.timeout,
+                lane_client=record.lane_client,
+                lane_checkpoint=record.lane_checkpoint,
+                lane_deadline_monotonic=(
+                    record.deadline if record.lane_client is not None else None
+                ),
             )
             try:
                 record.refresh = self._loop.create_task(coroutine)
