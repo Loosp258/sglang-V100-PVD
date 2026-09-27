@@ -1,10 +1,45 @@
 """Deterministic varied-fact load probe without a live Gateway."""
 
 import hashlib
+import json
 import re
 
 import pytest
 import run_pvd_fact_recall as probe
+
+
+class SSEResponse:
+    def __init__(self, events=(), *, done=True, content_type="text/event-stream"):
+        self.status = 200
+        self.headers = {"Content-Type": content_type}
+        self.lines = []
+        for event in events:
+            self.lines.extend(
+                (
+                    b"event: message\r\n",
+                    b"data: " + json.dumps(event).encode("utf-8") + b"\r\n",
+                    b"\r\n",
+                )
+            )
+        if done:
+            self.lines.append(b"data: [DONE]\r\n")
+        self.read_limits = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def readline(self, size=-1):
+        self.read_limits.append(size)
+        if not self.lines:
+            return b""
+        line = self.lines.pop(0)
+        if size >= 0 and len(line) > size:
+            self.lines.insert(0, line[size:])
+            return line[:size]
+        return line
 
 
 def test_fact_prompts_are_reproducible_unique_and_answered_by_one_record():
@@ -82,6 +117,206 @@ def test_long_prompt_collect_reports_actual_tokens_and_input_hash(monkeypatch):
     assert reports[0]["prompt_tokens_min"] == reports[0]["prompt_tokens_max"] == 4096
     assert reports[0]["records_per_case"] == 139
     assert len(seen) == 4
+
+
+def test_stream_parser_hashes_cumulative_text_and_reports_token_timing(monkeypatch):
+    response = SSEResponse(
+        (
+            {
+                "text": "The ",
+                "meta_info": {"completion_tokens": 1, "prompt_tokens": 4096},
+            },
+            {
+                "text": "The code is 12345",
+                "meta_info": {"completion_tokens": 3, "prompt_tokens": 4096},
+            },
+        )
+    )
+    times = iter((1.0, 3.0, 4.0))
+    monkeypatch.setattr(probe.time, "perf_counter", lambda: next(times))
+
+    result = probe._observe_stream(
+        response, 0.0, "long prompt", "12345", 3, "cumulative"
+    )
+
+    assert result["input_sha256"] == hashlib.sha256(b"long prompt").hexdigest()
+    assert result["output_sha256"] == hashlib.sha256(b"The code is 12345").hexdigest()
+    assert result["first_code_matches"] is True
+    assert result["prompt_tokens"] == 4096 and result["completion_tokens"] == 3
+    assert result["ttft_seconds"] == 1.0
+    assert result["intertoken_gap_p50_seconds"] == 0.0
+    assert result["intertoken_gap_p95_seconds"] == 2.0
+    assert result["intertoken_gap_max_seconds"] == 2.0
+    assert result["completion_seconds"] == 3.0
+    assert result["decode_seconds"] == 2.0 and result["wall_seconds"] == 4.0
+    assert result["coalesced_tokens"] == 1
+    assert result["true_tpot_observable"] is False
+    assert max(response.read_limits) == probe.MAX_SSE_LINE_BYTES + 1
+
+
+def test_stream_delta_text_has_same_output_hash_as_final_text():
+    response = SSEResponse(
+        (
+            {"text": "The ", "meta_info": {"completion_tokens": 1, "prompt_tokens": 9}},
+            {
+                "text": "code is ",
+                "meta_info": {"completion_tokens": 2, "prompt_tokens": 9},
+            },
+            {
+                "text": "12345",
+                "meta_info": {"completion_tokens": 3, "prompt_tokens": 9},
+            },
+        )
+    )
+
+    result = probe._observe_stream(
+        response, probe.time.perf_counter(), "p", "12345", 3, "delta"
+    )
+
+    assert result["output_sha256"] == hashlib.sha256(b"The code is 12345").hexdigest()
+    assert result["first_code_matches"] is True
+
+
+def test_stream_and_nonstream_collect_hash_the_same_prompt_and_output(monkeypatch):
+    seed = "stream_compare_20260927"
+    prompt, expected = probe.make_prompt(seed, 0, records=139)
+
+    def fake_nonstream(url, text, expected_code, max_tokens, timeout):
+        assert text == prompt and expected_code == expected
+        assert max_tokens == 128 and timeout == 5
+        return {
+            "input_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "output_sha256": hashlib.sha256(expected_code.encode("utf-8")).hexdigest(),
+            "expected_code": expected_code,
+            "first_code": expected_code,
+            "first_code_matches": True,
+            "prompt_tokens": 4096,
+            "completion_tokens": 128,
+            "elapsed_seconds": 0.1,
+        }
+
+    monkeypatch.setattr(probe, "_request", fake_nonstream)
+    common = {
+        "cases": 1,
+        "target_prompt_tokens": 4096,
+        "max_tokens": 128,
+        "timeout": 5,
+        "concurrency": 1,
+    }
+    nonstream = probe.collect("http://gateway", seed, **common)
+
+    def fake_urlopen(request, timeout):
+        body = json.loads(request.data)
+        assert timeout == 5 and body["stream"] is True
+        assert body["text"] == prompt
+        assert body["sampling_params"]["max_new_tokens"] == 128
+        return SSEResponse(
+            (
+                {
+                    "text": expected,
+                    "meta_info": {"completion_tokens": 128, "prompt_tokens": 4096},
+                },
+            )
+        )
+
+    monkeypatch.setattr(probe.urllib.request, "urlopen", fake_urlopen)
+    streaming = probe.collect("http://gateway", seed, stream=True, **common)
+
+    assert streaming["input_set_sha256"] == nonstream["input_set_sha256"]
+    assert (
+        streaming["results"][0]["input_sha256"]
+        == nonstream["results"][0]["input_sha256"]
+    )
+    assert (
+        streaming["results"][0]["output_sha256"]
+        == nonstream["results"][0]["output_sha256"]
+    )
+    assert streaming["results"][0]["first_code_matches"] is True
+    assert streaming["stream_metrics"]["coalesced_tokens"] == 127
+    assert streaming["stream_metrics"]["intertoken_gap_max_seconds"] == 0.0
+    assert "_intertoken_gaps_seconds" not in streaming["results"][0]
+
+
+@pytest.mark.parametrize(
+    "response,max_tokens,reason",
+    [
+        (SSEResponse(content_type="application/json"), 1, "SSE"),
+        (
+            SSEResponse(
+                (
+                    {
+                        "text": "a",
+                        "meta_info": {"completion_tokens": 1, "prompt_tokens": 1},
+                    },
+                ),
+                done=False,
+            ),
+            1,
+            "DONE",
+        ),
+        (
+            SSEResponse(
+                (
+                    {
+                        "text": "a",
+                        "meta_info": {"completion_tokens": 1, "prompt_tokens": 1},
+                    },
+                    {
+                        "text": "a",
+                        "meta_info": {"completion_tokens": 0, "prompt_tokens": 1},
+                    },
+                )
+            ),
+            2,
+            "regressed",
+        ),
+        (
+            SSEResponse(
+                (
+                    {
+                        "text": "a",
+                        "meta_info": {"completion_tokens": 2, "prompt_tokens": 1},
+                    },
+                )
+            ),
+            1,
+            "excessive",
+        ),
+        (SSEResponse(), 1, "SSE stream ended"),
+    ],
+)
+def test_stream_parser_rejects_invalid_or_incomplete_sse(response, max_tokens, reason):
+    with pytest.raises(ValueError, match=reason):
+        probe._observe_stream(
+            response,
+            probe.time.perf_counter(),
+            "p",
+            "12345",
+            max_tokens,
+            "cumulative",
+        )
+
+
+def test_stream_parser_bounds_sse_line_and_output_size():
+    oversized_line = SSEResponse()
+    oversized_line.lines = [b"data: " + b"x" * probe.MAX_SSE_LINE_BYTES]
+    with pytest.raises(ValueError, match="SSE line exceeds"):
+        probe._observe_stream(
+            oversized_line, probe.time.perf_counter(), "p", "12345", 1, "cumulative"
+        )
+
+    oversized_text = SSEResponse(
+        (
+            {
+                "text": "x" * (probe.MAX_OUTPUT_CHARS + 1),
+                "meta_info": {"completion_tokens": 1, "prompt_tokens": 1},
+            },
+        )
+    )
+    with pytest.raises(ValueError, match="unbounded text"):
+        probe._observe_stream(
+            oversized_text, probe.time.perf_counter(), "p", "12345", 1, "cumulative"
+        )
 
 
 def test_fact_collect_reports_correctness_and_hashes_without_raw_output(monkeypatch):
