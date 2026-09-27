@@ -104,7 +104,8 @@ def test_v100s_triton_cached_m4_lead3_changes_only_prefetch_lead():
         ).read_text()
     )
     candidate_path = (
-        directory / "pvd_qwen_v100s_serving_limits_triton_m4_lead3_probe_cache_long.json"
+        directory
+        / "pvd_qwen_v100s_serving_limits_triton_m4_lead3_probe_cache_long.json"
     )
     assert json.loads(candidate_path.read_text()) == {**baseline, "lead_tokens": 3}
     limits = load_cuda_serving_limits(
@@ -205,6 +206,24 @@ def test_v100s_triton_long_m8_lead6_experiment_extends_only_prefetch_window():
     assert limits.max_sequence_tokens == 2304
     assert limits.attention_impl == "triton_grouped"
     assert limits.lead_tokens == 6
+
+
+def test_v100s_m8_probe_cache_experiment_changes_only_lead_from_m4_cache():
+    directory = Path(__file__).parent
+    baseline = json.loads(
+        (directory / "pvd_qwen_v100s_serving_limits_triton_m4_probe_cache_long.json")
+        .read_text()
+    )
+    candidate = (
+        directory
+        / "pvd_qwen_v100s_serving_limits_triton_m8_lead6_probe_cache_long.json"
+    )
+    assert json.loads(candidate.read_text()) == {**baseline, "lead_tokens": 6}
+    with pytest.raises(ValueError, match="less than refresh_interval"):
+        load_cuda_serving_limits(candidate, refresh_interval=4, predict_tokens=6)
+    limits = load_cuda_serving_limits(candidate, refresh_interval=8, predict_tokens=6)
+    assert limits.lead_tokens == 6
+    assert limits.probe_prefix_cache_bytes == 536870912
 
 
 def test_v100s_long_context_fixture_uses_online_attention_and_longer_timeout():

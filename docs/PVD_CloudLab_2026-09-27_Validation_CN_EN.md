@@ -494,6 +494,30 @@ for Top-4 and **2.37/2.13 s** for full KV. This narrow negative result
 does not justify a default change; adding retrieved tokens alone does not
 guarantee full-output equivalence.
 
+### M=8 + probe 缓存事实负载 / M8 with probe cache on fact prompts
+
+独立配置 `pvd_qwen_v100s_serving_limits_triton_m8_lead6_probe_cache_long.json`
+与 M4 缓存配置只差 `lead_tokens=6`，启动时配套刷新间隔 8、draft
+预测 6 token；加载约束回归 **55 passed**，Ruff E/F/I 通过。
+保持 P/V/Gateway、Top-4、packed Q、seed 与事实负载不变，仅更换 D。
+两轮第一个代码仍 **6/6 正确**，模式内输出哈希稳定；与完整 KV 的
+完整输出 **1/6** 哈希相同。两轮请求中位耗时约 **5.10/5.16 s**，
+比 M4 缓存 **6.14/6.10 s** 低，但仍约为完整 KV **2.37/2.13 s**
+的两倍以上。两轮日志的 `PVD refresh ready` 计数从 M4 的 48
+降至 M8 的 24（每模式均 12 个请求）。这说明减少刷新次数对该
+负载有效，不能证明 M8 的近似质量足以默认启用，也未达到最终性能目标。
+
+The isolated M8/lead-6 fixture differs from cached M4 only in lead tokens;
+it pairs with interval 8 and six draft tokens. Its loader regression passed
+**55/55** with Ruff E/F/I clean. Holding P/V/Gateway, Top-4, packed Q and
+the six fact prompts fixed, both M8 runs answered the first code **6/6**
+and produced stable within-mode hashes. **1/6** complete outputs matched
+full KV. Median request latency was **5.10/5.16 s**, down from cached M4's
+**6.14/6.10 s**, but still over twice full KV's **2.37/2.13 s**.
+The two runs logged 24 refreshes in M8 versus 48 in M4 (12 requests each).
+Fewer refreshes helped this workload; neither broader answer quality nor
+the final latency target is established.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
