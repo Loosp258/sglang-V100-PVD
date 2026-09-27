@@ -139,7 +139,9 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
             return super().retire_cached_request(req)
         self._require_main_thread()
         if self._active or self._execution_held or self._quarantined:
-            raise PredictionConfigError("active or quarantined probe cannot close cache")
+            raise PredictionConfigError(
+                "active or quarantined probe cannot close cache"
+            )
         if not self._execution_lock.acquire(blocking=False):
             raise PredictionConfigError("target execution is busy during cache close")
         self._execution_held = True

@@ -103,7 +103,9 @@ def test_precomputed_prediction_queries_search_without_repeating_model_work():
                     prepared_queries=queries,
                 )
                 assert epoch.target_tokens == 4
-                assert fixture.request.pipeline.provider.calls == [(prefix.request_id, 2)]
+                assert fixture.request.pipeline.provider.calls == [
+                    (prefix.request_id, 2)
+                ]
                 assert len(fixture.request.pipeline.probe.calls) == 1
                 assert fixture.request.try_install({0: 4, 1: 4})
         finally:

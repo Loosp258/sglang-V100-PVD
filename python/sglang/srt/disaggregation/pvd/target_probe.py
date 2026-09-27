@@ -419,7 +419,9 @@ class _LlamaTargetProbeCore(TargetProbe):
             raise PredictionConfigError(
                 "cooperative target capture requires reserved private prefix cache"
             )
-        return self._forward_cached_steps(prefix, prediction.tokens, self._state, cached)
+        return self._forward_cached_steps(
+            prefix, prediction.tokens, self._state, cached
+        )
 
     def capture_committed(self, prefix, positions):
         self._require_main_thread()
