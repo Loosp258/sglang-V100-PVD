@@ -626,7 +626,21 @@ class CUDARefreshDriver:
                 record.prediction_steps = None
                 if not isinstance(done.value, tuple) or not done.value:
                     raise LifecycleError("private prediction returned no query layers")
+                _timeline(
+                    "PVD timeline event=prediction_step request_id=%s "
+                    "committed_tokens=%d done=1 t=%.6f",
+                    record.req.rid,
+                    len(record.outputs) - 1,
+                    self._clock(),
+                )
                 return done.value
+        _timeline(
+            "PVD timeline event=prediction_step request_id=%s "
+            "committed_tokens=%d done=0 t=%.6f",
+            record.req.rid,
+            len(record.outputs) - 1,
+            self._clock(),
+        )
         return None
 
     def _stop(self, record, reason):

@@ -308,7 +308,9 @@ class _PrefetchRequestCore:
                 (
                     "precomputed"
                     if prepared_queries is not None or query_future is not None
-                    else "private_lane" if lane_client is not None else "inline"
+                    else "private_lane"
+                    if lane_client is not None
+                    else "inline"
                 ),
                 len(self._routes),
                 capture_seconds,
@@ -331,7 +333,9 @@ class _PrefetchRequestCore:
                     (
                         "precomputed"
                         if prepared_queries is not None or query_future is not None
-                        else "private_lane" if lane_client is not None else "inline"
+                        else "private_lane"
+                        if lane_client is not None
+                        else "inline"
                     ),
                     type(exc).__name__,
                 )

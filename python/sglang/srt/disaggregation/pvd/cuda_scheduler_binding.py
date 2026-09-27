@@ -13,7 +13,10 @@ from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
     CUDABatchResultRefused,
     CUDARankBatchExecutor,
 )
-from sglang.srt.disaggregation.pvd.cuda_refresh_driver import CUDARefreshDriver
+from sglang.srt.disaggregation.pvd.cuda_refresh_driver import (
+    CUDARefreshDriver,
+    _timeline,
+)
 from sglang.srt.disaggregation.pvd.cuda_request_release import _require_supported_pools
 from sglang.srt.disaggregation.pvd.cuda_route_discovery import (
     CUDARouteDiscoveryQueue,
@@ -304,6 +307,22 @@ class CUDADecodeSchedulerBinding:
 
         if not ready_indices:
             return None
+        if len(ready_indices) != batch.batch_size():
+            ready_set = set(ready_indices)
+            _timeline(
+                "PVD timeline event=ready_subset ready=%s blocked=%s t=%.6f",
+                tuple(
+                    (req.rid, len(req.output_ids) - 1)
+                    for i, req in enumerate(batch.reqs)
+                    if i in ready_set
+                ),
+                tuple(
+                    (req.rid, len(req.output_ids) - 1)
+                    for i, req in enumerate(batch.reqs)
+                    if i not in ready_set
+                ),
+                self.driver._clock(),
+            )
         decode_batch = (
             batch
             if len(ready_indices) == batch.batch_size()
@@ -338,6 +357,11 @@ class CUDADecodeSchedulerBinding:
                 sync_rows = getattr(canonical_batch, "sync_decode_rows_from", None)
                 if callable(sync_rows):
                     sync_rows(batch)
+            _timeline(
+                "PVD timeline event=formal_decode_committed rows=%s t=%.6f",
+                tuple((req.rid, len(req.output_ids) - 1) for req in batch.reqs),
+                self.driver._clock(),
+            )
             return result
         except CUDABatchResultRefused as exc:
             # Only this pre-commit refusal can become a request-local abort.
