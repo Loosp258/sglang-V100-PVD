@@ -728,6 +728,37 @@ complete-output hashes were stable; only **3/6** sparse outputs matched
 full KV. The synchronized diagnostic still does not show an end-to-end
 benefit or network-as-local latency.
 
+### M16 同步前向时间线 / Synchronous forward timeline at M16
+
+在独立 D 进程设 `PVD_PROFILE_REFRESH_TIMELINE=1`，同一 exact-2304
+V、两客户端同步发起两条长 Prompt。两条请求都首代码正确。每个请求
+在 D clock=10 安排边界 16 的刷新，下一次 Scheduler `first_poll`
+分别耗时约 **1.215/1.082 s**；其间 draft 分别约 **0.357/0.258 s**，
+目标模型 Q probe 约 **0.797/0.765 s**。这个同步 capture 仍占用
+Scheduler owner 和目标模型执行仲裁，不能与同进程正式 Decode
+forward 并行。V 搜索的单次 HTTP 批量往返多为 **0.069–0.075 s**
+（后续 pinned 批约 **0.037–0.039 s**），而 D 的整体
+`search_seconds` 约 **0.327/0.319 s**，包含事件循环被正式
+forward 阻隔后才消费完成结果的时间。两条请求的交付约
+**0.094/0.090 s**，边界已观测至安装约 **0.105/0.100 s**。
+因此此负载首先应解除 D 本地同步 draft/Q probe 对 Decode
+Scheduler 的阻塞，同时保持目标模型 Q 的空间一致性及资源隔离；
+单独优化 V 的 10–50 ms 核心搜索不足以弥补一秒级阻塞。
+
+In a two-client synchronized replay with the timeline opt-in, both long
+fact requests answered correctly. At D clock 10, the next Scheduler
+`first_poll` occupied about **1.215/1.082 s**, including draft
+**0.357/0.258 s** and target-Q probe **0.797/0.765 s**. This synchronous
+capture still holds the owner/execution arbiter and cannot overlap the live
+target Decode forward. Individual HTTP search batches took about
+**0.069–0.075 s**, with later pinned batches around **0.037–0.039 s**,
+whereas D recorded **0.327/0.319 s** for the overall search stage,
+including delayed owner-loop consumption while target forwards proceed.
+Delivery took **0.094/0.090 s** and observed-boundary-to-install about
+**0.105/0.100 s**. An independent, isolated probe execution lane is the
+next architectural performance task; shaving V kernel milliseconds alone
+cannot hide a one-second synchronous D capture.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
