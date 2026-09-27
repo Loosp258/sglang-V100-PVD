@@ -22,6 +22,7 @@ d_staging_bytes="${PVD_D_STAGING_BYTES:-268435456}"
 v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
 probe_scratch_bytes="${PVD_PROBE_SCRATCH_BYTES:-536870912}"
 draft_scratch_bytes="${PVD_DRAFT_SCRATCH_BYTES:-268435456}"
+retrieval_bank_bytes="${PVD_RETRIEVAL_BANK_BYTES:-268435456}"
 prefill_chunk_tokens="${PVD_PREFILL_CHUNK_TOKENS:-2048}"
 p_tp_size="${PVD_P_TP_SIZE:-1}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
@@ -47,6 +48,8 @@ if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
    (( probe_scratch_bytes < 536870912 || probe_scratch_bytes > 4294967296 )) ||
    [[ ! "$draft_scratch_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
    (( draft_scratch_bytes < 268435456 || draft_scratch_bytes > 2147483648 )) ||
+   [[ ! "$retrieval_bank_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
+   (( retrieval_bank_bytes < 268435456 || retrieval_bank_bytes > 2147483648 )) ||
    [[ ! "$prefill_chunk_tokens" =~ ^(64|128|256|512|1024|2048)$ ]] ||
    [[ ! "$p_tp_size" =~ ^(1|2)$ ]]; then
   echo 'invalid bounded long-context capacity settings' >&2
@@ -240,7 +243,7 @@ case "$role" in
           --pvd-retrieval-vector-space qwen25-7b-pvd
           --pvd-retrieval-top-k "$retrieval_top_k"
           --pvd-retrieval-max-union-tokens "$retrieval_union_tokens"
-          --pvd-retrieval-bank-budget-bytes 268435456
+          --pvd-retrieval-bank-budget-bytes "$retrieval_bank_bytes"
           --pvd-retrieval-scratch-budget-bytes "$probe_scratch_bytes"
         )
         ;;
