@@ -1,5 +1,7 @@
 """PVD-only compact TorchNative EXTEND with a previously stored prefix."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from sglang.srt.layers.attention import torch_native_backend as native
@@ -90,3 +92,28 @@ def test_compact_extend_removes_redundant_prefix_queries(monkeypatch):
     backend._run_sdpa_forward_extend(*common, causal=True)
     backend._run_sdpa_forward_extend(*common, causal=True, compact_queries=True)
     assert seen == [8, 2]
+
+
+@pytest.mark.parametrize(
+    "pvd_prefill,probe_override,causal,is_cross_attn,expected",
+    [
+        (False, False, True, False, False),
+        (True, False, True, False, True),
+        (True, False, False, False, False),
+        (True, False, True, True, False),
+        (False, True, False, True, True),
+    ],
+)
+def test_compact_extend_gate_is_pvd_scoped(
+    pvd_prefill, probe_override, causal, is_cross_attn, expected
+):
+    backend = native.TorchNativeAttnBackend.__new__(native.TorchNativeAttnBackend)
+    backend.pvd_chunked_prefill_compaction = pvd_prefill
+    batch = SimpleNamespace(pvd_compact_extend=probe_override)
+
+    assert (
+        backend._should_compact_extend_queries(
+            batch, causal=causal, is_cross_attn=is_cross_attn
+        )
+        is expected
+    )

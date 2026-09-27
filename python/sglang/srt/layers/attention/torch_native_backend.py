@@ -3,11 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 import torch
-from torch.nn.functional import scaled_dot_product_attention
-
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.layers.radix_attention import AttentionType
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from torch.nn.functional import scaled_dot_product_attention
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
@@ -19,10 +18,30 @@ class TorchNativeAttnBackend(AttentionBackend):
         super().__init__()
         self.forward_metadata = None
         self.device = model_runner.device
+        server_args = getattr(model_runner, "server_args", None)
+        # Chunked PVD prefill already has the complete prefix KV in cache, so
+        # its attention only needs Q rows for the current chunk. Keep this
+        # opt-in to PVD serving; other TorchNative callers retain the legacy
+        # behavior unless they explicitly set pvd_compact_extend.
+        self.pvd_chunked_prefill_compaction = (
+            getattr(server_args, "disaggregation_topology", None) == "pvd"
+            and getattr(server_args, "disaggregation_mode", None) == "prefill"
+        )
         # Pool refs — captured at construction so they survive deletion of the
         # corresponding ForwardBatch fields.
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
+
+    def _should_compact_extend_queries(
+        self, forward_batch: ForwardBatch, *, causal: bool, is_cross_attn: bool
+    ) -> bool:
+        if getattr(forward_batch, "pvd_compact_extend", False):
+            return True
+        return (
+            getattr(self, "pvd_chunked_prefill_compaction", False)
+            and causal
+            and not is_cross_attn
+        )
 
     @staticmethod
     def _make_sliding_window_mask(
@@ -112,10 +131,9 @@ class TorchNativeAttnBackend(AttentionBackend):
                 end_kv = start_kv + seq_len_kv
             per_req_query = query[:, start_q:end_q, :]
             if compact_queries:
-                # An incremental PVD probe owns the complete prefix KV, but
-                # only the new suffix has Q rows. The legacy path pads Q to
-                # seq_len_kv and computes a quadratic attention for rows it
-                # discards. Keep that legacy path for all other callers.
+                # The complete prefix KV is already in cache, and only the
+                # current extend chunk has Q rows. The legacy path pads Q to
+                # seq_len_kv and computes attention for rows it discards.
                 attention_query = per_req_query
             else:
                 attention_query = torch.empty(
@@ -133,7 +151,7 @@ class TorchNativeAttnBackend(AttentionBackend):
             per_req_value = v_cache[per_req_tokens].movedim(0, query.dim() - 2)
 
             if not (per_req_query.dtype == per_req_key.dtype == per_req_value.dtype):
-                # scaled_dot_product_attention() expects query, key, and value to have the same dtype
+                # SDPA expects query, key, and value to have the same dtype.
                 per_req_key = per_req_key.to(per_req_query.dtype)
                 per_req_value = per_req_value.to(per_req_query.dtype)
 
@@ -250,7 +268,7 @@ class TorchNativeAttnBackend(AttentionBackend):
             per_req_value = v_cache[per_req_tokens].movedim(0, query.dim() - 2)
 
             if not (per_req_query.dtype == per_req_key.dtype == per_req_value.dtype):
-                # scaled_dot_product_attention() expects query, key, and value to have the same dtype
+                # SDPA expects query, key, and value to have the same dtype.
                 per_req_key = per_req_key.to(per_req_query.dtype)
                 per_req_value = per_req_value.to(per_req_query.dtype)
 
@@ -338,7 +356,9 @@ class TorchNativeAttnBackend(AttentionBackend):
                 and layer.sliding_window_size > -1
                 else None
             ),
-            compact_queries=getattr(forward_batch, "pvd_compact_extend", False),
+            compact_queries=self._should_compact_extend_queries(
+                forward_batch, causal=causal, is_cross_attn=layer.is_cross_attention
+            ),
         )
         return o
 
