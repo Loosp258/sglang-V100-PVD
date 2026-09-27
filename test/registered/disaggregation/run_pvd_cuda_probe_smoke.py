@@ -323,6 +323,8 @@ def main(argv=None, *, validator=validate, schema="pvd-cuda-target-probe-v1"):
                 dtype=args.dtype,
                 load_format="auto" if args.model_path else "dummy",
                 attention_backend="torch_native",
+                prefill_attention_backend="torch_native",
+                decode_attention_backend="torch_native",
                 page_size=1,
                 max_total_tokens=args.max_total_tokens,
                 max_running_requests=4,

@@ -162,3 +162,17 @@ Waiting-queue admission 检查点：`CUDAWaitingAdmissionResources` 可持有
 `CUDARefreshDriver.register()`；无 lane 时参数全为 `None`，旧行为
 不变。两者必须同时且类型正确，否则在安装/注册前拒绝。admission
 相关 **26 passed**。还需启动组件实际创建/验证独立进程并提供绑定。
+
+独立进程启动检查点 / Standalone sidecar readiness gate (2026-09-27):
+`run_pvd_qwen_sidecar_gpu.py` 在 D 节点 GPU0 的隔离进程中加载本地
+Qwen2.5-7B-Instruct 目标模型与 Qwen2.5-0.5B-Instruct draft，计算上述
+真实 checkpoint 摘要，并以显式的 D PID 限定 Unix socket 对端。
+启动输出 `pvd.probe.sidecar.ready.v1`、socket 路径与两个摘要；收到
+SIGTERM 后报告 `sidecar_stopped_cleanly=true`，socket 已移除。脚本还
+核对导入的 ModelRunner 确实来自当前隔离 checkout，防止 editable
+install 意外混用旧源码；实验必须设置当前 checkout 的 `PYTHONPATH`
+（包括 `python` 与 `test/registered/disaggregation`）。两份相关脚本
+通过 Ruff E/F/I 与 format 检查。此 gate **只验证进程就绪和清理**，
+未让生产 D Scheduler 建立连接，也未运行三机检索/传输或性能比较。
+The next gate is a supervised Scheduler-to-sidecar binding with fail-closed
+identity, peer-PID and lifetime checks; a ready socket alone is insufficient.
