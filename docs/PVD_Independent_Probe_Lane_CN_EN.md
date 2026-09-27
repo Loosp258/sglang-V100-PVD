@@ -75,3 +75,11 @@ Ticket 帧限制 256 KiB；回复原始 Q 最多 16 MiB，并限制元数据
 错 nonce、缺层和错 Q 长度；数据验证后复制到 D 所有的 tensor。
 纯协议与编解码测试合计 **36 passed**，Ruff E/F/I 和格式通过。
 仍无 socket 连接、认证或实际独立模型执行。
+
+同机传输检查点 / Local transport checkpoint: `probe_lane_unix.py` 已提供
+权限 0700 的专用目录、0600 socket、Linux `SO_PEERCRED` 同 UID 与
+指定 PID 校验、有限帧、deadline、单 handler 串行执行、有界连接数
+及按 inode 校验后的关闭清理。假预测器的 Unix 往返与协议测试
+合计 **42 passed**；Ruff E/F/I 和格式通过。此处的 PID 绑定是
+本机进程身份校验，不是远端认证；目前仍未启动 GPU0 模型进程，
+也未把 D Scheduler 请求送入此通道。

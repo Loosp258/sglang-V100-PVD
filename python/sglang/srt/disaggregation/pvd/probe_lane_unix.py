@@ -1,0 +1,230 @@
+"""Opt-in local Unix transport for an isolated prediction process.
+
+Only a private directory and exact same-UID/expected-PID peers are accepted.
+The handler is injected; this module loads no model and registers no serving
+hook. CUDA handlers must execute on their owner thread and fence on failure.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import os
+import socket
+import stat
+import struct
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
+    MAX_LANE_REPLY_BYTES,
+    ProbeLaneProtocolError,
+    ProbeLaneReply,
+    ProbeLaneTicket,
+)
+from sglang.srt.disaggregation.pvd.probe_lane_wire import (
+    MAX_REPLY_FRAME_OVERHEAD,
+    MAX_TICKET_FRAME_BYTES,
+    decode_reply,
+    decode_ticket,
+    encode_reply,
+    encode_ticket,
+)
+
+
+def _private_socket_path(directory: str | Path, name: str) -> Path:
+    if (
+        type(name) is not str
+        or not name
+        or name in (".", "..")
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+    ):
+        raise ProbeLaneProtocolError("socket name must be one basename")
+    root = Path(directory)
+    info = root.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise ProbeLaneProtocolError("socket directory must be owner-private")
+    path = root / name
+    if len(os.fsencode(path)) >= 100:
+        raise ProbeLaneProtocolError("Unix socket path exceeds portable bound")
+    return path
+
+
+def _peer_credentials(writer: asyncio.StreamWriter) -> tuple[int, int, int]:
+    if not hasattr(socket, "SO_PEERCRED"):
+        raise ProbeLaneProtocolError("Linux SO_PEERCRED is required")
+    sock = writer.get_extra_info("socket")
+    if sock is None or sock.family != socket.AF_UNIX:
+        raise ProbeLaneProtocolError("an AF_UNIX peer is required")
+    raw = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    return struct.unpack("3i", raw)
+
+
+async def _read_frame(reader: asyncio.StreamReader, *, limit: int) -> bytes:
+    length = struct.unpack(">I", await reader.readexactly(4))[0]
+    if not 0 < length <= limit:
+        raise ProbeLaneProtocolError("Unix probe frame exceeds byte bound")
+    return await reader.readexactly(length)
+
+
+async def _write_frame(writer: asyncio.StreamWriter, frame: bytes, *, limit: int):
+    if not 0 < len(frame) <= limit:
+        raise ProbeLaneProtocolError("Unix probe frame exceeds byte bound")
+    writer.write(struct.pack(">I", len(frame)))
+    writer.write(frame)
+    await writer.drain()
+
+
+class ProbeLaneUnixClient:
+    def __init__(self, directory, name, *, expected_server_pid: int):
+        self.path = _private_socket_path(directory, name)
+        if type(expected_server_pid) is not int or expected_server_pid <= 0:
+            raise ProbeLaneProtocolError("exact sidecar PID required")
+        self.expected_server_pid = expected_server_pid
+
+    async def request(self, ticket: ProbeLaneTicket):
+        frame = encode_ticket(ticket)
+        remaining = ticket.deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise ProbeLaneProtocolError("probe ticket expired before send")
+
+        async def exchange():
+            reader, writer = await asyncio.open_unix_connection(str(self.path))
+            try:
+                pid, uid, _ = _peer_credentials(writer)
+                if pid != self.expected_server_pid or uid != os.getuid():
+                    raise ProbeLaneProtocolError("sidecar PID/UID differs")
+                await _write_frame(writer, frame, limit=MAX_TICKET_FRAME_BYTES)
+                reply = await _read_frame(
+                    reader,
+                    limit=ticket.max_reply_bytes + MAX_REPLY_FRAME_OVERHEAD,
+                )
+                return decode_reply(ticket, reply)
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
+
+        try:
+            return await asyncio.wait_for(exchange(), timeout=remaining)
+        except TimeoutError as exc:
+            raise ProbeLaneProtocolError("probe lane request timed out") from exc
+        except (OSError, asyncio.IncompleteReadError) as exc:
+            raise ProbeLaneProtocolError(
+                "probe lane closed before complete reply"
+            ) from exc
+
+
+class ProbeLaneUnixServer:
+    def __init__(
+        self,
+        directory,
+        name,
+        *,
+        expected_client_pid: int,
+        target_model_id: str,
+        weights_sha256: str,
+        tokenizer_sha256: str,
+        handler: Callable[[ProbeLaneTicket], ProbeLaneReply],
+        max_connections: int = 4,
+    ):
+        self.path = _private_socket_path(directory, name)
+        if type(expected_client_pid) is not int or expected_client_pid <= 0:
+            raise ProbeLaneProtocolError("exact D client PID required")
+        if not callable(handler):
+            raise ProbeLaneProtocolError("prediction handler required")
+        if type(max_connections) is not int or not 1 <= max_connections <= 8:
+            raise ProbeLaneProtocolError("bounded connection count required")
+        self.expected_client_pid = expected_client_pid
+        self.target_model_id = target_model_id
+        self.weights_sha256 = weights_sha256
+        self.tokenizer_sha256 = tokenizer_sha256
+        self.handler = handler
+        self.max_connections = max_connections
+        self._server = None
+        self._active: set[asyncio.Task] = set()
+        self._compute_lock = asyncio.Lock()
+        self._inode = None
+        self._closing = False
+
+    async def start(self):
+        if self._server is not None or self._closing or os.path.lexists(self.path):
+            raise ProbeLaneProtocolError("Unix probe socket already exists or closed")
+        self._server = await asyncio.start_unix_server(
+            self._accept, path=str(self.path), backlog=self.max_connections
+        )
+        os.chmod(self.path, 0o600)
+        self._inode = self.path.stat().st_ino
+        return self
+
+    async def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        task = asyncio.current_task()
+        if self._closing or len(self._active) >= self.max_connections:
+            writer.close()
+            await writer.wait_closed()
+            return
+        self._active.add(task)
+        try:
+            pid, uid, _ = _peer_credentials(writer)
+            if pid != self.expected_client_pid or uid != os.getuid():
+                raise ProbeLaneProtocolError("D client PID/UID differs")
+            frame = await asyncio.wait_for(
+                _read_frame(reader, limit=MAX_TICKET_FRAME_BYTES), timeout=5.0
+            )
+            ticket = decode_ticket(
+                frame,
+                target_model_id=self.target_model_id,
+                weights_sha256=self.weights_sha256,
+                tokenizer_sha256=self.tokenizer_sha256,
+            )
+            async with self._compute_lock:
+                if time.monotonic() >= ticket.deadline_monotonic:
+                    raise ProbeLaneProtocolError("probe ticket expired in queue")
+                response = self.handler(ticket)
+                if inspect.isawaitable(response):
+                    response = await response
+            if time.monotonic() >= ticket.deadline_monotonic:
+                raise ProbeLaneProtocolError("probe computation missed deadline")
+            payload = encode_reply(ticket, response)
+            await _write_frame(
+                writer,
+                payload,
+                limit=min(MAX_LANE_REPLY_BYTES, ticket.max_reply_bytes)
+                + MAX_REPLY_FRAME_OVERHEAD,
+            )
+        except (OSError, EOFError, asyncio.IncompleteReadError, ProbeLaneProtocolError):
+            # Never send a partial or unauthenticated result. The D client
+            # treats close as failure and may use its controlled fallback.
+            pass
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
+            self._active.discard(task)
+
+    async def aclose(self):
+        if self._closing:
+            return
+        self._closing = True
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+        if self._active:
+            await asyncio.gather(*tuple(self._active), return_exceptions=True)
+        try:
+            info = self.path.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISSOCK(info.st_mode) and info.st_ino == self._inode:
+            self.path.unlink()
