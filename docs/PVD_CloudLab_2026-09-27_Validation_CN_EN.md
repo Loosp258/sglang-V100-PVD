@@ -894,6 +894,35 @@ files, a cold two-request smoke was **2/2** and a warm six-request replay
 was **6/6**, **3.60 s** median and **13.31 s** total wall time, with the
 same sparse-mode output hashes.
 
+### 初始化后剩余时延与 owner-loop poll / Residual latency and owner-loop polling
+
+初始化后的暖态日志中，首次刷新 capture 约 **0.44–0.46 s**
+（draft 约 **0.26 s**、目标 Q probe 约 **0.16–0.17 s**），
+search 约 **0.33 s**，delivery 约 **0.08–0.10 s**，
+边界观测到安装约 **0.08–0.10 s**。仍有 D 本地同步
+draft/probe、V 搜索结果消费及交付三个独立成本。
+
+只将 D 的实验环境变量 `PVD_REFRESH_POLL_TURNS` 从默认 1 改为 4，
+六请求同步负载两轮仍 **6/6**、哈希不变，请求中位
+**3.55/3.53 s**，总 wall **13.05/13.42 s**；之前单轮
+poll 的暖态复测为中位 **3.60 s**、总 wall **13.31 s**。
+`search_seconds` 降至约 **0.13 s**，但 `delivery_seconds`
+升至约 **0.17–0.23 s**，端到端变化未稳定优于原值。
+因此未修改默认 poll 次数。各阶段秒数含 owner-loop 调度，
+不是纯网络或 GPU kernel 用时。
+
+After private Prompt seeding, warm first-refresh capture costs about
+**0.44–0.46 s** (draft **~0.26 s**, target-Q probe **~0.16–0.17 s**),
+search **~0.33 s**, delivery **~0.08–0.10 s**, and observed-boundary
+installation **~0.08–0.10 s**. Increasing only D's experimental
+`PVD_REFRESH_POLL_TURNS` from 1 to 4 preserved **6/6** correctness and
+output hashes over two synchronized replays, with **3.55/3.53 s** median
+and **13.05/13.42 s** total wall time. A warm single-turn replay was
+**3.60/13.31 s**. Search-stage accounting fell to **~0.13 s** while
+delivery accounting rose to **~0.17–0.23 s**; the end-to-end difference
+was not stable, so the default poll count was left unchanged. These stage
+times include owner-loop scheduling, not just network or kernel execution.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
