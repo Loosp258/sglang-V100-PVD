@@ -266,11 +266,12 @@ class _PrefetchRequestCore:
             self._session.invalidate()
             self._ready = epoch
             logger.info(
-                "PVD refresh ready: query_source=%s ranks=%d "
+                "PVD refresh ready: query_source=%s probe_source=%s ranks=%d "
                 "capture_seconds=%.6f search_seconds=%.6f "
                 "union_seconds=%.6f delivery_seconds=%.6f "
                 "total_seconds=%.6f",
                 query_source,
+                "private_lane" if lane_client is not None else "inline",
                 len(self._routes),
                 capture_seconds,
                 search_seconds,

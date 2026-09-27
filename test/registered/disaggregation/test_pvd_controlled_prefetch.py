@@ -72,7 +72,7 @@ def test_refresh_phase_diagnostics_follow_actual_success(caplog):
         if record.message.startswith("PVD refresh ready:")
     ]
     assert len(messages) == 1
-    assert "query_source=predicted ranks=2" in messages[0]
+    assert "query_source=predicted probe_source=inline ranks=2" in messages[0]
     timings = dict(re.findall(r"(\w+_seconds)=([0-9.]+)", messages[0]))
     assert set(timings) == {
         "capture_seconds",

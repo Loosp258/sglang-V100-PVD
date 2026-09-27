@@ -20,7 +20,10 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_controlled_prefetch import components
 
 
-def test_private_q_lane_runs_existing_v_search_and_sparse_install():
+def test_private_q_lane_runs_existing_v_search_and_sparse_install(caplog):
+    caplog.set_level(
+        "INFO", logger="sglang.srt.disaggregation.pvd.cpu_prefetch_request"
+    )
     async def run():
         fixture = ControlledFixture(*components())
         prefix = fixture.refresh_prefix(3)
@@ -93,3 +96,7 @@ def test_private_q_lane_runs_existing_v_search_and_sparse_install():
                 fixture.close()
 
     asyncio.run(run())
+    assert any(
+        "query_source=predicted probe_source=private_lane" in record.message
+        for record in caplog.records
+    )

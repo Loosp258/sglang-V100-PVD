@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 import socket
 import stat
@@ -37,6 +38,8 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferBudget,
     TransferCapacityError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _private_socket_path(directory: str | Path, name: str) -> Path:
@@ -189,6 +192,18 @@ class ProbeLaneUnixServer:
         self._compute_lock = asyncio.Lock()
         self._inode = None
         self._closing = False
+        self._rejection_counts: dict[str, int] = {}
+
+    def _record_rejection(self, reason: str):
+        # Fixed categories and logarithmic emission keep diagnostics bounded
+        # even when an unauthenticated peer repeatedly opens the socket.
+        count = self._rejection_counts.get(reason, 0) + 1
+        self._rejection_counts[reason] = count
+        if count & (count - 1) == 0:
+            try:
+                logger.warning("PVD probe lane reject reason=%s count=%d", reason, count)
+            except Exception:
+                pass  # Logging cannot change rejection or reply ownership.
 
     async def start(self):
         if self._server is not None or self._closing or os.path.lexists(self.path):
@@ -203,6 +218,7 @@ class ProbeLaneUnixServer:
     async def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         task = asyncio.current_task()
         if self._closing or len(self._active) >= self.max_connections:
+            self._record_rejection("connection_capacity")
             writer.close()
             await writer.wait_closed()
             return
@@ -251,16 +267,19 @@ class ProbeLaneUnixServer:
                 limit=min(MAX_LANE_REPLY_BYTES, ticket.max_reply_bytes)
                 + MAX_REPLY_FRAME_OVERHEAD,
             )
-        except (
-            OSError,
-            EOFError,
-            asyncio.IncompleteReadError,
-            ProbeLaneProtocolError,
-            TransferCapacityError,
-        ):
-            # Never send a partial or unauthenticated result. The D client
-            # treats close as failure and may use its controlled fallback.
-            pass
+        # Never send a partial or unauthenticated result. D treats a closed
+        # connection as failure under the explicit boundary policy.
+        except TransferCapacityError:
+            self._record_rejection("reply_capacity")
+        except ProbeLaneProtocolError:
+            self._record_rejection("protocol")
+        except TimeoutError:
+            self._record_rejection("ticket_timeout")
+        except (OSError, EOFError, asyncio.IncompleteReadError):
+            self._record_rejection("peer_closed")
+        except Exception:
+            self._record_rejection("handler_error")
+            raise
         finally:
             if reply_owner is not None:
                 self.reply_budget.release(reply_owner)

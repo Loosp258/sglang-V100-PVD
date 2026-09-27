@@ -42,6 +42,8 @@ print(
     ),
     flush=True,
 )
+if mode == "diagnostic":
+    print("PVD probe lane reject reason=reply_capacity count=1", flush=True)
 stop.wait()
 sock.close()
 path.unlink()

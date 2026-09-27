@@ -347,7 +347,9 @@ def test_unix_server_admits_and_refunds_reply_budget(socket_dir):
     asyncio.run(run())
 
 
-def test_two_waiting_sidecar_requests_hold_distinct_reply_reservations(socket_dir):
+def test_two_waiting_sidecar_requests_hold_distinct_reply_reservations(
+    socket_dir, caplog
+):
     async def run():
         release_first = asyncio.Event()
         entered = asyncio.Event()
@@ -374,6 +376,10 @@ def test_two_waiting_sidecar_requests_hold_distinct_reply_reservations(socket_di
                     break
                 await asyncio.sleep(0.01)
             assert budget.snapshot()["reservations"] == 2
+            with pytest.raises(ProbeLaneProtocolError, match="complete reply"):
+                await exchange()
+            assert budget.snapshot()["reservations"] == 2
+            assert "reason=reply_capacity" in caplog.text
             release_first.set()
             await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
             assert budget.snapshot()["reservations"] == 0

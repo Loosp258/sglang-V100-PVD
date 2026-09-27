@@ -8,6 +8,7 @@ the returned process and pass its client/checkpoint to waiting admission.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -24,6 +25,8 @@ from sglang.srt.disaggregation.pvd.probe_lane_identity import (
 )
 from sglang.srt.disaggregation.pvd.probe_lane_unix import ProbeLaneUnixClient
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+
+logger = logging.getLogger(__name__)
 
 
 class ProbeSidecarStartupError(RuntimeError):
@@ -43,6 +46,12 @@ class ProbeSidecarProcess:
 
     def check_alive(self):
         if self._closed or self.process.poll() is not None:
+            if not self._closed:
+                logger.warning(
+                    "PVD probe sidecar exited pid=%d returncode=%s",
+                    self.process.pid,
+                    self.process.returncode,
+                )
             raise ProbeSidecarStartupError("probe sidecar is no longer alive")
 
     def close(self, *, timeout: float = 10.0):
@@ -54,6 +63,7 @@ class ProbeSidecarProcess:
             try:
                 self.process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
+                logger.warning("PVD probe sidecar kill after timeout pid=%d", self.process.pid)
                 self.process.kill()
                 self.process.wait(timeout=timeout)
         self._output_thread.join(timeout=timeout)
@@ -61,6 +71,11 @@ class ProbeSidecarProcess:
         if socket.is_socket():
             socket.unlink()
         self.socket_dir.rmdir()
+        logger.info(
+            "PVD probe sidecar closed pid=%d returncode=%s",
+            self.process.pid,
+            self.process.returncode,
+        )
 
 
 def launch_probe_sidecar(
@@ -118,6 +133,7 @@ def launch_probe_sidecar(
         raise ProbeSidecarStartupError("sidecar socket path exceeds portable bound")
     ready: queue.Queue[dict | BaseException] = queue.Queue(maxsize=1)
     output_tail: deque[str] = deque(maxlen=8)
+    diagnostic_count = 0
     child = None
     reader_thread = None
     try:
@@ -146,9 +162,19 @@ def launch_probe_sidecar(
         )
 
         def drain():
+            nonlocal diagnostic_count
             try:
                 for line in child.stdout:
-                    output_tail.append(line.rstrip()[:512])
+                    bounded = line.rstrip()[:512]
+                    output_tail.append(bounded)
+                    if "PVD probe lane reject reason=" in bounded:
+                        diagnostic_count += 1
+                        if diagnostic_count & (diagnostic_count - 1) == 0:
+                            logger.warning(
+                                "PVD probe sidecar child pid=%d %s",
+                                child.pid,
+                                bounded,
+                            )
                     if len(line) > 4096 or not line.startswith("{"):
                         continue
                     try:
@@ -200,6 +226,7 @@ def launch_probe_sidecar(
             expected_server_pid=child.pid,
             reply_budget=reply_budget,
         )
+        logger.info("PVD probe sidecar ready pid=%d device=cuda:0", child.pid)
         return ProbeSidecarProcess(child, root, client, checkpoint, reader_thread)
     except BaseException:
         if child is not None:

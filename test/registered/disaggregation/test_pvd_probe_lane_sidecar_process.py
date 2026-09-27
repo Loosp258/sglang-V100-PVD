@@ -2,6 +2,7 @@
 
 import socket
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,19 @@ def test_owner_exposes_only_selected_gpu_to_child(short_tmp_root, monkeypatch):
     try:
         owner.check_alive()
         assert owner.client.expected_server_pid == owner.process.pid
+    finally:
+        owner.close()
+
+
+def test_owner_forwards_bounded_child_rejection(short_tmp_root, monkeypatch, caplog):
+    monkeypatch.setenv("PVD_FAKE_SIDECAR_MODE", "diagnostic")
+    owner = _launch(short_tmp_root)
+    try:
+        for _ in range(100):
+            if "reason=reply_capacity" in caplog.text:
+                break
+            time.sleep(0.01)
+        assert "reason=reply_capacity" in caplog.text
     finally:
         owner.close()
 
