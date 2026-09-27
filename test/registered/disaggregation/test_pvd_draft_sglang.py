@@ -44,6 +44,7 @@ from sglang.srt.disaggregation.pvd.probe_search import (
     ProbeSearchSession,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    TransferBudget,
     TransferCapacityError,
 )
 
