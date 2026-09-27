@@ -20,6 +20,8 @@ context_tokens="${PVD_CONTEXT_TOKENS:-2304}"
 fanin_max_slices="${PVD_FANIN_MAX_SLICES:-262144}"
 d_staging_bytes="${PVD_D_STAGING_BYTES:-268435456}"
 v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
+probe_scratch_bytes="${PVD_PROBE_SCRATCH_BYTES:-536870912}"
+draft_scratch_bytes="${PVD_DRAFT_SCRATCH_BYTES:-268435456}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
 # link has the same path and pinned tokenizer bytes, while P/D links include
 # their own local weight shards.
@@ -32,13 +34,17 @@ if [[ ! "$tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
   exit 2
 fi
 if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
-   (( context_tokens < 2304 || context_tokens > 16384 )) ||
+   (( context_tokens < 2304 || context_tokens > 20480 )) ||
    [[ ! "$fanin_max_slices" =~ ^[1-9][0-9]{5,7}$ ]] ||
    (( fanin_max_slices < 262144 || fanin_max_slices > 2097152 )) ||
    [[ ! "$d_staging_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
-   (( d_staging_bytes < 268435456 || d_staging_bytes > 1073741824 )) ||
+   (( d_staging_bytes < 268435456 || d_staging_bytes > 4294967296 )) ||
    [[ ! "$v_total_pages" =~ ^[1-9][0-9]{3,4}$ ]] ||
-   (( v_total_pages < context_tokens || v_total_pages > 32768 )); then
+   (( v_total_pages < context_tokens || v_total_pages > 32768 )) ||
+   [[ ! "$probe_scratch_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
+   (( probe_scratch_bytes < 536870912 || probe_scratch_bytes > 4294967296 )) ||
+   [[ ! "$draft_scratch_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
+   (( draft_scratch_bytes < 268435456 || draft_scratch_bytes > 2147483648 )); then
   echo 'invalid bounded long-context capacity settings' >&2
   exit 2
 fi
@@ -214,7 +220,7 @@ case "$role" in
           --pvd-draft-model-path "$draft"
           --pvd-draft-revision 7ae557604adf67be50417f59c2c2f167def9a775
           --pvd-draft-device "$d_draft_device" --pvd-draft-mem-fraction-static 0.1
-          --pvd-draft-scratch-budget-bytes 268435456
+          --pvd-draft-scratch-budget-bytes "$draft_scratch_bytes"
           --pvd-draft-persistent-budget-bytes 2147483648
           --pvd-draft-predict-tokens "$draft_predict_tokens"
           --pvd-predictive-retrieval-config
@@ -223,7 +229,7 @@ case "$role" in
           --pvd-retrieval-top-k "$retrieval_top_k"
           --pvd-retrieval-max-union-tokens "$retrieval_union_tokens"
           --pvd-retrieval-bank-budget-bytes 268435456
-          --pvd-retrieval-scratch-budget-bytes 536870912
+          --pvd-retrieval-scratch-budget-bytes "$probe_scratch_bytes"
         )
         ;;
       full) ;;

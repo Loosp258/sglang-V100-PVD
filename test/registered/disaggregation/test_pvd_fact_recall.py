@@ -1,5 +1,6 @@
 """Deterministic varied-fact load probe without a live Gateway."""
 
+import hashlib
 import re
 
 import pytest
@@ -23,11 +24,66 @@ def test_fact_prompts_are_reproducible_unique_and_answered_by_one_record():
 
 
 @pytest.mark.parametrize(
-    "seed,case,records", [("../bad", 0, 48), ("ok", -1, 48), ("ok", 0, 97)]
+    "seed,case,records", [("../bad", 0, 48), ("ok", -1, 48), ("ok", 0, 641)]
 )
 def test_fact_prompt_refuses_unbounded_shape(seed, case, records):
     with pytest.raises(ValueError):
         probe.make_prompt(seed, case, records=records)
+
+
+@pytest.mark.parametrize(
+    "target_tokens,records",
+    [(4096, 139), (8192, 278), (16384, 557)],
+)
+def test_long_prompt_profiles_are_bounded_and_reproducible(target_tokens, records):
+    assert probe.records_for_target_prompt_tokens(target_tokens) == records
+    prompt, expected = probe.make_prompt("long_context_20260927", 0, records=records)
+    assert prompt == probe.make_prompt(
+        "long_context_20260927", 0, records=records
+    )[0]
+    assert len(re.findall(r"^Record ID R\d{3}:", prompt, flags=re.MULTILINE)) == records
+    assert re.search(rf"access code is {expected}\.", prompt)
+
+
+def test_long_prompt_collect_reports_actual_tokens_and_input_hash(monkeypatch):
+    seen = []
+
+    def fake_request(url, text, expected, max_tokens, timeout):
+        assert url == "http://gateway" and max_tokens == 128 and timeout == 5
+        input_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        seen.append(input_hash)
+        return {
+            "input_sha256": input_hash,
+            "output_sha256": "o" * 64,
+            "expected_code": expected,
+            "first_code": expected,
+            "first_code_matches": True,
+            "prompt_tokens": 4096,
+            "completion_tokens": 128,
+            "elapsed_seconds": 0.01,
+        }
+
+    monkeypatch.setattr(probe, "_request", fake_request)
+    reports = [
+        probe.collect(
+            "http://gateway",
+            "long_context_20260927",
+            cases=2,
+            target_prompt_tokens=4096,
+            max_tokens=128,
+            timeout=5,
+            concurrency=1,
+        )
+        for _ in range(2)
+    ]
+    assert reports[0]["input_set_sha256"] == reports[1]["input_set_sha256"]
+    assert [item["input_sha256"] for item in reports[0]["results"]] == [
+        item["input_sha256"] for item in reports[1]["results"]
+    ]
+    assert reports[0]["target_prompt_tokens"] == 4096
+    assert reports[0]["prompt_tokens_min"] == reports[0]["prompt_tokens_max"] == 4096
+    assert reports[0]["records_per_case"] == 139
+    assert len(seen) == 4
 
 
 def test_fact_collect_reports_correctness_and_hashes_without_raw_output(monkeypatch):

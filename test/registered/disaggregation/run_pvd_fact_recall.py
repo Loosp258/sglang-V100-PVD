@@ -1,6 +1,10 @@
 """Deterministic, bounded fact-retrieval quality probe through a PVD Gateway.
 
 Run the same seed once with predictive sparse D and once with full-KV D.
+Use ``--target-prompt-tokens`` for reproducible long-context profiles. Those
+profiles are scaled from the existing 48-record, approximately 1413-token
+Gateway measurement; the report always records the Gateway's actual token
+count. Compare ``input_set_sha256`` across modes to confirm identical inputs.
 The report contains expected-answer checks and hashes, not raw model output.
 It does not establish general generation quality or retrieval recall.
 """
@@ -45,6 +49,18 @@ CITIES = (
     "Riga",
     "Cusco",
 )
+TARGET_PROMPT_RECORDS = {4096: 139, 8192: 278, 16384: 557}
+MAX_RECORDS = 640
+
+
+def records_for_target_prompt_tokens(target_prompt_tokens: int) -> int:
+    """Map approximate token profiles to records using the 48/1413 baseline."""
+    if (
+        type(target_prompt_tokens) is not int
+        or target_prompt_tokens not in TARGET_PROMPT_RECORDS
+    ):
+        raise ValueError("target prompt tokens must be one of 4096, 8192, or 16384")
+    return TARGET_PROMPT_RECORDS[target_prompt_tokens]
 
 
 def make_prompt(seed: str, case: int, *, records: int) -> tuple[str, str]:
@@ -55,7 +71,7 @@ def make_prompt(seed: str, case: int, *, records: int) -> tuple[str, str]:
         type(case) is not int
         or case < 0
         or type(records) is not int
-        or not 16 <= records <= 96
+        or not 16 <= records <= MAX_RECORDS
     ):
         raise ValueError("case and record count are out of bounds")
     rng = random.Random(f"{seed}:{case}")
@@ -132,7 +148,8 @@ def collect(
     seed: str,
     *,
     cases: int,
-    records: int,
+    records: int | None = None,
+    target_prompt_tokens: int | None = None,
     max_tokens: int,
     timeout: float,
     concurrency: int = 2,
@@ -142,11 +159,25 @@ def collect(
         raise ValueError("bounded Gateway URL and case count required")
     if not 1 <= max_tokens <= 256 or not 0 < timeout <= 600:
         raise ValueError("bounded generation and timeout required")
+    if target_prompt_tokens is not None:
+        if records is not None:
+            raise ValueError("choose records or target_prompt_tokens, not both")
+        records = records_for_target_prompt_tokens(target_prompt_tokens)
+        if max_tokens not in (128, 256):
+            raise ValueError("long-prompt profiles require 128 or 256 output tokens")
+    elif records is None:
+        records = 48
     if type(concurrency) is not int or not 1 <= concurrency <= 4:
         raise ValueError("concurrency must be an integer in [1, 4]")
     if type(synchronized_start) is not bool:
         raise ValueError("synchronized_start must be a bool")
     prompts = [make_prompt(seed, i, records=records) for i in range(cases)]
+    input_hashes = [
+        hashlib.sha256(text.encode("utf-8")).hexdigest() for text, _ in prompts
+    ]
+    input_set_sha256 = hashlib.sha256(
+        "\n".join(input_hashes).encode("ascii")
+    ).hexdigest()
     results, waves = [], []
     total_started = time.perf_counter()
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -154,16 +185,21 @@ def collect(
             wave = prompts[offset : offset + concurrency]
             gate = threading.Barrier(len(wave)) if synchronized_start else None
 
-            def send(pair):
+            def send(case_index, pair):
                 if gate is not None:
                     try:
                         gate.wait(timeout=min(timeout, 30.0))
                     except threading.BrokenBarrierError as exc:
                         raise ValueError("synchronized wave could not start") from exc
-                return _request(url, pair[0], pair[1], max_tokens, timeout)
+                result = _request(url, pair[0], pair[1], max_tokens, timeout)
+                result["case"] = case_index
+                return result
 
             wave_started = time.perf_counter()
-            futures = [pool.submit(send, pair) for pair in wave]
+            futures = [
+                pool.submit(send, offset + index, pair)
+                for index, pair in enumerate(wave)
+            ]
             results.extend(future.result() for future in futures)
             waves.append(
                 {
@@ -176,6 +212,13 @@ def collect(
         "seed": seed,
         "cases": cases,
         "records_per_case": records,
+        "target_prompt_tokens": target_prompt_tokens,
+        "input_set_sha256": input_set_sha256,
+        "prompt_tokens_min": min(item["prompt_tokens"] for item in results),
+        "prompt_tokens_median": statistics.median(
+            item["prompt_tokens"] for item in results
+        ),
+        "prompt_tokens_max": max(item["prompt_tokens"] for item in results),
         "correct": sum(item["first_code_matches"] for item in results),
         "median_elapsed_seconds": statistics.median(
             item["elapsed_seconds"] for item in results
@@ -194,19 +237,42 @@ def main():
     parser.add_argument("--gateway-url", required=True)
     parser.add_argument("--seed", required=True)
     parser.add_argument("--cases", type=int, default=6)
-    parser.add_argument("--records", type=int, default=48)
-    parser.add_argument("--max-new-tokens", type=int, default=20)
+    size = parser.add_mutually_exclusive_group()
+    size.add_argument(
+        "--records",
+        type=int,
+        help="records per case (default: 48; legacy workload)",
+    )
+    size.add_argument(
+        "--target-prompt-tokens",
+        type=int,
+        choices=tuple(TARGET_PROMPT_RECORDS),
+        help=(
+            "approximate long-prompt profile; actual Gateway token counts are reported"
+        ),
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        help="output limit (default: 20 for legacy runs, 128 for long-prompt profiles)",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument("--synchronized-start", action="store_true")
     args = parser.parse_args()
+    max_tokens = args.max_new_tokens
+    if max_tokens is None:
+        max_tokens = 128 if args.target_prompt_tokens is not None else 20
+    if args.target_prompt_tokens is not None and max_tokens not in (128, 256):
+        parser.error("--target-prompt-tokens requires --max-new-tokens 128 or 256")
     try:
         result = collect(
             args.gateway_url,
             args.seed,
             cases=args.cases,
             records=args.records,
-            max_tokens=args.max_new_tokens,
+            target_prompt_tokens=args.target_prompt_tokens,
+            max_tokens=max_tokens,
             timeout=args.timeout_seconds,
             concurrency=args.concurrency,
             synchronized_start=args.synchronized_start,
