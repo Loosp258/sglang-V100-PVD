@@ -290,6 +290,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 poll_interval_seconds=limits.poll_interval_seconds,
                 lane_client=sidecar.client if sidecar is not None else None,
                 lane_checkpoint=sidecar.checkpoint if sidecar is not None else None,
+                sidecar_prefix_prewarm=limits.sidecar_prefix_prewarm,
             )
 
         target = install_cuda_target_components(

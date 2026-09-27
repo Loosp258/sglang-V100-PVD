@@ -145,6 +145,7 @@ def admit_received_cuda_request(
     release=None,
     lane_client=None,
     lane_checkpoint=None,
+    prewarm_sidecar=False,
 ):
     """Claim a prepared CUDA request in one owner-thread transaction.
 
@@ -156,6 +157,8 @@ def admit_received_cuda_request(
     """
     if not isinstance(preflight, CUDAAdmissionPreflight):
         raise CUDAAdmissionBlocked("validated CUDA admission preflight required")
+    if type(prewarm_sidecar) is not bool:
+        raise CUDAAdmissionBlocked("sidecar prewarm setting must be boolean")
     preflight.revalidate()
     session, driver = preflight.session, preflight.driver
     cache = session.manager.scheduler.tree_cache
@@ -191,6 +194,8 @@ def admit_received_cuda_request(
             raise CUDAAdmissionBlocked("exact private probe lane binding required")
     elif lane_checkpoint is not None:
         raise CUDAAdmissionBlocked("checkpoint identity requires a private probe lane")
+    elif prewarm_sidecar:
+        raise CUDAAdmissionBlocked("sidecar prewarm requires a private probe lane")
     req = session.req
     driver.register(
         req,
@@ -202,6 +207,7 @@ def admit_received_cuda_request(
         pool_owner=pool_owner,
         lane_client=lane_client,
         lane_checkpoint=lane_checkpoint,
+        prewarm_sidecar=prewarm_sidecar,
     )
     try:
         retirement = CUDARequestRelease(

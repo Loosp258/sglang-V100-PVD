@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import time
+import uuid
 from array import array
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -70,6 +71,10 @@ class _Request:
     timeout: float
     lane_client: object = None
     lane_checkpoint: object = None
+    prewarm_task: object = None
+    prewarm_state: str = "disabled"
+    prewarm_error: str | None = None
+    prewarm_overlapped_refresh: bool = False
     refresh: object = None
     close_task: object = None
     capture_lease: object = None
@@ -173,10 +178,13 @@ class CUDARefreshDriver:
         pool_owner=None,
         lane_client=None,
         lane_checkpoint=None,
+        prewarm_sidecar=False,
     ):
         self._owner()
         if type(initial_import_pending) is not bool:
             raise LifecycleError("initial import state must be explicit")
+        if type(prewarm_sidecar) is not bool:
+            raise LifecycleError("sidecar prewarm setting must be boolean")
         if initial_import_pending:
             from sglang.srt.disaggregation.pvd.cuda_model_attention import (
                 CUDAModelPools,
@@ -281,6 +289,8 @@ class CUDARefreshDriver:
                 raise LifecycleError("private lane deadline requires monotonic clock")
         elif lane_checkpoint is not None:
             raise LifecycleError("checkpoint identity requires a private probe lane")
+        elif prewarm_sidecar:
+            raise LifecycleError("sidecar prewarm requires a private probe lane")
         lock = controller.pipeline._lock
         if self._execution_lock is not None and lock is not self._execution_lock:
             raise LifecycleError("all requests must share the target execution lock")
@@ -298,6 +308,7 @@ class CUDARefreshDriver:
             float(timeout_seconds),
             lane_client=lane_client,
             lane_checkpoint=lane_checkpoint,
+            prewarm_state="armed" if prewarm_sidecar else "disabled",
             provisional=initial_import_pending,
             provisional_source=initial_session,
             provisional_pool_owner=pool_owner,
@@ -561,6 +572,8 @@ class CUDARefreshDriver:
                 self.quarantine_provisional(record.req, reason)
                 return
         record.stopping = True
+        if record.prewarm_task is not None and not record.prewarm_task.done():
+            record.prewarm_task.cancel()
         if record.refresh is not None:
             record.refresh.cancel()
         try:
@@ -578,9 +591,75 @@ class CUDARefreshDriver:
             raise LifecycleError("unregistered Req incarnation")
         self._stop(record, reason)
 
+    async def _prewarm_sidecar(self, record, prefix, target_tokens, identity):
+        """Capture one harmless Q to seed only the sidecar's private caches."""
+        from sglang.srt.disaggregation.pvd.probe_lane_routing import (
+            issue_routed_probe_ticket,
+        )
+        from sglang.srt.disaggregation.pvd.probe_search import ProbeWindow
+
+        controller = record.controller
+        if controller.group.coordinator.identity != identity:
+            raise LifecycleError("sidecar prewarm request incarnation changed")
+        request_id, incarnation, entry_transfer_id = identity
+        if (
+            request_id != record.req.rid
+            or prefix.request_id != request_id
+            or prefix.committed_position != target_tokens
+            or prefix.version != f"{incarnation}:{target_tokens}"
+        ):
+            raise LifecycleError("sidecar prewarm request incarnation changed")
+        window = ProbeWindow(
+            incarnation=incarnation,
+            operation_id=uuid.uuid4().hex,
+            entry_transfer_id=entry_transfer_id,
+            prefix=prefix,
+            target_tokens=target_tokens,
+            query_positions=(len(prefix.tokens),),
+            query_source="predicted",
+        )
+        routes = tuple(
+            route
+            for rank in sorted(controller._routes)
+            for route in controller._routes[rank]
+        )
+        ticket = issue_routed_probe_ticket(
+            window,
+            routes,
+            controller.mapping,
+            record.lane_checkpoint,
+            deadline_monotonic=time.monotonic() + record.timeout,
+        )
+        # The valid reply is intentionally discarded.  Its only durable
+        # effects are private prefix rows owned by this request incarnation.
+        async with record.lane_client.request(ticket):
+            pass
+
+    def _finish_prewarm(self, record):
+        task = record.prewarm_task
+        if task is None or not task.done():
+            return
+        record.prewarm_task = None
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            record.prewarm_state = "cancelled"
+        except Exception as exc:  # noqa: BLE001 - sidecar failures are optional.
+            record.prewarm_state = "failed"
+            record.prewarm_error = f"{type(exc).__name__}: {exc}"[:512]
+            _timeline(
+                "PVD timeline event=sidecar_prewarm_failed request_id=%s reason=%s",
+                record.req.rid,
+                record.prewarm_error,
+            )
+        else:
+            record.prewarm_state = "ready"
+
     def _advance(self):
         due = None
+        launched_sidecar = False
         for key, record in tuple(self._records.items()):
+            self._finish_prewarm(record)
             if record.quarantined:
                 continue
             if record.provisional and not record.stopping:
@@ -672,6 +751,43 @@ class CUDARefreshDriver:
                             and self._clock() >= record.deadline
                         ):
                             raise LifecycleError("CUDA refresh timeout")
+                        if record.prewarm_state == "armed":
+                            if (
+                                record.lane_client is not None
+                                and n < boundary - state["lead_tokens"]
+                            ):
+                                identity = controller.group.coordinator.identity
+                                prefix = CommittedPrefix(
+                                    record.req.rid,
+                                    record.prompt + record.outputs,
+                                    n,
+                                    f"{identity[1]}:{n}",
+                                )
+                                coroutine = self._prewarm_sidecar(
+                                    record, prefix, n, identity
+                                )
+                                try:
+                                    record.prewarm_task = self._loop.create_task(
+                                        coroutine
+                                    )
+                                except (RuntimeError, TypeError) as exc:
+                                    coroutine.close()
+                                    record.prewarm_state = "failed"
+                                    record.prewarm_error = (
+                                        f"{type(exc).__name__}: {exc}"
+                                    )[:512]
+                                else:
+                                    record.prewarm_state = "pending"
+                                    launched_sidecar = True
+                                    _timeline(
+                                        "PVD timeline event=sidecar_prewarm_scheduled "
+                                        "request_id=%s committed_tokens=%d t=%.6f",
+                                        record.req.rid,
+                                        n,
+                                        self._clock(),
+                                    )
+                            else:
+                                record.prewarm_state = "skipped_late"
                         if record.ready and n == boundary and not self.arbiter.busy:
                             if controller.try_install(
                                 {rank: n for rank in controller._routes}
@@ -704,12 +820,33 @@ class CUDARefreshDriver:
                             and n >= boundary - state["lead_tokens"]
                             and self._may_decode_past_boundary(record.req, boundary)
                         ):
+                            if (
+                                record.prewarm_task is not None
+                                and not record.prewarm_task.done()
+                                and not record.prewarm_overlapped_refresh
+                            ):
+                                # The sidecar handler executes CUDA work
+                                # synchronously; cancellation can drain its
+                                # reply path but cannot preempt the active GPU
+                                # call, so expose this overlap for diagnosis.
+                                record.prewarm_overlapped_refresh = True
+                                _timeline(
+                                    "PVD timeline event=prewarm_pending_at_refresh "
+                                    "request_id=%s n=%d boundary=%d t=%.6f",
+                                    record.req.rid,
+                                    n,
+                                    boundary,
+                                    self._clock(),
+                                )
                             if due is None:
                                 due = (record, n, boundary)
                 except Exception as exc:
                     record.error = exc
                     self._stop(record, "Req observation or CUDA refresh failed")
-            if record.stopping and (record.refresh is None or record.refresh.done()):
+            if record.stopping and (
+                (record.refresh is None or record.refresh.done())
+                and (record.prewarm_task is None or record.prewarm_task.done())
+            ):
                 coroutine = self._close_controller(record)
                 try:
                     record.close_task = self._loop.create_task(coroutine)
@@ -753,13 +890,13 @@ class CUDARefreshDriver:
                     n,
                     self._clock(),
                 )
-                return record.lane_client is not None
+                return launched_sidecar or record.lane_client is not None
             except BaseException:
                 coroutine.close()
                 self._release_capture(record)
                 record.deadline = None
                 raise
-        return False
+        return launched_sidecar
 
     def poll(self):
         self._owner()
@@ -863,6 +1000,9 @@ class CUDARefreshDriver:
                 key: {
                     "committed_tokens": len(r.outputs) - 1,
                     "refresh_pending": r.refresh is not None,
+                    "sidecar_prewarm": r.prewarm_state,
+                    "sidecar_prewarm_error": r.prewarm_error,
+                    "sidecar_prewarm_overlapped_refresh": r.prewarm_overlapped_refresh,
                     "ready": r.ready,
                     "stopping": r.stopping,
                     "quarantined": r.quarantined,

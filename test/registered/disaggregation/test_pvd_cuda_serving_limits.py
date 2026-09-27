@@ -31,6 +31,16 @@ def write_config(tmp_path, value):
     return path
 
 
+def sidecar_config(tmp_path):
+    return {
+        "script_path": str((tmp_path / "probe.py").resolve()),
+        "directory_parent": str(tmp_path.resolve()),
+        "cuda_visible_devices": "0",
+        "reply_budget_bytes": 16 << 20,
+        "startup_timeout_seconds": 180,
+    }
+
+
 def load(path, *, refresh_interval=16, predict_tokens=4):
     return load_cuda_serving_limits(
         path, refresh_interval=refresh_interval, predict_tokens=predict_tokens
@@ -51,6 +61,7 @@ def test_loads_exact_config_as_immutable_dataclass(tmp_path):
     assert limits.attention_impl == "online"
     assert limits.probe_prefix_cache_bytes == 0
     assert limits.draft_prefix_cache_bytes == 0
+    assert not limits.sidecar_prefix_prewarm
     with pytest.raises(dataclasses.FrozenInstanceError):
         limits.lead_tokens = 3
 
@@ -85,16 +96,53 @@ def test_draft_prefix_cache_budget_is_explicit(tmp_path):
 
 def test_sidecar_opt_in_requires_exact_explicit_fields(tmp_path):
     config = valid_config()
-    config["probe_sidecar"] = {
-        "script_path": "/tmp/probe.py",
-        "directory_parent": "/tmp",
-        "cuda_visible_devices": "0",
-        "reply_budget_bytes": 16 << 20,
-        "startup_timeout_seconds": 180,
-    }
+    config["probe_sidecar"] = sidecar_config(tmp_path)
     sidecar = load(write_config(tmp_path, config)).probe_sidecar
     assert sidecar.cuda_visible_devices == "0"
     assert sidecar.reply_budget_bytes == 16 << 20
+
+
+def test_sidecar_prefix_prewarm_requires_both_private_caches(tmp_path):
+    config = valid_config()
+    config.update(
+        probe_prefix_cache_bytes=256 << 20,
+        draft_prefix_cache_bytes=64 << 20,
+        probe_sidecar=sidecar_config(tmp_path),
+        sidecar_prefix_prewarm=True,
+    )
+    assert load(write_config(tmp_path, config)).sidecar_prefix_prewarm
+
+
+@pytest.mark.parametrize("invalid", [1, "true", None])
+def test_sidecar_prefix_prewarm_requires_json_boolean(tmp_path, invalid):
+    config = valid_config()
+    config["sidecar_prefix_prewarm"] = invalid
+    with pytest.raises(ValueError, match="sidecar_prefix_prewarm must be a boolean"):
+        load(write_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    "missing_or_zero",
+    ["sidecar", "target_cache", "draft_cache"],
+)
+def test_sidecar_prefix_prewarm_requires_sidecar_and_cache_budgets(
+    tmp_path, missing_or_zero
+):
+    config = valid_config()
+    config.update(
+        probe_prefix_cache_bytes=256 << 20,
+        draft_prefix_cache_bytes=64 << 20,
+        probe_sidecar=sidecar_config(tmp_path),
+        sidecar_prefix_prewarm=True,
+    )
+    if missing_or_zero == "sidecar":
+        config.pop("probe_sidecar")
+    elif missing_or_zero == "target_cache":
+        config["probe_prefix_cache_bytes"] = 0
+    else:
+        config["draft_prefix_cache_bytes"] = 0
+    with pytest.raises(ValueError, match="sidecar_prefix_prewarm requires"):
+        load(write_config(tmp_path, config))
 
 
 @pytest.mark.parametrize(
@@ -108,13 +156,7 @@ def test_sidecar_opt_in_requires_exact_explicit_fields(tmp_path):
 )
 def test_sidecar_refuses_ambiguous_or_unbounded_config(tmp_path, key, value):
     config = valid_config()
-    config["probe_sidecar"] = {
-        "script_path": "/tmp/probe.py",
-        "directory_parent": "/tmp",
-        "cuda_visible_devices": "0",
-        "reply_budget_bytes": 16 << 20,
-        "startup_timeout_seconds": 180,
-    }
+    config["probe_sidecar"] = sidecar_config(tmp_path)
     config["probe_sidecar"][key] = value
     with pytest.raises(ValueError, match="probe_sidecar"):
         load(write_config(tmp_path, config))

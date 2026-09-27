@@ -27,6 +27,7 @@ _OPTIONAL_FIELDS = frozenset(
         "probe_prefix_cache_bytes",
         "draft_prefix_cache_bytes",
         "probe_sidecar",
+        "sidecar_prefix_prewarm",
     )
 )
 
@@ -59,6 +60,7 @@ class CUDAServingLimits:
     probe_prefix_cache_bytes: int = 0
     draft_prefix_cache_bytes: int = 0
     probe_sidecar: ProbeSidecarLimits | None = None
+    sidecar_prefix_prewarm: bool = False
 
 
 def _reject_constant(value):
@@ -234,5 +236,19 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
             reply_bytes,
             float(timeout),
         )
+
+    sidecar_prefix_prewarm = config.get("sidecar_prefix_prewarm", False)
+    if type(sidecar_prefix_prewarm) is not bool:
+        raise ValueError("sidecar_prefix_prewarm must be a boolean")
+    if sidecar_prefix_prewarm and (
+        "probe_sidecar" not in values
+        or values["probe_prefix_cache_bytes"] <= 0
+        or values["draft_prefix_cache_bytes"] <= 0
+    ):
+        raise ValueError(
+            "sidecar_prefix_prewarm requires probe_sidecar and positive "
+            "target/draft prefix cache budgets"
+        )
+    values["sidecar_prefix_prewarm"] = sidecar_prefix_prewarm
 
     return CUDAServingLimits(**values)

@@ -48,6 +48,7 @@ class CUDAWaitingAdmissionResources:
     release: object = None
     lane_client: object = None
     lane_checkpoint: object = None
+    sidecar_prefix_prewarm: bool = False
 
 
 class CUDAWaitingAdmissionCoordinator:
@@ -135,6 +136,7 @@ class CUDAWaitingAdmissionCoordinator:
                 release=resources.release,
                 lane_client=resources.lane_client,
                 lane_checkpoint=resources.lane_checkpoint,
+                prewarm_sidecar=resources.sidecar_prefix_prewarm,
             )
         except BaseException:
             if assembly is not None and isinstance(assembly, CUDARoutedRequestAssembly):
