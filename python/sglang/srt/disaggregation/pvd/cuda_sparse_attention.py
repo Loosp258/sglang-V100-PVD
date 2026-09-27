@@ -259,6 +259,8 @@ class CUDASparseAttentionWorkspace:
             None,
             None,
         )
+        self._deferred_forward = False
+        self._deferred = []
         budget.reserve(self._owner, count * 4, 1)
         try:
             self._scratch = torch.empty(count, dtype=torch.float32, device=self.device)
@@ -310,6 +312,41 @@ class CUDASparseAttentionWorkspace:
     def _synchronize(self):
         torch.cuda.synchronize(self.device)
 
+    def begin_deferred_forward(self):
+        self._check()
+        if (
+            self._active
+            or self._deferred_forward
+            or self._deferred
+            or self.attention_impl != "triton_grouped"
+        ):
+            raise SparsePayloadError(
+                "deferred attention requires an idle grouped workspace"
+            )
+        self._deferred_forward = True
+
+    def finish_deferred_forward(self):
+        """Prove all layer kernels complete before releasing any retained owner."""
+        self._check()
+        if not self._deferred_forward or self._active:
+            raise SparsePayloadError("no completed deferred forward to retire")
+        try:
+            self._synchronize()
+        except BaseException:
+            self._quarantine = "deferred attention completion unknown"
+            self._held = tuple(self._deferred)
+            raise
+        try:
+            for resources, pin, owner, _, _ in self._deferred:
+                resources.unpin(pin)
+                self._budget.release(owner)
+        except BaseException:
+            self._quarantine = "deferred attention release unknown"
+            self._held = tuple(self._deferred)
+            raise
+        self._deferred.clear()
+        self._deferred_forward = False
+
     def execute(
         self,
         participant,
@@ -320,6 +357,7 @@ class CUDASparseAttentionWorkspace:
         resources,
         scale,
         borrowed_groups=None,
+        defer_completion=False,
     ):
         self._check()
         if self._active:
@@ -339,8 +377,17 @@ class CUDASparseAttentionWorkspace:
             raise SparsePayloadError(
                 "explicit participant, mapping, buffers and scale required"
             )
+        if defer_completion and (
+            not self._deferred_forward
+            or borrowed_groups is None
+            or self.attention_impl != "triton_grouped"
+        ):
+            raise SparsePayloadError(
+                "deferred attention requires a borrowed forward bank"
+            )
         started = time.perf_counter()
         triton_owner = triton_view = triton_rows = None
+        deferred = False
         pin = f"{self._owner}:execution"
         resources.pin(pin)
         self._active = True
@@ -498,6 +545,11 @@ class CUDASparseAttentionWorkspace:
                             buffers.output,
                             block_tokens=self.chunk_tokens,
                         )
+                        if defer_completion:
+                            self._deferred.append(
+                                (resources, pin, triton_owner, triton_view, triton_rows)
+                            )
+                            deferred = True
                         if self.attention_impl == "triton_shadow":
                             shadow_buffers = AttentionBuffers(
                                 buffers.q,
@@ -539,18 +591,19 @@ class CUDASparseAttentionWorkspace:
                             self.head_dim,
                         )
                 finally:
-                    try:
-                        self._synchronize()
-                    except BaseException:
-                        self._quarantine = "attention completion unknown"
-                        self._held = (
-                            resources,
-                            pin,
-                            participant,
-                            triton_view,
-                            triton_rows,
-                        )
-                        raise
+                    if not deferred:
+                        try:
+                            self._synchronize()
+                        except BaseException:
+                            self._quarantine = "attention completion unknown"
+                            self._held = (
+                                resources,
+                                pin,
+                                participant,
+                                triton_view,
+                                triton_rows,
+                            )
+                            raise
                 if self.attention_impl == "triton_shadow":
                     difference = (
                         buffers.output.float() - self._shadow_output.float()
@@ -599,7 +652,7 @@ class CUDASparseAttentionWorkspace:
                         triton_view,
                         triton_rows,
                     )
-                if self._quarantine is None:
+                if self._quarantine is None and not deferred:
                     try:
                         resources.unpin(pin)
                     except BaseException:
@@ -637,6 +690,8 @@ class CUDASparseAttentionWorkspace:
             "active": self._active,
             "quarantine": self._quarantine,
             "resources_held": self._held is not None,
+            "deferred_forward": self._deferred_forward,
+            "deferred_layers": len(self._deferred),
             "explicit_scratch_bytes": 0
             if self._scratch is None
             else self._scratch.numel() * 4,
@@ -664,7 +719,7 @@ class CUDASparseAttentionWorkspace:
         if self._closed:
             return
         self._check()
-        if self._active:
+        if self._active or self._deferred_forward or self._deferred:
             raise SparsePayloadError("attention execution still owns workspace")
         # Every execution drains before returning. Unknown completion has
         # already quarantined this object; close cannot override that state.

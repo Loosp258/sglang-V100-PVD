@@ -549,6 +549,42 @@ off by default. Removing the more costly per-layer workspace sync requires
 forward-scoped ownership of all pending tables, rows, budgets and outputs;
 simply deleting that fence would be unsafe.
 
+### D 侧整段 forward 延迟完成栅栏 / Forward-scoped CUDA completion
+
+新增默认关闭的 `PVD_DEFER_LAYER_FENCES=1`，且只允许与
+`PVD_REUSE_FORWARD_BANK_LEASE=1`、`triton_grouped` 同时使用。
+每层的 Prompt 指针表、生成 token 行索引、输入/输出资源 pin 和预算
+保留至整段 forward 的 CUDA 完成栅栏之后，再依次释放；如果栅栏失败，
+资源进入 quarantine，不重新发放可能仍被 GPU 使用的地址。独立实验
+配置将 scratch 最大预留槽数扩大到 256；旧配置与默认行为不变。
+CPU 生命周期/配置测试分别 **123/56 passed**，Ruff E/F/I 通过。
+
+CloudLab V100S 上复用相同 P/V/Gateway、Qwen2.5-7B、M8/Top-4、
+packed Q、六个事实 Prompt 和两个客户端；D 确认加载两个 opt-in 环境
+变量并实际执行稀疏 attention。两轮首代码均 **6/6 正确**，每条完整
+输出哈希与上一版 M8 复用读租约路径一致，D 日志未见 quarantine、
+Traceback 或 RDMA remote-access 错误。两轮中位耗时约 **5.09/5.08 s**；
+先前仅复用读租约的两轮约 **5.17/5.17 s**，完整 KV 约 **2.37/2.13 s**。
+这是小样本、未同步起跑的诊断，不能将约 0.08 秒差异归因于本改动，
+更不能称其达到端到端目标；因此仍默认关闭。下一步需 profile 前向
+各阶段及重复 target-Q capture，再决定是否扩大使用范围。
+
+The opt-in `PVD_DEFER_LAYER_FENCES=1` is permitted only with the borrowed
+forward Prompt reader and grouped Triton attention. Each layer's pointer
+tables, generated-row indices, input/output pins and budget charge remain
+owned until one forward-scoped CUDA completion fence; an uncertain fence
+quarantines the owners instead of recycling their addresses. The isolated
+fixture raises scratch reservation slots to 256; defaults are unchanged.
+CPU lifecycle/config tests passed **123/56** respectively, with Ruff E/F/I
+clean. On V100S, two replays of the same six fact prompts answered **6/6**
+first codes and reproduced every complete-output hash from the reader-only
+M8 path. The active D process had both opt-ins set and logged real sparse
+attention; its log showed no traceback, quarantine or RDMA access error.
+Median request latency was **5.09/5.08 s**, versus **5.17/5.17 s** for
+reader-only M8 and **2.37/2.13 s** for full KV. This tiny, unsynchronized
+sample does not establish a causal speedup or the final end-to-end target,
+so deferred fences stay disabled by default.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

@@ -203,6 +203,46 @@ def policy_workspace(monkeypatch, *, capacity=4096, attention_impl="online"):
     return workspace, budget, syncs
 
 
+def test_deferred_forward_releases_table_only_after_completion_fence(monkeypatch):
+    workspace, budget, syncs = policy_workspace(monkeypatch)
+    workspace.attention_impl = "triton_grouped"
+    released = []
+    guard = ResourceGuard(object(), lambda: released.append(True))
+    guard.pin("layer")
+    guard.request_release()
+    budget.reserve("table", 64, 1)
+    workspace.begin_deferred_forward()
+    workspace._deferred.append((guard, "layer", "table", object(), object()))
+    assert not released and budget.snapshot()["used_staging_bytes"] > 64
+    workspace.finish_deferred_forward()
+    assert syncs == [True] and released == [True]
+    assert not workspace.snapshot()["deferred_forward"]
+    assert workspace.snapshot()["deferred_layers"] == 0
+    assert budget.snapshot()["used_staging_bytes"] == workspace._scratch.numel() * 4
+    workspace.close()
+
+
+def test_unknown_deferred_completion_quarantines_pins_and_budget(monkeypatch):
+    workspace, budget, _ = policy_workspace(monkeypatch)
+    workspace.attention_impl = "triton_grouped"
+    released = []
+    guard = ResourceGuard(object(), lambda: released.append(True))
+    guard.pin("layer")
+    guard.request_release()
+    budget.reserve("table", 64, 1)
+    workspace.begin_deferred_forward()
+    workspace._deferred.append((guard, "layer", "table", object(), object()))
+    monkeypatch.setattr(
+        workspace, "_synchronize", lambda: (_ for _ in ()).throw(RuntimeError("fence"))
+    )
+    with pytest.raises(RuntimeError, match="fence"):
+        workspace.finish_deferred_forward()
+    assert workspace.snapshot()["quarantine"] == "deferred attention completion unknown"
+    assert not released and budget.snapshot()["used_staging_bytes"] > 64
+    with pytest.raises(SparsePayloadError, match="quarantined"):
+        workspace.close()
+
+
 def ready(monkeypatch):
     peers, exchange, _, _ = setup(monkeypatch)
     complete(peers, exchange, 0)

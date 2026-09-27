@@ -201,6 +201,15 @@ def test_forward_bank_lease_reuse_refuses_foreign_group_mapping(monkeypatch):
     assert c.budget.snapshot()["used_staging_bytes"] == 0
 
 
+def test_deferred_fences_require_borrowed_grouped_bank(monkeypatch):
+    monkeypatch.setenv("PVD_DEFER_LAYER_FENCES", "1")
+    with pytest.raises(SparsePayloadError, match="deferred layer fences"):
+        fixture(monkeypatch)
+    monkeypatch.setenv("PVD_REUSE_FORWARD_BANK_LEASE", "1")
+    with pytest.raises(SparsePayloadError, match="deferred layer fences"):
+        fixture(monkeypatch)
+
+
 def test_model_accepts_explicit_disabled_speculation_and_rejects_active(monkeypatch):
     c = fixture(monkeypatch)
     c.batch.spec_algorithm = SpeculativeAlgorithm.NONE

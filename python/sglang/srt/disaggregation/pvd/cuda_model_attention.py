@@ -130,6 +130,17 @@ class CUDAModelSparseConsumer:
         self._borrow_forward_bank = (
             os.environ.get("PVD_REUSE_FORWARD_BANK_LEASE") == "1"
         )
+        self._defer_layer_fences = os.environ.get("PVD_DEFER_LAYER_FENCES") == "1"
+        if self._defer_layer_fences and (
+            not self._borrow_forward_bank
+            or workspace.attention_impl != "triton_grouped"
+            or workspace._budget.snapshot()["max_inflight"]
+            < 1 + len(self.layers) * max_batch_size
+        ):
+            raise SparsePayloadError(
+                "deferred layer fences require grouped attention, borrowed "
+                "Prompt readers and enough scratch reservations"
+            )
         self._bank_groups = {}
         self._seen, self._quarantine, self._held = set(), None, None
         self._active = False
@@ -161,7 +172,7 @@ class CUDAModelSparseConsumer:
         self._bank_groups.clear()
         self._packed_inputs.clear()
         self._packed_charged = False
-        stack, pinned, charged = ExitStack(), False, False
+        stack, pinned, charged, deferred_started = ExitStack(), False, False, False
         bound, identities = {}, set()
         failure = None
         try:
@@ -237,6 +248,9 @@ class CUDAModelSparseConsumer:
             self._budget.reserve(self._owner, size, 1)
             charged = True
             self._bound, self._seen = bound, set()
+            if self._defer_layer_fences:
+                self.workspace.begin_deferred_forward()
+                deferred_started = True
             yield self
             if self._seen != {(slot, layer) for slot in bound for layer in self.layers}:
                 raise SparsePayloadError(
@@ -254,6 +268,8 @@ class CUDAModelSparseConsumer:
             try:
                 if self.workspace.snapshot()["quarantine"] is not None:
                     raise SparsePayloadError("attention completion remains unknown")
+                if deferred_started:
+                    self.workspace.finish_deferred_forward()
                 self._synchronize()
                 stack.close()  # Includes Prompt reader completion fences.
                 self._pending = None
@@ -449,6 +465,7 @@ class CUDAModelSparseConsumer:
                         if self._borrow_forward_bank
                         else None
                     ),
+                    defer_completion=self._defer_layer_fences,
                 )
             finally:
                 resources.request_release()
@@ -462,6 +479,7 @@ class CUDAModelSparseConsumer:
             "quarantine": self._quarantine,
             "held": self._held is not None,
             "retained_outputs": len(self._outputs),
+            "deferred_layer_fences": self._defer_layer_fences,
         }
 
 
