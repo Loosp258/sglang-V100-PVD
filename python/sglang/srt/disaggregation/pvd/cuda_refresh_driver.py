@@ -991,6 +991,10 @@ class CUDARefreshDriver:
                             and n >= boundary - state["lead_tokens"]
                             and self._may_decode_past_boundary(record.req, boundary)
                         ):
+                            # Include time spent waiting for the one private
+                            # draft branch in the refresh deadline.
+                            if record.deadline is None:
+                                record.deadline = self._clock() + record.timeout
                             if (
                                 record.prewarm_task is not None
                                 and not record.prewarm_task.done()
@@ -1027,6 +1031,29 @@ class CUDARefreshDriver:
         if due is not None and not self._closing and not self.arbiter.busy:
             record, n, boundary = due
             try:
+                if (
+                    self._cooperative_prediction
+                    and record.lane_client is None
+                    and (
+                        getattr(record.controller.pipeline, "_scope_active", False)
+                        or any(
+                            other is not record and other.prediction_steps is not None
+                            for other in self._records.values()
+                        )
+                    )
+                ):
+                    # The draft provider has one private Req/KV branch. A
+                    # second request may keep formal Decode running up to its
+                    # boundary, then wait for that branch instead of aborting.
+                    _timeline(
+                        "PVD timeline event=prediction_deferred request_id=%s "
+                        "committed_tokens=%d boundary=%d t=%.6f",
+                        record.req.rid,
+                        n,
+                        boundary,
+                        self._clock(),
+                    )
+                    return launched_sidecar
                 cooperative = (
                     self._cooperative_prediction
                     and record.lane_client is None
@@ -1038,7 +1065,8 @@ class CUDARefreshDriver:
                     n,
                     f"{record.controller.group.coordinator.identity[1]}:{n}",
                 )
-                record.deadline = self._clock() + record.timeout
+                if record.deadline is None:
+                    record.deadline = self._clock() + record.timeout
                 future = None
                 if cooperative:
                     future = self._loop.create_future()

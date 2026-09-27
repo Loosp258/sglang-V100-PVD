@@ -15,6 +15,7 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import (
     CUDARefreshDriver,
+    _Request,
     _task_site,
 )
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
@@ -292,6 +293,69 @@ def test_cooperative_prediction_keeps_formal_turns_running_before_search(monkeyp
         assert captures == [(12,)]
         pump(driver, c, lambda: record.refresh is None)
         assert control.can_decode(4)
+
+
+def test_cooperative_refresh_waits_for_private_branch_then_starts(monkeypatch):
+    monkeypatch.delenv("PVD_SEED_PROBE_FROM_PROMPT_KV", raising=False)
+    driver = CUDARefreshDriver(
+        TargetExecutionArbiter(), max_requests=2, max_prefix_tokens=64, clock=lambda: 100
+    )
+    driver._cooperative_prediction = True
+    driver._finish_prewarm = lambda record: None
+    driver._observe = lambda record: 32
+    driver._may_decode_past_boundary = lambda request, boundary: True
+    request = req()
+    request.output_ids.extend([3] * 32)
+
+    def predict(prefix):
+        yield None
+        return ("queries",)
+
+    async def refresh(*args, query_future, **kwargs):
+        await query_future
+
+    pipeline = SimpleNamespace(_scope_active=True, iter_queries=predict)
+    control = SimpleNamespace(
+        _live=lambda: None,
+        group=SimpleNamespace(
+            coordinator=SimpleNamespace(
+                identity=(0, "epoch"),
+                snapshot=lambda: {"next_boundary": 64, "lead_tokens": 32},
+            )
+        ),
+        pending_install_boundary=None,
+        pipeline=pipeline,
+        refresh=refresh,
+    )
+    record = _Request(
+        request,
+        control,
+        {},
+        tuple(request.origin_input_ids),
+        tuple(request.output_ids),
+        1,
+        20,
+    )
+    driver._records[request.rid] = record
+    try:
+        assert driver._advance() is False
+        assert record.refresh is None and record.prediction_steps is None
+        assert record.deadline == 120  # Waiting for the shared branch is bounded.
+
+        pipeline._scope_active = False
+        assert driver._advance() is True
+        assert record.refresh is not None and record.prediction_steps is not None
+        assert record.error is None
+    finally:
+        if record.prediction_steps is not None:
+            record.prediction_steps.close()
+        if record.refresh is not None:
+            record.refresh.cancel()
+            driver._loop.run_until_complete(
+                asyncio.gather(record.refresh, return_exceptions=True)
+            )
+        driver._records.clear()
+        driver._loop.close()
 
 
 def test_terminal_token_cap_skips_unreachable_refresh(monkeypatch):
