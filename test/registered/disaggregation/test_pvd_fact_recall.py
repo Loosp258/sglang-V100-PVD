@@ -147,11 +147,19 @@ def test_stream_parser_hashes_cumulative_text_and_reports_token_timing(monkeypat
     assert result["intertoken_gap_p50_seconds"] == 0.0
     assert result["intertoken_gap_p95_seconds"] == 2.0
     assert result["intertoken_gap_max_seconds"] == 2.0
+    assert result["early_32_gap_p50_seconds"] is None
+    assert result["late_32_gap_p50_seconds"] is None
     assert result["completion_seconds"] == 3.0
     assert result["decode_seconds"] == 2.0 and result["wall_seconds"] == 4.0
     assert result["coalesced_tokens"] == 1
     assert result["true_tpot_observable"] is False
     assert max(response.read_limits) == probe.MAX_SSE_LINE_BYTES + 1
+
+
+def test_decode_windows_exclude_middle_refresh_gap():
+    gaps = [0.1] * 32 + [8.0] + [0.15] * 62 + [0.2] * 32
+    assert probe._decode_window_p50(gaps) == (0.1, 0.2)
+    assert probe._decode_window_p50(gaps[:20]) == (None, None)
 
 
 def test_stream_delta_text_has_same_output_hash_as_final_text():

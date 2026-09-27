@@ -157,6 +157,18 @@ def _nearest_rank(values: list[float], percentile: float) -> float | None:
     return ordered[max(0, math.ceil(percentile * len(ordered)) - 1)]
 
 
+def _decode_window_p50(gaps: list[float]) -> tuple[float | None, float | None]:
+    """Compare early and late Decode away from an M64 refresh boundary.
+
+    A 128-token stream has 127 gaps. Its first and last 32 gaps sit on
+    opposite sides of the first M64 boundary, even when that boundary stalls.
+    Short streams cannot support both windows and report no phase estimate.
+    """
+    if len(gaps) < 64:
+        return None, None
+    return _nearest_rank(gaps[:32], 0.5), _nearest_rank(gaps[-32:], 0.5)
+
+
 def _observe_stream(
     response,
     started: float,
@@ -252,6 +264,7 @@ def _observe_stream(
         raise ValueError("SSE output text length changed while parsing")
     first_code = re.search(r"(?<!\d)\d{5}(?!\d)", output)
     gaps = [later - earlier for earlier, later in zip(token_times, token_times[1:])]
+    early_p50, late_p50 = _decode_window_p50(gaps)
     wall_seconds = time.perf_counter() - started
     ttft_seconds = token_times[0]
     completion_seconds = token_times[-1]
@@ -268,6 +281,8 @@ def _observe_stream(
         "intertoken_gap_p50_seconds": _nearest_rank(gaps, 0.50),
         "intertoken_gap_p95_seconds": _nearest_rank(gaps, 0.95),
         "intertoken_gap_max_seconds": max(gaps) if gaps else None,
+        "early_32_gap_p50_seconds": early_p50,
+        "late_32_gap_p50_seconds": late_p50,
         "completion_seconds": completion_seconds,
         "decode_seconds": completion_seconds - ttft_seconds,
         "wall_seconds": wall_seconds,
