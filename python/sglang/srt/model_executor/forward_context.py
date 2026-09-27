@@ -14,15 +14,15 @@ per-stream backend, frozen-KV MTP draft loop, TBO per-child dispatch) use
 Distinct from ``sglang.srt.compilation.piecewise_context_manager.ForwardContext``,
 which collects compilation-time refs for the piecewise CUDA graph backend.
 
-Concurrency: ``_current`` is a plain module-level global, not thread-local.
-This matches the ``global_server_args`` precedent and is safe because each
-forward runs synchronously on a single Python thread per worker process. If
-worker threads ever share a process, migrate to ``contextvars.ContextVar``.
+Concurrency: the active context belongs to the current Python execution
+context. This lets independent model forwards on separate threads use their
+own attention backends without changing each other's pool bindings.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -40,27 +40,30 @@ class ForwardContext:
     attn_backend: AttentionBackend
 
 
-_current: Optional[ForwardContext] = None
+_current: ContextVar[Optional[ForwardContext]] = ContextVar(
+    "sglang_forward_context", default=None
+)
 
 
 def set_forward_context(ctx: Optional[ForwardContext]) -> Optional[ForwardContext]:
     """Set the active context; return the previous one for explicit
     save/restore. Prefer the ``forward_context()`` context manager."""
-    global _current
-    prev, _current = _current, ctx
+    prev = _current.get()
+    _current.set(ctx)
     return prev
 
 
 def has_forward_context() -> bool:
-    return _current is not None
+    return _current.get() is not None
 
 
 def get_forward_context() -> ForwardContext:
-    assert _current is not None, (
+    current = _current.get()
+    assert current is not None, (
         "no forward context active — call forward_context(...) or set_forward_context(...) "
         "before reading get_forward_context()."
     )
-    return _current
+    return current
 
 
 def get_attn_backend() -> AttentionBackend:
