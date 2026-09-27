@@ -209,6 +209,40 @@ def test_sync_owner_loop_runs_two_http_rounds_from_actual_req_counts(monkeypatch
         assert capture_threads == [owner, owner]
 
 
+def test_cooperative_prediction_keeps_formal_turns_running_before_search(monkeypatch):
+    with synchronous(monkeypatch) as (driver, c, control, request, captures):
+        driver._cooperative_prediction = True
+        steps = []
+
+        def predict(prefix):
+            steps.append(("draft", prefix.committed_position))
+            yield None
+            steps.append(("probe", prefix.committed_position))
+            yield None
+            return control.pipeline.probe.capture_committed(
+                prefix, (len(prefix.tokens),)
+            )
+
+        monkeypatch.setattr(control.pipeline, "iter_queries", predict, raising=False)
+        request.output_ids.extend([3] * 3)  # n=3, first boundary=4.
+        record = driver._records[request.rid]
+        driver.poll()
+        assert steps == [("draft", 3)]
+        assert record.refresh is None and not driver.arbiter.busy
+
+        # The formal result processor can commit A's next token, while the
+        # same scheduler may also commit B/C, between private GPU forwards.
+        request.output_ids.append(4)
+        driver.poll()
+        assert steps == [("draft", 3), ("probe", 3)]
+        assert record.refresh is None and not driver.arbiter.busy
+        driver.poll()
+        assert record.refresh is not None and not driver.arbiter.busy
+        assert captures == [(12,)]
+        pump(driver, c, lambda: record.refresh is None)
+        assert control.can_decode(4)
+
+
 def test_terminal_token_cap_skips_unreachable_refresh(monkeypatch):
     with synchronous(monkeypatch) as (driver, _, _, request, captures):
         request.sampling_params = SimpleNamespace(max_new_tokens=4)

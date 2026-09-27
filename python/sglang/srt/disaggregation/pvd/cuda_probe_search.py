@@ -153,7 +153,9 @@ class CUDAPredictionPipeline(PredictionPipeline):
                 or prediction.prefix_version != prefix.version
                 or len(prediction.tokens) > self.draft_config.predict_tokens
             ):
-                raise PredictionConfigError("draft returned a foreign or oversized branch")
+                raise PredictionConfigError(
+                    "draft returned a foreign or oversized branch"
+                )
             queries = yield from self.probe.capture_steps(prefix, prediction)
             return self._validate_queries(
                 prefix,
