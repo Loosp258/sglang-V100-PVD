@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 import uuid
+from array import array
 from dataclasses import dataclass
 
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
@@ -200,7 +201,7 @@ class CUDAPromptPrewarmer:
             or session._closed
             or req.finished()
             or req.is_retracted
-            or not isinstance(prompt_values, (list, tuple))
+            or not isinstance(prompt_values, (list, tuple, array))
         ):
             raise LifecycleError("exact live D Req and initial PVD session required")
         prompt = tuple(prompt_values)

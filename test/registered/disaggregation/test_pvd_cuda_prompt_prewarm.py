@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from array import array
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -27,7 +28,9 @@ def _case(tmp_path, *, prompt_length=8):
     )
     req = SimpleNamespace(
         rid="request-1",
-        origin_input_ids=[7] * prompt_length,
+        # The serving Req stores token IDs as array('q'), even when the
+        # tokenizer submitted a list. Exercise that production representation.
+        origin_input_ids=array("q", [7] * prompt_length),
         output_ids=[11],
         pvd_transfer_id="entry-1",
         pvd_delivery_id="delivery-1",
