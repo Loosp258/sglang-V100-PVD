@@ -7,6 +7,7 @@ discarded, and the ticket never authorizes retrieval, installation, or Decode.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -23,6 +24,59 @@ from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
 from sglang.srt.disaggregation.pvd.probe_lane_unix import ProbeLaneUnixClient
 from sglang.srt.disaggregation.pvd.probe_search import ProbeWindow
 
+logger = logging.getLogger(__name__)
+
+
+def _safe_monotonic():
+    try:
+        return time.monotonic()
+    except Exception:  # noqa: BLE001 - diagnostic timing is best effort.
+        return None
+
+
+def _elapsed_ms(started, finished):
+    if started is None or finished is None:
+        return None
+    try:
+        return max(0.0, finished - started) * 1000
+    except Exception:  # noqa: BLE001 - diagnostic timing is best effort.
+        return None
+
+
+def _format_ms(value):
+    return "-" if value is None else f"{value:.3f}"
+
+
+def _log_prewarm_event(
+    stage,
+    owner,
+    *,
+    level=logging.INFO,
+    schedule_delay_ms=None,
+    request_duration_ms=None,
+    total_duration_ms=None,
+    error_type=None,
+):
+    """Emit request-identity-only timing; diagnostics must stay fail-open."""
+    try:
+        logger.log(
+            level,
+            "PVD timeline event=prompt_only_sidecar_prewarm stage=%s "
+            "request_id=%s entry_transfer_id=%s utc_epoch_s=%.3f "
+            "schedule_delay_ms=%s request_duration_ms=%s "
+            "total_duration_ms=%s error_type=%s",
+            stage,
+            owner.request_id,
+            owner.entry_transfer_id,
+            time.time_ns() / 1_000_000_000,
+            _format_ms(schedule_delay_ms),
+            _format_ms(request_duration_ms),
+            _format_ms(total_duration_ms),
+            error_type or "-",
+        )
+    except Exception:  # noqa: BLE001 - diagnostics must be fail-open.
+        return
+
 
 @dataclass
 class CUDAPromptPrewarmOwner:
@@ -36,6 +90,7 @@ class CUDAPromptPrewarmOwner:
     receiver_epoch: str
     prompt: tuple[int, ...]
     ticket: ProbeLaneTicket
+    scheduled_at_monotonic: float | None = None
     task: asyncio.Task | None = None
     reconciled: bool = False
     state: str = "pending"
@@ -201,21 +256,62 @@ class CUDAPromptPrewarmer:
         )
 
     async def _run(self, owner):
+        run_started = _safe_monotonic()
+        scheduled_at = owner.scheduled_at_monotonic
+        schedule_delay_ms = _elapsed_ms(scheduled_at, run_started)
+        _log_prewarm_event(
+            "request_started", owner, schedule_delay_ms=schedule_delay_ms
+        )
         try:
             async with self.lane_client.request(owner.ticket):
                 # The bounded Q response has no serving consumer by design.
                 pass
         except asyncio.CancelledError:
             owner.state = "cancelled"
+            finished = _safe_monotonic()
+            _log_prewarm_event(
+                "cancelled",
+                owner,
+                schedule_delay_ms=schedule_delay_ms,
+                request_duration_ms=_elapsed_ms(run_started, finished),
+                total_duration_ms=_elapsed_ms(
+                    scheduled_at if scheduled_at is not None else run_started,
+                    finished,
+                ),
+            )
             raise
-        except Exception:  # noqa: BLE001 - optional sidecar work is fail-open.
+        except Exception as exc:  # noqa: BLE001 - optional sidecar work is fail-open.
             # This is optional sidecar cache work. Admission's ordinary n=0
             # ticket remains the fallback when the exact receipt arrives.
             owner.state = "failed"
             self._stats["failed"] += 1
+            finished = _safe_monotonic()
+            _log_prewarm_event(
+                "failed",
+                owner,
+                level=logging.WARNING,
+                schedule_delay_ms=schedule_delay_ms,
+                request_duration_ms=_elapsed_ms(run_started, finished),
+                total_duration_ms=_elapsed_ms(
+                    scheduled_at if scheduled_at is not None else run_started,
+                    finished,
+                ),
+                error_type=type(exc).__name__,
+            )
             return False
         owner.state = "completed"
         self._stats["completed"] += 1
+        finished = _safe_monotonic()
+        _log_prewarm_event(
+            "completed",
+            owner,
+            schedule_delay_ms=schedule_delay_ms,
+            request_duration_ms=_elapsed_ms(run_started, finished),
+            total_duration_ms=_elapsed_ms(
+                scheduled_at if scheduled_at is not None else run_started,
+                finished,
+            ),
+        )
         return True
 
     def start(self, req, session):
@@ -234,6 +330,7 @@ class CUDAPromptPrewarmer:
                 self._stats["skipped_invalid"] += 1
             return None
         try:
+            owner.scheduled_at_monotonic = _safe_monotonic()
             coroutine = self._run(owner)
             try:
                 task = self.driver._loop.create_task(coroutine)
@@ -243,9 +340,16 @@ class CUDAPromptPrewarmer:
             owner.task = task
             self._owner = owner
             self._stats["started"] += 1
+            _log_prewarm_event("scheduled", owner)
             return owner
-        except Exception:  # noqa: BLE001 - optional task setup is fail-open.
+        except Exception as exc:  # noqa: BLE001 - optional task setup is fail-open.
             self._stats["failed"] += 1
+            _log_prewarm_event(
+                "schedule_failed",
+                owner,
+                level=logging.WARNING,
+                error_type=type(exc).__name__,
+            )
             return None
 
     def owns(self, owner, req, session):
