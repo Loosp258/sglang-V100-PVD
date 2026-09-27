@@ -243,6 +243,16 @@ def test_v100s_deferred_forward_fixture_only_expands_scratch_slots():
     assert limits.target_scratch_max_reservations == 256
 
 
+def test_v100s_m16_deferred_fixture_keeps_same_bounded_resources():
+    directory = Path(__file__).parent
+    m8 = directory / "pvd_qwen_v100s_serving_limits_triton_m8_deferred_long.json"
+    m16 = directory / "pvd_qwen_v100s_serving_limits_triton_m16_deferred_long.json"
+    assert json.loads(m16.read_text()) == json.loads(m8.read_text())
+    limits = load_cuda_serving_limits(m16, refresh_interval=16, predict_tokens=6)
+    assert limits.lead_tokens == 6
+    assert limits.target_scratch_max_reservations == 256
+
+
 def test_v100s_long_context_fixture_uses_online_attention_and_longer_timeout():
     directory = Path(__file__).parent
     candidate_path = directory / "pvd_qwen_v100s_serving_limits_online_long.json"

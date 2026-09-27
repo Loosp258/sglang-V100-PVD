@@ -621,6 +621,27 @@ completed refreshes. Median latency was **4.47/4.45 s**, down from
 and 24 all refreshed and installed correctly. This is not yet a broad
 quality or end-to-end performance acceptance.
 
+### M=16 的延迟与质量取舍 / M16 latency-quality tradeoff
+
+在跳过不可达末尾刷新之后，仅把 D 的刷新间隔从 8 改为 16，仍保留
+lead=6、Top-4、packed Q、forward 延迟栅栏以及相同 P/V/Gateway、
+模型和六个事实请求。两轮首代码均 **6/6 正确**，各自完整输出哈希
+稳定，中位耗时约 **3.64/3.67 s**；M8 约 **4.47/4.45 s**，完整
+KV 约 **2.37/2.13 s**。M16 与 M8 的完整输出只有 **1/6** 哈希
+相同。现有事实任务不能证明广义答案质量，故此配置仅作隔离实验，
+不改默认刷新间隔。专用 M16 配置与 M8 延迟栅栏配置的资源界限完全
+相同；选择 interval=16 必须在启动命令中显式指定。
+
+After terminal-refresh skipping, changing only D's interval from 8 to 16
+(lead 6, Top-4 and the same packed-Q/deferred-forward settings) yielded
+**6/6** correct first codes in each same-seed replay, stable within-mode
+complete-output hashes and **3.64/3.67 s** median request latency. M8
+measured **4.47/4.45 s** and full KV **2.37/2.13 s**. Only **1/6**
+complete outputs matched M8, so this is a latency/approximation tradeoff,
+not evidence for a new default or general answer quality. The named M16
+fixture has exactly the same resource bounds as the M8 deferred fixture;
+`--pvd-kv-refresh-interval 16` remains an explicit launch choice.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
