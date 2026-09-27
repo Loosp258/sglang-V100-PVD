@@ -642,6 +642,42 @@ not evidence for a new default or general answer quality. The named M16
 fixture has exactly the same resource bounds as the M8 deferred fixture;
 `--pvd-kv-refresh-interval 16` remains an explicit launch choice.
 
+### 2095 行冷 CAGRA 与 exact 准入 / Cold CAGRA versus exact admission
+
+在相同 P/D/Gateway、Qwen2.5-7B、M16/lead6/Top4、单 rail 下，
+72 条记录的 Prompt 为 2095 token（部分 case 为 2113），超过 V
+当前 2048 行 exact 阈值。首次原生 CAGRA 路径的一条请求首代码
+正确，但耗时 **26.60 s**；D 日志显示等待检索约 **23.44 s**，
+V 两个 rank 分别为 56 个 head 建图、每 rank 合计约 **10.46 s**，
+就绪前搜索收到可重试的 400。该时间不是一次 GPU search 的耗时。
+
+只将 V 的 `PVD_PROMPT_INDEX_EXACT_MAX_ROWS=2304`（显式实验覆盖）
+并保持 2 GiB index 预算、其他组件和请求不变，2095-token 单请求
+耗时 **3.91 s**，完整输出哈希与冷 CAGRA 路径相同；V 两 rank 的
+exact 索引构建合计分别约 **0.053/0.035 s**。随后六个不同
+2095–2113-token 事实请求、两个客户端、两轮均为首代码 **6/6**，
+模式内完整输出哈希稳定，中位约 **4.51/4.52 s**。仅切换 D 至
+完整 KV，对照两轮也是 **6/6**，中位约 **2.26/2.29 s**；
+exact 稀疏 M16 与完整 KV 的完整输出 **3/6** 哈希相同。
+这些小样本说明：短寿命 Entry 强制冷建 CAGRA 是严重尾延迟，
+但 exact 规避冷建图后仍未证明稀疏路径更快。静态 2304 阈值
+不解决更长索引的准入，也可能增加多 Entry 常驻内存；没有修改
+服务端默认值。
+
+For a 2095-token prompt just above V's current 2048-row exact threshold,
+the first native CAGRA run answered correctly but took **26.60 s**;
+D spent about **23.44 s** waiting for search while V built 56 graphs per
+rank, about **10.46 s** per rank in total. Raising only V's explicit
+experimental exact threshold to 2304 gave **3.91 s** with the identical
+complete-output hash; V's two exact builds took about **0.053/0.035 s**.
+Two replays of six distinct 2095–2113-token facts with two clients were
+**6/6** correct, stable within mode and **4.51/4.52 s** median. Full-KV D
+under the same P/V/Gateway answered **6/6** in **2.26/2.29 s** median;
+only **3/6** complete outputs matched exact sparse M16. Exact-first
+admission is clearly preferable for these short-lived Entries, but the
+static threshold does not solve longer indexes or prove sustainable memory
+pressure, and no serving default was changed.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
