@@ -120,6 +120,56 @@ def test_opt_in_prompt_seed_refuses_unreceived_source(monkeypatch):
     assert releases == [record]
 
 
+def test_cooperative_prompt_seed_pin_ends_before_formal_decode(monkeypatch):
+    monkeypatch.setenv("PVD_SEED_PROBE_FROM_PROMPT_KV", "1")
+    driver = CUDARefreshDriver.__new__(CUDARefreshDriver)
+    driver._poll_number = 1
+    calls = []
+    request = req()
+
+    @contextmanager
+    def seed_scope(actual_req, owner):
+        assert actual_req is request and owner == "owned-pools"
+        calls.append("pin")
+        try:
+            yield
+        finally:
+            calls.append("unpin")
+
+    def steps():
+        calls.append("private-forward")
+        yield None
+        calls.append("private-forward")
+        return ("queries",)
+
+    record = SimpleNamespace(
+        req=request,
+        controller=SimpleNamespace(
+            pipeline=SimpleNamespace(
+                probe=SimpleNamespace(prompt_seed_scope=seed_scope)
+            )
+        ),
+        retirement=SimpleNamespace(state="attached", pool_owner="owned-pools"),
+        full_session=object(),
+        prediction_steps=steps(),
+        prediction_last_poll=-1,
+    )
+    assert driver._prediction_step(record) is None
+    assert calls == ["pin", "private-forward", "unpin"]
+    assert driver._prediction_step(record) is None  # No second step in this poll.
+    driver._poll_number += 1
+    assert driver._prediction_step(record) == ("queries",)
+    assert record.prediction_steps is None
+    assert calls == [
+        "pin",
+        "private-forward",
+        "unpin",
+        "pin",
+        "private-forward",
+        "unpin",
+    ]
+
+
 def finish_writes(c):
     for delivery in tuple(c.store.entries[c.entry.key].deliveries.values()):
         handle = delivery.transfer_handle

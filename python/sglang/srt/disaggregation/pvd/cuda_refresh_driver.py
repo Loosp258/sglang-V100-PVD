@@ -302,13 +302,26 @@ class CUDARefreshDriver:
             raise LifecycleError("checkpoint identity requires a private probe lane")
         elif prewarm_sidecar:
             raise LifecycleError("sidecar prewarm requires a private probe lane")
-        if self._cooperative_prediction and lane_client is None and (
-            getattr(controller.pipeline.probe, "prefix_budget", None) is None
-            or not callable(getattr(controller.pipeline, "iter_queries", None))
+        if (
+            self._cooperative_prediction
+            and lane_client is None
+            and (
+                getattr(controller.pipeline.probe, "prefix_budget", None) is None
+                or not callable(getattr(controller.pipeline, "iter_queries", None))
+            )
         ):
             raise LifecycleError(
                 "same-GPU cooperative prediction requires a private prefix cache"
             )
+        if self._cooperative_prediction and lane_client is None:
+            probe = controller.pipeline.probe
+            if (
+                probe.prefix_budget.snapshot()["staging_bytes"]
+                < probe.prefix_cache_bytes
+            ):
+                raise LifecycleError(
+                    "same-GPU private prefix cache budget cannot hold one request"
+                )
         if early_prewarm_owner is not None:
             prewarmer = getattr(self, "cuda_prompt_prewarm", None)
             if (
@@ -586,6 +599,33 @@ class CUDARefreshDriver:
         finally:
             self._release_capture(record)
 
+    def _prediction_step(self, record):
+        """Run one private forward, fencing and releasing its seed pin before Decode."""
+        if record.prediction_last_poll == self._poll_number:
+            return None
+        record.prediction_last_poll = self._poll_number
+        seed_scope = nullcontext()
+        if os.environ.get("PVD_SEED_PROBE_FROM_PROMPT_KV") == "1":
+            retirement = record.retirement
+            if (
+                record.full_session is None
+                or retirement is None
+                or retirement.state != "attached"
+            ):
+                raise LifecycleError("Prompt-KV seed requires an attached full receiver")
+            seed_scope = record.controller.pipeline.probe.prompt_seed_scope(
+                record.req, retirement.pool_owner
+            )
+        with seed_scope:
+            try:
+                next(record.prediction_steps)
+            except StopIteration as done:
+                record.prediction_steps = None
+                if not isinstance(done.value, tuple) or not done.value:
+                    raise LifecycleError("private prediction returned no query layers")
+                return done.value
+        return None
+
     def _stop(self, record, reason):
         if record.stopping or record.quarantined:
             return
@@ -613,7 +653,10 @@ class CUDARefreshDriver:
                 record.prediction_steps.close()
             except BaseException as exc:
                 record.error, record.quarantined = exc, True
-                if record.full_session is not None or record.provisional_source is not None:
+                if (
+                    record.full_session is not None
+                    or record.provisional_source is not None
+                ):
                     self._quarantine_receiver(record, exc)
                 raise
             finally:
@@ -964,19 +1007,15 @@ class CUDARefreshDriver:
                             f"{record.controller.group.coordinator.identity[1]}:{n}",
                         )
                         record.prediction_boundary = boundary
-                        record.prediction_steps = record.controller.pipeline.iter_queries(
-                            record.prediction_prefix
+                        record.prediction_steps = (
+                            record.controller.pipeline.iter_queries(
+                                record.prediction_prefix
+                            )
                         )
                         record.deadline = self._clock() + record.timeout
                     if record.prediction_boundary != boundary:
                         raise LifecycleError("prediction boundary changed")
-                    if record.prediction_last_poll != self._poll_number:
-                        record.prediction_last_poll = self._poll_number
-                        try:
-                            next(record.prediction_steps)
-                        except StopIteration as done:
-                            queries = done.value
-                            record.prediction_steps = None
+                    queries = self._prediction_step(record)
                     if queries is None:
                         return launched_sidecar
                 elif record.prediction_steps is not None:
@@ -985,13 +1024,7 @@ class CUDARefreshDriver:
                     # Decode peers are scheduled independently.
                     if record.prediction_boundary != boundary:
                         raise LifecycleError("prediction boundary changed")
-                    if record.prediction_last_poll != self._poll_number:
-                        record.prediction_last_poll = self._poll_number
-                        try:
-                            next(record.prediction_steps)
-                        except StopIteration as done:
-                            queries = done.value
-                            record.prediction_steps = None
+                    queries = self._prediction_step(record)
                     if queries is None:
                         return launched_sidecar
                 prefix = record.prediction_prefix
@@ -1009,10 +1042,7 @@ class CUDARefreshDriver:
                 coroutine = record.controller.refresh(
                     prefix,
                     query_positions=(
-                        len(prefix.tokens)
-                        + boundary
-                        - prefix.committed_position
-                        - 1,
+                        len(prefix.tokens) + boundary - prefix.committed_position - 1,
                     ),
                     clients=record.clients,
                     execution_scope=(
