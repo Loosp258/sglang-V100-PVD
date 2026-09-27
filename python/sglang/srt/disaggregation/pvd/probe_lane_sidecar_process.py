@@ -43,15 +43,20 @@ class ProbeSidecarProcess:
     checkpoint: ProbeLaneCheckpointIdentity
     _output_thread: threading.Thread
     _closed: bool = False
+    _exit_reported: bool = False
 
     def check_alive(self):
         if self._closed or self.process.poll() is not None:
-            if not self._closed:
-                logger.warning(
-                    "PVD probe sidecar exited pid=%d returncode=%s",
-                    self.process.pid,
-                    self.process.returncode,
-                )
+            if not self._closed and not self._exit_reported:
+                self._exit_reported = True
+                try:
+                    logger.warning(
+                        "PVD probe sidecar exited pid=%d returncode=%s",
+                        self.process.pid,
+                        self.process.returncode,
+                    )
+                except Exception:
+                    pass  # Diagnostics cannot change the fail-closed state.
             raise ProbeSidecarStartupError("probe sidecar is no longer alive")
 
     def close(self, *, timeout: float = 10.0):

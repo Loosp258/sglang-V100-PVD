@@ -92,6 +92,22 @@ def test_owner_forwards_bounded_child_rejection(short_tmp_root, monkeypatch, cap
         owner.close()
 
 
+def test_unexpected_child_exit_is_reported_once(short_tmp_root, caplog):
+    owner = _launch(short_tmp_root)
+    try:
+        owner.process.terminate()
+        owner.process.wait(timeout=5)
+        for _ in range(3):
+            with pytest.raises(ProbeSidecarStartupError, match="no longer alive"):
+                owner.check_alive()
+        assert sum(
+            "PVD probe sidecar exited pid=" in record.message
+            for record in caplog.records
+        ) == 1
+    finally:
+        owner.close()
+
+
 @pytest.mark.parametrize("mode", ["wrong_pid", "wrong_hash", "exit"])
 def test_bad_ready_or_early_exit_does_not_leave_a_child(
     short_tmp_root, monkeypatch, mode
