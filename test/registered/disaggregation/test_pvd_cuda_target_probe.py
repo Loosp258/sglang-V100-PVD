@@ -107,7 +107,8 @@ def environment(
         def __init__(self, size, length, device, saver):
             probe = holders["probe"]
             assert probe._private_state is not None or (
-                prefix_cache and probe._prefix_caches["r"].resources is not None
+            prefix_cache
+            and any(record.owner is not None for record in probe._prefix_caches.values())
             )
             assert budget.snapshot()["used_staging_bytes"] > 0
             assert device == "cuda:0"
@@ -367,9 +368,7 @@ def test_cooperative_probe_reuses_one_cache_reservation_across_requests(monkeypa
 
     next_prefix = CommittedPrefix("next", tuple(range(1, 10)), 0, "second")
     list(
-        c.probe.capture_steps(
-            next_prefix, DraftPrediction("next", "second", (10, 11))
-        )
+        c.probe.capture_steps(next_prefix, DraftPrediction("next", "second", (10, 11)))
     )
     assert c.probe._prefix_caches["r"].owner is None
     assert c.probe._prefix_caches["next"].tokens == next_prefix.tokens
@@ -384,9 +383,7 @@ def test_cancelled_cooperative_probe_retires_partial_private_prefix(monkeypatch)
     req = SimpleNamespace(rid="r")
     c.probe.register_cached_request(req)
     prefix = CommittedPrefix("r", tuple(range(1, 10)), 0, "version")
-    steps = c.probe.capture_steps(
-        prefix, DraftPrediction("r", "version", (10, 11))
-    )
+    steps = c.probe.capture_steps(prefix, DraftPrediction("r", "version", (10, 11)))
     next(steps)
     steps.close()
     assert not c.lock.locked() and not c.probe._active

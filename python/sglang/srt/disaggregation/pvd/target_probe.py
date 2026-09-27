@@ -590,9 +590,7 @@ class _LlamaTargetProbeCore(TargetProbe):
                         continue
                     self._drop_prefix_cache(older)
                     try:
-                        self.prefix_budget.reserve(
-                            owner, self.prefix_cache_bytes, 1
-                        )
+                        self.prefix_budget.reserve(owner, self.prefix_cache_bytes, 1)
                     except TransferCapacityError:
                         continue
                     break
