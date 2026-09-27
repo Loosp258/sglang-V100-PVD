@@ -38,9 +38,7 @@ def test_fact_prompt_refuses_unbounded_shape(seed, case, records):
 def test_long_prompt_profiles_are_bounded_and_reproducible(target_tokens, records):
     assert probe.records_for_target_prompt_tokens(target_tokens) == records
     prompt, expected = probe.make_prompt("long_context_20260927", 0, records=records)
-    assert prompt == probe.make_prompt(
-        "long_context_20260927", 0, records=records
-    )[0]
+    assert prompt == probe.make_prompt("long_context_20260927", 0, records=records)[0]
     assert len(re.findall(r"^Record ID R\d{3}:", prompt, flags=re.MULTILINE)) == records
     assert re.search(rf"access code is {expected}\.", prompt)
 
