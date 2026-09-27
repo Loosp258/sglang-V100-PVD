@@ -172,6 +172,8 @@ class CUDAProbeSearchSession(ProbeSearchSession):
         self._copy_owner = None
         self._copy_retained = []
         self._copy_unknown = False
+        self._copy_heads = ()
+        self._copy_cache = None
 
     def _validate_pipeline(self, pipeline):
         if not isinstance(pipeline, CUDAPredictionPipeline) or (
@@ -191,42 +193,78 @@ class CUDAProbeSearchSession(ProbeSearchSession):
     def _prepare_scope(self, routes, window):
         if any(r.scope.head_dim > self.max_head_dim for r in routes):
             raise ValueError("query head dimension exceeds admitted bound")
-        # Only one routed tensor is materialized at a time: native-dtype host
-        # copy plus FP32 host cast. No full-head/full-layer GPU gather buffer.
-        size = len(window.query_positions) * max(r.scope.head_dim for r in routes) * 8
+        # Copy every routed head in one layer before the next layer. Both the
+        # native-dtype host rows and FP32 rows fit this reservation; no GPU
+        # gather buffer or unrelated query head is materialized.
+        heads = tuple(sorted({r.query_head for r in routes}))
+        size = (
+            len(window.query_positions)
+            * len(heads)
+            * max(r.scope.head_dim for r in routes)
+            * 8
+        )
         owner = f"pvd-query-copy:{uuid.uuid4().hex}"
         self.copy_budget.reserve(owner, size, 1)
         self._copy_owner = owner
+        self._copy_heads = heads
         try:
             yield
         finally:
             if not self._copy_unknown:
+                self._copy_cache = None
                 self._copy_retained.clear()
+                self._copy_heads = ()
                 self.copy_budget.release(owner)
                 self._copy_owner = None
 
     def _query_rows(self, tensor, indices, head, pipeline):
-        self._copy_retained = [tensor]
-        try:
-            host = torch.empty(
-                (len(indices), tensor.shape[-1]), dtype=tensor.dtype, device="cpu"
+        cached = self._copy_cache
+        if cached is None or cached[0] is not tensor or cached[1] != indices:
+            # The previous layer was fenced; its host storage can be retired
+            # before allocating the next layer under the same reservation.
+            self._copy_retained.clear()
+            self._copy_cache = None
+            head_start = getattr(
+                getattr(pipeline, "probe_config", None), "head_start", 0
             )
-            self._copy_retained.append(host)
-            for row, index in enumerate(indices):
-                host[row].copy_(tensor[index, head].detach(), non_blocking=False)
-        except BaseException:
-            # A failing copy may still have enqueued work. Fence before the
-            # source probe is allowed to discard its Q/capture reservation.
+            local_heads = tuple(
+                global_head - head_start for global_head in self._copy_heads
+            )
+            if not local_heads or any(
+                local_head < 0 or local_head >= tensor.shape[1]
+                for local_head in local_heads
+            ):
+                raise ValueError("routed query head is missing from probe")
+            host = torch.empty(
+                (len(indices), len(local_heads), tensor.shape[-1]),
+                dtype=tensor.dtype,
+                device="cpu",
+                pin_memory=tensor.device.type == "cuda",
+            )
+            self._copy_retained = [tensor, host]
+            try:
+                for row, index in enumerate(indices):
+                    for column, local_head in enumerate(local_heads):
+                        host[row, column].copy_(
+                            tensor[index, local_head].detach(),
+                            non_blocking=tensor.device.type == "cuda",
+                        )
+            except BaseException:
+                # An unsuccessful submission may still have enqueued work.
+                self._finish_copy(pipeline)
+                raise
             self._finish_copy(pipeline)
-            raise
-        self._finish_copy(pipeline)
-        converted = host.to(dtype=torch.float32)
-        self._copy_retained.append(converted)
-        if not torch.isfinite(converted).all():
-            raise ValueError("probe query must contain finite float32 values")
-        rows = tuple(tuple(row) for row in converted.tolist())
-        self._copy_retained.clear()
-        return rows
+            converted = host.to(dtype=torch.float32)
+            self._copy_retained.append(converted)
+            if not torch.isfinite(converted).all():
+                raise ValueError("probe query must contain finite float32 values")
+            cached = (tensor, indices, converted, local_heads)
+            self._copy_cache = cached
+        try:
+            column = cached[3].index(head)
+        except ValueError as exc:
+            raise ValueError("routed query head is missing from probe") from exc
+        return tuple(tuple(row) for row in cached[2][:, column, :].tolist())
 
     def _finish_copy(self, pipeline):
         try:

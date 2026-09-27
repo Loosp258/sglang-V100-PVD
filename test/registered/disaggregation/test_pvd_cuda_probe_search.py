@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -197,6 +198,63 @@ def test_copy_unknown_retains_source_destination_and_reservation(monkeypatch):
     session.close()
     assert budget.snapshot()["used_staging_bytes"] == 64
     assert session._copy_retained[0] is source
+
+
+def test_cuda_query_copy_batches_routed_heads_per_layer(monkeypatch):
+    _, session, window, _, route, budget, calls = bridge(monkeypatch)
+    routes = tuple(replace(route, query_head=head) for head in range(3))
+    source = torch.arange(48, dtype=torch.float16).reshape(2, 3, 8)
+    pipeline = SimpleNamespace(probe_config=SimpleNamespace(head_start=0))
+    with session._prepare_scope(routes, window):
+        for head in range(3):
+            assert session._query_rows(source, (1,), head, pipeline) == (
+                tuple(float(v) for v in source[1, head]),
+            )
+        assert budget.snapshot()["used_staging_bytes"] == 192
+        assert calls.count("cuda:0") == 1
+    assert budget.snapshot()["used_staging_bytes"] == 0
+    assert not session._copy_retained
+
+
+def test_cuda_query_copy_respects_nonzero_query_head_start(monkeypatch):
+    _, session, window, _, route, _, calls = bridge(monkeypatch)
+    routes = (replace(route, query_head=4), replace(route, query_head=5))
+    source = torch.arange(32, dtype=torch.float32).reshape(2, 2, 8)
+    pipeline = SimpleNamespace(probe_config=SimpleNamespace(head_start=4))
+    with session._prepare_scope(routes, window):
+        assert session._query_rows(source, (1,), 1, pipeline) == (
+            tuple(float(v) for v in source[1, 1]),
+        )
+        assert session._query_rows(source, (1,), 0, pipeline) == (
+            tuple(float(v) for v in source[1, 0]),
+        )
+        assert calls.count("cuda:0") == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
+def test_cuda_query_copy_pinned_batch_matches_source_and_budget(monkeypatch):
+    original = torch.cuda.synchronize
+    _, session, window, _, route, budget, _ = bridge(monkeypatch)
+    routes = tuple(replace(route, query_head=head) for head in range(3))
+    source = torch.arange(48, dtype=torch.float16, device="cuda:0").reshape(2, 3, 8)
+    expected = source.cpu()
+    pipeline = SimpleNamespace(probe_config=SimpleNamespace(head_start=0))
+    synchronizations = []
+
+    def fence(device):
+        synchronizations.append(device)
+        original(device)
+
+    monkeypatch.setattr(torch.cuda, "synchronize", fence)
+    with session._prepare_scope(routes, window):
+        for head in range(3):
+            assert session._query_rows(source, (1,), head, pipeline) == (
+                tuple(float(v) for v in expected[1, head]),
+            )
+        assert synchronizations == [torch.device("cuda:0")]
+        assert session._copy_retained[1].is_pinned()
+        assert budget.snapshot()["used_staging_bytes"] == 192
+    assert budget.snapshot()["used_staging_bytes"] == 0
 
 
 def test_nonfinite_query_releases_copy_budget_after_successful_fence(monkeypatch):

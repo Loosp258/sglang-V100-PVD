@@ -790,6 +790,36 @@ Warm grouped V batches often spent about 6–21 ms in the manager, but some
 spent 48–53 ms. This small experiment does **not** establish a reliable
 end-to-end gain or match full-KV latency; output hashes did not change.
 
+### D 查询拷贝按层合批 / D query-copy batching by layer
+
+D 的 CUDA probe 原先逐 Q head 拷贝到 host 并在每个 head 后栅栏。
+现在仅针对本次路由的 Q heads，在同一层用有界 pinned host 缓冲
+提交非阻塞拷贝，做一次完成栅栏后才读 host 数据；下一层前释放
+上一层的已完成缓冲。预算涵盖 native 与 FP32 两份 host 行，
+拷贝提交/完成不确定时仍隔离源、目标与预算。真实 V100S CUDA
+测试及原有相关测试共 **17 passed**；Ruff E/F/I 与格式检查通过。
+
+在 grouped-exact V、M16/Top-4 D、同一 6 条长 Prompt 的同步
+双客户端实验中，首代码 **6/6 正确**，完整输出哈希不变，
+请求中位 **4.81 s**、总 wall **17.52 s**；此前未改 D 的
+grouped-exact 对照为 **4.66 s/17.12 s**。D 的六次同步
+`first_poll` 为 **1.04–1.18 s**，draft/Q probe 仍占主要部分。
+这是正确性与拷贝栅栏粒度的改进，**没有证明端到端加速**；
+继续需要隔离 D 的目标 Q 计算而不是只减少 host-copy 栅栏。
+
+The D CUDA probe now copies only the routed Q heads into a bounded pinned
+host buffer per layer, submits nonblocking copies, and fences once before
+reading them. Both native-dtype and FP32 host rows remain charged; uncertain
+completion retains source/destination ownership and the reservation. The
+related suite, including a real V100S CUDA test, passed **17/17**; Ruff
+E/F/I and formatting passed. On the same synchronized six long-prompt
+M16/Top-4 workload with grouped exact V, first-code accuracy was **6/6**
+and output hashes were unchanged, but median latency/total wall were
+**4.81/17.52 s**, versus **4.66/17.12 s** before this D change.
+Six synchronous `first_poll` calls still took **1.04–1.18 s**. This reduces
+copy-fence granularity without an established end-to-end speedup; the
+synchronous draft/target-Q execution remains the main performance gap.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
