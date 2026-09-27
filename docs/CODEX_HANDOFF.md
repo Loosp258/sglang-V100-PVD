@@ -612,3 +612,62 @@ continues, send only predicted query vectors to V, then leave V search
 and delivery asynchronous while the original request formally decodes.
 Its candidate tokens must never enter formal output IDs, sequence length,
 or KV mappings. No same-GPU implementation or benchmark is validated yet.
+
+## 11. 2026-09-27 same-GPU cooperative prediction checkpoint
+
+The design in section 10 has now been implemented as an opt-in path. Commits
+`72c277531` through `e2f0fbba2` add a private prediction Req/KV branch,
+bounded native SGLang model forwards, and `PVD_COOPERATIVE_PREDICTION=1` in
+the CUDA refresh driver. The branch produces query vectors for V; its draft
+tokens are never accepted into the formal Req or its KV mapping. An optional
+`PVD_SEED_PROBE_FROM_PROMPT_KV=1` copies the committed Prompt KV to the private
+target prefix cache. The refresh epoch opens before the query future finishes,
+so advancing formal Decode cannot make the prediction's prefix snapshot
+regress the committed-token clock. Cancellation closes the private iterator.
+
+The D Scheduler retains the canonical running batch, selects ready rows for
+each formal forward, and synchronizes their tokens and sampling state back to
+the canonical requests. A request waiting for V refresh therefore does not
+hold up ready peers. Prediction work runs on the **same physical GPU** as D,
+in bounded steps between formal forwards; this is Scheduler interleaving, not
+simultaneous CUDA kernel execution. It reuses SGLang's lower-level model
+forwards and KV pools, not its high-level `STANDALONE` speculation worker,
+which would formally accept draft tokens into the whole batch.
+
+Validation on CloudLab clgpu019 D / clgpu020 P / clgpu021 V used target and
+draft on D GPU 1, with GPU 0 unused by D, `PVD_REFRESH_INTERVAL=4`,
+`PVD_DRAFT_PREDICT_TOKENS=2`, a 2304-token context limit, and
+`PVD_PROFILE_REFRESH_TIMELINE=1`. The first concurrent pair returned two
+HTTP 200 responses, each with a 255-token prompt and 16 completion tokens,
+in 3.833 seconds. The unequal-prompt pair returned two HTTP 200 responses,
+with 755/130 prompt tokens and 20 completion tokens each, in 4.455 seconds.
+These are client wall times for functional checks, not matched full-KV
+performance comparisons or quality validation.
+
+The D trace for the unequal pair directly shows interleaving. Request
+`44f4c3c0...` had a prediction step at monotonic `101373.033236`; the
+other request `ae355c71...` formally committed token 1 at `101373.085665`;
+the first request's prediction did not complete until `101373.129298`.
+The first request also formally advanced from token 2 to 3 while its own
+private prediction was active. Later, when the first request waited at
+refresh boundary 4, the ready-only view committed the second request's
+tokens 2, 3, and 4. V search HTTP from `101375.137881` to `101375.268463`
+overlapped a formal commit of the second request's token 11 at
+`101375.219397`. Trace file on D:
+`validation/logs/d-samegpu_e2f0.log`. The matching client runs were launched
+from V's `validation/samegpu_pair_client.py`.
+
+Focused Linux tests on the early-epoch implementation: 101 passed; the
+larger ready-batch/draft suite on the preceding implementation: 137 passed.
+Ruff E/F/I and format checks passed for the touched PVD modules. The final
+trace-only commit adds bounded diagnostic logs and a format correction; its
+live two-request run passed. The paired client now supports unequal prompt
+lengths and bounded staggering to make overlap observable.
+
+The same-GPU path still has no controlled throughput comparison against full
+KV, no repeated randomized concurrent-load trial, and no 16k+ validation.
+The short-context trace proves progress of formal requests during private
+prediction and V search; it does not prove a long-context speed advantage or
+that every Scheduler poll produces a formal token. Measure those separately
+before enabling the opt-in by default. Preserve the seven pre-existing dirty
+files and local `.pvd-validation-*.bundle` artifacts when continuing work.

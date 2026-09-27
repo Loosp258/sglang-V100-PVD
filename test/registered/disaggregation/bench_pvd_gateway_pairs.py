@@ -69,6 +69,8 @@ def main(argv=None):
         "--prompt-schedule", choices=("fixed", "unique"), default="fixed"
     )
     parser.add_argument("--repetitions", type=int, default=500)
+    parser.add_argument("--second-repetitions", type=int)
+    parser.add_argument("--second-delay-seconds", type=float, default=0.0)
     parser.add_argument("--output-tokens", type=int, default=8)
     parser.add_argument("--timeout", type=float, default=300.0)
     args = parser.parse_args(argv)
@@ -80,16 +82,32 @@ def main(argv=None):
         parser.error("bounded rounds, warmups and prompt repetitions required")
     if not (1 <= args.output_tokens <= 128 and 1 <= args.timeout <= 600):
         parser.error("bounded output length and timeout required")
+    if args.second_repetitions is not None and not 1 <= args.second_repetitions <= 1000:
+        parser.error("second prompt repetitions must be in [1, 1000]")
+    if not 0 <= args.second_delay_seconds <= 5:
+        parser.error("second request delay must be in [0, 5] seconds")
     rounds = []
     warmups = []
     for index in range(-args.warmup_rounds, args.rounds):
         prompts = prompts_for_round(args.repetitions, index, args.prompt_schedule)
+        if args.second_repetitions is not None:
+            prompts[1] = prompts_for_round(
+                args.second_repetitions, index, args.prompt_schedule
+            )[1]
         started = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
-                executor.submit(request, args.url, p, args.output_tokens, args.timeout)
-                for p in prompts
+                executor.submit(
+                    request, args.url, prompts[0], args.output_tokens, args.timeout
+                )
             ]
+            if args.second_delay_seconds:
+                time.sleep(args.second_delay_seconds)
+            futures.append(
+                executor.submit(
+                    request, args.url, prompts[1], args.output_tokens, args.timeout
+                )
+            )
             responses = [future.result(timeout=args.timeout + 5) for future in futures]
         row = {
             "wall_seconds": round(time.perf_counter() - started, 3),
@@ -102,6 +120,8 @@ def main(argv=None):
                 "schema": "pvd-gateway-pair-ab-v1",
                 "url": args.url,
                 "repetitions": args.repetitions,
+                "second_repetitions": args.second_repetitions or args.repetitions,
+                "second_delay_seconds": args.second_delay_seconds,
                 "prompt_schedule": args.prompt_schedule,
                 "output_tokens_requested": args.output_tokens,
                 "warmups": warmups,
