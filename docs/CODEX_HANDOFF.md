@@ -234,13 +234,26 @@ opted into/verified separately.
 
 ## 6. Outstanding work — exact next steps
 
-1. **Normalize a reproducible deployment before another result.** Commit
-   this handoff locally; create a new incremental Git bundle through that
-   commit, verify/fetch it on P/V/D, and create fresh isolated worktrees (or
-   deliberately fast-forward the dedicated validation refs). Do not overwrite
-   the dirty older worktrees. Update the sidecar JSON's absolute script path,
-   validate model hashes, GPU mapping, `mlx5_0` and empty ports. No GitHub
-   push. Remove or archive no user data without authorization.
+1. **Completed: normalize a reproducible deployment.** The handoff was
+   committed as `35350660d` and corrected in `ecf1fc247`. The incremental
+   bundle `.pvd-validation-ecf1fc247-sidecar.bundle` contains precisely
+   `88c72ed79..ecf1fc247`; SHA-256 is
+   `12c4c72670759d15ec030372ddb472123c1fcf84935a0ac2ab7765611df07d8a`.
+   It was copied, hash-checked, verified and fetched on P/V/D. All three new
+   isolated worktrees are `$SGLANG_PVD_ROOT/validation/pvd-sidecar-ecf1fc247`
+   at exact HEAD `ecf1fc247e459c1be1ca0aa37e29a5f7d26df2a0`, clean at
+   creation. Older worktrees and user data were preserved. D uses a separate
+   validation-only JSON at
+   `$SGLANG_PVD_ROOT/validation/config/pvd_qwen_v100s_serving_limits_triton_sidecar_ecf1fc247.json`, whose
+   `probe_sidecar.script_path` points into the new D worktree. P and D target
+   weights/tokenizer content hashes match section 4; V's tokenizer-only mirror
+   matches the same tokenizer hash. All six V100S showed 0 MiB usage,
+   `mlx5_0` was ACTIVE, `mlx5_1` DOWN, and ports 30002/30003/9100/9300/9301/
+   8001 had no listener. The focused startup/Unix/process/config suite on V's
+   pytest-equipped environment passed **96 tests** against this worktree. D's
+   serving Conda Python lacks pytest. No services were started for this
+   normalization step, no new serving-latency claim was made, and nothing was
+   pushed to GitHub.
 2. **Prove and diagnose the lane selection under failures.** Add an explicit
    `probe_source=private_lane|inline` field to D refresh timings and bounded
    sidecar rejection/lifecycle diagnostics; the current sidecar supervisor
