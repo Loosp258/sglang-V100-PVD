@@ -125,6 +125,7 @@ def test_cooperative_prompt_seed_pin_ends_before_formal_decode(monkeypatch):
     monkeypatch.setenv("PVD_SEED_PROBE_FROM_PROMPT_KV", "1")
     driver = CUDARefreshDriver.__new__(CUDARefreshDriver)
     driver._poll_number = 1
+    driver._clock = lambda: 1.0
     calls = []
     request = req()
 
@@ -152,6 +153,7 @@ def test_cooperative_prompt_seed_pin_ends_before_formal_decode(monkeypatch):
         ),
         retirement=SimpleNamespace(state="attached", pool_owner="owned-pools"),
         full_session=object(),
+        outputs=tuple(request.output_ids),
         prediction_steps=steps(),
         prediction_last_poll=-1,
     )
