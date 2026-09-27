@@ -16,6 +16,8 @@ from sglang.srt.disaggregation.pvd.draft_forward_adapter import DraftForwardAdap
 from sglang.srt.disaggregation.pvd.draft_runner_sglang import SGLangDraftRunnerFactory
 from sglang.srt.disaggregation.pvd.draft_sglang import SGLangDraftProvider
 from sglang.srt.disaggregation.pvd.prediction import (
+    CommittedPrefix,
+    DraftPrediction,
     PredictionConfigError,
     PredictionPipeline,
 )
@@ -121,6 +123,46 @@ class CUDAPredictionPipeline(PredictionPipeline):
             draft_seconds,
             probe_seconds,
         )
+
+    def iter_queries(self, prefix):
+        """Produce prediction-only Q in bounded same-GPU scheduler steps.
+
+        The caller advances this generator between ordinary formal Decode
+        forwards. Neither the shared model lock nor an RNG fork spans a yield.
+        Close it on request cancellation to retire branch-owned KV promptly.
+        """
+        self.probe._require_main_thread()
+        if (
+            self._scope_active
+            or self._quarantined
+            or self.probe._quarantined
+            or self.provider.degraded
+        ):
+            raise PredictionConfigError("CUDA prediction is active or quarantined")
+        if not isinstance(prefix, CommittedPrefix):
+            raise PredictionConfigError("immutable committed prefix required")
+        self._scope_active = True
+        try:
+            with self.provider.branch():
+                prediction = yield from self.provider.iter_predict(
+                    prefix, self.draft_config.predict_tokens
+                )
+            if (
+                not isinstance(prediction, DraftPrediction)
+                or prediction.request_id != prefix.request_id
+                or prediction.prefix_version != prefix.version
+                or len(prediction.tokens) > self.draft_config.predict_tokens
+            ):
+                raise PredictionConfigError("draft returned a foreign or oversized branch")
+            queries = yield from self.probe.capture_steps(prefix, prediction)
+            return self._validate_queries(
+                prefix,
+                queries,
+                range(len(prefix.tokens), len(prefix.tokens) + len(prediction.tokens)),
+            )
+        finally:
+            self._scope_active = False
+            self._quarantined |= self.probe._quarantined or self.provider.degraded
 
     @contextmanager
     def query_branch(self, prefix):

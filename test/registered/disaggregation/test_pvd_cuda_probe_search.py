@@ -16,7 +16,11 @@ from sglang.srt.disaggregation.pvd.cuda_probe_search import (
 )
 from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
 from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
-from sglang.srt.disaggregation.pvd.prediction import PredictionConfigError
+from sglang.srt.disaggregation.pvd.prediction import (
+    DraftPrediction,
+    PredictionConfigError,
+    QueryVectors,
+)
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
@@ -78,6 +82,64 @@ def prepare(session, window, pipeline, route):
     return session.prepare(
         window, pipeline, routes=(route,), head_mapping=QueryHeadMapping(1, 1)
     )
+
+
+def test_pipeline_steps_release_same_gpu_for_formal_batch(monkeypatch):
+    _, _, window, pipeline, _, _, _ = bridge(monkeypatch)
+    prefix = window.prefix
+
+    def draft_steps(prefix, max_tokens):
+        assert max_tokens == 2
+        yield "private-draft-forward"
+        return DraftPrediction(prefix.request_id, prefix.version, (31, 32))
+
+    def target_steps(prefix, prediction):
+        assert prediction.tokens == (31, 32)
+        yield "private-target-forward"
+        positions = (len(prefix.tokens), len(prefix.tokens) + 1)
+        return (
+            QueryVectors(
+                vector_space=pipeline.probe_config.target_model_id,
+                version="private-target-q",
+                layer=0,
+                head_start=0,
+                head_count=1,
+                positions=positions,
+                valid_length=2,
+                vectors=torch.ones((2, 1, 8)),
+                prefix_version=prefix.version,
+                positional_encoding="rope_applied",
+                request_id=prefix.request_id,
+            ),
+        )
+
+    monkeypatch.setattr(pipeline.provider, "iter_predict", draft_steps)
+    monkeypatch.setattr(pipeline.probe, "capture_steps", target_steps)
+
+    def formal_worker_can_take_gpu():
+        acquired = []
+
+        def check():
+            got = pipeline._lock.acquire(blocking=False)
+            acquired.append(got)
+            if got:
+                pipeline._lock.release()
+
+        thread = threading.Thread(target=check)
+        thread.start()
+        thread.join()
+        return acquired == [True]
+
+    steps = pipeline.iter_queries(prefix)
+    assert next(steps) == "private-draft-forward"
+    assert formal_worker_can_take_gpu()
+    assert next(steps) == "private-target-forward"
+    assert formal_worker_can_take_gpu()
+    with pytest.raises(StopIteration) as finished:
+        next(steps)
+    assert finished.value.value[0].version == "private-target-q"
+    assert not pipeline._scope_active
+    assert not pipeline.provider._active
 
 
 def test_cuda_prediction_logs_draft_probe_and_scope_entry_costs(monkeypatch, caplog):

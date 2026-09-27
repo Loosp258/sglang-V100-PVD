@@ -55,9 +55,10 @@ transient allocation.
 
 Owning resources separately is not the same as being safe to execute
 concurrently. ``ModelRunner`` and its attention backend carry per-forward
-state, so **execution is serialized** behind one lock until concurrent use is
-positively established. The branch limit bounds how many handles may exist,
-not how many forwards may run at once.
+state, so each forward is serialized behind one lock. The cooperative iterator
+releases that lock between completed forwards, allowing the caller to schedule
+formal Decode before advancing the private branch again. The branch limit
+bounds how many handles may exist, not how many forwards may run at once.
 
 Release ordering
 ----------------
@@ -82,7 +83,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Dict, Generator, List, Optional, Protocol, Sequence, Tuple
 
 from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prediction import (
@@ -376,6 +377,22 @@ class PreparedPrefix(Protocol):
     def length(self) -> int: ...
 
 
+@dataclass(frozen=True, slots=True)
+class DraftForwardProgress:
+    """A completed private draft forward, safe for the caller to yield around.
+
+    Candidate ids and logits stay inside the prediction branch. This event
+    carries only enough progress information for a cooperative scheduler to
+    decide when to run another formal Decode turn.
+    """
+
+    forward_index: int
+    stage: str
+    forward_mode: str
+    sequence_length: int
+    candidate_count: int
+
+
 class DraftExecutionHandle(Protocol):
     """One branch's execution state. The only thing that can free it.
 
@@ -397,6 +414,18 @@ class DraftExecutionHandle(Protocol):
 
     def release(self) -> None:
         """Free this handle's slots, KV rows and scratch. Idempotent."""
+
+
+class CooperativeDraftExecutionHandle(DraftExecutionHandle, Protocol):
+    """A handle that can yield only after one private model forward completes."""
+
+    def iter_prepare_prefix(
+        self, tokens: Tuple[int, ...]
+    ) -> Generator[DraftForwardProgress, None, PreparedPrefix]: ...
+
+    def iter_generate(
+        self, prepared: PreparedPrefix, max_tokens: int
+    ) -> Generator[DraftForwardProgress, None, Sequence[int]]: ...
 
 
 class DraftRunnerFactory(Protocol):
@@ -1074,6 +1103,126 @@ class SGLangDraftProvider(DraftProvider):
                 prefix.request_id,
                 len(prefix.tokens),
             )
+        return DraftPrediction(
+            request_id=prefix.request_id,
+            prefix_version=prefix.version,
+            tokens=tokens,
+            source=source,
+        )
+
+    def _advance_cooperative_locked(self, steps):
+        """Advance one handle step while ``_execution_lock`` is held."""
+        if self.degraded:
+            raise DraftWorkerError("shared draft worker is quarantined")
+        try:
+            progress = next(steps)
+        except StopIteration as completed:
+            return False, completed.value
+        if not isinstance(progress, DraftForwardProgress):
+            raise DraftCapabilityError(
+                "a cooperative handle must yield DraftForwardProgress after "
+                "each completed forward"
+            )
+        return True, progress
+
+    def _advance_cooperative(self, steps, owner_thread: int):
+        """Hold the shared runner lock for one forward, then release it."""
+        if threading.get_ident() != owner_thread:
+            raise DraftLifecycleError(
+                "a cooperative prediction must stay on its branch owner thread"
+            )
+        with self._execution_lock:
+            return self._advance_cooperative_locked(steps)
+
+    def iter_predict(
+        self, prefix: CommittedPrefix, max_tokens: int
+    ) -> Generator[DraftForwardProgress, None, DraftPrediction]:
+        """Yield after each private forward; return the result on exhaustion.
+
+        Drive this generator inside ``branch()`` and on that branch's owner
+        thread. Each ``next()`` runs at most one draft ``ModelExecutor.forward``
+        while holding the shared runner lock; the lock is released before this
+        generator yields. The caller can run a formal Decode turn between
+        yields, then advance the same immutable-prefix prediction again.
+
+        Close the generator if scheduling is cancelled. Closing drains and
+        releases its private request/KV branch before returning. Candidate IDs
+        are available only as ``StopIteration.value`` after the generator is
+        exhausted. This path is greedy and does not open an RNG fork scope;
+        callers must not wrap it in ``PredictionPipeline.query_branch()``,
+        whose forked RNG scope would span the scheduler's formal Decode turns.
+        Cooperative execution bypasses the optional shared sidecar prefix
+        cache because its single mutable KV lease cannot span scheduler yields;
+        this path always uses branch-private prefix rows.
+        """
+        record = self._require_branch()
+        owner_thread = threading.get_ident()
+        if not isinstance(prefix, CommittedPrefix):
+            raise PredictionConfigError("prediction requires a committed snapshot")
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
+            raise PredictionConfigError("max_tokens must be an integer")
+        if max_tokens <= 0:
+            raise PredictionConfigError("max_tokens must be positive")
+        if not prefix.tokens:
+            raise PredictionConfigError("an empty prefix predicts nothing")
+        self._check_tokens(prefix.tokens, "prefix")
+        budgeted = min(max_tokens, self.config.predict_tokens)
+        self.capabilities.require_shape(
+            prefix_tokens=len(prefix.tokens), predict_tokens=budgeted
+        )
+
+        prepare = getattr(record.handle, "iter_prepare_prefix", None)
+        generate = getattr(record.handle, "iter_generate", None)
+        if not callable(prepare) or not callable(generate):
+            raise DraftCapabilityError(
+                "this draft handle does not support cooperative model-forward steps"
+            )
+
+        try:
+            with self._execution_lock:
+                if self.degraded:
+                    raise DraftWorkerError("shared draft worker is quarantined")
+                if getattr(self.factory, "prefix_cache_enabled", False):
+                    # The cache has one shared mutable request/KV slot. A
+                    # cooperative prediction cannot hold that lease while
+                    # yielding to the scheduler, so use only this handle's
+                    # private rows. The synchronous API keeps cache support.
+                    record.handle.set_prefix_cache_identity(None)
+                prefix_steps = prepare(prefix.tokens)
+                more, value = self._advance_cooperative_locked(prefix_steps)
+
+            while more:
+                yield value
+                more, value = self._advance_cooperative(prefix_steps, owner_thread)
+            prepared = value
+
+            generation_steps = generate(prepared, budgeted)
+            more, value = self._advance_cooperative(generation_steps, owner_thread)
+            while more:
+                yield value
+                more, value = self._advance_cooperative(
+                    generation_steps, owner_thread
+                )
+            produced = value
+        except BaseException:
+            # In particular, GeneratorExit closes a paused prediction. Reacquire
+            # the lock for completion drain and private-row cleanup, then let the
+            # outer branch context return its budget/admission slot.
+            with self._execution_lock:
+                self._retire_locked(record.branch_id)
+            raise
+
+        tokens = self._validate(produced, budgeted)
+        source = self.describe()
+        if getattr(self.factory, "prefix_cache_enabled", False):
+            source["prefix"] = "recomputed-cooperative-cache-bypassed"
+            logger.info(
+                "PVD draft prefix cache action=%s request_id=%s tokens=%d",
+                "recomputed-cooperative-cache-bypassed",
+                prefix.request_id,
+                len(prefix.tokens),
+            )
+        source["execution"] = "serialized-forward-steps"
         return DraftPrediction(
             request_id=prefix.request_id,
             prefix_version=prefix.version,

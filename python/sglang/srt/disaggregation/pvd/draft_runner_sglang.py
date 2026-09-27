@@ -48,12 +48,13 @@ import threading
 import uuid
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Generator, List, Optional, Protocol, Sequence, Tuple
 
 import torch
 from sglang.srt.disaggregation.pvd.draft_sglang import (
     DraftCapabilities,
     DraftCapabilityError,
+    DraftForwardProgress,
     DraftLifecycleError,
     DraftWorkerError,
 )
@@ -456,6 +457,7 @@ class SGLangDraftHandle:
         self._kv: List[int] = []
         self._released = False
         self._release_error: Optional[str] = None
+        self._forward_index = 0
         #: Everything handed to the executor, for inspection in tests.
         self.forwards: List[DraftForwardInputs] = []
 
@@ -530,14 +532,23 @@ class SGLangDraftHandle:
 
     # -- prefix -------------------------------------------------------------
 
-    def _forward_prefix_chunks(
+    @staticmethod
+    def _finish_steps(steps: Generator[Any, None, Any]) -> Any:
+        """Exhaust a cooperative handle method for the legacy sync surface."""
+        while True:
+            try:
+                next(steps)
+            except StopIteration as completed:
+                return completed.value
+
+    def _iter_forward_prefix_chunks(
         self,
         tokens: Tuple[int, ...],
         *,
         prefix_length: int,
         new_rows: Sequence[int],
-    ) -> Any:
-        """Forward a new prefix suffix in bounded, position-aware chunks.
+    ) -> Generator[DraftForwardProgress, None, Any]:
+        """Yield after each bounded, position-aware prefix forward.
 
         ``new_rows`` contains the KV rows for ``tokens[prefix_length:]`` and
         has already been mapped to this request. Each extend sees the complete
@@ -568,11 +579,25 @@ class SGLangDraftHandle:
             )
             self.forwards.append(inputs)
             last_logits = self._executor.forward(inputs)
+            self._forward_index += 1
+            yield DraftForwardProgress(
+                forward_index=self._forward_index,
+                stage="prefix",
+                forward_mode="extend",
+                sequence_length=end,
+                candidate_count=0,
+            )
             start = end
         return last_logits
 
     def prepare_prefix(self, tokens: Tuple[int, ...]) -> PreparedDraftPrefix:
-        """Prepare a cache append for an identified sidecar Req, else prefill."""
+        """Synchronously prepare a prefix, preserving the original API."""
+        return self._finish_steps(self.iter_prepare_prefix(tokens))
+
+    def iter_prepare_prefix(
+        self, tokens: Tuple[int, ...]
+    ) -> Generator[DraftForwardProgress, None, PreparedDraftPrefix]:
+        """Prepare the private prefix, yielding once per completed forward."""
         self._require_open()
         if self._request_index is not None:
             raise DraftLifecycleError(
@@ -596,7 +621,7 @@ class SGLangDraftHandle:
                         request_index=self._request_index,
                     )
                 try:
-                    logits = self._forward_prefix_chunks(
+                    logits = yield from self._iter_forward_prefix_chunks(
                         tokens,
                         prefix_length=lease.prefix_length,
                         new_rows=lease.new_rows,
@@ -625,7 +650,7 @@ class SGLangDraftHandle:
         # allocator: no committed request's mapping is read or written.
         self._allocator.write_mapping(self._request_index, 0, locations)
         self._mapped = length
-        logits = self._forward_prefix_chunks(
+        logits = yield from self._iter_forward_prefix_chunks(
             tokens,
             prefix_length=0,
             new_rows=locations,
@@ -638,7 +663,18 @@ class SGLangDraftHandle:
     # -- bounded continuation ----------------------------------------------
 
     def generate(self, prepared: PreparedDraftPrefix, max_tokens: int) -> Sequence[int]:
-        """Step at most ``max_tokens`` times. No verification, no commit."""
+        """Synchronously generate, preserving the original API."""
+        return self._finish_steps(self.iter_generate(prepared, max_tokens))
+
+    def iter_generate(
+        self, prepared: PreparedDraftPrefix, max_tokens: int
+    ) -> Generator[DraftForwardProgress, None, Sequence[int]]:
+        """Generate privately, yielding after each continuation forward.
+
+        Greedy candidate selection itself does not call the model runner. It
+        remains local to this generator, and no candidate is verified or
+        committed here.
+        """
         self._require_open()
         if not isinstance(prepared, PreparedDraftPrefix):
             raise DraftLifecycleError("generate needs a prepared prefix")
@@ -682,6 +718,14 @@ class SGLangDraftHandle:
             )
             self.forwards.append(inputs)
             logits = self._executor.forward(inputs)
+            self._forward_index += 1
+            yield DraftForwardProgress(
+                forward_index=self._forward_index,
+                stage="continuation",
+                forward_mode="decode",
+                sequence_length=position + 1,
+                candidate_count=len(produced),
+            )
             position += 1
         return produced
 
