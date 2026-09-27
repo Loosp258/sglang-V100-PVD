@@ -158,6 +158,7 @@ class ProbeLaneUnixServer:
         tokenizer_sha256: str,
         handler: Callable[[ProbeLaneTicket], ProbeLaneReply],
         max_connections: int = 4,
+        max_seen_nonces: int = 1024,
     ):
         self.path = _private_socket_path(directory, name)
         if type(expected_client_pid) is not int or expected_client_pid <= 0:
@@ -166,12 +167,16 @@ class ProbeLaneUnixServer:
             raise ProbeLaneProtocolError("prediction handler required")
         if type(max_connections) is not int or not 1 <= max_connections <= 8:
             raise ProbeLaneProtocolError("bounded connection count required")
+        if type(max_seen_nonces) is not int or not 1 <= max_seen_nonces <= 4096:
+            raise ProbeLaneProtocolError("bounded replay ledger required")
         self.expected_client_pid = expected_client_pid
         self.target_model_id = target_model_id
         self.weights_sha256 = weights_sha256
         self.tokenizer_sha256 = tokenizer_sha256
         self.handler = handler
         self.max_connections = max_connections
+        self.max_seen_nonces = max_seen_nonces
+        self._seen_nonces: dict[str, float] = {}
         self._server = None
         self._active: set[asyncio.Task] = set()
         self._compute_lock = asyncio.Lock()
@@ -208,6 +213,17 @@ class ProbeLaneUnixServer:
                 weights_sha256=self.weights_sha256,
                 tokenizer_sha256=self.tokenizer_sha256,
             )
+            now = time.monotonic()
+            self._seen_nonces = {
+                nonce: deadline
+                for nonce, deadline in self._seen_nonces.items()
+                if deadline > now
+            }
+            if ticket.nonce in self._seen_nonces:
+                raise ProbeLaneProtocolError("probe ticket nonce replayed")
+            if len(self._seen_nonces) >= self.max_seen_nonces:
+                raise ProbeLaneProtocolError("probe replay ledger is full")
+            self._seen_nonces[ticket.nonce] = ticket.deadline_monotonic
             async with self._compute_lock:
                 if time.monotonic() >= ticket.deadline_monotonic:
                     raise ProbeLaneProtocolError("probe ticket expired in queue")

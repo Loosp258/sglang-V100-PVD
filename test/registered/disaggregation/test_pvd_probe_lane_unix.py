@@ -43,7 +43,7 @@ def private_dir(tmp_path):
     return tmp_path
 
 
-def server(tmp_path, handler=reply_for, *, client_pid=None):
+def server(tmp_path, handler=reply_for, *, client_pid=None, max_seen_nonces=1024):
     return ProbeLaneUnixServer(
         private_dir(tmp_path),
         "probe.sock",
@@ -52,6 +52,7 @@ def server(tmp_path, handler=reply_for, *, client_pid=None):
         weights_sha256="a" * 64,
         tokenizer_sha256="b" * 64,
         handler=handler,
+        max_seen_nonces=max_seen_nonces,
     )
 
 
@@ -282,6 +283,33 @@ def test_unix_client_refuses_unbudgeted_reply_before_io(socket_dir):
                 async with client(socket_dir, budget=budget).request(ticket()):
                     pass
             assert budget.snapshot()["reservations"] == 0
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_unix_replay_and_bounded_ledger_refuse_before_handler(socket_dir):
+    async def run():
+        called = []
+
+        def handler(bound):
+            called.append(bound.nonce)
+            return reply_for(bound)
+
+        service = await server(socket_dir, handler, max_seen_nonces=1).start()
+        try:
+            first = ticket()
+            async with client(socket_dir).request(first):
+                pass
+            with pytest.raises(ProbeLaneProtocolError, match="complete reply"):
+                async with client(socket_dir).request(first):
+                    pass
+            with pytest.raises(ProbeLaneProtocolError, match="complete reply"):
+                async with client(socket_dir).request(ticket()):
+                    pass
+            assert called == [first.nonce]
+            assert service._seen_nonces == {first.nonce: first.deadline_monotonic}
         finally:
             await service.aclose()
 
