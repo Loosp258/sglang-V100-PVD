@@ -581,9 +581,25 @@ class _LlamaTargetProbeCore(TargetProbe):
             try:
                 self.prefix_budget.reserve(owner, self.prefix_cache_bytes, 1)
             except TransferCapacityError:
-                # Optional cache pressure never blocks the correct full-prefix
-                # path. An owner may retry on its next prediction round.
-                return None
+                # Only one request can hold the private target branch at a
+                # time. Other requests' completed prefix caches are idle and
+                # may be evicted to admit this request's cooperative capture.
+                # Their next refresh can rebuild from committed Prompt KV.
+                for older in tuple(self._prefix_caches.values()):
+                    if older is record or older.owner is None:
+                        continue
+                    self._drop_prefix_cache(older)
+                    try:
+                        self.prefix_budget.reserve(
+                            owner, self.prefix_cache_bytes, 1
+                        )
+                    except TransferCapacityError:
+                        continue
+                    break
+                else:
+                    # The synchronous capture path can still recompute the
+                    # full prefix; cooperative capture requires a reservation.
+                    return None
             record.owner = owner
         return record
 

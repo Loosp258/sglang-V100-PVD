@@ -354,6 +354,30 @@ def test_cooperative_cached_probe_releases_target_between_prefix_forwards(monkey
     c.probe.retire_cached_request(req)
 
 
+def test_cooperative_probe_reuses_one_cache_reservation_across_requests(monkeypatch):
+    c = environment(monkeypatch, prefix_cache=True)
+    first = SimpleNamespace(rid="r")
+    second = SimpleNamespace(rid="next")
+    c.probe.register_cached_request(first)
+    c.probe.register_cached_request(second)
+    prefix = CommittedPrefix("r", tuple(range(1, 10)), 0, "first")
+    with c.probe.branch():
+        c.probe.capture(prefix, DraftPrediction("r", "first", (10, 11)))
+    assert c.probe._prefix_caches["r"].owner is not None
+
+    next_prefix = CommittedPrefix("next", tuple(range(1, 10)), 0, "second")
+    list(
+        c.probe.capture_steps(
+            next_prefix, DraftPrediction("next", "second", (10, 11))
+        )
+    )
+    assert c.probe._prefix_caches["r"].owner is None
+    assert c.probe._prefix_caches["next"].tokens == next_prefix.tokens
+    c.probe.retire_cached_request(first)
+    c.probe.retire_cached_request(second)
+    assert c.probe.prefix_budget.snapshot()["used_staging_bytes"] == 0
+
+
 def test_cancelled_cooperative_probe_retires_partial_private_prefix(monkeypatch):
     monkeypatch.setattr(target_probe, "_TARGET_PREFIX_CHUNK_TOKENS", 4)
     c = environment(monkeypatch, prefix_cache=True)

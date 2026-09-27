@@ -10,7 +10,7 @@
   "draft_transient_bytes_bound": 134217728,
   "probe_transient_bytes_bound": 134217728,
   "draft_prefix_cache_bytes": 402653184,
-  "probe_prefix_cache_bytes": 1610612736,
+  "probe_prefix_cache_bytes": 3221225472,
   "target_scratch_max_reservations": 64,
   "bank_max_reservations": 32
 }
