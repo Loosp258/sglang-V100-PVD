@@ -19,6 +19,7 @@ separately by the opt-in strict ``run_pvd_draft_cpu_smoke.py``, not by doubles.
 """
 
 import ast
+from dataclasses import replace
 from enum import IntEnum
 from pathlib import Path
 
@@ -335,6 +336,29 @@ def test_logits_are_unwrapped_from_the_model_runner_output():
     logits = adapter(runner).forward(extend_inputs(3))
     assert logits.ndim == 1 and logits.shape[0] == runner.vocab
     assert int(torch.argmax(logits).item()) == 7
+
+
+def test_incremental_draft_extend_marks_compact_attention_queries():
+    class RecordingRunner(RealShapedModelRunner):
+        def __init__(self):
+            super().__init__()
+            self.compact = []
+
+        def forward(self, batch):
+            self.compact.append(batch.pvd_compact_extend)
+            return super().forward(batch)
+
+    runner = RecordingRunner()
+    made = adapter(runner)
+    made.forward(extend_inputs(3))
+    incremental = replace(
+        extend_inputs(2),
+        positions=(3, 4),
+        seq_lens=(5,),
+        extend_prefix_lens=(3,),
+    )
+    made.forward(incremental)
+    assert runner.compact == [False, True]
 
 
 def test_a_missing_logits_output_is_refused():

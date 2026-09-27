@@ -150,6 +150,7 @@ def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(
         assert args[args.index("--model-path") + 1] == str(tmp_path)
         assert args[args.index("--max-connections") + 1] == "2"
         assert args[args.index("--probe-prefix-cache-budget-bytes") + 1] == "512"
+        assert args[args.index("--draft-prefix-cache-budget-bytes") + 1] == "1024"
         assert (
             kwargs["background_loop"]
             is scheduler.disagg_decode_prealloc_queue.kv_manager.control.loop
@@ -160,7 +161,12 @@ def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(
     sidecar_limits = ProbeSidecarLimits("/tmp/probe.py", "/tmp", "0", 16 << 20, 180)
     installed = startup.install_cuda_predictive_serving(
         scheduler,
-        replace(limits, probe_sidecar=sidecar_limits, probe_prefix_cache_bytes=512),
+        replace(
+            limits,
+            probe_sidecar=sidecar_limits,
+            probe_prefix_cache_bytes=512,
+            draft_prefix_cache_bytes=1024,
+        ),
     )
     admitted = observed["target"]["prepare_cuda_admission"](object())
     assert admitted.lane_client is fake_sidecar.client

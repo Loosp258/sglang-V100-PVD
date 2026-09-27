@@ -27,6 +27,7 @@ def main(argv=None):
     parser.add_argument("--draft-mem-fraction-static", type=float, required=True)
     parser.add_argument("--draft-scratch-budget-bytes", type=int, required=True)
     parser.add_argument("--draft-persistent-budget-bytes", type=int, required=True)
+    parser.add_argument("--draft-prefix-cache-budget-bytes", type=int, default=0)
     parser.add_argument("--draft-transient-bytes-bound", type=int, required=True)
     parser.add_argument("--probe-budget-bytes", type=int, required=True)
     parser.add_argument("--probe-prefix-cache-budget-bytes", type=int, default=0)
@@ -58,6 +59,8 @@ def main(argv=None):
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if args.probe_prefix_cache_budget_bytes < 0:
         parser.error("--probe-prefix-cache-budget-bytes must be nonnegative")
+    if args.draft_prefix_cache_budget_bytes < 0:
+        parser.error("--draft-prefix-cache-budget-bytes must be nonnegative")
 
     def serve(target_runner, *, checkpoint=False):
         if not checkpoint:
@@ -84,6 +87,11 @@ def main(argv=None):
             if args.probe_prefix_cache_budget_bytes
             else None
         )
+        draft_prefix_budget = (
+            TransferBudget(args.draft_prefix_cache_budget_bytes, 1)
+            if args.draft_prefix_cache_budget_bytes
+            else None
+        )
         startup = build_cuda_prediction_startup(
             target_runner,
             draft_model_path=args.draft_model_path,
@@ -104,6 +112,7 @@ def main(argv=None):
             probe_transient_bytes_bound=args.probe_transient_bytes_bound,
             target_scratch_budget=scratch,
             prefix_budget=prefix_budget,
+            draft_prefix_cache_budget=draft_prefix_budget,
         )
         if (
             prefix_budget is not None

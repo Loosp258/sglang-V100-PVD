@@ -80,8 +80,16 @@ def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
             self.events.append(("retire", req))
 
     probe = Probe()
+    draft_events = []
+    provider = SimpleNamespace(
+        factory=SimpleNamespace(prefix_cache_enabled=True),
+        set_sidecar_cache_identity=lambda *identity: draft_events.append(
+            ("bind", identity)
+        ),
+        retire_sidecar_cache=lambda: draft_events.append(("retire", None)),
+    )
     handler = ProbeLaneCUDAHandler.__new__(ProbeLaneCUDAHandler)
-    handler.pipeline = SimpleNamespace(probe=probe)
+    handler.pipeline = SimpleNamespace(probe=probe, provider=provider)
     handler.owner_thread = threading.get_ident()
     handler._cached_req = None
     handler._cached_incarnation = None
@@ -94,11 +102,17 @@ def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
     handler._prepare_cache(first)
     assert probe.live is first_req
     assert len(probe.events) == 1
+    assert draft_events == [("bind", ("rid", "a"))]
 
     handler._prepare_cache(second)
     assert probe.events[:2] == [("register", first_req), ("retire", first_req)]
     assert probe.live is not first_req
     assert handler._cached_incarnation == ("rid", "b")
+    assert draft_events == [
+        ("bind", ("rid", "a")),
+        ("retire", None),
+        ("bind", ("rid", "b")),
+    ]
 
     handler._cached_used_at = time.monotonic() - 10
     handler.retire_idle_cache()
@@ -106,3 +120,4 @@ def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
     assert handler._cached_incarnation is None
     handler.close()
     assert len(probe.events) == 4
+    assert draft_events[-1] == ("retire", None)

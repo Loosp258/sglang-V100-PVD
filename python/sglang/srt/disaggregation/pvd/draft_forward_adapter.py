@@ -237,9 +237,8 @@ class DraftForwardAdapter(ModelExecutor):
             "seq_lens": self._tensor(inputs.seq_lens, torch.int64),
             "out_cache_loc": self._tensor(inputs.out_cache_loc, torch.int64),
             "seq_lens_sum": int(sum(inputs.seq_lens)),
-            # Absolute sequence positions, supplied rather than derived: the
-            # prefix is recomputed from zero every call, so nothing may infer
-            # positions from a prior forward's state.
+            # Absolute sequence positions are supplied explicitly. A sidecar
+            # cache may extend its retained prefix from a nonzero position.
             "positions": self._tensor(inputs.positions, torch.int64),
             # init_new populates this mirror for every non-gpu_only path;
             # backends read it to avoid a device sync.
@@ -359,6 +358,11 @@ class DraftForwardAdapter(ModelExecutor):
         if self._completion_error is not None:
             raise DraftLifecycleError(self._completion_error)
         batch = self.build_forward_batch(inputs)
+        batch.pvd_compact_extend = bool(
+            inputs.forward_mode == "extend"
+            and inputs.extend_prefix_lens
+            and inputs.extend_prefix_lens[0] > 0
+        )
         self._pending_owners.append(batch)
         self.forward_count += 1
         self.last_forward = {

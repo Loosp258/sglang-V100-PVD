@@ -50,6 +50,7 @@ def test_loads_exact_config_as_immutable_dataclass(tmp_path):
     assert limits.draft_transient_bytes_bound == 0
     assert limits.attention_impl == "online"
     assert limits.probe_prefix_cache_bytes == 0
+    assert limits.draft_prefix_cache_bytes == 0
     with pytest.raises(dataclasses.FrozenInstanceError):
         limits.lead_tokens = 3
 
@@ -66,6 +67,20 @@ def test_probe_prefix_cache_budget_is_explicit_and_disabled_by_default(tmp_path)
     config = valid_config()
     config["probe_prefix_cache_bytes"] = 256 << 20
     assert load(write_config(tmp_path, config)).probe_prefix_cache_bytes == 256 << 20
+
+
+@pytest.mark.parametrize("invalid", [-1, True, 1.5, "4096"])
+def test_draft_prefix_cache_budget_refuses_invalid_values(tmp_path, invalid):
+    config = valid_config()
+    config["draft_prefix_cache_bytes"] = invalid
+    with pytest.raises(ValueError, match="draft_prefix_cache_bytes"):
+        load(write_config(tmp_path, config))
+
+
+def test_draft_prefix_cache_budget_is_explicit(tmp_path):
+    config = valid_config()
+    config["draft_prefix_cache_bytes"] = 64 << 20
+    assert load(write_config(tmp_path, config)).draft_prefix_cache_bytes == 64 << 20
 
 
 def test_sidecar_opt_in_requires_exact_explicit_fields(tmp_path):

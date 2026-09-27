@@ -117,6 +117,7 @@ def build_cuda_prediction_startup(
     probe_transient_bytes_bound: int,
     target_scratch_budget: TransferBudget,
     prefix_budget: TransferBudget | None = None,
+    draft_prefix_cache_budget: TransferBudget | None = None,
     target_tokenizer: Any = None,
     draft_tokenizer: Any = None,
     tokenizer_loader: Callable[[str, str | None], Any] = _load_tokenizer,
@@ -145,6 +146,10 @@ def build_cuda_prediction_startup(
         raise PredictionConfigError("shared target scratch budget required")
     if prefix_budget is not None and not isinstance(prefix_budget, TransferBudget):
         raise PredictionConfigError("separate target prefix cache budget required")
+    if draft_prefix_cache_budget is not None and not isinstance(
+        draft_prefix_cache_budget, TransferBudget
+    ):
+        raise PredictionConfigError("separate draft prefix cache budget required")
     for name, value in (
         ("max_prefix_tokens", max_prefix_tokens),
         ("predict_tokens", predict_tokens),
@@ -299,6 +304,7 @@ def build_cuda_prediction_startup(
             ),
             persistent_bytes=retained_bytes,
             max_tokens=predict_tokens,
+            prefix_cache_budget=draft_prefix_cache_budget,
         )
         draft_config = DraftConfig(
             model_name_or_path=draft_model_path,

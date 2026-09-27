@@ -40,11 +40,12 @@ forward machinery -- driven from a snapshot, against pools nobody else owns.
 
 Ownership model
 ---------------
-Every prediction runs inside a **branch**, and a branch owns an
-``DraftExecutionHandle`` minted for it by a factory. The handle owns that
-branch's request slots, KV rows and scratch, and is the only thing whose
-``release`` can free them; a runner shared between branches with an
-unqualified ``release()`` cannot say whose resources it just freed.
+Every prediction runs inside a **branch**, and a branch owns a
+``DraftExecutionHandle`` minted for it by a factory. The handle owns its
+request slot, temporary KV rows and scratch. When the sidecar cache is
+explicitly enabled, the factory separately owns one incarnation-scoped
+prefix slot and its retained rows; a branch may extend that prefix and frees
+only its own continuation rows when it releases.
 
 Weights are **not** per branch. One model, one worker, one set of pools,
 shared by every handle. Their bytes are a persistent reservation made once,
@@ -76,6 +77,7 @@ configuration copy, and never sets ``speculative_algorithm`` anywhere.
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import uuid
 from contextlib import contextmanager
@@ -94,6 +96,8 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferBudget,
     TransferCapacityError,
 )
+
+logger = logging.getLogger(__name__)
 
 #: The only names a prediction path may reach on a draft worker. This is an
 #: allowlist: a name that is not here raises, whether or not it exists
@@ -386,21 +390,7 @@ class DraftExecutionHandle(Protocol):
         """Bytes this handle will hold. Reserved before it allocates."""
 
     def prepare_prefix(self, tokens: Tuple[int, ...]) -> PreparedPrefix:
-        """Compute whatever the continuation steps need from the prefix.
-
-        An explicit seam. The first runner **recomputes the prefix on every
-        call** and keeps nothing between predictions: ownership, budgeting and
-        invalidation are then trivial, because nothing outlives the branch.
-        That is a correctness baseline, not the final latency answer -- the
-        prefill cost has to be measured against the available prefetch window
-        before anyone calls it good enough.
-
-        Persistent prefix caching would replace this method, and would first
-        need: an owner for the retained KV, a persistent budget separate from
-        per-branch scratch, incremental extension as the prefix grows, and
-        invalidation on prefix replacement, retraction, Entry change and
-        request close. None of that exists, so none of it is assumed.
-        """
+        """Prepare a prefix; the SGLang handle may use an explicit sidecar cache."""
 
     def generate(self, prepared: PreparedPrefix, max_tokens: int) -> Sequence[int]:
         """Run bounded continuation steps and return candidate token ids."""
@@ -659,6 +649,22 @@ class SGLangDraftProvider(DraftProvider):
             raise PredictionConfigError(
                 "persistent and scratch budgets must be separate"
             )
+        prefix_cache_budget = getattr(factory, "prefix_cache_budget", None)
+        if prefix_cache_budget is not None and prefix_cache_budget in (
+            self.scratch_budget,
+            self.persistent_budget,
+        ):
+            raise PredictionConfigError(
+                "draft prefix cache budget must be separate from scratch and "
+                "resident-model budgets"
+            )
+        if (
+            getattr(factory, "prefix_cache_enabled", False)
+            and placement.max_concurrent_branches != 1
+        ):
+            raise PredictionConfigError(
+                "the one-slot draft prefix cache requires exactly one active branch"
+            )
         if persistent_bytes and self.persistent_budget is None:
             raise PredictionConfigError(
                 "positive persistent bytes require an explicit persistent budget"
@@ -682,6 +688,8 @@ class SGLangDraftProvider(DraftProvider):
         self._execution_lock = threading.Lock()
         self._active: Dict[str, _Branch] = {}
         self._quarantined: List[QuarantinedBranch] = []
+        self._prefix_cache_failure: Optional[str] = None
+        self._sidecar_cache_identity: Optional[Tuple[str, str]] = None
         # Keep actual handles/pools alive, not only a textual diagnostic.
         self._retained: Dict[str, _Branch] = {}
         self._current = threading.local()
@@ -741,12 +749,16 @@ class SGLangDraftProvider(DraftProvider):
                     else self.pool_ownership.describe()
                 ),
                 "worker_surface": "allowlist",
-                "prefix": "recomputed-per-call",
+                "prefix": (
+                    "sidecar-one-slot-append-only"
+                    if getattr(self.factory, "prefix_cache_enabled", False)
+                    else "recomputed-per-call"
+                ),
                 "execution": "serialized",
                 "tokenizer": (
                     "unchecked" if self.vocabulary is None else "signature-matched"
                 ),
-                "degraded": str(bool(self._quarantined)),
+                "degraded": str(self.degraded),
             }
         )
         return described
@@ -763,7 +775,81 @@ class SGLangDraftProvider(DraftProvider):
 
     @property
     def degraded(self) -> bool:
-        return bool(self.quarantined)
+        snapshot = self.prefix_cache_snapshot
+        with self._lock:
+            cache_failure = self._prefix_cache_failure
+            branches_quarantined = bool(self._quarantined)
+        return (
+            branches_quarantined
+            or cache_failure is not None
+            or bool(snapshot and snapshot.get("quarantined"))
+        )
+
+    def set_sidecar_cache_identity(self, request_id: str, incarnation: str) -> None:
+        """Bind the optional draft cache to one exact live sidecar incarnation.
+
+        Call before opening a query branch. Reusing a request id after close is
+        safe only after a new incarnation is supplied; no prefix-version
+        string is parsed or treated as an incarnation.
+        """
+        if any(
+            not isinstance(value, str) or not value
+            for value in (request_id, incarnation)
+        ):
+            raise PredictionConfigError(
+                "draft cache needs non-empty request id and incarnation"
+            )
+        identity = (request_id, incarnation)
+        with self._execution_lock:
+            with self._lock:
+                if self._prefix_cache_failure is not None:
+                    raise DraftWorkerError(self._prefix_cache_failure)
+                if self._active:
+                    raise DraftLifecycleError(
+                        "cannot change draft cache identity while a branch is open"
+                    )
+                previous = self._sidecar_cache_identity
+            if previous != identity:
+                retire = getattr(self.factory, "retire_prefix_cache", None)
+                if callable(retire):
+                    try:
+                        retire()
+                    except BaseException as exc:
+                        with self._lock:
+                            self._prefix_cache_failure = (
+                                f"draft prefix cache retirement failed: {exc}"
+                            )
+                        raise
+            with self._lock:
+                self._sidecar_cache_identity = identity
+
+    def retire_sidecar_cache(self) -> None:
+        """Fence and retire the one cached prefix at sidecar request close/idle."""
+        with self._execution_lock:
+            with self._lock:
+                if self._active:
+                    raise DraftLifecycleError(
+                        "cannot retire draft prefix cache while a branch is open"
+                    )
+                if self._prefix_cache_failure is not None:
+                    raise DraftWorkerError(self._prefix_cache_failure)
+            retire = getattr(self.factory, "retire_prefix_cache", None)
+            if callable(retire):
+                try:
+                    retire()
+                except BaseException as exc:
+                    with self._lock:
+                        self._prefix_cache_failure = (
+                            f"draft prefix cache retirement failed: {exc}"
+                        )
+                    raise
+            with self._lock:
+                self._sidecar_cache_identity = None
+
+    @property
+    def prefix_cache_snapshot(self) -> Optional[dict]:
+        snapshot = getattr(self.factory, "prefix_cache_snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def _capacity(self) -> int:
         """Admission slots still issuable: quarantined ones never come back."""
@@ -782,8 +868,13 @@ class SGLangDraftProvider(DraftProvider):
         """
         branch_id = uuid.uuid4().hex[:12]
         owner = f"pvd-draft:{branch_id}"
+        cache_snapshot = self.prefix_cache_snapshot
         with self._lock:
-            if self._quarantined:
+            if (
+                self._quarantined
+                or self._prefix_cache_failure is not None
+                or bool(cache_snapshot and cache_snapshot.get("quarantined"))
+            ):
                 raise TransferCapacityError("shared draft worker is quarantined")
             if getattr(self._current, "branch", None) is not None:
                 raise DraftLifecycleError(
@@ -810,6 +901,15 @@ class SGLangDraftProvider(DraftProvider):
                 prefix_tokens=self.capabilities.max_prefix_tokens,
                 max_tokens=self.config.predict_tokens,
             )
+            if getattr(self.factory, "prefix_cache_enabled", False):
+                setter = getattr(handle, "set_prefix_cache_identity", None)
+                if not callable(setter):
+                    raise DraftCapabilityError(
+                        "cache-enabled handle must accept a sidecar incarnation"
+                    )
+                with self._lock:
+                    identity = self._sidecar_cache_identity
+                setter(identity)
             wanted = handle.scratch_bytes()
             if type(wanted) is not int or wanted < 0:
                 raise PredictionConfigError(
@@ -818,7 +918,7 @@ class SGLangDraftProvider(DraftProvider):
             self.scratch_budget.reserve(owner, wanted, 0)
             reserved = True
             with self._lock:
-                if self._quarantined:
+                if self._quarantined or self._prefix_cache_failure is not None:
                     raise TransferCapacityError("shared draft worker is quarantined")
                 record = self._active[branch_id]
                 record.handle = handle
@@ -939,8 +1039,24 @@ class SGLangDraftProvider(DraftProvider):
         # Serialized: the handles are separate, the model runner is not.
         with self._execution_lock:
             try:
-                if self._quarantined:
+                if self.degraded:
                     raise DraftWorkerError("shared draft worker is quarantined")
+                if getattr(self.factory, "prefix_cache_enabled", False):
+                    identity = self._sidecar_cache_identity
+                    if identity is not None and identity[0] != prefix.request_id:
+                        identity = None
+                    record.handle.set_prefix_cache_identity(identity)
+                    if identity is None:
+                        cache_snapshot = self.prefix_cache_snapshot
+                        if cache_snapshot and cache_snapshot.get("owner_reserved"):
+                            try:
+                                self.factory.retire_prefix_cache()
+                            except BaseException as exc:
+                                with self._lock:
+                                    self._prefix_cache_failure = (
+                                        f"draft prefix cache retirement failed: {exc}"
+                                    )
+                                raise
                 prepared = record.handle.prepare_prefix(prefix.tokens)
                 produced = record.handle.generate(prepared, budgeted)
             except BaseException:
@@ -949,11 +1065,20 @@ class SGLangDraftProvider(DraftProvider):
                 self._retire_locked(record.branch_id)
                 raise
         tokens = self._validate(produced, budgeted)
+        source = self.describe()
+        if getattr(self.factory, "prefix_cache_enabled", False):
+            source["prefix"] = record.handle.prefix_cache_action
+            logger.info(
+                "PVD draft prefix cache action=%s request_id=%s tokens=%d",
+                record.handle.prefix_cache_action,
+                prefix.request_id,
+                len(prefix.tokens),
+            )
         return DraftPrediction(
             request_id=prefix.request_id,
             prefix_version=prefix.version,
             tokens=tokens,
-            source=self.describe(),
+            source=source,
         )
 
     def _check_tokens(self, tokens: Sequence[int], what: str) -> None:

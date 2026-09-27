@@ -1051,6 +1051,132 @@ def test_the_prefix_is_recomputed_on_every_prediction():
     assert not alloc.live_kv and not alloc.live_requests
 
 
+def test_the_sidecar_cache_prefills_appends_then_hits_under_one_owner():
+    alloc = FakeAllocator(rows=128)
+    executor = FakeExecutor()
+    cache_budget = TransferBudget(2 << 20, 1)
+    fac = factory(
+        executor=executor,
+        allocator=alloc,
+        prefix_cache_budget=cache_budget,
+    )
+    made = provider(fac)
+    made.set_sidecar_cache_identity("request", "incarnation-a")
+
+    for tokens in ((10, 11, 12), (10, 11, 12, 13), (10, 11, 12, 13)):
+        with made.branch():
+            made.predict(prefix(tokens=tokens), 2)
+
+    extends = [call for call in executor.calls if call.forward_mode == "extend"]
+    assert len(extends) == 2
+    assert extends[0].input_ids == (10, 11, 12)
+    assert extends[0].extend_prefix_lens == (0,)
+    assert extends[1].input_ids == (13,)
+    assert extends[1].positions == (3,)
+    assert extends[1].extend_prefix_lens == (3,)
+    assert extends[1].extend_seq_lens == (1,)
+    assert fac.prefix_cache_snapshot()["retained_tokens"] == 4
+    assert fac.prefix_cache_snapshot()["owner_reserved"]
+    assert cache_budget.snapshot()["used_inflight"] == 1
+    # Branch prediction rows are gone; only the four committed prefix rows and
+    # their request slot remain with the cache owner.
+    assert len(alloc.live_kv) == 4
+    assert len(alloc.live_requests) == 1
+
+    made.retire_sidecar_cache()
+    assert not alloc.live_kv and not alloc.live_requests
+    assert cache_budget.snapshot()["used_staging_bytes"] == 0
+    assert cache_budget.snapshot()["used_inflight"] == 0
+
+
+def test_the_sidecar_cache_retires_on_incarnation_change_and_retraction():
+    alloc = FakeAllocator(rows=128)
+    executor = FakeExecutor()
+    cache_budget = TransferBudget(2 << 20, 1)
+    fac = factory(
+        executor=executor,
+        allocator=alloc,
+        prefix_cache_budget=cache_budget,
+    )
+    made = provider(fac)
+    made.set_sidecar_cache_identity("request", "incarnation-a")
+    with made.branch():
+        made.predict(prefix(tokens=(10, 11, 12)), 2)
+    assert len(alloc.live_kv) == 3
+
+    # A new incarnation of a reused request id cannot inherit the prior KV.
+    made.set_sidecar_cache_identity("request", "incarnation-b")
+    assert not alloc.live_kv and not alloc.live_requests
+    with made.branch():
+        made.predict(prefix(tokens=(10, 11, 12)), 2)
+
+    # A retracted/replaced prefix drops that slot before preparing from zero.
+    with made.branch():
+        made.predict(prefix(tokens=(10, 99)), 2)
+    extends = [call for call in executor.calls if call.forward_mode == "extend"]
+    assert [call.extend_prefix_lens for call in extends] == [(0,), (0,), (0,)]
+    assert extends[-1].positions == (0, 1)
+    assert fac.prefix_cache_snapshot()["retained_tokens"] == 2
+    assert len(alloc.live_kv) == 2
+
+    made.retire_sidecar_cache()
+    assert not alloc.live_kv and not alloc.live_requests
+
+
+def test_configured_sidecar_cache_stays_disabled_without_identity():
+    alloc = FakeAllocator(rows=128)
+    executor = FakeExecutor()
+    cache_budget = TransferBudget(2 << 20, 1)
+    fac = factory(
+        executor=executor,
+        allocator=alloc,
+        prefix_cache_budget=cache_budget,
+    )
+    made = provider(fac)
+    for _ in range(2):
+        with made.branch():
+            made.predict(prefix(tokens=(10, 11, 12)), 2)
+    extends = [call for call in executor.calls if call.forward_mode == "extend"]
+    assert len(extends) == 2
+    assert fac.prefix_cache_snapshot()["retained_tokens"] == 0
+    assert not alloc.live_kv and not alloc.live_requests
+    assert cache_budget.snapshot()["used_inflight"] == 0
+
+
+def test_a_partial_cache_allocation_is_fenced_and_freed_before_fallback():
+    class PartialOnce(FakeAllocator):
+        def __init__(self):
+            super().__init__(rows=128)
+            self.partial = True
+
+        def alloc_kv(self, count):
+            if self.partial:
+                self.partial = False
+                return super().alloc_kv(count - 1)
+            return super().alloc_kv(count)
+
+    alloc = PartialOnce()
+    executor = FakeExecutor()
+    cache_budget = TransferBudget(2 << 20, 1)
+    fac = factory(
+        executor=executor,
+        allocator=alloc,
+        prefix_cache_budget=cache_budget,
+    )
+    made = provider(fac)
+    made.set_sidecar_cache_identity("request", "incarnation-a")
+    with made.branch():
+        made.predict(prefix(tokens=(10, 11, 12)), 2)
+
+    assert [call.input_ids for call in executor.calls if call.forward_mode == "extend"] == [
+        (10, 11, 12)
+    ]
+    assert fac.prefix_cache_snapshot()["retained_tokens"] == 0
+    assert cache_budget.snapshot()["used_staging_bytes"] == 0
+    assert cache_budget.snapshot()["used_inflight"] == 0
+    assert not alloc.live_kv and not alloc.live_requests
+
+
 def test_execution_is_serialized_across_concurrent_branches():
     """Separate handles are not a claim that the model runner is reentrant."""
     import threading

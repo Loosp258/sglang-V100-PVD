@@ -116,7 +116,7 @@ class ProbeLaneCUDAHandler:
         if threading.get_ident() != self.owner_thread:
             raise ProbeLaneProtocolError("CUDA sidecar handler changed owner thread")
         if (
-            self._cached_req is not None
+            self._cached_incarnation is not None
             and self._cached_used_at is not None
             and time.monotonic() - self._cached_used_at >= max_idle_seconds
         ):
@@ -125,21 +125,32 @@ class ProbeLaneCUDAHandler:
     def close(self) -> None:
         if threading.get_ident() != self.owner_thread:
             raise ProbeLaneProtocolError("CUDA sidecar handler changed owner thread")
-        if self._cached_req is not None:
-            self.pipeline.probe.retire_cached_request(self._cached_req)
+        if self._cached_incarnation is not None:
+            provider = self.pipeline.provider
+            if provider.factory.prefix_cache_enabled:
+                provider.retire_sidecar_cache()
+            if self._cached_req is not None:
+                self.pipeline.probe.retire_cached_request(self._cached_req)
             self._cached_req = None
             self._cached_incarnation = None
             self._cached_used_at = None
 
     def _prepare_cache(self, window) -> None:
-        if self.pipeline.probe.prefix_budget is None:
+        provider = self.pipeline.provider
+        if (
+            self.pipeline.probe.prefix_budget is None
+            and not provider.factory.prefix_cache_enabled
+        ):
             return
         identity = (window.prefix.request_id, window.incarnation)
         if self._cached_incarnation != identity:
             self.close()
-            req = SimpleNamespace(rid=window.prefix.request_id)
-            self.pipeline.probe.register_cached_request(req)
-            self._cached_req = req
+            if provider.factory.prefix_cache_enabled:
+                provider.set_sidecar_cache_identity(*identity)
+            if self.pipeline.probe.prefix_budget is not None:
+                req = SimpleNamespace(rid=window.prefix.request_id)
+                self.pipeline.probe.register_cached_request(req)
+                self._cached_req = req
             self._cached_incarnation = identity
         self._cached_used_at = time.monotonic()
 

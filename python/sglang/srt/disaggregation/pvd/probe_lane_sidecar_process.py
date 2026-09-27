@@ -183,7 +183,10 @@ def launch_probe_sidecar(
                                 child.pid,
                                 bounded,
                             )
-                    elif "PVD CUDA prediction stages:" in bounded:
+                    elif (
+                        "PVD CUDA prediction stages:" in bounded
+                        or "PVD draft prefix cache action=" in bounded
+                    ):
                         logger.info(
                             "PVD probe sidecar child pid=%d %s", child.pid, bounded
                         )
