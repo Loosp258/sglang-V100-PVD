@@ -1000,3 +1000,56 @@ two-stream probe on GPU0 showed approximately 47.94 ms of overlap between two
 48 ms `torch.cuda._sleep` kernels. This establishes device capability for
 concurrent kernels, not that two real model forwards can safely or profitably
 overlap. The probe did not touch GPU1 or modify serving code.
+
+## 17. 2026-09-28 same-GPU physical overlap implementation and validation
+
+Local commits `b35752ffb`, `5eec4e12d`, and `351fe7953` implement the
+opt-in `PVD_CONCURRENT_PREDICTION=1` path. One worker thread owns A's private
+prediction branch and CUDA stream, while the Scheduler continues ready B/C
+formal batches on its own stream. `ForwardContext` uses thread-local context
+scope (`7a0051334`); the private target forward bypasses mutable ModelRunner
+wrapper hooks. A's Q is copied to CPU and fenced before it is handed to the
+Scheduler. The Scheduler keeps A out of the formal ready batch until its
+private job completes. Cancellation, worker errors, and unknown completion
+quarantine the private path. The startup gate currently requires TP1/PP1,
+Qwen2, CUDA graphs disabled, and no sidecar, draft-prefix cache, target-prefix
+cache, or prompt-KV seed. The configuration is
+`test/registered/disaggregation/pvd_qwen_v100s_serving_limits_triton_m64_concurrent_16k.json`.
+
+On the CloudLab V100S D node GPU1, Nsight Systems captured two real model
+streams in the **same device, CUDA context, and process**, launched by
+different host threads. Stream 42 was the private prediction stream (56,531
+kernels, launch thread `285336974623984`); stream 46 was the formal Decode
+stream (84,830 kernels, launch thread `285336974623537`). Interval intersection
+found **26,259 overlapping kernel pairs and 344.57 ms of actual simultaneous
+kernel execution**. This is GPU execution overlap, rather than only overlapping
+host scheduling spans. The reproducible analyzer is
+`scripts/pvd_analyze_overlap.py`; the D evidence is
+`validation/logs/concurrent_cuda_351fe.nsys-rep`,
+`concurrent_cuda_351fe.sqlite`, and
+`concurrent_cuda_351fe_overlap.json` under the D validation root.
+
+The V/Gateway two-request smoke and two profiled repeats returned HTTP 200
+with 80 completion tokens per request. The later approximately 5k/1k prompt
+pair also returned 80 tokens each: 5,005 and 1,005 prompt tokens, 15.523 s
+pair wall. Its V report is `validation/logs/concurrent_pair_5k_351fe.json`;
+the D trace is `validation/logs/d-concurrent-restored-351fe.log`. In that trace,
+A scheduled prediction after formal token 32 at `t=121618.840`; B continued
+formally through token 64 at `t=121620.884` while A's private capture was
+still active. A's refresh became ready at `t=121628.102` (capture 7.267 s,
+V search 1.130 s, delivery 0.859 s, total 9.258 s). B itself then reached
+an M64 boundary and waited for its own refresh. This demonstrates peer
+progress during A's prediction, but does **not** establish unaffected peer
+latency or a full-KV speed advantage. The private long-prefix probe and shared
+GPU contention remain substantial costs; no matched full-KV control was run
+for this exact 5,005/1,005-token input.
+
+Linux validation: nine focused suites passed 324 tests on the preceding
+implementation; after the raw-forward eligibility fix, the draft adapter
+suite passed 62 tests and Ruff E/F/I plus formatting passed. Local Windows
+compileall passed. The D server and V Gateway were restored after Nsight
+capture and are serving the concurrent configuration. Preserve the existing
+dirty tracked files and validation bundles when continuing. The next
+performance work is to remove repeated long-prefix target-Q recomputation,
+measure peer-token latency against a matched full-KV run, and reduce A's
+M64 wait while retaining the proven stream isolation and kernel overlap.
