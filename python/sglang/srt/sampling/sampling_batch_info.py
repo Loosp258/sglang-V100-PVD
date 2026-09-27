@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
 import logging
+import weakref
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -291,6 +293,137 @@ class SamplingBatchInfo:
             self.logit_bias = self.logit_bias[keep_indices_device]
 
         self.adjusted_filter_batch(keep_indices, keep_indices_device)
+
+    def select_rows(self, keep_indices: List[int], batch: ScheduleBatch):
+        """Return an independent sampling view for selected scheduler rows.
+
+        PVD can temporarily forward only the requests whose target state is
+        ready while retaining the full scheduler batch as the canonical owner.
+        The selected view must own its tensors because Decode preparation
+        mutates the per-request penalty accumulators.
+        """
+        batch_size = len(self)
+        if len(batch.reqs) != len(keep_indices):
+            raise ValueError("selected batch rows do not match sampling row indices")
+        if any(i < 0 or i >= batch_size for i in keep_indices):
+            raise IndexError("sampling row index is out of range")
+
+        row_indices = torch.tensor(
+            keep_indices, dtype=torch.int64, device=self.device
+        )
+        selected = copy.copy(self)
+        for field in dataclasses.fields(self):
+            name = field.name
+            value = getattr(self, name)
+            if name in ("penalizer_orchestrator", "custom_logit_processor"):
+                continue
+            if isinstance(value, torch.Tensor):
+                if value.ndim > 0 and value.shape[0] == batch_size:
+                    value = value.index_select(0, row_indices)
+                else:
+                    value = value.clone()
+                setattr(selected, name, value)
+            elif name in ("grammars", "custom_params") and value is not None:
+                if len(value) == batch_size:
+                    setattr(selected, name, [value[i] for i in keep_indices])
+                else:
+                    setattr(selected, name, value.copy())
+
+        if self.custom_logit_processor is not None:
+            selected.custom_logit_processor = {
+                key: (processor, mask.index_select(0, row_indices))
+                for key, (processor, mask) in self.custom_logit_processor.items()
+            }
+
+        source_orchestrator = self.penalizer_orchestrator
+        if source_orchestrator is not None:
+            selected_orchestrator = copy.copy(source_orchestrator)
+            selected_orchestrator._batch_ref = weakref.ref(batch)
+            selected_orchestrator.penalizers = {}
+            selected_required = False
+            for penalizer_type, source_penalizer in (
+                source_orchestrator.penalizers.items()
+            ):
+                selected_penalizer = copy.copy(source_penalizer)
+                selected_penalizer._orchestrator_ref = weakref.ref(
+                    selected_orchestrator
+                )
+                for name, value in source_penalizer.__dict__.items():
+                    if name == "_orchestrator_ref":
+                        continue
+                    if isinstance(value, torch.Tensor):
+                        if value.ndim > 0 and value.shape[0] == batch_size:
+                            value = value.index_select(0, row_indices)
+                        else:
+                            value = value.clone()
+                        setattr(selected_penalizer, name, value)
+
+                required = selected_penalizer.is_required()
+                selected_required |= required
+                if required and not selected_penalizer.is_prepared():
+                    selected_penalizer.prepare()
+                elif not required and selected_penalizer.is_prepared():
+                    selected_penalizer.teardown()
+                selected_orchestrator.penalizers[penalizer_type] = (
+                    selected_penalizer
+                )
+            selected_orchestrator.is_required = selected_required
+            selected.penalizer_orchestrator = selected_orchestrator
+
+        return selected
+
+    def copy_penalty_rows_from(
+        self,
+        source: "SamplingBatchInfo",
+        row_pairs: List[Tuple[int, int]],
+    ) -> None:
+        """Copy Decode-updated penalty rows from a temporary view to its owner."""
+        target_orchestrator = self.penalizer_orchestrator
+        source_orchestrator = source.penalizer_orchestrator
+        if target_orchestrator is None or source_orchestrator is None or not row_pairs:
+            return
+
+        source_indices = torch.tensor(
+            [source_index for source_index, _ in row_pairs],
+            dtype=torch.int64,
+            device=source.device,
+        )
+        target_indices = torch.tensor(
+            [target_index for _, target_index in row_pairs],
+            dtype=torch.int64,
+            device=self.device,
+        )
+        for penalizer_type, target_penalizer in target_orchestrator.penalizers.items():
+            source_penalizer = source_orchestrator.penalizers[penalizer_type]
+            if not source_penalizer.is_prepared():
+                continue
+            if not target_penalizer.is_prepared():
+                if not target_penalizer.is_required():
+                    continue
+                target_penalizer.prepare()
+
+            for name, source_value in source_penalizer.__dict__.items():
+                if (
+                    name == "_orchestrator_ref"
+                    or not isinstance(source_value, torch.Tensor)
+                    or source_value.ndim == 0
+                    or source_value.shape[0] != len(source)
+                ):
+                    continue
+                target_value = getattr(target_penalizer, name, None)
+                if (
+                    not isinstance(target_value, torch.Tensor)
+                    or target_value.shape[0] != len(self)
+                    or target_value.shape[1:] != source_value.shape[1:]
+                ):
+                    raise ValueError(
+                        f"incompatible sampler state tensor for {name}"
+                    )
+                target_value.index_copy_(
+                    0,
+                    target_indices,
+                    source_value.index_select(0, source_indices),
+                )
 
     def _filter_batch_custom_logit_processor(
         self, keep_indices: List[int], keep_indices_device: torch.Tensor

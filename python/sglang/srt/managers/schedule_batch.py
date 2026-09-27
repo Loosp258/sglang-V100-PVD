@@ -2498,6 +2498,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         keep_indices: Optional[List[int]] = None,
         # FIXME(lsyin): deprecate this API after spec v1 is deprecated
         v1_spec_info_filtered: Optional[bool] = False,
+        _sampling_info_preselected: bool = False,
     ):
         if keep_indices is None:
             if isinstance(chunked_req_to_exclude, Req):
@@ -2563,7 +2564,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
         self.has_grammar = any(req.grammar for req in self.reqs)
 
-        self.sampling_info.filter_batch(keep_indices, keep_indices_device)
+        if not _sampling_info_preselected:
+            self.sampling_info.filter_batch(keep_indices, keep_indices_device)
         # NOTE: spec_info filtered before batch filtering only happens in:
         # - Spec v1's verify phase
         # - Only for decode batch (running_batch)
@@ -2574,6 +2576,81 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 new_indices=keep_indices_device,
                 has_been_filtered=has_been_filtered,
             )
+
+    def select_rows(self, keep_indices: List[int]) -> "ScheduleBatch":
+        """Create a mutable Decode view without changing the canonical batch.
+
+        The PVD scheduler uses this only for a partial-ready Decode turn. The
+        canonical ``running_batch`` continues to own all requests; this view
+        owns only the ready rows and their mutable sampler state.
+        """
+        if not keep_indices:
+            raise ValueError("a Decode view must contain at least one row")
+        if self.spec_info is not None or (
+            self.spec_algorithm is not None and not self.spec_algorithm.is_none()
+        ):
+            raise ValueError("partial Decode views do not support speculation")
+
+        selected = copy.copy(self)
+        selected.reqs = [self.reqs[i] for i in keep_indices]
+        selected.sampling_info = self.sampling_info.select_rows(
+            keep_indices, selected
+        )
+        selected.spec_info = None
+        # Let filter_batch select every other row-aligned field. Sampling state
+        # was selected independently above so the canonical sampler stays live.
+        selected.reqs = self.reqs[:]
+        selected.filter_batch(
+            keep_indices=keep_indices,
+            v1_spec_info_filtered=True,
+            _sampling_info_preselected=True,
+        )
+        selected.batch_is_full = False
+        return selected
+
+    def sync_decode_rows_from(self, source: "ScheduleBatch") -> None:
+        """Persist rows advanced by a temporary Decode view into this batch."""
+        if source is self:
+            return
+        if source.spec_info is not None or self.spec_info is not None:
+            raise ValueError("partial Decode state sync does not support speculation")
+
+        target_indices = {id(req): i for i, req in enumerate(self.reqs)}
+        row_pairs = [
+            (source_index, target_indices[id(req)])
+            for source_index, req in enumerate(source.reqs)
+            if id(req) in target_indices
+        ]
+        if not row_pairs:
+            return
+
+        source_indices = torch.tensor(
+            [source_index for source_index, _ in row_pairs],
+            dtype=torch.int64,
+            device=source.device,
+        )
+        target_row_indices = torch.tensor(
+            [target_index for _, target_index in row_pairs],
+            dtype=torch.int64,
+            device=self.device,
+        )
+        for name in ("seq_lens", "orig_seq_lens"):
+            target = getattr(self, name)
+            value = getattr(source, name)
+            target.index_copy_(
+                0, target_row_indices, value.index_select(0, source_indices)
+            )
+
+        if self.seq_lens_cpu is not None and source.seq_lens_cpu is not None:
+            for source_index, target_index in row_pairs:
+                self.seq_lens_cpu[target_index] = source.seq_lens_cpu[source_index]
+        elif source.seq_lens_cpu is None:
+            self.seq_lens_cpu = None
+
+        self.seq_lens_sum = None
+        self.out_cache_loc = None
+        self.input_ids = None
+        self.sampling_info.copy_penalty_rows_from(source.sampling_info, row_pairs)
 
     def merge_batch(self, other: "ScheduleBatch"):
         # Penalizer orchestrator must be merged before Batch.reqs is merged. This is because

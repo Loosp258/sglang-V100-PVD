@@ -6,6 +6,7 @@ register_cpu_ci(est_time=9, suite="base-a-test-cpu")
 register_cpu_ci(est_time=8, suite="base-b-test-cpu")
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import torch
@@ -14,6 +15,13 @@ from sglang.srt.sampling.sampling_batch_info import (
     SamplingBatchInfo,
     merge_bias_tensor,
 )
+from sglang.srt.sampling.penaltylib import (
+    BatchedFrequencyPenalizer,
+    BatchedMinNewTokensPenalizer,
+    BatchedPresencePenalizer,
+    BatchedRepetitionPenalizer,
+)
+from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.sampling.sampling_params import TOP_K_ALL
 from sglang.test.test_utils import CustomTestCase
 
@@ -442,6 +450,7 @@ class TestFromScheduleBatch(CustomTestCase):
         req.sampling_params.min_p = min_p
         req.sampling_params.frequency_penalty = freq
         req.sampling_params.presence_penalty = presence
+        req.sampling_params.repetition_penalty = 1.0
         req.sampling_params.min_new_tokens = min_tokens
         req.sampling_params.logit_bias = logit_bias
         req.sampling_params.sampling_seed = seed
@@ -451,6 +460,132 @@ class TestFromScheduleBatch(CustomTestCase):
         req.tokenizer.additional_stop_token_ids = None
         req.tokenizer.eos_token_id = eos_id
         return req
+
+    @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
+    def test_select_and_copy_penalty_rows_preserves_parked_sampler_state(
+        self, mock_server_args
+    ):
+        mock_server_args.return_value.enable_deterministic_inference = False
+        mock_server_args.return_value.enable_custom_logit_processor = False
+
+        reqs = [
+            self._make_req(freq=0.25, presence=0.1, min_tokens=2),
+            self._make_req(freq=0.5, presence=0.2, min_tokens=3),
+            self._make_req(freq=0.75, presence=0.3, min_tokens=4),
+        ]
+        for req in reqs:
+            req.sampling_params.repetition_penalty = 1.2
+        canonical = MagicMock()
+        canonical.reqs = reqs
+        canonical.device = DEVICE
+        info = SamplingBatchInfo.from_schedule_batch(canonical, VOCAB_SIZE)
+        info.penalizer_orchestrator.cumulate_output_tokens(
+            torch.tensor([1, 2, 3], dtype=torch.int64)
+        )
+
+        view_batch = MagicMock()
+        view_batch.reqs = reqs[1:]
+        view_batch.device = DEVICE
+        view = info.select_rows([1, 2], view_batch)
+        self.assertIs(view.penalizer_orchestrator.batch, view_batch)
+        self.assertEqual(
+            view.penalizer_orchestrator.penalizers[
+                BatchedFrequencyPenalizer
+            ].cumulated_frequency_penalties[0, 2].item(),
+            0.5,
+        )
+
+        view.penalizer_orchestrator.cumulate_output_tokens(
+            torch.tensor([4, 5], dtype=torch.int64)
+        )
+        info.copy_penalty_rows_from(view, [(0, 1), (1, 2)])
+
+        canonical_frequency = info.penalizer_orchestrator.penalizers[
+            BatchedFrequencyPenalizer
+        ].cumulated_frequency_penalties
+        self.assertEqual(canonical_frequency[0, 1].item(), 0.25)
+        self.assertEqual(canonical_frequency[1, 2].item(), 0.5)
+        self.assertEqual(canonical_frequency[1, 4].item(), 0.5)
+        self.assertEqual(canonical_frequency[2, 3].item(), 0.75)
+        self.assertEqual(canonical_frequency[2, 5].item(), 0.75)
+        self.assertEqual(
+            info.penalizer_orchestrator.penalizers[
+                BatchedPresencePenalizer
+            ].cumulated_presence_penalties[1, 4].item(),
+            0.2,
+        )
+        self.assertEqual(
+            info.penalizer_orchestrator.penalizers[
+                BatchedRepetitionPenalizer
+            ].cumulated_repetition_penalties[2, 5].item(),
+            1.2,
+        )
+        self.assertEqual(
+            info.penalizer_orchestrator.penalizers[
+                BatchedMinNewTokensPenalizer
+            ].len_output_tokens[:, 0].tolist(),
+            [1, 2, 2],
+        )
+
+    @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
+    def test_schedule_batch_decode_view_preserves_canonical_rows(self, mock_server_args):
+        mock_server_args.return_value.enable_deterministic_inference = False
+        mock_server_args.return_value.enable_custom_logit_processor = False
+        reqs = [
+            self._make_req(freq=0.2),
+            self._make_req(freq=0.4),
+            self._make_req(freq=0.6),
+        ]
+        for req in reqs:
+            req.return_logprob = False
+            req.grammar = None
+            req.finished.return_value = False
+        canonical = ScheduleBatch(
+            reqs=reqs,
+            model_config=SimpleNamespace(is_encoder_decoder=False, vocab_size=VOCAB_SIZE),
+            spec_algorithm=None,
+            device=DEVICE,
+            req_pool_indices=torch.tensor([10, 11, 12]),
+            req_pool_indices_cpu=torch.tensor([10, 11, 12]),
+            seq_lens=torch.tensor([20, 30, 40]),
+            seq_lens_cpu=torch.tensor([20, 30, 40]),
+            orig_seq_lens=torch.tensor([21, 31, 41]),
+            input_ids=torch.tensor([5, 6, 7]),
+            out_cache_loc=torch.tensor([1, 2, 3]),
+        )
+        canonical.sampling_info = SamplingBatchInfo.from_schedule_batch(
+            canonical, VOCAB_SIZE
+        )
+        canonical.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
+            torch.tensor([1, 2, 3])
+        )
+
+        view = canonical.select_rows([1, 2])
+        self.assertEqual(canonical.reqs, reqs)
+        self.assertEqual(view.reqs, reqs[1:])
+        self.assertEqual(view.req_pool_indices.tolist(), [11, 12])
+        self.assertEqual(view.seq_lens.tolist(), [30, 40])
+        self.assertEqual(view.input_ids.tolist(), [6, 7])
+
+        view.seq_lens.add_(1)
+        view.seq_lens_cpu.add_(1)
+        view.orig_seq_lens.add_(1)
+        view.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
+            torch.tensor([4, 5])
+        )
+        canonical.sync_decode_rows_from(view)
+
+        self.assertEqual(canonical.seq_lens.tolist(), [20, 31, 41])
+        self.assertEqual(canonical.seq_lens_cpu.tolist(), [20, 31, 41])
+        self.assertEqual(canonical.orig_seq_lens.tolist(), [21, 32, 42])
+        canonical_frequency = canonical.sampling_info.penalizer_orchestrator.penalizers[
+            BatchedFrequencyPenalizer
+        ].cumulated_frequency_penalties
+        self.assertEqual(canonical_frequency[0, 1].item(), 0.2)
+        self.assertEqual(canonical_frequency[1, 2].item(), 0.4)
+        self.assertEqual(canonical_frequency[1, 4].item(), 0.4)
+        self.assertEqual(canonical_frequency[2, 3].item(), 0.6)
+        self.assertEqual(canonical_frequency[2, 5].item(), 0.6)
 
     @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
     def test_basic_construction(self, mock_server_args):

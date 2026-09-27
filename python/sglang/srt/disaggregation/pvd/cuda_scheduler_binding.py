@@ -6,6 +6,8 @@ factory must supply the installed backend and receiver-claimed requests.
 
 import uuid
 
+import torch
+
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
 from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
 from sglang.srt.disaggregation.pvd.cuda_rank_batch import (
@@ -262,35 +264,63 @@ class CUDADecodeSchedulerBinding:
             or (prewarmer is not None and prewarmer.pending)
         )
 
-    def ready_to_prepare(self, batch):
-        """Gate BEFORE prepare_for_decode allocates another generated KV row."""
+    def select_ready_batch(self, batch):
+        """Build a ready-only Decode view while retaining the canonical batch.
+
+        ``running_batch`` remains the scheduler's owner of every request. A
+        temporary view allows ready peers to decode when another request is
+        waiting for its PVD refresh, without allocating a KV row for it.
+        """
         self._check()
         if self.driver.arbiter.busy:
-            return False
+            return None
         before = batch.batch_size()
         batch.filter_batch(v1_spec_info_filtered=True)
         if batch.batch_size() != before:
             batch.batch_is_full = False
         if batch.is_empty():
-            return False
-        for req in batch.reqs:
+            return None
+
+        # Partial views cannot consume FutureMap rows owned by the previous
+        # full batch. Rebuild the Decode input directly from the request state
+        # before selecting rows, so both ready and later-rejoined requests use
+        # the token produced by their most recent formal Decode.
+        if any(not req.output_ids for req in batch.reqs):
+            raise LifecycleError("PVD Decode request has no committed output token")
+        batch.input_ids = torch.tensor(
+            [req.output_ids[-1] for req in batch.reqs],
+            dtype=torch.int64,
+            device=batch.device,
+        )
+
+        ready_indices = []
+        for index, req in enumerate(batch.reqs):
             record = self._record(req)
             if record is None:
                 raise LifecycleError("unregistered request in CUDA running batch")
             if record.stopping or record.quarantined:
-                return False
-            if not record.controller.can_decode(self.driver._observe(record)):
-                return False  # Wait-all: no peer allocation or partial forward.
-        if not batch.check_decode_mem():
+                continue
+            if record.controller.can_decode(self.driver._observe(record)):
+                ready_indices.append(index)
+
+        if not ready_indices:
+            return None
+        decode_batch = (
+            batch
+            if len(ready_indices) == batch.batch_size()
+            else batch.select_rows(ready_indices)
+        )
+        if not decode_batch.check_decode_mem():
             # Native in-place retraction destroys deferred-release bookkeeping.
-            # First explicit serving policy: terminate this batch, drain normally.
+            # Abort only the ready rows; a refresh-pending peer did not consume
+            # another generated KV row and remains scheduler-owned.
             self.scheduler._abort_pvd_cuda_requests(
-                list(batch.reqs),
+                list(decode_batch.reqs),
                 "CUDA Decode KV capacity exhausted; asynchronous retraction is unsupported",
             )
             batch.filter_batch(v1_spec_info_filtered=True)
-            return False
-        return True
+            return None
+        return decode_batch
 
     def run(self, batch):
         self._check()
@@ -298,11 +328,17 @@ class CUDADecodeSchedulerBinding:
             self.executor, self.driver, batch, pool_owner=self.pool_owner
         )
         try:
-            return bridge.run(
+            result = bridge.run(
                 forward=lambda: self.scheduler.run_batch(batch),
                 processor=self.scheduler.batch_result_processor,
                 result_handler=self.scheduler.process_batch_result,
             )
+            canonical_batch = getattr(self.scheduler, "running_batch", None)
+            if canonical_batch is not None and canonical_batch is not batch:
+                sync_rows = getattr(canonical_batch, "sync_decode_rows_from", None)
+                if callable(sync_rows):
+                    sync_rows(batch)
+            return result
         except CUDABatchResultRefused as exc:
             # Only this pre-commit refusal can become a request-local abort.
             # Unknown GPU completion, a failed result hook, or uncertain stop

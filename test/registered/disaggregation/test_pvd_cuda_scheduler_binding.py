@@ -6,6 +6,7 @@ from http import HTTPStatus
 from types import SimpleNamespace as NS
 
 import pytest
+import torch
 from sglang.srt.disaggregation.pvd import cuda_scheduler_binding as module
 from sglang.srt.disaggregation.pvd.conn import PVDSelectedRouteBinding
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
@@ -32,6 +33,8 @@ def method(name, **namespace):
 class Batch:
     def __init__(self, reqs):
         self.reqs, self.batch_is_full, self.capacity = list(reqs), True, True
+        self.device = "cpu"
+        self.input_ids = None
 
     def batch_size(self):
         return len(self.reqs)
@@ -39,8 +42,19 @@ class Batch:
     def is_empty(self):
         return not self.reqs
 
-    def filter_batch(self, **kwargs):
-        self.reqs = [r for r in self.reqs if not r.finished()]
+    def filter_batch(self, *, keep_indices=None, **kwargs):
+        if keep_indices is None:
+            self.reqs = [r for r in self.reqs if not r.finished()]
+        else:
+            self.reqs = [self.reqs[i] for i in keep_indices]
+            if self.input_ids is not None:
+                self.input_ids = self.input_ids[keep_indices]
+
+    def select_rows(self, keep_indices):
+        selected = Batch([self.reqs[i] for i in keep_indices])
+        selected.capacity = self.capacity
+        selected.input_ids = self.input_ids[keep_indices]
+        return selected
 
     def check_decode_mem(self):
         return self.capacity
@@ -326,11 +340,54 @@ def test_actual_selection_waits_before_decode_allocation(monkeypatch):
         assert select(t.s) is batch and t.events == ["allocate"]
 
 
+def test_ready_subset_keeps_canonical_requests_and_refreshes_latest_tokens(monkeypatch):
+    with setup(monkeypatch) as t:
+        blocked = t.c.request
+        ready = NS(
+            rid="peer",
+            output_ids=[6],
+            is_retracted=False,
+            finished=lambda: False,
+        )
+        batch = Batch([blocked, ready])
+        t.s.running_batch = batch
+        records = {
+            id(blocked): NS(
+                stopping=False,
+                quarantined=False,
+                controller=NS(can_decode=lambda _: False),
+            ),
+            id(ready): NS(
+                stopping=False,
+                quarantined=False,
+                controller=NS(can_decode=lambda _: True),
+            ),
+        }
+        t.binding._record = lambda req: records[id(req)]
+        t.b.driver._observe = lambda _: 0
+
+        first_view = t.binding.select_ready_batch(batch)
+        assert first_view is not batch
+        assert first_view.reqs == [ready]
+        assert batch.reqs == [blocked, ready]
+        assert batch.input_ids.tolist() == [5, 6]
+        assert first_view.input_ids.tolist() == [6]
+
+        # Simulate B's formal Decode result. The next ready-only view must use
+        # the new token from Req, even though the prior view had its own tensor.
+        ready.output_ids.append(7)
+        second_view = t.binding.select_ready_batch(batch)
+        assert second_view.reqs == [ready]
+        assert second_view.input_ids.tolist() == [7]
+        assert batch.reqs == [blocked, ready]
+        assert batch.input_ids.tolist() == [5, 7]
+
+
 def test_capacity_aborts_once_and_waits_for_both_closes(monkeypatch):
     with setup(monkeypatch) as t:
         batch = Batch([t.c.request])
         batch.capacity = False
-        assert not t.binding.ready_to_prepare(batch)
+        assert t.binding.select_ready_batch(batch) is None
         assert batch.is_empty() and t.s.waiting_queue == []
         assert [e[0] for e in t.events] == ["abort", "stream", "defer"]
         for _ in range(3):

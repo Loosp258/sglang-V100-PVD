@@ -1815,6 +1815,11 @@ class SchedulerDisaggregationDecodeMixin:
     ) -> Optional[ScheduleBatch]:
         """Process prebuilt batch and schedule the next decode batch."""
         from sglang.srt.disaggregation.pvd.cuda_scheduler_binding import binding_for
+
+        cuda_binding = binding_for(self)
+        if cuda_binding is not None:
+            self._pvd_prune_running_batch_requests()
+
         # Process pending prebuilt batch: output processing + filter + merge
         new_prebuilt_batch = self.get_new_prebuilt_batch()
         if new_prebuilt_batch:
@@ -1834,20 +1839,46 @@ class SchedulerDisaggregationDecodeMixin:
                     self.running_batch.merge_batch(new_prebuilt_batch)
 
         # Schedule decode batch
-        cuda_binding = binding_for(self)
-        if self.running_batch.is_empty() or (
-            cuda_binding is not None
-            and not cuda_binding.ready_to_prepare(self.running_batch)
-        ):
+        if self.running_batch.is_empty():
             ret = None
-        else:
+        elif cuda_binding is None:
             self.running_batch = self.update_running_batch(self.running_batch)
             ret = self.running_batch if not self.running_batch.is_empty() else None
+        else:
+            # Keep running_batch canonical so pending requests remain visible
+            # to admission, timeout, abort, preallocation, and idle accounting.
+            decode_view = cuda_binding.select_ready_batch(self.running_batch)
+            if decode_view is None:
+                ret = None
+            else:
+                decode_view = self.update_running_batch(decode_view)
+                self._pvd_prune_running_batch_requests()
+                ret = decode_view if not decode_view.is_empty() else None
 
         ret = self.dp_attn_adapter.maybe_prepare_mlp_sync_batch(ret)
         if ret:
             set_schedule_time_batch(ret)
         return ret
+
+    def _pvd_prune_running_batch_requests(self: Scheduler):
+        """Remove finished/retracted rows from the canonical PVD owner batch."""
+        batch = self.running_batch
+        if batch.is_empty():
+            return
+        waiting_ids = {id(req) for req in self.waiting_queue}
+        keep_indices = [
+            i
+            for i, req in enumerate(batch.reqs)
+            if not req.finished()
+            and not getattr(req, "is_retracted", False)
+            and id(req) not in waiting_ids
+        ]
+        if len(keep_indices) != batch.batch_size():
+            batch.filter_batch(
+                keep_indices=keep_indices,
+                v1_spec_info_filtered=True,
+            )
+            batch.batch_is_full = False
 
     def get_new_prebuilt_batch(self: Scheduler) -> Optional[ScheduleBatch]:
         """Create a schedulebatch for fake completed prefill"""
