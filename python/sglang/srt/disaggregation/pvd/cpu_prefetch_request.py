@@ -9,8 +9,9 @@ source for the scope. Only the Delivery sink publishes write destinations.
 
 import asyncio
 import logging
+import math
 import time
-from contextlib import nullcontext
+from contextlib import AsyncExitStack, nullcontext
 
 from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
 from sglang.srt.disaggregation.pvd.probe_search import (
@@ -109,6 +110,9 @@ class _PrefetchRequestCore:
         pack_source=None,
         execution_scope=None,
         index_ready_wait_seconds=0.0,
+        lane_client=None,
+        lane_checkpoint=None,
+        lane_deadline_monotonic=None,
     ):
         """Predict ahead of boundary; a first start AT it uses committed Q.
 
@@ -123,6 +127,27 @@ class _PrefetchRequestCore:
             raise ValueError("choose exactly one local source or owned Delivery sink")
         if self._active is not None or self._tasks:
             raise ValueError("one outstanding refresh per request")
+        if lane_client is not None:
+            from sglang.srt.disaggregation.pvd.probe_lane_identity import (
+                ProbeLaneCheckpointIdentity,
+            )
+            from sglang.srt.disaggregation.pvd.probe_lane_unix import (
+                ProbeLaneUnixClient,
+            )
+
+            if (
+                not isinstance(lane_client, ProbeLaneUnixClient)
+                or not isinstance(lane_checkpoint, ProbeLaneCheckpointIdentity)
+                or type(lane_deadline_monotonic) not in (int, float)
+                or not math.isfinite(lane_deadline_monotonic)
+                or lane_deadline_monotonic <= time.monotonic()
+                or execution_scope is not None
+            ):
+                raise ValueError(
+                    "private lane requires exact client, identity and deadline"
+                )
+        elif lane_checkpoint is not None or lane_deadline_monotonic is not None:
+            raise ValueError("private lane identity/deadline require a lane client")
         if (
             not isinstance(prefix, CommittedPrefix)
             or prefix.request_id != self._session.request_id
@@ -144,6 +169,7 @@ class _PrefetchRequestCore:
         refresh_started = time.perf_counter()
         epoch = self.group.begin(prefix.committed_position)
         self._active = epoch
+        lane_stack = AsyncExitStack()
         try:
             window = self._session.begin(
                 prefix,
@@ -157,12 +183,35 @@ class _PrefetchRequestCore:
                 start = len(routes)
                 routes.extend(self._routes[rank])
                 partitions[rank] = tuple(range(start, len(routes)))
-            # The optional scheduler-owned scope covers synchronous draft/probe
-            # only; it MUST NOT remain held over HTTP waits.
-            with nullcontext() if execution_scope is None else execution_scope():
-                prepared = self._session.prepare(
+            if lane_client is None:
+                # The scheduler-owned scope covers synchronous draft/probe
+                # only; it MUST NOT remain held over HTTP waits.
+                with nullcontext() if execution_scope is None else execution_scope():
+                    prepared = self._session.prepare(
+                        window,
+                        self.pipeline,
+                        routes=tuple(routes),
+                        head_mapping=self.mapping,
+                    )
+            else:
+                from sglang.srt.disaggregation.pvd.probe_lane_routing import (
+                    issue_routed_probe_ticket,
+                )
+
+                ticket = issue_routed_probe_ticket(
                     window,
-                    self.pipeline,
+                    tuple(routes),
+                    self.mapping,
+                    lane_checkpoint,
+                    deadline_monotonic=lane_deadline_monotonic,
+                )
+                queries = await lane_stack.enter_async_context(
+                    lane_client.request(ticket)
+                )
+                prepared = self._session.prepare_from_lane(
+                    window,
+                    ticket,
+                    queries,
                     routes=tuple(routes),
                     head_mapping=self.mapping,
                 )
@@ -180,6 +229,8 @@ class _PrefetchRequestCore:
                 for rank, (child, part) in children.items()
             )
             await asyncio.gather(*self._tasks)
+            if lane_client is not None and time.monotonic() >= lane_deadline_monotonic:
+                raise StaleProbeSearch("private lane search exceeded refresh deadline")
             search_seconds = time.perf_counter() - search_started
             union_started = time.perf_counter()
             self._live()
@@ -238,6 +289,7 @@ class _PrefetchRequestCore:
                     task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            await lane_stack.aclose()
 
     def can_decode(self, committed_tokens):
         if self._closed:

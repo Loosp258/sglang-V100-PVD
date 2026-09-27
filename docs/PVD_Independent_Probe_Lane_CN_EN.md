@@ -138,3 +138,12 @@ V 检索/RDMA 或同条件性能比较。
 校验 Entry、目标向量空间、post-RoPE、GQA→KV-head 映射与维度，
 并从实际 query positions 计算回复字节上限。纯逻辑测试通过；
 Scheduler 尚未调用此函数。
+
+刷新状态机检查点 / Refresh seam: `_PrefetchRequestCore.refresh()` 新增
+显式可选的 `lane_client` + 真实 checkpoint 身份 + 绝对 deadline 分支，
+默认同进程预测路径不变。新分支用可信路由签发 ticket，在 Q 回复
+预算作用域内完成既有 V search、GQA 并集和 sparse Delivery；晚于
+deadline 的检索拒绝安装。假 sidecar + 真实本地 V HTTP/index 的
+完整 refresh/install 测试通过，原受控刷新回归合计 **26 passed**。
+还没有在生产 Scheduler 选择这个分支；D GPU1 仍会加载本地 draft，
+因此现阶段**不能声称计算重叠或显存节省**。
