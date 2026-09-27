@@ -58,6 +58,26 @@ def test_owner_mints_peer_pid_and_private_directory(short_tmp_root):
     owner.close()
 
 
+def test_owner_exposes_only_selected_gpu_to_child(short_tmp_root, monkeypatch):
+    monkeypatch.setenv("PVD_FAKE_SIDECAR_MODE", "assert_cuda_env")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    owner = launch_probe_sidecar(
+        FIXTURE,
+        [],
+        checkpoint=CHECKPOINT,
+        target_model_id="target/qwen2",
+        reply_budget=TransferBudget(1 << 20, 2),
+        startup_timeout=5,
+        directory_parent=short_tmp_root,
+        cuda_visible_devices="0",
+    )
+    try:
+        owner.check_alive()
+        assert owner.client.expected_server_pid == owner.process.pid
+    finally:
+        owner.close()
+
+
 @pytest.mark.parametrize("mode", ["wrong_pid", "wrong_hash", "exit"])
 def test_bad_ready_or_early_exit_does_not_leave_a_child(
     short_tmp_root, monkeypatch, mode

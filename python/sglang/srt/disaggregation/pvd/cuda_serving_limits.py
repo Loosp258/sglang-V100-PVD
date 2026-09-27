@@ -21,7 +21,18 @@ _NONNEGATIVE_INTEGER_FIELDS = (
 )
 _DURATION_FIELDS = ("request_timeout_seconds", "poll_interval_seconds")
 _FIELDS = frozenset(_INTEGER_FIELDS + _NONNEGATIVE_INTEGER_FIELDS + _DURATION_FIELDS)
-_OPTIONAL_FIELDS = frozenset(("attention_impl", "probe_prefix_cache_bytes"))
+_OPTIONAL_FIELDS = frozenset(
+    ("attention_impl", "probe_prefix_cache_bytes", "probe_sidecar")
+)
+
+
+@dataclass(frozen=True)
+class ProbeSidecarLimits:
+    script_path: str
+    directory_parent: str
+    cuda_visible_devices: str
+    reply_budget_bytes: int
+    startup_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,7 @@ class CUDAServingLimits:
     bank_max_reservations: int
     attention_impl: str = "online"
     probe_prefix_cache_bytes: int = 0
+    probe_sidecar: ProbeSidecarLimits | None = None
 
 
 def _reject_constant(value):
@@ -153,7 +165,8 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
         or type(attention_impl) is not str
     ):
         raise ValueError(
-            "attention_impl must be online, sdpa_bounded, triton_grouped or triton_shadow"
+            "attention_impl must be online, sdpa_bounded, triton_grouped "
+            "or triton_shadow"
         )
     if attention_impl == "sdpa_bounded" and values["max_sequence_tokens"] > 256:
         raise ValueError("sdpa_bounded requires max_sequence_tokens <= 256")
@@ -173,5 +186,42 @@ def load_cuda_serving_limits(path, *, refresh_interval, predict_tokens):
     if type(prefix_cache_bytes) is not int or prefix_cache_bytes < 0:
         raise ValueError("probe_prefix_cache_bytes must be a nonnegative integer")
     values["probe_prefix_cache_bytes"] = prefix_cache_bytes
+
+    sidecar = config.get("probe_sidecar")
+    if sidecar is not None:
+        required = {
+            "script_path",
+            "directory_parent",
+            "cuda_visible_devices",
+            "reply_budget_bytes",
+            "startup_timeout_seconds",
+        }
+        if type(sidecar) is not dict or set(sidecar) != required:
+            raise ValueError("probe_sidecar requires exactly five explicit fields")
+        if any(
+            type(sidecar[key]) is not str or not Path(sidecar[key]).is_absolute()
+            for key in ("script_path", "directory_parent")
+        ):
+            raise ValueError("probe_sidecar paths must be absolute")
+        visible = sidecar["cuda_visible_devices"]
+        if type(visible) is not str or not visible.isdecimal():
+            raise ValueError("probe_sidecar requires one numeric visible GPU")
+        reply_bytes = sidecar["reply_budget_bytes"]
+        timeout = sidecar["startup_timeout_seconds"]
+        if type(reply_bytes) is not int or reply_bytes <= 0:
+            raise ValueError("probe_sidecar reply budget must be positive")
+        if (
+            type(timeout) not in (int, float)
+            or not math.isfinite(timeout)
+            or not 0 < timeout <= 600
+        ):
+            raise ValueError("probe_sidecar startup timeout must be within 600 s")
+        values["probe_sidecar"] = ProbeSidecarLimits(
+            sidecar["script_path"],
+            sidecar["directory_parent"],
+            visible,
+            reply_bytes,
+            float(timeout),
+        )
 
     return CUDAServingLimits(**values)

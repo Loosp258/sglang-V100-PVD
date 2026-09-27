@@ -32,7 +32,12 @@ print(
             "socket": str(path),
             "weights_sha256": ("c" if mode == "wrong_hash" else "a") * 64,
             "tokenizer_sha256": "b" * 64,
-            "device": "cuda:0",
+            "device": (
+                "cuda:0"
+                if mode != "assert_cuda_env"
+                or os.environ.get("CUDA_VISIBLE_DEVICES") == "0"
+                else "cuda:wrong"
+            ),
         }
     ),
     flush=True,

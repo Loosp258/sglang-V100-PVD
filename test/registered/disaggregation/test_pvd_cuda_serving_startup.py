@@ -8,7 +8,13 @@ import pytest
 import torch
 from sglang.srt.disaggregation.pvd import cuda_serving_startup as startup
 from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import LifecycleError
-from sglang.srt.disaggregation.pvd.cuda_serving_limits import CUDAServingLimits
+from sglang.srt.disaggregation.pvd.cuda_serving_limits import (
+    CUDAServingLimits,
+    ProbeSidecarLimits,
+)
+from sglang.srt.disaggregation.pvd.probe_lane_identity import (
+    ProbeLaneCheckpointIdentity,
+)
 
 
 def _setup(monkeypatch, *, wrong_lock=False, wrong_budget=False, fail_target=False):
@@ -117,6 +123,94 @@ def test_composition_shares_one_lock_and_target_scratch_budget(monkeypatch):
     assert target["max_sequence_tokens"] == 64
     assert target["num_query_heads"] == 28
     assert target["total_kv_heads"] == 4
+
+
+def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(
+    monkeypatch, tmp_path
+):
+    scheduler, limits, observed = _setup(monkeypatch)
+    scheduler.server_args.model_path = str(tmp_path)
+    scheduler.server_args.tokenizer_path = str(tmp_path)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    identity = ProbeLaneCheckpointIdentity("a" * 64, "b" * 64, 100, 10)
+    monkeypatch.setattr(startup, "checkpoint_identity", lambda _: identity)
+    calls = []
+    fake_sidecar = NS(
+        client=object(),
+        checkpoint=identity,
+        check_alive=lambda: calls.append("check"),
+        close=lambda: calls.append("close"),
+    )
+
+    def launch(script, args, **kwargs):
+        assert script == "/tmp/probe.py"
+        assert kwargs["cuda_visible_devices"] == "0"
+        assert kwargs["target_model_id"] == "target-qwen"
+        assert args[args.index("--model-path") + 1] == str(tmp_path)
+        return fake_sidecar
+
+    monkeypatch.setattr(startup, "launch_probe_sidecar", launch)
+    sidecar_limits = ProbeSidecarLimits("/tmp/probe.py", "/tmp", "0", 16 << 20, 180)
+    installed = startup.install_cuda_predictive_serving(
+        scheduler, replace(limits, probe_sidecar=sidecar_limits)
+    )
+    admitted = observed["target"]["prepare_cuda_admission"](object())
+    assert admitted.lane_client is fake_sidecar.client
+    assert admitted.lane_checkpoint is identity
+    assert calls == ["check"]
+    installed.close_drained()
+    assert calls == ["check", "close"]
+
+
+def test_sidecar_is_stopped_if_target_install_fails(monkeypatch, tmp_path):
+    scheduler, limits, _ = _setup(monkeypatch, fail_target=True)
+    scheduler.server_args.model_path = str(tmp_path)
+    scheduler.server_args.tokenizer_path = str(tmp_path)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    identity = ProbeLaneCheckpointIdentity("a" * 64, "b" * 64, 100, 10)
+    monkeypatch.setattr(startup, "checkpoint_identity", lambda _: identity)
+    closed = []
+    monkeypatch.setattr(
+        startup,
+        "launch_probe_sidecar",
+        lambda *_, **__: NS(close=lambda: closed.append(True)),
+    )
+    with pytest.raises(RuntimeError, match="target installation failed"):
+        startup.install_cuda_predictive_serving(
+            scheduler,
+            replace(
+                limits,
+                probe_sidecar=ProbeSidecarLimits(
+                    "/tmp/probe.py", "/tmp", "0", 16 << 20, 180
+                ),
+            ),
+        )
+    assert closed == [True]
+    assert scheduler.pvd_cuda_components is None
+
+
+def test_sidecar_close_failure_quarantines_process_owner(monkeypatch, tmp_path):
+    scheduler, limits, _ = _setup(monkeypatch, fail_target=True)
+    scheduler.server_args.model_path = str(tmp_path)
+    scheduler.server_args.tokenizer_path = str(tmp_path)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    identity = ProbeLaneCheckpointIdentity("a" * 64, "b" * 64, 100, 10)
+    monkeypatch.setattr(startup, "checkpoint_identity", lambda _: identity)
+    owner = NS(close=lambda: (_ for _ in ()).throw(RuntimeError("close failed")))
+    monkeypatch.setattr(startup, "launch_probe_sidecar", lambda *_, **__: owner)
+    before = len(startup._STARTUP_QUARANTINE)
+    with pytest.raises(LifecycleError, match="shutdown uncertain"):
+        startup.install_cuda_predictive_serving(
+            scheduler,
+            replace(
+                limits,
+                probe_sidecar=ProbeSidecarLimits(
+                    "/tmp/probe.py", "/tmp", "0", 16 << 20, 180
+                ),
+            ),
+        )
+    assert len(startup._STARTUP_QUARANTINE) == before + 1
+    assert startup._STARTUP_QUARANTINE[-1][-1] is owner
 
 
 def test_opt_in_sdpa_reaches_target_workspace_without_changing_prediction(monkeypatch):

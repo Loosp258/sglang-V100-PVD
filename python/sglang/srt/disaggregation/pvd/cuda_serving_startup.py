@@ -28,6 +28,11 @@ from sglang.srt.disaggregation.pvd.cuda_waiting_admission import (
     CUDAWaitingAdmissionResources,
 )
 from sglang.srt.disaggregation.pvd.draft_sglang import DraftPlacement
+from sglang.srt.disaggregation.pvd.probe_lane_identity import checkpoint_identity
+from sglang.srt.disaggregation.pvd.probe_lane_sidecar_process import (
+    ProbeSidecarProcess,
+    launch_probe_sidecar,
+)
 from sglang.srt.disaggregation.pvd.prompt_vectors import QueryHeadMapping
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
@@ -61,10 +66,13 @@ class CUDAPredictiveServing:
     bank_budget: TransferBudget
     target_scratch_budget: TransferBudget
     head_mapping: QueryHeadMapping
+    sidecar: ProbeSidecarProcess | None = None
 
     def close_drained(self):
         """Best-effort orderly close; process exit still owns model-pool memory."""
         self.target.close_drained()
+        if self.sidecar is not None:
+            self.sidecar.close()
 
 
 def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
@@ -76,7 +84,10 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     explicit budgets. Failed CUDA loading retains possibly-live owners until
     worker exit; it never resumes the legacy path in that process.
     """
-    from sglang.srt.disaggregation.pvd.cuda_serving_limits import CUDAServingLimits
+    from sglang.srt.disaggregation.pvd.cuda_serving_limits import (
+        CUDAServingLimits,
+        ProbeSidecarLimits,
+    )
 
     if not isinstance(limits, CUDAServingLimits):
         raise LifecycleError("validated explicit CUDA serving limits required")
@@ -149,7 +160,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     route_queue = CUDARouteDiscoveryQueue(
         manager, max_inflight=scheduler.max_running_requests
     )
-    prediction = target = None
+    prediction = target = sidecar = None
     try:
         prediction = build_cuda_prediction_startup(
             runner,
@@ -191,7 +202,67 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 device=device,
             )
 
+        sidecar_config = limits.probe_sidecar
+        if sidecar_config is not None:
+            if not isinstance(sidecar_config, ProbeSidecarLimits):
+                raise LifecycleError("validated probe sidecar limits required")
+            parent_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if (
+                parent_visible is None
+                or not parent_visible.isdecimal()
+                or parent_visible == sidecar_config.cuda_visible_devices
+                or runner.gpu_id != 0
+                or args.pvd_draft_predict_tokens not in (1, 2, 4, 8, 16)
+                or not os.path.isdir(args.model_path)
+                or os.path.realpath(args.tokenizer_path or args.model_path)
+                != os.path.realpath(args.model_path)
+            ):
+                raise LifecycleError(
+                    "sidecar requires a distinct visible GPU, local target "
+                    "checkpoint/tokenizer and supported prediction length"
+                )
+            checkpoint = checkpoint_identity(os.path.realpath(args.model_path))
+            sidecar = launch_probe_sidecar(
+                sidecar_config.script_path,
+                [
+                    "--model-path",
+                    os.path.realpath(args.model_path),
+                    "--draft-model-path",
+                    os.path.realpath(args.pvd_draft_model_path),
+                    "--context-length",
+                    str(limits.max_sequence_tokens),
+                    "--max-total-tokens",
+                    str(limits.max_sequence_tokens),
+                    "--predict-tokens",
+                    str(args.pvd_draft_predict_tokens),
+                    "--draft-mem-fraction-static",
+                    str(args.pvd_draft_mem_fraction_static),
+                    "--draft-scratch-budget-bytes",
+                    str(args.pvd_draft_scratch_budget_bytes),
+                    "--draft-persistent-budget-bytes",
+                    str(args.pvd_draft_persistent_budget_bytes),
+                    "--draft-transient-bytes-bound",
+                    str(limits.draft_transient_bytes_bound),
+                    "--probe-budget-bytes",
+                    str(args.pvd_retrieval_scratch_budget_bytes),
+                    "--probe-transient-bytes-bound",
+                    str(limits.probe_transient_bytes_bound),
+                    "--reply-budget-bytes",
+                    str(sidecar_config.reply_budget_bytes),
+                ],
+                checkpoint=checkpoint,
+                target_model_id=args.pvd_retrieval_vector_space,
+                reply_budget=TransferBudget(
+                    sidecar_config.reply_budget_bytes, scheduler.max_running_requests
+                ),
+                startup_timeout=sidecar_config.startup_timeout_seconds,
+                directory_parent=sidecar_config.directory_parent,
+                cuda_visible_devices=sidecar_config.cuda_visible_devices,
+            )
+
         def prepare(_preflight):
+            if sidecar is not None:
+                sidecar.check_alive()
             return CUDAWaitingAdmissionResources(
                 pipeline=prediction.pipeline,
                 head_mapping=head_mapping,
@@ -210,6 +281,8 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 max_pending_events=limits.max_pending_events,
                 max_pending_bytes=limits.max_pending_bytes,
                 poll_interval_seconds=limits.poll_interval_seconds,
+                lane_client=sidecar.client if sidecar is not None else None,
+                lane_checkpoint=sidecar.checkpoint if sidecar is not None else None,
             )
 
         target = install_cuda_target_components(
@@ -240,11 +313,25 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 "CUDA target and prediction do not share execution owners"
             )
         installed = CUDAPredictiveServing(
-            target, prediction, route_queue, bank_budget, scratch_budget, head_mapping
+            target,
+            prediction,
+            route_queue,
+            bank_budget,
+            scratch_budget,
+            head_mapping,
+            sidecar,
         )
         scheduler.pvd_cuda_components = installed
         return installed
     except BaseException:
+        if sidecar is not None:
+            try:
+                sidecar.close()
+            except BaseException:
+                _STARTUP_QUARANTINE.append(
+                    (scheduler, target, prediction, route_queue, sidecar)
+                )
+                raise LifecycleError("sidecar shutdown uncertain during startup")
         # A loaded draft cannot be safely unloaded from a running target
         # process. Any failure after that point is terminal for this worker.
         if prediction is not None or target is not None:

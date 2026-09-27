@@ -194,3 +194,15 @@ post-RoPE Q 经 Unix 通道在约 **0.34 s** 内返回，host 回复预算归还
 0.34 s 是独立请求观测值，**不是**含正式 D decode、V search、RDMA
 或 attention 的端到端刷新延迟；不能据此推断网络隐藏或性能收益。
 生产 Scheduler 仍未调用这条监督式启动路径。
+
+生产启动接线（显式 opt-in，未完成端到端验收）：CUDA serving limits
+现在可带严格的 `probe_sidecar` 对象，指定绝对脚本路径、私有目录父路径、
+独立物理 GPU、回复预算和启动超时。D 的可见 GPU 必须是另一张单独
+编号的 GPU；进程拥有者只向子进程暴露所选 GPU，核对模型摘要后将
+client/checkpoint 经 waiting-queue admission 交给 refresh driver，
+关闭已排空的服务时关闭 sidecar。无此字段时保持既有路径。真实/假
+进程和配置/启动单测合计 **83 passed**，包括启动失败且 sidecar 清理
+不确定时保留所有者并拒绝发布；生产三机 opt-in 尚未运行。
+当前第一版**仍在 D 正式进程加载本地 draft**，因此这一接线只移走
+refresh Q 的计算位置，暂不节约该 draft 的 GPU1 常驻显存；性能
+是否改善必须用同条件工作负载测量，不可根据结构推断。

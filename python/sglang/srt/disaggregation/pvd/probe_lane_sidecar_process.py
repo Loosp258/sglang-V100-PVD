@@ -73,6 +73,7 @@ def launch_probe_sidecar(
     startup_timeout: float = 180.0,
     directory_parent: str | Path | None = None,
     python_executable: str | Path = sys.executable,
+    cuda_visible_devices: str | None = None,
 ) -> ProbeSidecarProcess:
     """Start a GPU0 sidecar with exact child identity and bounded startup wait.
 
@@ -90,6 +91,13 @@ def launch_probe_sidecar(
         or not 0 < startup_timeout <= 600
         or type(args) is not list
         or not all(type(arg) is str for arg in args)
+        or (
+            cuda_visible_devices is not None
+            and (
+                type(cuda_visible_devices) is not str
+                or not cuda_visible_devices.isdecimal()
+            )
+        )
     ):
         raise ProbeSidecarStartupError("explicit bounded sidecar identity required")
     unresolved = Path(script)
@@ -130,6 +138,11 @@ def launch_probe_sidecar(
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=(
+                {**os.environ, "CUDA_VISIBLE_DEVICES": cuda_visible_devices}
+                if cuda_visible_devices is not None
+                else None
+            ),
         )
 
         def drain():

@@ -68,6 +68,43 @@ def test_probe_prefix_cache_budget_is_explicit_and_disabled_by_default(tmp_path)
     assert load(write_config(tmp_path, config)).probe_prefix_cache_bytes == 256 << 20
 
 
+def test_sidecar_opt_in_requires_exact_explicit_fields(tmp_path):
+    config = valid_config()
+    config["probe_sidecar"] = {
+        "script_path": "/tmp/probe.py",
+        "directory_parent": "/tmp",
+        "cuda_visible_devices": "0",
+        "reply_budget_bytes": 16 << 20,
+        "startup_timeout_seconds": 180,
+    }
+    sidecar = load(write_config(tmp_path, config)).probe_sidecar
+    assert sidecar.cuda_visible_devices == "0"
+    assert sidecar.reply_budget_bytes == 16 << 20
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("cuda_visible_devices", "0,1"),
+        ("script_path", "probe.py"),
+        ("reply_budget_bytes", 0),
+        ("startup_timeout_seconds", 601),
+    ],
+)
+def test_sidecar_refuses_ambiguous_or_unbounded_config(tmp_path, key, value):
+    config = valid_config()
+    config["probe_sidecar"] = {
+        "script_path": "/tmp/probe.py",
+        "directory_parent": "/tmp",
+        "cuda_visible_devices": "0",
+        "reply_budget_bytes": 16 << 20,
+        "startup_timeout_seconds": 180,
+    }
+    config["probe_sidecar"][key] = value
+    with pytest.raises(ValueError, match="probe_sidecar"):
+        load(write_config(tmp_path, config))
+
+
 def test_cloudlab_cached_probe_fixture_differs_only_by_opt_in_budget():
     directory = Path(__file__).parent
     baseline = json.loads(
@@ -211,8 +248,9 @@ def test_v100s_triton_long_m8_lead6_experiment_extends_only_prefetch_window():
 def test_v100s_m8_probe_cache_experiment_changes_only_lead_from_m4_cache():
     directory = Path(__file__).parent
     baseline = json.loads(
-        (directory / "pvd_qwen_v100s_serving_limits_triton_m4_probe_cache_long.json")
-        .read_text()
+        (
+            directory / "pvd_qwen_v100s_serving_limits_triton_m4_probe_cache_long.json"
+        ).read_text()
     )
     candidate = (
         directory
