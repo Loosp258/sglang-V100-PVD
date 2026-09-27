@@ -184,3 +184,13 @@ identity, peer-PID and lifetime checks; a ready socket alone is insufficient.
 回归覆盖正常退出、错误 PID/摘要、早退及禁止覆盖父进程身份。它仍是
 **显式调用的启动组件**，尚未在生产 Scheduler 内启用；真实模型双进程
 的启动/请求/停止完整联测及 D GPU1 并发加速仍待验证。
+
+真实监督式检查点 / Real supervised gate (2026-09-27): 在 D 节点以
+`run_pvd_qwen_sidecar_supervised_gpu.py` 启动本地 7B+0.5B 的 GPU0
+sidecar。父进程计算真实 checkpoint 摘要、生成私有目录和 peer PID，
+子进程回执在约 **39.32 s** 内通过核对；一次两位置、全部 28 层的
+post-RoPE Q 经 Unix 通道在约 **0.34 s** 内返回，host 回复预算归还，
+子进程退出且 socket 目录清理。摘要与前述真实内容哈希一致。这个
+0.34 s 是独立请求观测值，**不是**含正式 D decode、V search、RDMA
+或 attention 的端到端刷新延迟；不能据此推断网络隐藏或性能收益。
+生产 Scheduler 仍未调用这条监督式启动路径。
