@@ -107,8 +107,10 @@ def environment(
         def __init__(self, size, length, device, saver):
             probe = holders["probe"]
             assert probe._private_state is not None or (
-            prefix_cache
-            and any(record.owner is not None for record in probe._prefix_caches.values())
+                prefix_cache
+                and any(
+                    record.owner is not None for record in probe._prefix_caches.values()
+                )
             )
             assert budget.snapshot()["used_staging_bytes"] > 0
             assert device == "cuda:0"
