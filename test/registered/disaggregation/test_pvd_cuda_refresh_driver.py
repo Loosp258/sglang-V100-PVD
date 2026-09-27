@@ -300,7 +300,10 @@ def test_cooperative_prediction_keeps_formal_turns_running_before_search(monkeyp
 def test_cooperative_refresh_waits_for_private_branch_then_starts(monkeypatch):
     monkeypatch.delenv("PVD_SEED_PROBE_FROM_PROMPT_KV", raising=False)
     driver = CUDARefreshDriver(
-        TargetExecutionArbiter(), max_requests=2, max_prefix_tokens=64, clock=lambda: 100
+        TargetExecutionArbiter(),
+        max_requests=2,
+        max_prefix_tokens=64,
+        clock=lambda: 100,
     )
     driver._cooperative_prediction = True
     driver._finish_prewarm = lambda record: None
