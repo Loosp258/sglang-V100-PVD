@@ -923,6 +923,30 @@ delivery accounting rose to **~0.17–0.23 s**; the end-to-end difference
 was not stable, so the default poll count was left unchanged. These stage
 times include owner-loop scheduling, not just network or kernel execution.
 
+### 128-token 长生成对照 / 128-token continuation comparison
+
+固定同一 2095-token 事实 Prompt、单客户端、最大输出 128 token、
+同一 P/V/Gateway 和 V grouped-exact，重复两次。启用私有 Prompt
+初始化的稀疏 M16/Top-4（D `PVD_REFRESH_POLL_TURNS=4`）
+耗时 **9.75/9.54 s**，安装了边界 16、32、48、64、80、96、112
+的七轮刷新；完整 KV D 耗时 **6.36/6.17 s**。两种模式
+首代码都正确且模式内完整输出哈希稳定，但稀疏/完整哈希不同。
+该单 Prompt 长生成没有盈亏平衡，约 **3.2–3.4 s** 的差距
+与七轮不能并行于正式 Decode 的 draft/Q probe 成本同量级。
+需把预测/目标 Q 计算移到独立执行通道并做跨轮流水线，单纯
+增加 owner-loop poll 不可能填平这一差距。
+
+For one fixed 2095-token fact prompt and 128 generated tokens, two
+single-client replays used the same P/V/Gateway and grouped-exact V.
+Seeded sparse M16/Top-4 D with four poll turns took **9.75/9.54 s** and
+installed seven refreshes at boundaries 16 through 112. Full-KV D took
+**6.36/6.17 s**. Both modes answered the first code correctly and had
+stable within-mode output hashes, but their complete outputs differed.
+This longer continuation still showed no break-even: the **~3.2–3.4 s**
+gap is on the order of seven serialized draft/target-Q captures. A
+separate prediction execution lane and cross-round pipeline are needed;
+owner-loop polling alone cannot erase the difference.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
