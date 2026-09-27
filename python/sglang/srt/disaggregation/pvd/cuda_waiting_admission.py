@@ -46,6 +46,8 @@ class CUDAWaitingAdmissionResources:
     max_pending_bytes: int
     poll_interval_seconds: float
     release: object = None
+    lane_client: object = None
+    lane_checkpoint: object = None
 
 
 class CUDAWaitingAdmissionCoordinator:
@@ -59,7 +61,8 @@ class CUDAWaitingAdmissionCoordinator:
     def __init__(self, manager, driver, pool_owner, prepare):
         if not callable(prepare) or not driver._owns_loop or driver._loop.is_running():
             raise ValueError(
-                "synchronous CUDA waiting admission requires a private driver loop and factory"
+                "synchronous CUDA waiting admission requires a private driver "
+                "loop and factory"
             )
         driver._owner()
         self.manager, self.driver = manager, driver
@@ -130,6 +133,8 @@ class CUDAWaitingAdmissionCoordinator:
                 pool_owner=self.pool_owner,
                 timeout_seconds=resources.timeout_seconds,
                 release=resources.release,
+                lane_client=resources.lane_client,
+                lane_checkpoint=resources.lane_checkpoint,
             )
         except BaseException:
             if assembly is not None and isinstance(assembly, CUDARoutedRequestAssembly):

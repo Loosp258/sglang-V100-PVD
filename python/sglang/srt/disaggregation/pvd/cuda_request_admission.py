@@ -143,6 +143,8 @@ def admit_received_cuda_request(
     pool_owner=None,
     timeout_seconds=None,
     release=None,
+    lane_client=None,
+    lane_checkpoint=None,
 ):
     """Claim a prepared CUDA request in one owner-thread transaction.
 
@@ -175,6 +177,20 @@ def admit_received_cuda_request(
         raise CUDAAdmissionBlocked(
             "exact prepared controller, importer, clients and pool owner required"
         )
+    if lane_client is not None:
+        from sglang.srt.disaggregation.pvd.probe_lane_identity import (
+            ProbeLaneCheckpointIdentity,
+        )
+        from sglang.srt.disaggregation.pvd.probe_lane_unix import (
+            ProbeLaneUnixClient,
+        )
+
+        if not isinstance(lane_client, ProbeLaneUnixClient) or not isinstance(
+            lane_checkpoint, ProbeLaneCheckpointIdentity
+        ):
+            raise CUDAAdmissionBlocked("exact private probe lane binding required")
+    elif lane_checkpoint is not None:
+        raise CUDAAdmissionBlocked("checkpoint identity requires a private probe lane")
     req = session.req
     driver.register(
         req,
@@ -184,6 +200,8 @@ def admit_received_cuda_request(
         initial_import_pending=True,
         initial_session=session,
         pool_owner=pool_owner,
+        lane_client=lane_client,
+        lane_checkpoint=lane_checkpoint,
     )
     try:
         retirement = CUDARequestRelease(

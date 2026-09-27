@@ -1,5 +1,6 @@
 """Scheduler-owner admission ordering with a real receiver and fake GPU factory."""
 
+from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
@@ -40,7 +41,10 @@ def setup(monkeypatch):
     return context, binding, driver
 
 
-def test_received_route_builds_pending_group_then_claims_clamped_request(monkeypatch):
+@pytest.mark.parametrize("private_lane", [False, True])
+def test_received_route_builds_pending_group_then_claims_clamped_request(
+    monkeypatch, private_lane
+):
     context, selected, driver = setup(monkeypatch)
     events = []
     prepared = NS(group=NS(close=lambda: events.append("close")), importer=object())
@@ -60,8 +64,13 @@ def test_received_route_builds_pending_group_then_claims_clamped_request(monkeyp
             events.append(("admit", preflight, kwargs)) or "claimed"
         ),
     )
+    selected_resources = resources()
+    if private_lane:
+        selected_resources = replace(
+            selected_resources, lane_client=object(), lane_checkpoint=object()
+        )
     coordinator = module.CUDAWaitingAdmissionCoordinator(
-        context.manager, driver, context.c.owner, lambda _: resources()
+        context.manager, driver, context.c.owner, lambda _: selected_resources
     )
     try:
         assert coordinator.admit(context.request, selected) == "claimed"
@@ -75,6 +84,8 @@ def test_received_route_builds_pending_group_then_claims_clamped_request(monkeyp
         assert events[2][2]["clients"] is assembly.clients
         assert events[2][2]["importer"] is prepared.importer
         assert events[2][2]["pool_owner"] is context.c.owner
+        assert events[2][2]["lane_client"] is selected_resources.lane_client
+        assert events[2][2]["lane_checkpoint"] is selected_resources.lane_checkpoint
     finally:
         close_driver(driver)
         context.group.close()

@@ -156,3 +156,9 @@ CPU fake 的完整 driver 回归在 sidecar 回复被延迟时成功取得并释
 正式 forward lease，随后完成 V 搜索与安装；39 项 driver 测试通过。
 这验证了状态机不会人为阻塞正式 forward，**不是**真实 GPU 算子
 并行或端到端加速证据。生产启动尚未向 driver 注册 lane client。
+
+Waiting-queue admission 检查点：`CUDAWaitingAdmissionResources` 可持有
+可选 lane client/checkpoint，并通过原有原子 admission 事务传到
+`CUDARefreshDriver.register()`；无 lane 时参数全为 `None`，旧行为
+不变。两者必须同时且类型正确，否则在安装/注册前拒绝。admission
+相关 **26 passed**。还需启动组件实际创建/验证独立进程并提供绑定。
