@@ -17,6 +17,10 @@ from sglang.srt.disaggregation.pvd.probe_lane_unix import (
     ProbeLaneUnixServer,
 )
 from sglang.srt.disaggregation.pvd.probe_lane_wire import MAX_TICKET_FRAME_BYTES
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    TransferBudget,
+    TransferCapacityError,
+)
 from test_pvd_probe_lane_protocol import reply_for, ticket
 
 pytestmark = pytest.mark.skipif(
@@ -50,11 +54,12 @@ def server(tmp_path, handler=reply_for, *, client_pid=None):
     )
 
 
-def client(tmp_path, *, server_pid=None):
+def client(tmp_path, *, server_pid=None, budget=None):
     return ProbeLaneUnixClient(
         private_dir(tmp_path),
         "probe.sock",
         expected_server_pid=os.getpid() if server_pid is None else server_pid,
+        reply_budget=budget or TransferBudget(1 << 20, 4),
     )
 
 
@@ -63,9 +68,12 @@ def test_unix_probe_round_trip_permissions_and_retirement(socket_dir):
         service = await server(socket_dir).start()
         try:
             assert stat.S_IMODE(service.path.stat().st_mode) == 0o600
-            rows = await client(socket_dir).request(ticket())
-            assert tuple(q.layer for q in rows) == (0, 1)
-            assert rows[0].vectors[0, 0, 0] == 1
+            budget = TransferBudget(1 << 20, 1)
+            async with client(socket_dir, budget=budget).request(ticket()) as rows:
+                assert tuple(q.layer for q in rows) == (0, 1)
+                assert rows[0].vectors[0, 0, 0] == 1
+                assert budget.snapshot()["used_staging_bytes"] > 0
+            assert budget.snapshot()["used_staging_bytes"] == 0
         finally:
             await service.aclose()
         assert not service.path.exists()
@@ -78,7 +86,10 @@ def test_unix_client_refuses_wrong_server_pid(socket_dir):
         service = await server(socket_dir).start()
         try:
             with pytest.raises(ProbeLaneProtocolError, match="PID/UID"):
-                await client(socket_dir, server_pid=os.getpid() + 1).request(ticket())
+                async with client(socket_dir, server_pid=os.getpid() + 1).request(
+                    ticket()
+                ):
+                    pass
         finally:
             await service.aclose()
 
@@ -96,7 +107,8 @@ def test_unix_server_refuses_wrong_client_pid_before_handler(socket_dir):
         service = await server(socket_dir, handler, client_pid=os.getpid() + 1).start()
         try:
             with pytest.raises(ProbeLaneProtocolError, match="complete reply"):
-                await client(socket_dir).request(ticket())
+                async with client(socket_dir).request(ticket()):
+                    pass
             assert not called
         finally:
             await service.aclose()
@@ -144,17 +156,20 @@ def test_unix_probe_deadline_and_serial_handler(socket_dir):
 
         service = await server(socket_dir, handler).start()
         try:
-            results = await asyncio.gather(
-                client(socket_dir).request(ticket()),
-                client(socket_dir).request(ticket()),
-            )
-            assert all(len(rows) == 2 for rows in results)
+
+            async def request_one():
+                async with client(socket_dir).request(ticket()) as rows:
+                    return len(rows)
+
+            results = await asyncio.gather(request_one(), request_one())
+            assert results == [2, 2]
             assert peak == 1
             expired = dataclasses.replace(
                 ticket(), deadline_monotonic=time.monotonic() + 0.001
             )
             with pytest.raises(ProbeLaneProtocolError, match="timed out|expired"):
-                await client(socket_dir).request(expired)
+                async with client(socket_dir).request(expired):
+                    pass
         finally:
             await service.aclose()
 
@@ -164,7 +179,48 @@ def test_unix_probe_deadline_and_serial_handler(socket_dir):
 def test_unix_path_requires_private_owned_directory(socket_dir):
     socket_dir.chmod(0o755)
     with pytest.raises(ProbeLaneProtocolError, match="owner-private"):
-        ProbeLaneUnixClient(socket_dir, "probe.sock", expected_server_pid=os.getpid())
+        ProbeLaneUnixClient(
+            socket_dir,
+            "probe.sock",
+            expected_server_pid=os.getpid(),
+            reply_budget=TransferBudget(1 << 20, 1),
+        )
     socket_dir.chmod(0o700)
     with pytest.raises(ProbeLaneProtocolError, match="basename"):
-        ProbeLaneUnixClient(socket_dir, "../foreign", expected_server_pid=os.getpid())
+        ProbeLaneUnixClient(
+            socket_dir,
+            "../foreign",
+            expected_server_pid=os.getpid(),
+            reply_budget=TransferBudget(1 << 20, 1),
+        )
+
+
+def test_unix_client_refuses_unbudgeted_reply_before_io(socket_dir):
+    async def run():
+        service = await server(socket_dir).start()
+        try:
+            budget = TransferBudget(1, 1)
+            with pytest.raises(TransferCapacityError):
+                async with client(socket_dir, budget=budget).request(ticket()):
+                    pass
+            assert budget.snapshot()["reservations"] == 0
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_unix_client_refunds_budget_when_consumer_fails(socket_dir):
+    async def run():
+        service = await server(socket_dir).start()
+        try:
+            budget = TransferBudget(1 << 20, 1)
+            with pytest.raises(RuntimeError, match="consumer failed"):
+                async with client(socket_dir, budget=budget).request(ticket()):
+                    assert budget.snapshot()["reservations"] == 1
+                    raise RuntimeError("consumer failed")
+            assert budget.snapshot()["reservations"] == 0
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())

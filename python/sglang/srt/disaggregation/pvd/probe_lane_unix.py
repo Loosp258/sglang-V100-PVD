@@ -14,7 +14,9 @@ import socket
 import stat
 import struct
 import time
+import uuid
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
@@ -31,6 +33,7 @@ from sglang.srt.disaggregation.pvd.probe_lane_wire import (
     encode_reply,
     encode_ticket,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
 def _private_socket_path(directory: str | Path, name: str) -> Path:
@@ -83,17 +86,32 @@ async def _write_frame(writer: asyncio.StreamWriter, frame: bytes, *, limit: int
 
 
 class ProbeLaneUnixClient:
-    def __init__(self, directory, name, *, expected_server_pid: int):
+    def __init__(
+        self, directory, name, *, expected_server_pid: int, reply_budget: TransferBudget
+    ):
         self.path = _private_socket_path(directory, name)
         if type(expected_server_pid) is not int or expected_server_pid <= 0:
             raise ProbeLaneProtocolError("exact sidecar PID required")
+        if not isinstance(reply_budget, TransferBudget):
+            raise ProbeLaneProtocolError("explicit host Q reply budget required")
         self.expected_server_pid = expected_server_pid
+        self.reply_budget = reply_budget
 
+    @asynccontextmanager
     async def request(self, ticket: ProbeLaneTicket):
+        """Q tensors remain charged until the caller finishes materializing rows.
+
+        The bound includes raw frame, slices, mutable decoding and cloned Q,
+        plus fixed metadata overhead. Callers must not retain Q after exit.
+        """
         frame = encode_ticket(ticket)
         remaining = ticket.deadline_monotonic - time.monotonic()
         if remaining <= 0:
             raise ProbeLaneProtocolError("probe ticket expired before send")
+        owner = f"pvd-probe-lane:{uuid.uuid4().hex}"
+        self.reply_budget.reserve(
+            owner, 8 * ticket.max_reply_bytes + MAX_REPLY_FRAME_OVERHEAD, 1
+        )
 
         async def exchange():
             reader, writer = await asyncio.open_unix_connection(str(self.path))
@@ -115,13 +133,17 @@ class ProbeLaneUnixClient:
                     pass
 
         try:
-            return await asyncio.wait_for(exchange(), timeout=remaining)
-        except TimeoutError as exc:
-            raise ProbeLaneProtocolError("probe lane request timed out") from exc
-        except (OSError, asyncio.IncompleteReadError) as exc:
-            raise ProbeLaneProtocolError(
-                "probe lane closed before complete reply"
-            ) from exc
+            try:
+                rows = await asyncio.wait_for(exchange(), timeout=remaining)
+            except TimeoutError as exc:
+                raise ProbeLaneProtocolError("probe lane request timed out") from exc
+            except (OSError, asyncio.IncompleteReadError) as exc:
+                raise ProbeLaneProtocolError(
+                    "probe lane closed before complete reply"
+                ) from exc
+            yield rows
+        finally:
+            self.reply_budget.release(owner)
 
 
 class ProbeLaneUnixServer:
