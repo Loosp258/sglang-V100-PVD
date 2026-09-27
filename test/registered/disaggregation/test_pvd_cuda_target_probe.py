@@ -105,7 +105,10 @@ def environment(
 
     class Requests:
         def __init__(self, size, length, device, saver):
-            assert holders["probe"]._private_state is not None
+            probe = holders["probe"]
+            assert probe._private_state is not None or (
+                prefix_cache and probe._prefix_caches["r"].resources is not None
+            )
             assert budget.snapshot()["used_staging_bytes"] > 0
             assert device == "cuda:0"
             self.tensor = remember()
