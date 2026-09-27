@@ -347,8 +347,13 @@ class ProbeLaneUnixServer:
             self._record_rejection("ticket_timeout")
         except (OSError, EOFError, asyncio.IncompleteReadError):
             self._record_rejection("peer_closed")
-        except Exception:
+        except Exception as exc:
             self._record_rejection("handler_error")
+            logger.error(
+                "PVD probe lane handler failure exception_type=%s reason=%s",
+                type(exc).__name__,
+                " ".join(str(exc).split())[:256],
+            )
             raise
         finally:
             if reply_owner is not None:

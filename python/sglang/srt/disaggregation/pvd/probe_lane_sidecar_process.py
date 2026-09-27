@@ -190,6 +190,10 @@ def launch_probe_sidecar(
                         logger.info(
                             "PVD probe sidecar child pid=%d %s", child.pid, bounded
                         )
+                    elif "PVD probe lane handler failure exception_type=" in bounded:
+                        logger.warning(
+                            "PVD probe sidecar child pid=%d %s", child.pid, bounded
+                        )
                     if len(line) > 4096 or not line.startswith("{"):
                         continue
                     try:
