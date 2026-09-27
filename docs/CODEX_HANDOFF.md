@@ -387,3 +387,106 @@ were stopped. Ports 30002/30003/9100/9300/9301/8001 had no listeners and
 all three nodes reported no GPU compute processes. The isolated V checkout at
 `ac3169962` and D checkout at `c418e7a4d` were clean. The seven pre-existing
 dirty local files and all validation bundles remain untouched; no push occurred.
+
+## 8. 2026-09-27 long-context and sidecar-prewarm checkpoint
+
+This section supersedes the prior "next" instruction for the requested long-
+context experiment. The user explicitly authorized bundling local commits to
+the named CloudLab validation directories and using both 32 GiB GPUs on each
+node. P ran Qwen2.5-7B-Instruct as TP2 on GPUs 0/1 with 512-token chunked
+prefill. V used GPUs 0/1, 32,768 pages per shard, and `mlx5_0` on both ranks.
+D used formal Decode on GPU1 and the target+draft sidecar on GPU0. Only
+`mlx5_0` was active; these results make no dual-rail claim. The V
+`cagra-auto` exact threshold was **explicitly** 8192 rows for 4k/8k tests
+and 16384 rows for 16k tests. A V restart that omitted this override caused
+20-second native CAGRA builds and 47–49-second requests; those runs are
+configuration mistakes and are excluded from the matched table below.
+
+All table rows use seed `longpvd0927`, one fact-recall case, 128 greedy output
+tokens, and SSE timing. The same input SHA-256 was used for each mode at each
+length; all returned the expected first five-digit code. Each cell is an
+individual observation, not a median over repeated randomized trials. Only
+the 8k prewarm cell has two repeats.
+
+| Actual Prompt | Full Prompt KV | PVD sidecar, no prewarm | PVD sidecar, prewarm at n=0 | Prewarm first boundary wait |
+| ---: | ---: | ---: | ---: | ---: |
+| 3,997 | 6.57 s | 10.13 s (earlier stack observation) | 8.09 s | 0.15 s |
+| 7,948 | 10.44 s | 16.74 s | 13.95 / 13.85 s | 2.74 s |
+| 15,875 | 20.49 s | 36.41 s | 32.49 s | 11.87 s |
+
+The 16k matched PVD A/B used the same commit, P/V services and budgets; only
+`sidecar_prefix_prewarm` changed. It saved 3.92 s and reduced the first M64
+boundary wait from 15.82 to 11.87 s, but remained 12.00 s slower than full
+KV. Its initial sidecar draft/target prefix stages took 5.19/13.86 s; the
+later cached append took 0.67/0.33 s. V exact search was 0.61 s. At 8k,
+prewarm cut the first boundary wait from 4.95 to 2.74 s. At 4k, the
+observed 0.15 s boundary wait was nearly covered by formal Decode, while
+PVD's ordinary token spacing remained higher than full KV's. For 16k the
+PVD/full-KV observable inter-token p50 was 0.138/0.084 s. Sidecar GPU0 used
+about 29.4/32 GiB and formal D GPU1 about 21.7/32 GiB after the 16k run.
+Output hashes differed between full KV and PVD at each length, so first-code
+success is only a narrow quality check. Prewarm-on and prewarm-off PVD output
+hashes matched at each tested length.
+
+Implementation/verification since section 7: `950f7b1f0`/`8576d919b`
+added long-context launcher and fact profiles; `e50cce0b0` used both P
+GPUs; `7bc027db6` fixed the quadratic P-prefill Q allocation via compact
+chunk attention; `8fcc5c1e8` added opt-in sidecar prewarm; `6d0bf83ac`
+raised the bounded D retrieval-bank setting for long Prompt KV;
+`1dd0f2ed3` exposed bounded sidecar handler errors; `a58238eef` chunked
+cached target probe prefix forwards; `9578935e4` started cache idle TTL at
+probe completion; `974736f47` chunked cached and uncached draft prefix
+forwards. Focused test/fixture fixes are `25cd5c409`, `b52f46fdd`,
+`e68aa49e8`, `a354e6f06`, and `a0005f0d4`. The V Linux focused target
+probe/compact suite passed 39 tests, handler/target suite 25, and final
+draft/compact suite 110 (each with one unrelated pytest config warning).
+Ruff E/F/I, formatting, bytecode compilation and `git diff --check` passed
+for the newly changed source and tests. Initial 8k target prefix and 16k
+draft prefix each caused a real sidecar CUDA OOM before their respective
+chunking fixes; both lengths subsequently completed.
+
+The experimental D JSON files are under the D node's isolated
+`$SGLANG_PVD_ROOT/validation/config/` directory. For 16k,
+`pvd_qwen_v100s_sidecar_long18432_m64_{prewarm,}.json` set a 1.5 GiB target
+prefix budget, 384 MiB draft prefix budget and 18,432-token maximum. The
+launcher used 2 GiB D staging, 4 GiB probe scratch, 1 GiB draft scratch,
+1.5 GiB retrieval bank, M64/lead32/predict32. The 16k full-KV control used
+the same 18,432-token P/V context and 2 GiB D staging. These lease-specific
+JSON files contain an absolute sidecar script path and are intentionally not
+committed to this repository.
+
+Next priority: start valid sidecar prewarm earlier than formal Decode n=0,
+overlapping the 8–9 s long-Prompt Prefill/transfer window, while preserving
+exact Req incarnation/version checks and never installing speculative state.
+The current `CUDARefreshDriver.register` requires P's first output token and
+the imported Prompt, so merely moving its current n=0 call earlier would
+break its admission contract. The earliest potential overlap is D Req
+creation/arrival, before waiting for V: its prompt IDs, transfer/delivery IDs
+and D worker epoch are already present. `PVDKVReceiver._send_metadata()` in
+`conn.py` is a later seam where the Entry/manifest and P first-token metadata
+are present before initial receive completes. A prompt-only sidecar ticket
+at Req arrival could overlap P Prefill, but requires a
+new provisional authorization record keyed to the exact Req object/rid,
+D worker epoch and Entry transfer ID. Route discovery presently scans only
+the final waiting queue with `bootstrap_runnable`, and the existing
+`InitialPromptReceipt` proof is minted after full receive ACK/TP agreement.
+An early cache-only ticket needs its own bounded constructor using the
+private sidecar's configured layer/head coverage instead of pretending final
+V routes exist. It must reconcile with that later receipt, use a distinct
+prompt-only prefix version, discard Q, and have explicit cancellation/cache
+retirement. Do not bypass those checks by calling the current n=0 method
+from the receiver. Also reduce the 16k target-Q prefix
+compute (13.86 s) and sparse formal Decode token cost before claiming a
+long-context speedup. Full-KV Prompt transfer to D and the duplicate D-GPU1
+draft still remain. Complete randomized multi-request throughput and quality
+acceptance before claiming final PVD advantage.
+
+The experiment process groups were stopped after these measurements:
+P 88217, V 189390, D 173489, Gateway 191700. A final three-node check
+showed **0 MiB on all six GPUs**, no GPU compute process, and no listener on
+30002/30003/9100/9300/9301/8001. Logs and validation JSON files remain.
+The clean isolated checkouts at `$SGLANG_PVD_ROOT/validation/pvd-sidecar-d042ec364`
+are P `7bc027db6ce702fb57050c5e8b53cf72c51526db`, V and D
+`a0005f0d4cdf2efe47e8464051c8980ec74ce351`. The seven pre-existing
+dirty local files and all untracked validation bundles remain untouched.
+No Git push occurred.
