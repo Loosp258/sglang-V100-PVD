@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from sglang.srt.disaggregation.pvd import draft_forward_adapter
+from sglang.srt.disaggregation.pvd import draft_forward_adapter, target_probe
 from sglang.srt.disaggregation.pvd.cuda_target_probe import (
     CUDALlamaTargetProbe,
     CUDAQwen2TargetProbe,
@@ -38,8 +38,9 @@ def environment(
     dtype=torch.float16,
     architecture="LlamaForCausalLM",
     vocabulary=None,
+    prefix_cache=False,
 ):
-    events, tensors, holders = [], [], {}
+    events, tensors, holders, forward_shapes = [], [], {}, []
     lock = threading.Lock()
     budget = TransferBudget(65536, 1)
     config = ProbeConfig("target", (0, 1), head_start=1, head_count=2)
@@ -63,9 +64,15 @@ def environment(
 
         def model(self, ids, positions, batch):
             events.append("forward")
-            for layer in (0, 1):
-                q = torch.arange(ids.numel() * 12, dtype=torch.float32).reshape(-1, 12)
-                batch.pvd_query_capture.capture(layer, positions, q)
+            forward_shapes.append(
+                (tuple(positions.tolist()), getattr(batch, "pvd_compact_extend", False))
+            )
+            if hasattr(batch, "pvd_query_capture"):
+                for layer in (0, 1):
+                    q = torch.arange(ids.numel() * 12, dtype=torch.float32).reshape(
+                        -1, 12
+                    )
+                    batch.pvd_query_capture.capture(layer, positions, q)
             if fail == "forward":
                 raise RuntimeError("forward failed")
 
@@ -102,6 +109,7 @@ def environment(
             assert budget.snapshot()["used_staging_bytes"] > 0
             assert device == "cuda:0"
             self.tensor = remember()
+            self.req_to_token = torch.zeros((2, length), dtype=torch.int32)
             events.append("requests")
 
     class Pool:
@@ -215,6 +223,7 @@ def environment(
         transient_bytes_bound=1024,
         budget=budget,
         vocabulary=vocabulary,
+        prefix_budget=TransferBudget(65536, 1) if prefix_cache else None,
     )
     holders["probe"] = probe
     drains = []
@@ -238,6 +247,7 @@ def environment(
         tensors=tensors,
         prefix=prefix,
         prediction=prediction,
+        forward_shapes=forward_shapes,
     )
 
 
@@ -294,6 +304,27 @@ def test_qwen2_probe_uses_private_pool_and_same_post_rope_contract(monkeypatch):
         assert result[0].positions == (3, 4)
         assert result[0].positional_encoding == "rope_applied"
     assert c.budget.snapshot()["used_staging_bytes"] == 0
+
+
+def test_cached_target_prefix_prefill_bounds_each_forward(monkeypatch):
+    monkeypatch.setattr(target_probe, "_TARGET_PREFIX_CHUNK_TOKENS", 4)
+    c = environment(monkeypatch, prefix_cache=True)
+    req = SimpleNamespace(rid="r")
+    c.probe.register_cached_request(req)
+    prefix = CommittedPrefix("r", tuple(range(1, 10)), 0, "version")
+    prediction = DraftPrediction("r", "version", (10, 11))
+    with c.probe.branch():
+        result = c.probe.capture(prefix, prediction)
+    assert c.forward_shapes == [
+        ((0, 1, 2, 3), False),
+        ((4, 5, 6, 7), True),
+        ((8,), True),
+        ((9, 10), True),
+    ]
+    assert result[0].positions == (9, 10)
+    assert c.probe._prefix_caches["r"].tokens == prefix.tokens
+    c.probe.retire_cached_request(req)
+    assert not c.probe._prefix_caches
 
 
 def test_opt_in_probe_timeline_separates_setup_forward_and_retirement(

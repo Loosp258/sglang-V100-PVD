@@ -33,6 +33,8 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferCapacityError,
 )
 
+_TARGET_PREFIX_CHUNK_TOKENS = 512
+
 
 class PostRopeQueryCapture:
     """Batch-owned collector; no model/global state and no borrowed Q storage."""
@@ -773,7 +775,16 @@ class _LlamaTargetProbeCore(TargetProbe):
                 rows = resources.allocator.alloc_kv(len(new_committed))
                 record.rows.extend(rows)
                 resources.allocator.write_mapping(record.slot, committed_start, rows)
-                forward_chunk(new_committed, start=committed_start, rows=rows)
+                # A full long-context prefill materializes a quadratic
+                # torch-native attention tensor on V100. Keep the private KV
+                # mapping, but bound each Q forward to 512 new tokens.
+                for offset in range(0, len(new_committed), _TARGET_PREFIX_CHUNK_TOKENS):
+                    chunk = new_committed[offset : offset + _TARGET_PREFIX_CHUNK_TOKENS]
+                    forward_chunk(
+                        chunk,
+                        start=committed_start + offset,
+                        rows=rows[offset : offset + len(chunk)],
+                    )
                 record.tokens = prefix.tokens
                 record.version = prefix.version
                 record.committed_position = prefix.committed_position
