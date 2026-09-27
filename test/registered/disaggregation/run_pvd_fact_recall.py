@@ -140,7 +140,7 @@ def collect(
 ):
     if not url.startswith(("http://", "https://")) or not 1 <= cases <= 16:
         raise ValueError("bounded Gateway URL and case count required")
-    if not 1 <= max_tokens <= 128 or not 0 < timeout <= 600:
+    if not 1 <= max_tokens <= 256 or not 0 < timeout <= 600:
         raise ValueError("bounded generation and timeout required")
     if type(concurrency) is not int or not 1 <= concurrency <= 4:
         raise ValueError("concurrency must be an integer in [1, 4]")
