@@ -307,9 +307,7 @@ class SamplingBatchInfo:
         if any(i < 0 or i >= batch_size for i in keep_indices):
             raise IndexError("sampling row index is out of range")
 
-        row_indices = torch.tensor(
-            keep_indices, dtype=torch.int64, device=self.device
-        )
+        row_indices = torch.tensor(keep_indices, dtype=torch.int64, device=self.device)
         selected = copy.copy(self)
         for field in dataclasses.fields(self):
             name = field.name
@@ -340,9 +338,10 @@ class SamplingBatchInfo:
             selected_orchestrator._batch_ref = weakref.ref(batch)
             selected_orchestrator.penalizers = {}
             selected_required = False
-            for penalizer_type, source_penalizer in (
-                source_orchestrator.penalizers.items()
-            ):
+            for (
+                penalizer_type,
+                source_penalizer,
+            ) in source_orchestrator.penalizers.items():
                 selected_penalizer = copy.copy(source_penalizer)
                 selected_penalizer._orchestrator_ref = weakref.ref(
                     selected_orchestrator
@@ -363,9 +362,7 @@ class SamplingBatchInfo:
                     selected_penalizer.prepare()
                 elif not required and selected_penalizer.is_prepared():
                     selected_penalizer.teardown()
-                selected_orchestrator.penalizers[penalizer_type] = (
-                    selected_penalizer
-                )
+                selected_orchestrator.penalizers[penalizer_type] = selected_penalizer
             selected_orchestrator.is_required = selected_required
             selected.penalizer_orchestrator = selected_orchestrator
 
@@ -415,9 +412,7 @@ class SamplingBatchInfo:
                     or target_value.shape[0] != len(self)
                     or target_value.shape[1:] != source_value.shape[1:]
                 ):
-                    raise ValueError(
-                        f"incompatible sampler state tensor for {name}"
-                    )
+                    raise ValueError(f"incompatible sampler state tensor for {name}")
                 target_value.index_copy_(
                     0,
                     target_indices,

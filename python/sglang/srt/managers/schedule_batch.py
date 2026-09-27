@@ -2593,9 +2593,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
         selected = copy.copy(self)
         selected.reqs = [self.reqs[i] for i in keep_indices]
-        selected.sampling_info = self.sampling_info.select_rows(
-            keep_indices, selected
-        )
+        selected.sampling_info = self.sampling_info.select_rows(keep_indices, selected)
         selected.spec_info = None
         # Let filter_batch select every other row-aligned field. Sampling state
         # was selected independently above so the canonical sampler stays live.

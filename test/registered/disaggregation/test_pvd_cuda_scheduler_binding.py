@@ -330,6 +330,7 @@ def test_actual_selection_waits_before_decode_allocation(monkeypatch):
     with setup(monkeypatch) as t:
         batch = Batch([t.c.request])
         t.s.running_batch = batch
+        t.s.waiting_queue = []  # Already admitted into the running batch.
         t.s.get_new_prebuilt_batch = lambda: None
         t.s.dp_attn_adapter = NS(maybe_prepare_mlp_sync_batch=lambda b: b)
         t.s.update_running_batch = lambda b: t.events.append("allocate") or b

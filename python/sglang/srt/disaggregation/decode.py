@@ -1883,6 +1883,7 @@ class SchedulerDisaggregationDecodeMixin:
     def get_new_prebuilt_batch(self: Scheduler) -> Optional[ScheduleBatch]:
         """Create a schedulebatch for fake completed prefill"""
         from sglang.srt.disaggregation.pvd.cuda_scheduler_binding import binding_for
+
         if self.grammar_manager.has_waiting_grammars():
             ready_grammar_requests = self.grammar_manager.get_ready_grammar_requests()
             for req in ready_grammar_requests:
