@@ -33,7 +33,10 @@ from sglang.srt.disaggregation.pvd.probe_lane_wire import (
     encode_reply,
     encode_ticket,
 )
-from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
+    TransferBudget,
+    TransferCapacityError,
+)
 
 
 def _private_socket_path(directory: str | Path, name: str) -> Path:
@@ -157,6 +160,7 @@ class ProbeLaneUnixServer:
         weights_sha256: str,
         tokenizer_sha256: str,
         handler: Callable[[ProbeLaneTicket], ProbeLaneReply],
+        reply_budget: TransferBudget,
         max_connections: int = 4,
         max_seen_nonces: int = 1024,
     ):
@@ -165,6 +169,8 @@ class ProbeLaneUnixServer:
             raise ProbeLaneProtocolError("exact D client PID required")
         if not callable(handler):
             raise ProbeLaneProtocolError("prediction handler required")
+        if not isinstance(reply_budget, TransferBudget):
+            raise ProbeLaneProtocolError("explicit sidecar reply budget required")
         if type(max_connections) is not int or not 1 <= max_connections <= 8:
             raise ProbeLaneProtocolError("bounded connection count required")
         if type(max_seen_nonces) is not int or not 1 <= max_seen_nonces <= 4096:
@@ -174,6 +180,7 @@ class ProbeLaneUnixServer:
         self.weights_sha256 = weights_sha256
         self.tokenizer_sha256 = tokenizer_sha256
         self.handler = handler
+        self.reply_budget = reply_budget
         self.max_connections = max_connections
         self.max_seen_nonces = max_seen_nonces
         self._seen_nonces: dict[str, float] = {}
@@ -200,6 +207,7 @@ class ProbeLaneUnixServer:
             await writer.wait_closed()
             return
         self._active.add(task)
+        reply_owner = None
         try:
             pid, uid, _ = _peer_credentials(writer)
             if pid != self.expected_client_pid or uid != os.getuid():
@@ -223,6 +231,10 @@ class ProbeLaneUnixServer:
                 raise ProbeLaneProtocolError("probe ticket nonce replayed")
             if len(self._seen_nonces) >= self.max_seen_nonces:
                 raise ProbeLaneProtocolError("probe replay ledger is full")
+            reply_owner = f"pvd-probe-reply:{ticket.nonce}"
+            self.reply_budget.reserve(
+                reply_owner, 8 * ticket.max_reply_bytes + MAX_REPLY_FRAME_OVERHEAD, 1
+            )
             self._seen_nonces[ticket.nonce] = ticket.deadline_monotonic
             async with self._compute_lock:
                 if time.monotonic() >= ticket.deadline_monotonic:
@@ -239,11 +251,19 @@ class ProbeLaneUnixServer:
                 limit=min(MAX_LANE_REPLY_BYTES, ticket.max_reply_bytes)
                 + MAX_REPLY_FRAME_OVERHEAD,
             )
-        except (OSError, EOFError, asyncio.IncompleteReadError, ProbeLaneProtocolError):
+        except (
+            OSError,
+            EOFError,
+            asyncio.IncompleteReadError,
+            ProbeLaneProtocolError,
+            TransferCapacityError,
+        ):
             # Never send a partial or unauthenticated result. The D client
             # treats close as failure and may use its controlled fallback.
             pass
         finally:
+            if reply_owner is not None:
+                self.reply_budget.release(reply_owner)
             writer.close()
             try:
                 await writer.wait_closed()

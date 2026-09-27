@@ -43,7 +43,14 @@ def private_dir(tmp_path):
     return tmp_path
 
 
-def server(tmp_path, handler=reply_for, *, client_pid=None, max_seen_nonces=1024):
+def server(
+    tmp_path,
+    handler=reply_for,
+    *,
+    client_pid=None,
+    max_seen_nonces=1024,
+    reply_budget=None,
+):
     return ProbeLaneUnixServer(
         private_dir(tmp_path),
         "probe.sock",
@@ -52,6 +59,7 @@ def server(tmp_path, handler=reply_for, *, client_pid=None, max_seen_nonces=1024
         weights_sha256="a" * 64,
         tokenizer_sha256="b" * 64,
         handler=handler,
+        reply_budget=reply_budget or TransferBudget(1 << 20, 4),
         max_seen_nonces=max_seen_nonces,
     )
 
@@ -75,6 +83,7 @@ def _child_server(directory, parent_pid, control):
             weights_sha256="a" * 64,
             tokenizer_sha256="b" * 64,
             handler=reply_for,
+            reply_budget=TransferBudget(1 << 20, 4),
         ).start()
         try:
             control.send(os.getpid())
@@ -310,6 +319,49 @@ def test_unix_replay_and_bounded_ledger_refuse_before_handler(socket_dir):
                     pass
             assert called == [first.nonce]
             assert service._seen_nonces == {first.nonce: first.deadline_monotonic}
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_unix_server_admits_and_refunds_reply_budget(socket_dir):
+    async def run():
+        called = []
+
+        def handler(bound):
+            called.append(bound.nonce)
+            assert budget.snapshot()["reservations"] == 1
+            return reply_for(bound)
+
+        budget = TransferBudget(1 << 20, 1)
+        service = await server(socket_dir, handler, reply_budget=budget).start()
+        try:
+            async with client(socket_dir).request(ticket()):
+                pass
+            assert budget.snapshot()["reservations"] == 0
+            assert len(called) == 1
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_unix_server_refuses_capacity_before_handler(socket_dir):
+    async def run():
+        called = []
+        budget = TransferBudget(1, 1)
+        service = await server(
+            socket_dir,
+            lambda bound: called.append(bound) or reply_for(bound),
+            reply_budget=budget,
+        ).start()
+        try:
+            with pytest.raises(ProbeLaneProtocolError, match="complete reply"):
+                async with client(socket_dir).request(ticket()):
+                    pass
+            assert called == []
+            assert budget.snapshot()["reservations"] == 0
         finally:
             await service.aclose()
 

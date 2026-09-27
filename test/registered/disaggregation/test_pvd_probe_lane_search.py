@@ -88,6 +88,7 @@ def test_private_lane_q_reaches_real_v_search_without_local_probe(socket_dir):
             weights_sha256=bound.weights_sha256,
             tokenizer_sha256=bound.tokenizer_sha256,
             handler=lambda accepted: _reply(accepted, pipeline.probe.vector),
+            reply_budget=TransferBudget(1 << 20, 1),
         ).start()
         try:
             lane = ProbeLaneUnixClient(

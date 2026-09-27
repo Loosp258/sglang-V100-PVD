@@ -99,3 +99,9 @@ window、deadline、Entry、模型空间、RoPE、layer/Q-head/GQA 和维度，
 sidecar 与真实 V HTTP/exact index 的测试确认本地 draft/target probe
 没有被调用；连同既有 probe-search 回归共 **69 passed**。这仍不包含
 GPU0 模型执行、Scheduler 异步派发或与正式 Decode 的计算重叠。
+
+服务端预算检查点 / Sidecar reply budget: Unix 服务端也要求显式
+`TransferBudget`；接受 ticket 后、调用模型 handler 前按允许的最大
+Q 回复预留 host 字节与一个并发槽，写完/拒绝/异常时归还。容量不足
+不调用 handler，也不消耗 nonce。协议、Unix 与 V 检索相关测试合计
+**50 passed**；目前仍是假模型 handler。
