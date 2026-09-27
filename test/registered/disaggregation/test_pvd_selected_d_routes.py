@@ -199,6 +199,7 @@ def test_selected_request_factory_uses_only_manager_owned_d_resources(
                 "search_io_loop": (
                     manager.control.loop if uses_background_loop else None
                 ),
+                "delivery_io_loop": manager.control.loop,
             },
         )
     ]

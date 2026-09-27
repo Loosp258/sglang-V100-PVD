@@ -355,8 +355,10 @@ class HttpShardClient(ShardClient):
                 if self._background_close_future is None:
                     coroutine = self._session.close()
                     try:
-                        self._background_close_future = asyncio.run_coroutine_threadsafe(
-                            coroutine, self._background_loop
+                        self._background_close_future = (
+                            asyncio.run_coroutine_threadsafe(
+                                coroutine, self._background_loop
+                            )
                         )
                     except BaseException:
                         coroutine.close()
