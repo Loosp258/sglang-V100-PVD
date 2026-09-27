@@ -743,3 +743,77 @@ measure a shorter same-GPU prediction horizon and a refreshed M value under
 matched 16k/8k workloads. Recheck retrieval recall and full output quality
 before treating first-code success as acceptance. Preserve the seven
 pre-existing dirty files and validation bundles.
+
+## 13. 2026-09-28 same-GPU Decode cost diagnosis
+
+The 16k case-0 request from section 12 was rerun on the same CloudLab lease
+with P TP2, V TP2, Gateway, and the 15,875-token input fixed. D target and
+draft shared physical GPU1. All three successful runs returned 128 SSE events
+and the expected first code. The two PVD runs used M64/lead32/predict32,
+cooperative prediction, the 3 GiB private target-prefix cache, a 2 GiB
+retrieval-bank budget, and a 4 GiB probe scratch bound. Only
+`PVD_CACHE_DECODE_METADATA` changed between PVD runs. The full-KV control
+restarted D with predictive serving disabled while P/V stayed running.
+
+| Mode | Wall | TTFT | Decode | Early-32 / late-32 token-gap p50 |
+| --- | ---: | ---: | ---: | ---: |
+| PVD metadata cache off | 27.667 s | 8.541 s | 19.125 s | 0.1409 / 0.0436 s |
+| PVD metadata cache on | 26.923 s | 8.522 s | 18.400 s | 0.1337 / 0.0402 s |
+| Full KV, same input | 19.410 s | 8.167 s | 11.243 s | 0.0843 / 0.0846 s |
+
+The input SHA-256 was identical in all three. The two PVD output hashes were
+identical; the full-KV output hash differed. First-code success therefore
+does not establish full output parity. This is one controlled case, not a
+confidence interval; section 12's three-case control showed the same overall
+direction. Before the successful runs, two D starts with undersized scratch
+or retrieval-bank bounds failed preflight/admission and produced no valid
+measurement. A direct predict-8 trial with lead32 was rejected at startup by
+`lead_tokens must not exceed predict_tokens`; it handled no requests.
+
+The opt-in `PVD_CACHE_DECODE_METADATA=1` in
+`cuda_model_attention.py` reads four GPU metadata vectors once per whole
+model `bind()` and reuses the host lists across layers. It requires the same
+`ForwardBatch` and tensor objects, validates their shape/device/type on
+reuse, and clears the cache when the bind ends. It does **not** cache the
+generated Req-to-KV rows, which remain checked per layer. The synchronous
+Scheduler runs one bound target forward before processing results or the next
+batch. The opt-in remains default-off while broader concurrency and output
+validation are incomplete. Its single-case improvement was 0.725 s of Decode
+and 0.744 s wall, with identical PVD output hash.
+
+The remote-only timeline aggregate for cache-on explains the remaining gap.
+Across 127 formal target batches, model-forward spans summed to 10.709 s,
+while the first-to-last formal forward spanned 18.398 s. Thus 7.689 s lay
+outside those measured target forwards. The first 64 forwards cost 8.598 s:
+their per-forward p50 was 0.1268 s for tokens 0–31 and 0.1272 s for 32–63.
+After installing the sparse bank, the last 63 forwards cost 2.112 s with
+p50 about 0.033–0.034 s. Full KV's client-observed token-gap p50 was about
+0.084 s throughout; it is a different timing scope than D's model-forward
+measurement. The private prediction-step trace spanned 9.945 s while formal
+Decode continued to interleave. Four V search HTTP calls overlapped in a
+0.512 s wall window. The final token-63 forward ended 1.045 s before the
+refresh became ready. Prediction/search spans are **not additive** to the
+7.689 s because work overlaps. The evidence shows both a slower pre-refresh
+PVD attention path and substantial same-GPU prediction/scheduling time; the
+faster sparse tail nearly offsets the pre-refresh formal-forward cost, but
+cannot offset that additional time. It does not isolate each CUDA kernel.
+
+The full-bank PVD adapter uses its own per-Q-head Triton attention and
+per-layer generated-row checks instead of the native full-KV Torch SDPA path.
+It also has per-layer completion fences unless the separate deferred-fence
+opt-in is enabled. These code paths plausibly explain the pre-refresh
+forward gap, but no attention-only A/B has yet measured their individual
+contributions. A native full-bank fallback needs explicit proof that the
+model pool still holds the complete Prompt and must preserve consumer
+validation/ownership; do not substitute it solely from bank completeness.
+
+The new `analyze_pvd_decode_timeline.py` emits aggregate numbers on D without
+copying request logs. D logs are
+`validation/logs/d-metacache16{off3,on,full}.log`; V reports are
+`validation/logs/metacache16{off3,on,full}_case1.json`. On V's isolated test
+checkout, 53 model-attention tests passed, including two new cache-scope and
+tensor-replacement tests; Ruff E/F/I and format checks passed for all three
+changed Python files. No Git push occurred. Next compare a coupled shorter
+lead/prediction profile and test full-bank fast-path eligibility, while
+checking full-output parity and retrieval recall. Preserve the seven
+pre-existing dirty tracked files.

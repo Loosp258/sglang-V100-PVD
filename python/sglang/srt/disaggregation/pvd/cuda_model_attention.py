@@ -126,6 +126,8 @@ class CUDAModelSparseConsumer:
         self._owner = "cuda-model-attention:" + uuid.uuid4().hex
         self._packed_owner = self._owner + ":packed-qkv"
         self._bound, self._outputs, self._pending = None, [], None
+        self._cache_decode_metadata = os.environ.get("PVD_CACHE_DECODE_METADATA") == "1"
+        self._decode_metadata = None
         self._packed_inputs, self._packed_charged = [], False
         self._borrow_forward_bank = (
             os.environ.get("PVD_REUSE_FORWARD_BANK_LEASE") == "1"
@@ -170,6 +172,7 @@ class CUDAModelSparseConsumer:
             raise SparsePayloadError("target execution is busy")
         self._active = True
         self._bank_groups.clear()
+        self._decode_metadata = None
         self._packed_inputs.clear()
         self._packed_charged = False
         stack, pinned, charged, deferred_started = ExitStack(), False, False, False
@@ -273,6 +276,7 @@ class CUDAModelSparseConsumer:
                 self._synchronize()
                 stack.close()  # Includes Prompt reader completion fences.
                 self._pending = None
+                self._decode_metadata = None
                 self._bank_groups.clear()
                 self._outputs.clear()
                 self._packed_inputs.clear()
@@ -304,6 +308,34 @@ class CUDAModelSparseConsumer:
         ):
             raise SparsePayloadError(f"device integral {name} required")
         return tensor.tolist()  # Bounded host metadata; no full KV gather.
+
+    def _batch_metadata(self, batch):
+        names = ("req_pool_indices", "positions", "seq_lens", "out_cache_loc")
+        labels = ("request slots", "positions", "lengths", "write locations")
+        tensors = tuple(getattr(batch, name) for name in names)
+        cached = self._decode_metadata
+        if self._cache_decode_metadata and cached is not None:
+            cached_batch, cached_tensors, cached_values = cached
+            if batch is not cached_batch or any(
+                tensor is not original
+                or not isinstance(tensor, torch.Tensor)
+                or tensor.device != self.device
+                or tensor.ndim != 1
+                or tensor.dtype not in (torch.int32, torch.int64)
+                or tensor.shape != original.shape
+                for tensor, original in zip(tensors, cached_tensors, strict=True)
+            ):
+                raise SparsePayloadError("decode metadata changed during model forward")
+            return cached_values
+        values = tuple(
+            self._indices(tensor, label)
+            for tensor, label in zip(tensors, labels, strict=True)
+        )
+        if self._cache_decode_metadata:
+            # The synchronous scheduler owns one ForwardBatch for the whole
+            # bind. It cannot advance requests between attention layers.
+            self._decode_metadata = (batch, tensors, values)
+        return values
 
     def forward_decode(self, q, k, v, layer, batch, save_kv_cache=True):
         self._check()
@@ -346,10 +378,7 @@ class CUDAModelSparseConsumer:
             or v is None
         ):
             raise SparsePayloadError("unsupported CUDA sparse decode configuration")
-        slots = self._indices(batch.req_pool_indices, "request slots")
-        positions = self._indices(batch.positions, "positions")
-        lengths = self._indices(batch.seq_lens, "lengths")
-        destinations = self._indices(batch.out_cache_loc, "write locations")
+        slots, positions, lengths, destinations = self._batch_metadata(batch)
         count, dim = len(slots), self.workspace.head_dim
         if (
             count != len(self._bound)

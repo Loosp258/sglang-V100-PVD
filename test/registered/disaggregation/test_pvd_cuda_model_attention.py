@@ -35,13 +35,17 @@ from test_pvd_cuda_working_set import options, packed_payloads
 from test_pvd_sparse_cpu_backend import Pool
 
 
-def fixture(monkeypatch, *, capacity=4096, resume=True, request_id="r"):
+def fixture(monkeypatch, *, capacity=4096, resume=True, request_id="r", layers=(0,)):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    bank_options = options()
+    bank_options["expected_groups"] = tuple(
+        (layer, head) for layer in layers for head in range(2)
+    )
     bank = CUDASparseWorkingSet(
         device="cuda:0",
         dtype=torch.float32,
         budget=TransferBudget(4096, 3),
-        **{**options(), "request_id": request_id},
+        **{**bank_options, "request_id": request_id},
     )
     bank.device = torch.device("cpu")
     monkeypatch.setattr(bank, "_synchronize", lambda: None)
@@ -59,10 +63,19 @@ def fixture(monkeypatch, *, capacity=4096, resume=True, request_id="r"):
     )
     epoch = exchange.begin(0)
     payloads, source, _ = packed_payloads()
-    for payload in payloads:
-        payload.spec = replace(
-            payload.spec, request_id=request_id, operation_id=epoch.operation_id
+    payloads = [
+        type(payload)(
+            replace(
+                payload.spec,
+                request_id=request_id,
+                operation_id=epoch.operation_id,
+                layer=layer,
+            ),
+            payload.tensor,
         )
+        for layer in layers
+        for payload in payloads
+    ]
     exchange.receive(peer.stage(epoch, payloads, source_guard=source), peer_rank=0)
     source.request_release()
     exchange.receive(peer.park(0), peer_rank=0)
@@ -83,7 +96,7 @@ def fixture(monkeypatch, *, capacity=4096, resume=True, request_id="r"):
     consumer = CUDAModelSparseConsumer(
         req,
         pool,
-        layers=(0,),
+        layers=layers,
         mapping=QueryHeadMapping(4, 2),
         workspace=workspace,
         execution_lock=lock,
@@ -136,6 +149,40 @@ def fixture(monkeypatch, *, capacity=4096, resume=True, request_id="r"):
 
 def run(c):
     return c.consumer.forward_decode(c.q, c.k, c.v, c.layer, c.batch)
+
+
+def test_forward_metadata_cache_is_scoped_to_one_bind(monkeypatch):
+    monkeypatch.setenv("PVD_CACHE_DECODE_METADATA", "1")
+    c = fixture(monkeypatch, layers=(0, 1))
+    reads = []
+    original = c.consumer._indices
+
+    def count_reads(tensor, name):
+        reads.append(name)
+        return original(tensor, name)
+
+    monkeypatch.setattr(c.consumer, "_indices", count_reads)
+    with c.consumer.bind([c.binding], pool_owner=c.owner):
+        run(c)
+        c.layer.layer_id = 1
+        run(c)
+        assert len(reads) == 4
+    assert c.consumer._decode_metadata is None
+
+
+def test_forward_metadata_cache_rejects_tensor_replacement(monkeypatch):
+    monkeypatch.setenv("PVD_CACHE_DECODE_METADATA", "1")
+    c = fixture(monkeypatch, layers=(0, 1))
+    with (
+        pytest.raises(SparsePayloadError, match="metadata changed"),
+        c.consumer.bind([c.binding], pool_owner=c.owner),
+    ):
+        run(c)
+        c.layer.layer_id = 1
+        c.batch.seq_lens = c.batch.seq_lens.clone()
+        run(c)
+    assert c.pool.writes == 1
+    assert c.consumer._decode_metadata is None
 
 
 def test_model_pool_mapping_matches_dense_oracle_and_retirement_is_fenced(monkeypatch):
