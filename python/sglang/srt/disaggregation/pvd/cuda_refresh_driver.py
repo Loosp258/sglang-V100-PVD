@@ -12,7 +12,7 @@ import math
 import os
 import time
 from array import array
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -495,7 +495,22 @@ class CUDARefreshDriver:
                 or record.req.is_retracted
             ):
                 raise LifecycleError("queued CUDA prefix changed before capture")
-            yield
+            seed_scope = nullcontext()
+            if os.environ.get("PVD_SEED_PROBE_FROM_PROMPT_KV") == "1":
+                retirement = record.retirement
+                if (
+                    record.full_session is None
+                    or retirement is None
+                    or retirement.state != "attached"
+                ):
+                    raise LifecycleError(
+                        "Prompt-KV seed requires an attached full receiver"
+                    )
+                seed_scope = record.controller.pipeline.probe.prompt_seed_scope(
+                    record.req, retirement.pool_owner
+                )
+            with seed_scope:
+                yield
         finally:
             self._release_capture(record)
 

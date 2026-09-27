@@ -64,6 +64,62 @@ def test_receiver_quarantine_reports_its_original_reason(monkeypatch):
             driver._source_quarantine = None
 
 
+def test_opt_in_prompt_seed_is_scoped_to_synchronous_capture(monkeypatch):
+    monkeypatch.setenv("PVD_SEED_PROBE_FROM_PROMPT_KV", "1")
+    driver = CUDARefreshDriver.__new__(CUDARefreshDriver)
+    driver._source_quarantine = None
+    request = req()
+    entered = []
+
+    @contextmanager
+    def seed_scope(actual_req, owner):
+        assert actual_req is request and owner == "owned-pools"
+        entered.append("enter")
+        try:
+            yield
+        finally:
+            entered.append("exit")
+
+    probe = SimpleNamespace(prompt_seed_scope=seed_scope)
+    record = SimpleNamespace(
+        req=request,
+        controller=SimpleNamespace(pipeline=SimpleNamespace(probe=probe)),
+        outputs=tuple(request.output_ids),
+        stopping=False,
+        capture_lease=object(),
+        full_session=object(),
+        retirement=SimpleNamespace(state="attached", pool_owner="owned-pools"),
+    )
+    driver._observe = lambda actual: len(actual.outputs) - 1
+    driver._release_capture = lambda actual: entered.append("release")
+    with driver._capture(record):
+        assert entered == ["enter"]
+    assert entered == ["enter", "exit", "release"]
+
+
+def test_opt_in_prompt_seed_refuses_unreceived_source(monkeypatch):
+    monkeypatch.setenv("PVD_SEED_PROBE_FROM_PROMPT_KV", "1")
+    driver = CUDARefreshDriver.__new__(CUDARefreshDriver)
+    driver._source_quarantine = None
+    request = req()
+    record = SimpleNamespace(
+        req=request,
+        controller=SimpleNamespace(pipeline=SimpleNamespace(probe=object())),
+        outputs=tuple(request.output_ids),
+        stopping=False,
+        capture_lease=object(),
+        full_session=None,
+        retirement=None,
+    )
+    driver._observe = lambda actual: len(actual.outputs) - 1
+    releases = []
+    driver._release_capture = lambda actual: releases.append(actual)
+    with pytest.raises(LifecycleError, match="attached full receiver"):
+        with driver._capture(record):
+            pass
+    assert releases == [record]
+
+
 def finish_writes(c):
     for delivery in tuple(c.store.entries[c.entry.key].deliveries.values()):
         handle = delivery.transfer_handle

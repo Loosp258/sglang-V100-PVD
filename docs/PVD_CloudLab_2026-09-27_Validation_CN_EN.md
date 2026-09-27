@@ -842,6 +842,58 @@ isolates the cold full-Prompt recomputation. A candidate next step is to
 seed the independently owned probe cache from D's verified full Prompt KV,
 with strict request/layout/lifetime/budget and CUDA-completion checks.
 
+### 从 D 完整 Prompt KV 初始化私有 Q probe 缓存 / Seeding the private Q-probe cache
+
+增加显式实验开关 `PVD_SEED_PROBE_FROM_PROMPT_KV=1`，默认关闭。
+在同步 capture 范围内，验证 live Req、完整 Prompt receiver 和
+模型池 `ResourceGuard` 的身份与生命周期，并临时 pin 源池；
+只将 Prompt K/V 复制到已有预算的 probe **私有**行，校验映射、
+设备、dtype、层数、KV-head 布局与非别名。每层按最多 64 token
+分块，CUDA 完成栅栏后才将私有前缀标记为可复用；不借用 live
+行，也不改动 D 正式请求映射。源索引与 gather 临时显存必须处于
+probe 已预留的 transient 上限内。失败沿原有私有缓存清理或
+CUDA 隔离路径处理。扩展 probe/refresh 回归与真实 CUDA 测试
+**181 passed**，
+Ruff E/F/I 与格式检查通过。
+
+在当前 V grouped-exact、M16/Top-4、2095–2113-token 事实负载，
+开关启用后六条请求均报告成功初始化；首轮 Q probe 常见约
+**0.166–0.172 s**，对照未启用时约 **0.76–0.80 s**。
+一个 36-token 请求的首轮 `first_poll` 从 **1.038 s** 降至
+**0.551 s**，第二轮仍约 **0.380 s**；该单请求总时延
+**4.44 s** 与旧版 **4.43 s** 基本持平，说明首轮计算并非
+每个请求时延的唯一决定项。同步双客户端六请求、20 输出 token
+的两轮均 **6/6** 首代码正确、完整输出哈希与未启用时相同；
+请求中位 **3.60/3.63 s**、总 wall **13.28/13.36 s**，
+对照同 V grouped-exact 且未初始化的 D 为 **4.81 s**、
+**17.52 s**。这是有限负载下的真实端到端改善，仍慢于
+完整 KV 的约 **9.95/10.79 s** 六请求总 wall，不能称
+“网络如本地”，也不能据此默认开启。
+加入显式 scratch 上限检查后重启 D，以最终文件复测：冷启动
+两请求 **2/2**，暖态六请求 **6/6**、中位 **3.60 s**、
+总 wall **13.31 s**，完整哈希仍与之前的稀疏模式相同。
+
+An explicit, default-off `PVD_SEED_PROBE_FROM_PROMPT_KV=1` path copies
+the verified full Prompt K/V from D's live source into separately budgeted,
+private target-probe rows during synchronous capture. It pins the source
+guard only for that scope; request identity, row mapping, layout, device,
+dtype, non-aliasing, scratch bound and CUDA completion are checked before
+the private prefix is published. The committed D mapping is unchanged.
+Expanded probe/refresh tests, including real CUDA copy, passed **181/181**;
+Ruff checks were
+clean. On the same grouped-exact V and M16/Top-4 six-case workload, first
+Q probe fell from about **0.76–0.80 s** to **0.166–0.172 s**. Two
+synchronized two-client replays were **6/6** correct with unchanged output
+hashes, **3.60/3.63 s** median request time and **13.28/13.36 s** total
+wall time, versus **4.81/17.52 s** without seeding. A single 36-token
+request retained almost identical total latency despite a faster first
+poll. This is a measured but limited end-to-end improvement, still slower
+than the full-KV six-case wall time of roughly **9.95/10.79 s**.
+After adding the explicit scratch bound and restarting D with the final
+files, a cold two-request smoke was **2/2** and a warm six-request replay
+was **6/6**, **3.60 s** median and **13.31 s** total wall time, with the
+same sparse-mode output hashes.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

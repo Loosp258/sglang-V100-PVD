@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import torch
+from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prediction import (
     CommittedPrefix,
     DraftPrediction,
@@ -26,7 +27,6 @@ from sglang.srt.disaggregation.pvd.prediction import (
     QueryVectors,
     TargetProbe,
 )
-from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     TransferBudget,
@@ -78,7 +78,8 @@ class PostRopeQueryCapture:
                 or tuple(sorted(set(committed_positions))) != committed_positions
             ):
                 raise PredictionConfigError(
-                    "committed capture requires explicit in-prefix positions and no prediction"
+                    "committed capture requires explicit in-prefix positions "
+                    "and no prediction"
                 )
             self.positions = committed_positions
             self.sequence_length = len(prefix.tokens)
@@ -309,6 +310,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             * 4
         )
         self.reservation_bytes = kv + mapping + queries + transient_bytes_bound
+        self.transient_bytes_bound = transient_bytes_bound
         self.prefix_cache_bytes = (
             (max_tokens + 1)
             * self.layers
@@ -320,6 +322,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             + 65536
         )
         self._prefix_caches = {}
+        self._prompt_seed_source = None
         self._active = False
         self._used = False
         self._state = None
@@ -485,6 +488,36 @@ class _LlamaTargetProbeCore(TargetProbe):
         self._drop_prefix_cache(record)
         del self._prefix_caches[req.rid]
 
+    @contextmanager
+    def prompt_seed_scope(self, req, pool_owner):
+        """Pin one live full-Prompt source only during synchronous capture.
+
+        A source is never retained as the cache: the first probe copies into
+        independently charged private rows before running the target model.
+        """
+        from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
+        from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
+
+        self._require_main_thread()
+        record = self._prefix_caches.get(getattr(req, "rid", None))
+        if (
+            self.prefix_budget is None
+            or record is None
+            or record.req is not req
+            or self._prompt_seed_source is not None
+            or not isinstance(pool_owner, ResourceGuard)
+            or not isinstance(pool_owner.value, CUDAModelPools)
+        ):
+            raise PredictionConfigError("exact live Prompt seed source required")
+        owner = f"pvd-probe-seed:{uuid.uuid4().hex}"
+        pool_owner.pin(owner)
+        try:
+            self._prompt_seed_source = (req, pool_owner)
+            yield
+        finally:
+            self._prompt_seed_source = None
+            pool_owner.unpin(owner)
+
     @torch.inference_mode()
     def _drop_prefix_cache(self, record) -> None:
         # The owner loop can retire this cache outside the target forward's
@@ -536,6 +569,96 @@ class _LlamaTargetProbeCore(TargetProbe):
                 return None
             record.owner = owner
         return record
+
+    def _seed_cached_prompt(self, prefix, record, resources):
+        """Copy verified full Prompt rows; never borrow live Req/KV storage."""
+        from sglang.srt.disaggregation.pvd.cuda_model_attention import CUDAModelPools
+
+        binding = self._prompt_seed_source
+        if binding is None or record.tokens:
+            return
+        req, pool_owner = binding
+        pools = pool_owner.value
+        prompt = tuple(getattr(req, "origin_input_ids", ()))
+        slot = getattr(req, "req_pool_idx", None)
+        if (
+            req is not record.req
+            or prefix.request_id != req.rid
+            or not isinstance(pools, CUDAModelPools)
+            or type(slot) is not int
+            or slot <= 0
+            or not prompt
+            or prefix.tokens[: len(prompt)] != prompt
+            or len(prompt) >= self.max_tokens
+        ):
+            raise PredictionConfigError("Prompt seed identity or length changed")
+        mapping = pools.req_pool.req_to_token
+        if (
+            not isinstance(mapping, torch.Tensor)
+            or mapping.device != torch.device(self.device)
+            or mapping.ndim != 2
+            or slot >= mapping.shape[0]
+            or len(prompt) > mapping.shape[1]
+            or mapping.dtype not in (torch.int32, torch.int64)
+        ):
+            raise PredictionConfigError("Prompt seed request mapping is incompatible")
+        source_rows = tuple(mapping[slot, : len(prompt)].tolist())
+        if len(set(source_rows)) != len(prompt) or any(
+            type(row) is not int or row <= 0 for row in source_rows
+        ):
+            raise PredictionConfigError("Prompt seed has invalid source rows")
+        # Two index tensors plus one bounded gather output are the only
+        # additional CUDA allocations; the persistent destination is already
+        # charged to prefix_cache_bytes. Reject before allocating any rows.
+        scratch_bytes = 2 * len(prompt) * 8 + (
+            min(64, len(prompt))
+            * self.kv_heads
+            * self.head_dim
+            * torch.empty((), dtype=self.dtype).element_size()
+        )
+        if scratch_bytes > self.transient_bytes_bound:
+            raise PredictionConfigError("Prompt seed exceeds probe scratch bound")
+        max_source_row = max(source_rows)
+        for layer in range(self.layers):
+            for getter in ("get_key_buffer", "get_value_buffer"):
+                source = getattr(pools.kv_pool, getter)(layer)
+                target = getattr(resources.pool, getter)(layer)
+                if (
+                    not isinstance(source, torch.Tensor)
+                    or not isinstance(target, torch.Tensor)
+                    or source.device != torch.device(self.device)
+                    or target.device != source.device
+                    or source.dtype != self.dtype
+                    or target.dtype != self.dtype
+                    or source.ndim != 3
+                    or target.ndim != 3
+                    or source.shape[1:] != (self.kv_heads, self.head_dim)
+                    or target.shape[1:] != source.shape[1:]
+                    or max_source_row >= source.shape[0]
+                    or source.data_ptr() == target.data_ptr()
+                ):
+                    raise PredictionConfigError("Prompt seed KV layout is incompatible")
+        rows = resources.allocator.alloc_kv(len(prompt))
+        record.rows.extend(rows)
+        resources.allocator.write_mapping(record.slot, 0, rows)
+        source_index = torch.tensor(source_rows, device=self.device, dtype=torch.long)
+        target_index = torch.tensor(rows, device=self.device, dtype=torch.long)
+        for layer in range(self.layers):
+            for getter in ("get_key_buffer", "get_value_buffer"):
+                source = getattr(pools.kv_pool, getter)(layer)
+                target = getattr(resources.pool, getter)(layer)
+                for start in range(0, len(prompt), 64):
+                    end = min(start + 64, len(prompt))
+                    target.index_copy_(
+                        0,
+                        target_index[start:end],
+                        source.index_select(0, source_index[start:end]),
+                    )
+        self._drain_private()
+        record.tokens = prompt
+        logging.getLogger(__name__).info(
+            "PVD target probe seeded private Prompt KV: tokens=%d", len(prompt)
+        )
 
     @torch.inference_mode()
     def _forward_cached(self, prefix, predicted_tokens, capture, record):
@@ -643,6 +766,7 @@ class _LlamaTargetProbeCore(TargetProbe):
             return result
 
         try:
+            self._seed_cached_prompt(prefix, record, resources)
             committed_start = len(record.tokens)
             new_committed = prefix.tokens[committed_start:]
             if new_committed:
