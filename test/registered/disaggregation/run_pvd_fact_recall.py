@@ -12,6 +12,7 @@ import json
 import random
 import re
 import statistics
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -127,20 +128,49 @@ def _request(url: str, text: str, expected: str, max_tokens: int, timeout: float
 
 
 def collect(
-    url: str, seed: str, *, cases: int, records: int, max_tokens: int, timeout: float
+    url: str,
+    seed: str,
+    *,
+    cases: int,
+    records: int,
+    max_tokens: int,
+    timeout: float,
+    concurrency: int = 2,
+    synchronized_start: bool = False,
 ):
     if not url.startswith(("http://", "https://")) or not 1 <= cases <= 16:
         raise ValueError("bounded Gateway URL and case count required")
-    if not 1 <= max_tokens <= 64 or not 0 < timeout <= 600:
+    if not 1 <= max_tokens <= 128 or not 0 < timeout <= 600:
         raise ValueError("bounded generation and timeout required")
+    if type(concurrency) is not int or not 1 <= concurrency <= 4:
+        raise ValueError("concurrency must be an integer in [1, 4]")
+    if type(synchronized_start) is not bool:
+        raise ValueError("synchronized_start must be a bool")
     prompts = [make_prompt(seed, i, records=records) for i in range(cases)]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, cases)) as pool:
-        results = list(
-            pool.map(
-                lambda pair: _request(url, pair[0], pair[1], max_tokens, timeout),
-                prompts,
+    results, waves = [], []
+    total_started = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for offset in range(0, cases, concurrency):
+            wave = prompts[offset : offset + concurrency]
+            gate = threading.Barrier(len(wave)) if synchronized_start else None
+
+            def send(pair):
+                if gate is not None:
+                    try:
+                        gate.wait(timeout=min(timeout, 30.0))
+                    except threading.BrokenBarrierError as exc:
+                        raise ValueError("synchronized wave could not start") from exc
+                return _request(url, pair[0], pair[1], max_tokens, timeout)
+
+            wave_started = time.perf_counter()
+            futures = [pool.submit(send, pair) for pair in wave]
+            results.extend(future.result() for future in futures)
+            waves.append(
+                {
+                    "requests": len(wave),
+                    "elapsed_seconds": time.perf_counter() - wave_started,
+                }
             )
-        )
     return {
         "schema": "pvd.fact_recall.v1",
         "seed": seed,
@@ -150,6 +180,10 @@ def collect(
         "median_elapsed_seconds": statistics.median(
             item["elapsed_seconds"] for item in results
         ),
+        "total_elapsed_seconds": time.perf_counter() - total_started,
+        "concurrency": concurrency,
+        "synchronized_start": synchronized_start,
+        "waves": waves,
         "results": results,
         "mode_verified_by_script": False,
     }
@@ -163,6 +197,8 @@ def main():
     parser.add_argument("--records", type=int, default=48)
     parser.add_argument("--max-new-tokens", type=int, default=20)
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--concurrency", type=int, default=2)
+    parser.add_argument("--synchronized-start", action="store_true")
     args = parser.parse_args()
     try:
         result = collect(
@@ -172,6 +208,8 @@ def main():
             records=args.records,
             max_tokens=args.max_new_tokens,
             timeout=args.timeout_seconds,
+            concurrency=args.concurrency,
+            synchronized_start=args.synchronized_start,
         )
     except (ValueError, OSError, urllib.error.URLError) as exc:
         parser.exit(1, f"fact-recall probe failed: {exc}\n")

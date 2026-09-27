@@ -697,6 +697,37 @@ full-KV mode for this launcher smoke (one correct request, ~2.19 s), so it
 is not another sparse-performance sample. Explicit lower thresholds remain
 available for native CAGRA acceptance.
 
+### 同步客户端波次对照 / Synchronized client-wave comparison
+
+事实负载工具新增有界 `--concurrency 1..4` 与可选
+`--synchronized-start`：每波客户端线程先在 barrier 会合，再同时
+发起 HTTP 请求；输出各波 wall time、总 wall time 与逐请求延迟。
+默认旧行为未改，输出仍不保存原始生成文本。工具逻辑测试
+**10 passed**，Ruff E/F/I 通过。屏障位于客户端，不保证服务端
+恰好同一时刻入队，也不隔离 P/V/D 的缓存暖态。
+
+使用相同 V exact-2304 默认启动器、P/Gateway、6 个 2095–2113
+token 事实 Prompt、20 token 输出、两客户端、三波：完整 KV D 的
+两轮首代码均 **6/6 正确**，请求中位约 **2.77/3.01 s**，六请求
+总 wall time 约 **9.95/10.79 s**；稀疏 M16/Top-4 D 的两轮也
+**6/6**，请求中位约 **5.08/4.48 s**，总 wall time 约
+**18.21/16.82 s**。每种模式内完整输出哈希稳定，稀疏与完整
+KV 仅 **3/6** 完整哈希一致。首波比后续波慢，且各请求在同一波内
+仍有显著排队差异。此时不能宣称“网络如本地”或端到端收益。
+
+The fact probe now accepts bounded concurrency and an optional client-side
+barrier per wave, reporting per-wave and total wall time without retaining
+raw generated text. Logic tests passed **10/10** and Ruff E/F/I was clean.
+The barrier synchronizes HTTP senders, not server admission or cache warmth.
+With the same V exact-2304 launcher, P/Gateway, six 2095–2113-token facts,
+20 output tokens and three two-client waves, full-KV D was **6/6** correct
+with **2.77/3.01 s** median request latency and **9.95/10.79 s** total
+wall time across two replays. Sparse M16/Top-4 D was also **6/6**, but
+**5.08/4.48 s** median and **18.21/16.82 s** total wall time. Within-mode
+complete-output hashes were stable; only **3/6** sparse outputs matched
+full KV. The synchronized diagnostic still does not show an end-to-end
+benefit or network-as-local latency.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
