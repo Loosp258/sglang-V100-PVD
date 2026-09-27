@@ -100,10 +100,12 @@ def test_unexpected_child_exit_is_reported_once(short_tmp_root, caplog):
         for _ in range(3):
             with pytest.raises(ProbeSidecarStartupError, match="no longer alive"):
                 owner.check_alive()
-        assert sum(
-            "PVD probe sidecar exited pid=" in record.message
+        reports = [
+            record
             for record in caplog.records
-        ) == 1
+            if "PVD probe sidecar exited pid=" in record.message
+        ]
+        assert len(reports) == 1
     finally:
         owner.close()
 

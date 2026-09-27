@@ -6,6 +6,8 @@ from historical sections of other documents. The final performance goal is
 **not achieved**. Do not push to GitHub unless the user explicitly changes the
 current instruction: make a **local commit after each verified step; no push**
 until the final goal is met and the user permits it.
+Sections 1–5 preserve the `ecf1fc247` handoff snapshot; section 6 records
+later verified checkpoints and remaining work.
 
 ## 1. Repository and preservation rules
 
@@ -182,7 +184,7 @@ Verified facts, not just unit-test intent:
   load; M16 128-output full KV ~6.17–6.36 s versus sparse ~9.54–9.75 s).
   Do not compare these different inputs directly with `sidecarfair1`.
 
-## 5. CloudLab environment and precise current remote state
+## 5. CloudLab environment and remote state at the original handoff
 
 SSH (authorized by the user; key contents must never be printed):
 
@@ -264,6 +266,28 @@ opted into/verified separately.
    boundary fallback. Confirm no stale Q, no leaked reply budget and no
    abandoned RDMA destination/MR. The earlier one-stream abort must become
    attributable rather than merely disappearing after the bound increase.
+   **2026-09-27 progress (still open):** `d042ec364`/`dc9ccf227` add
+   `probe_source=private_lane|inline` to D refresh timings, bounded categorical
+   sidecar rejection forwarding and lifecycle logs. `1befeef2e`/`610b9fdb7`
+   test two live replies plus a capacity refusal, boundary committed-prefix
+   Q, cancellation/retraction and cancellation during an in-flight fake RDMA
+   write; the destination is retained until the write is safe, then the
+   registry, pending rounds and reply budgets drain. `582163751` logs the
+   request ID, source and exception type on refresh failure and tests a
+   capacity refusal through the controller. The focused V suite passed
+   **61 tests** with Ruff E/F/I and formatting clean at `582163751`.
+   A real three-node opt-in smoke at `dc9ccf227` returned HTTP 200 for
+   42 Prompt/20 output tokens in 69.24 s; D logged four private-lane sparse
+   refreshes at boundaries 4/8/12/16. The first capture took 14.85 s cold;
+   later captures were ~0.30 s. This is one request, not a baseline or gain.
+   A controlled real sidecar stop at `582163751` returned HTTP 503
+   `decode_unavailable` at waiting admission in 1.95 s, before any refresh
+   could install stale Q. Repeated exit logs in that run motivated
+   `5ab196426`, which reports one exit per owner; its real-child test passed
+   **10 tests** with Ruff E/F/I clean. That last log-bound fix has not yet
+   been rerun on GPU. Both experiments were stopped; GPUs and target ports
+   returned to idle, and only their own empty socket directories were
+   removed. Two older empty `/tmp/pvd-probe-*` directories were preserved.
 3. **Run controlled A/B on the same exact inputs**: full Prompt KV, existing
    inline predictive path, and sidecar predictive path; 20 and 128 output
    tokens; short, ~1k and ~2k Prompt; 1/2/4 clients; repeated warmed trials

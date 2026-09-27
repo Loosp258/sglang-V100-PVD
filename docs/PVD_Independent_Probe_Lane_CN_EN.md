@@ -1,6 +1,11 @@
 # PVD 独立预测执行通道 / Independent prediction lane
 
-状态：设计与接口阶段；**未接入 serving，不是性能成果**。
+状态：私有 sidecar 已作为可选路径接入 D serving，并在三机 V100S 完成
+单请求与准入故障验证；**尚未证明同输入端到端性能增益**。
+
+Status: the private sidecar is integrated as an opt-in D serving path and has
+one-request and admission-failure evidence on three V100S nodes. Same-input
+end-to-end improvement remains unproven.
 
 ## 为什么需要 / Why
 
@@ -58,8 +63,10 @@ RDMA call. A separate thread over the current target runner is unsafe.
    峰值显存与 V/RDMA 时间。只有输出/安全门槛通过且端到端
    稳定超过完整 KV，才能宣称最终性能目标。
 
-No sidecar process, IPC transport, asynchronous Scheduler handoff or
-compute overlap exists merely because the protocol types are present.
+The protocol-only checkpoint below preceded the later process, IPC and
+Scheduler integration. Protocol types alone did not establish serving or
+compute overlap; the later opt-in checkpoints and CloudLab run provide the
+current integration evidence.
 
 当前接口检查点 / Current protocol checkpoint: `probe_lane_protocol.py`
 签发有 token 摘要、模型/词表 SHA256、nonce、deadline、层/head 范围
