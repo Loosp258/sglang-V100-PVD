@@ -183,7 +183,7 @@ def build_cuda_prediction_startup(
         > target_runner.server_args.max_total_tokens
     ):
         raise PredictionConfigError("prediction exceeds target context or KV capacity")
-    if type(predict_tokens) is int and predict_tokens > 16:
+    if type(predict_tokens) is int and predict_tokens > 32:
         raise PredictionConfigError("draft prediction exceeds supported bounded length")
     architecture = type(target_runner.model).__name__
     probes = {

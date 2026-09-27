@@ -49,7 +49,7 @@ def main(argv=None):
     root = Path(args.socket_dir)
     if (
         args.expected_d_pid <= 0
-        or args.predict_tokens not in (1, 2, 4, 8, 16)
+        or args.predict_tokens not in (1, 2, 4, 8, 16, 32)
         or args.max_total_tokens <= args.predict_tokens
         or args.context_length < args.max_total_tokens
         or not args.target_model_id.strip()

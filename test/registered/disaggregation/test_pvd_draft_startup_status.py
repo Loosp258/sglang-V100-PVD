@@ -251,10 +251,14 @@ def test_bounds_file_without_serving_opt_in_is_refused():
         handle_pvd_disaggregation(pvd_args(pvd_cuda_serving_config="bounds.json"))
 
 
-def test_cuda_serving_opt_in_passes_static_preflight_and_disables_overlap(caplog):
+@pytest.mark.parametrize("predict_tokens", [8, 32])
+def test_cuda_serving_opt_in_passes_static_preflight_and_disables_overlap(
+    caplog, predict_tokens
+):
     args = _retrieval_config_args(
         pvd_cuda_predictive_serving=True,
         pvd_cuda_serving_config="bounds.json",
+        pvd_draft_predict_tokens=predict_tokens,
     )
     with caplog.at_level(logging.INFO):
         handle_pvd_disaggregation(args)
@@ -288,7 +292,7 @@ def test_cuda_serving_refuses_missing_sparse_receive_registry_config():
             {"pvd_draft_persistent_budget_bytes": None},
             "pvd-draft-persistent-budget-bytes",
         ),
-        ({"pvd_draft_predict_tokens": 17}, "at most 16 draft tokens"),
+        ({"pvd_draft_predict_tokens": 33}, "at most 32 draft tokens"),
     ],
 )
 def test_cuda_serving_opt_in_fails_closed_for_unsupported_features(overrides, error):

@@ -987,6 +987,9 @@ def test_capabilities_are_checked_against_the_model_not_against_themselves():
         caps.require_model(architecture="NotListed", attention_backend="triton")
     # The shape check takes a request, not a declaration.
     caps.require_shape(prefix_tokens=10, predict_tokens=2)
+    caps.require_shape(prefix_tokens=10, predict_tokens=32)
+    with pytest.raises(DraftCapabilityError):
+        caps.require_shape(prefix_tokens=10, predict_tokens=33)
     with pytest.raises(DraftCapabilityError):
         caps.require_shape(prefix_tokens=10, predict_tokens=10_000)
 

@@ -275,9 +275,9 @@ def _validate_predictive_retrieval_config(server_args: "ServerArgs") -> bool:
         "--pvd-draft-predict-tokens",
         getattr(server_args, "pvd_draft_predict_tokens", None),
     )
-    if predict_tokens > 16:
+    if predict_tokens > 32:
         raise ValueError(
-            "--pvd-cuda-predictive-serving supports at most 16 draft tokens"
+            "--pvd-cuda-predictive-serving supports at most 32 draft tokens"
         )
     logger.info(
         "PVD CUDA predictive-serving arguments passed preflight; startup still "

@@ -212,7 +212,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 or not parent_visible.isdecimal()
                 or parent_visible == sidecar_config.cuda_visible_devices
                 or runner.gpu_id != 0
-                or args.pvd_draft_predict_tokens not in (1, 2, 4, 8, 16)
+                or args.pvd_draft_predict_tokens not in (1, 2, 4, 8, 16, 32)
                 or not os.path.isdir(args.model_path)
                 or os.path.realpath(args.tokenizer_path or args.model_path)
                 != os.path.realpath(args.model_path)

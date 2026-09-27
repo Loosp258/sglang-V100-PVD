@@ -69,7 +69,7 @@ DEFAULT_CAPABILITIES = DraftCapabilities(
     architectures=("LlamaForCausalLM", "Qwen2ForCausalLM"),
     attention_backends=("flashinfer", "triton", "torch_native"),
     max_prefix_tokens=8192,
-    max_predict_tokens=16,
+    max_predict_tokens=32,
 )
 
 
