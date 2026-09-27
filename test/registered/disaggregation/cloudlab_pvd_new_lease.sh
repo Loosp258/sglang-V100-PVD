@@ -16,6 +16,10 @@ d_ip="${PVD_D_IP:-10.10.1.3}"
 rail="${PVD_RAIL:-mlx5_0}"
 tag="${PVD_RUN_TAG:-acceptance}"
 log_dir="$root/validation/logs"
+context_tokens="${PVD_CONTEXT_TOKENS:-2304}"
+fanin_max_slices="${PVD_FANIN_MAX_SLICES:-262144}"
+d_staging_bytes="${PVD_D_STAGING_BYTES:-268435456}"
+v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
 # link has the same path and pinned tokenizer bytes, while P/D links include
 # their own local weight shards.
@@ -25,6 +29,17 @@ python="$CONDA_PREFIX/bin/python"
 
 if [[ ! "$tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo 'PVD_RUN_TAG must be filename-safe' >&2
+  exit 2
+fi
+if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
+   (( context_tokens < 2304 || context_tokens > 16384 )) ||
+   [[ ! "$fanin_max_slices" =~ ^[1-9][0-9]{5,7}$ ]] ||
+   (( fanin_max_slices < 262144 || fanin_max_slices > 2097152 )) ||
+   [[ ! "$d_staging_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
+   (( d_staging_bytes < 268435456 || d_staging_bytes > 1073741824 )) ||
+   [[ ! "$v_total_pages" =~ ^[1-9][0-9]{3,4}$ ]] ||
+   (( v_total_pages < context_tokens || v_total_pages > 32768 )); then
+  echo 'invalid bounded long-context capacity settings' >&2
   exit 2
 fi
 if [[ ! -d "$checkout/python/sglang/srt/disaggregation/pvd" ]] ||
@@ -73,9 +88,9 @@ case "$role" in
       --pvd-rank-rails "$rail" --disaggregation-transfer-backend mooncake \
       --pvd-transfer-staging-budget-bytes 67108864 \
       --pvd-transfer-max-inflight 16 \
-      --mem-fraction-static 0.5 --context-length 2304 \
-      --max-total-tokens 2304 --max-running-requests 4 \
-      --max-prefill-tokens 2304 --disable-cuda-graph \
+      --mem-fraction-static 0.5 --context-length "$context_tokens" \
+      --max-total-tokens "$context_tokens" --max-running-requests 4 \
+      --max-prefill-tokens "$context_tokens" --disable-cuda-graph \
       --disable-overlap-schedule --log-level info \
       >"$log_dir/p-$tag.log" 2>&1 </dev/null &
     ;;
@@ -87,9 +102,9 @@ case "$role" in
     # threshold for its separate recall/long-index acceptance experiments.
     exact_max_rows="${PVD_PROMPT_INDEX_EXACT_MAX_ROWS:-2304}"
     index_budget="${PVD_PROMPT_INDEX_BUDGET_BYTES:-2147483648}"
-    if [[ ! "$exact_max_rows" =~ ^[1-9][0-9]{0,3}$ ]] ||
-       (( exact_max_rows < 16 || exact_max_rows > 2304 )); then
-      echo 'PVD_PROMPT_INDEX_EXACT_MAX_ROWS must be an integer in [16, 2304]' >&2
+    if [[ ! "$exact_max_rows" =~ ^[1-9][0-9]{0,4}$ ]] ||
+       (( exact_max_rows < 16 || exact_max_rows > context_tokens )); then
+      echo 'PVD_PROMPT_INDEX_EXACT_MAX_ROWS must be in [16, context]' >&2
       exit 2
     fi
     if [[ ! "$index_budget" =~ ^[1-9][0-9]{0,9}$ ]] ||
@@ -115,7 +130,7 @@ case "$role" in
       --entry-ttl-secs 300 --pvd-rank-devices 0,1 \
       --pvd-rank-rails "$rail,$rail" \
       --transfer-backend mooncake --strict-rdma-preflight \
-      --total-pages 8192 --page-bytes 57344 \
+      --total-pages "$v_total_pages" --page-bytes 57344 \
       --transfer-staging-budget-bytes 67108864 --transfer-max-inflight 16 \
       --prompt-index-vector-space qwen25-7b-pvd \
       --prompt-index-budget-bytes "$index_budget" \
@@ -127,7 +142,7 @@ case "$role" in
       --prompt-index-exact-max-rows "$exact_max_rows" \
       --prompt-index-cagra-itopk-size 64 \
       --experimental-cuda-sparse-packing "${pack_args[@]}" \
-      --full-kv-fanin-max-slices 262144 \
+      --full-kv-fanin-max-slices "$fanin_max_slices" \
       --full-kv-fanin-max-inflight 2 \
       --full-kv-fanin-max-records 1024 \
       --full-kv-fanin-native-batch \
@@ -154,11 +169,14 @@ case "$role" in
     draft_predict_tokens="${PVD_DRAFT_PREDICT_TOKENS:-2}"
     retrieval_top_k="${PVD_RETRIEVAL_TOP_K:-4}"
     retrieval_union_tokens="${PVD_RETRIEVAL_UNION_TOKENS:-32}"
+    reserved_tokens="${PVD_RESERVED_DECODE_TOKENS:-16}"
     if [[ ! "$refresh_interval" =~ ^[1-9][0-9]?$ ]] ||
-       (( refresh_interval > 32 )) ||
+       (( refresh_interval > 64 )) ||
        [[ ! "$draft_predict_tokens" =~ ^[1-9][0-9]?$ ]] ||
-       (( draft_predict_tokens > 32 )); then
-      echo 'PVD_REFRESH_INTERVAL and PVD_DRAFT_PREDICT_TOKENS must be in [1, 32]' >&2
+       (( draft_predict_tokens > 32 )) ||
+       [[ ! "$reserved_tokens" =~ ^[1-9][0-9]?$ ]] ||
+       (( reserved_tokens > 64 )); then
+      echo 'invalid bounded refresh, prediction or reserved-token setting' >&2
       exit 2
     fi
     if [[ ! "$retrieval_top_k" =~ ^[1-9][0-9]?$ ]] ||
@@ -220,17 +238,17 @@ case "$role" in
       --pvd-model-instance-id qwen25-7b-pvd \
       --pvd-rank-rails "$rail" --pvd-d-receive-rails "$rail" \
       --disaggregation-transfer-backend mooncake \
-      --pvd-transfer-staging-budget-bytes 268435456 \
+      --pvd-transfer-staging-budget-bytes "$d_staging_bytes" \
       --pvd-transfer-max-inflight 16 --pvd-waiting-queue-bootstrap \
-      --pvd-full-kv-fanin-max-slices 262144 \
+      --pvd-full-kv-fanin-max-slices "$fanin_max_slices" \
       --pvd-full-kv-fanin-response-bytes 67108864 \
       "${rank_packed_args[@]}" \
       --pvd-kv-refresh-interval "$refresh_interval" \
-      --num-reserved-decode-tokens 16 \
+      --num-reserved-decode-tokens "$reserved_tokens" \
       "${predictive_args[@]}" \
-      --mem-fraction-static 0.5 --context-length 2304 \
-      --max-total-tokens 2304 --max-running-requests 4 \
-      --max-prefill-tokens 2304 --disable-cuda-graph \
+      --mem-fraction-static 0.5 --context-length "$context_tokens" \
+      --max-total-tokens "$context_tokens" --max-running-requests 4 \
+      --max-prefill-tokens "$context_tokens" --disable-cuda-graph \
       --disable-overlap-schedule --log-level info \
       >"$log_dir/d-$tag.log" 2>&1 </dev/null &
     ;;
