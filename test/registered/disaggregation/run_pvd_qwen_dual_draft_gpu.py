@@ -195,6 +195,9 @@ def validate_dual_model(
         DraftConfig,
         ProbeConfig,
     )
+    from sglang.srt.disaggregation.pvd.probe_lane_identity import (
+        checkpoint_identity,
+    )
     from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
     from sglang.srt.model_executor.model_runner import ModelRunner
     from sglang.srt.server_args import (
@@ -213,6 +216,9 @@ def validate_dual_model(
     target_args = target_runner.server_args
     device = torch.device("cuda:0")
     target_path = os.path.realpath(target_args.model_path)
+    identity_hash_started = time.monotonic()
+    checkpoint_digest = checkpoint_identity(target_path)
+    identity_hash_seconds = time.monotonic() - identity_hash_started
     draft_path = os.path.realpath(draft_model_path)
     if target_path == draft_path:
         raise ValueError("target and draft must be separate checkpoint directories")
@@ -532,8 +538,7 @@ def validate_dual_model(
     )
     from sglang.srt.disaggregation.pvd.probe_search import ProbeWindow
 
-    # This smoke uses fixed *test-only* digest values to exercise binding;
-    # a serving sidecar must hash the exact checkpoint and tokenizer files.
+    # Bind the cross-process ticket to the content of the local checkpoint.
     lane_window = ProbeWindow(
         "dual-model-smoke-incarnation",
         "dual-model-smoke-operation",
@@ -545,8 +550,8 @@ def validate_dual_model(
     lane_ticket = ProbeLaneTicket.issue(
         lane_window,
         target_model_id=target_identity,
-        weights_sha256="a" * 64,
-        tokenizer_sha256="b" * 64,
+        weights_sha256=checkpoint_digest.weights_sha256,
+        tokenizer_sha256=checkpoint_digest.tokenizer_sha256,
         layers=tuple(range(target_runner.model.config.num_hidden_layers)),
         head_start=0,
         head_count=target_runner.model.config.num_attention_heads,
@@ -688,6 +693,9 @@ def validate_dual_model(
         ),
         "isolated_lane_handler_q_matches_direct_probe": True,
         "real_model_q_cross_process_unix_matched": True,
+        "probe_lane_weights_sha256": checkpoint_digest.weights_sha256,
+        "probe_lane_tokenizer_sha256": checkpoint_digest.tokenizer_sha256,
+        "probe_lane_identity_hash_seconds": identity_hash_seconds,
         "target_model_state_canaries_unchanged": True,
         "cpu_cuda_rng_unchanged": True,
         "draft_pool_storage_verified_private": provider.pool_ownership.storage_verified,

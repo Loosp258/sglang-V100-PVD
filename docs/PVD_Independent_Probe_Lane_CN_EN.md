@@ -112,8 +112,7 @@ Q 回复预留 host 字节与一个并发槽，写完/拒绝/异常时归还。�
 完成栅栏。2026-09-27 在新的 CloudLab D 节点 GPU0，以本地
 Qwen2.5-7B-Instruct + Qwen2.5-0.5B-Instruct 运行单独的 dual-model
 smoke：28 层 Q 与直接 probe 逐值一致，私有池/预算归还，峰值 allocated
-约 16.33 GB。该 smoke 使用固定**测试用**摘要测试协议绑定，尚未计算
-权重文件真实 SHA256；也没有经 Unix socket 运行真实模型进程，更未
+约 16.33 GB。这个阶段尚未经 Unix socket 运行真实模型进程，更未
 验证 serving、RDMA 或性能收益。
 
 跨进程真实模型检查点 / Real-model Unix gate: 同一 D GPU0 的独立
@@ -122,6 +121,13 @@ model-owner 进程加载 7B+0.5B，另一个 `spawn` 的 CPU-only 进程通过
 直接目标 probe 的 Q 逐层一致。客户端和服务端 host 回复预算归还，
 目标/draft 私有池与 CUDA 预算也归还；进程退出后没有保留实验服务。
 `run_pvd_qwen_dual_draft_gpu.py` 报告
-`real_model_q_cross_process_unix_matched=true`。实验 ticket 仍使用
-固定**测试用**摘要而非实际权重 SHA；尚未接入 Decode Scheduler、
+`real_model_q_cross_process_unix_matched=true`。
+`probe_lane_identity.py` 随后改为流式哈希本地 `config.json`、所有
+`.safetensors`、可选 index 和 tokenizer 工件，拒绝链接成员或读取时
+改变的文件。D 节点目标权重/配置共 15,231,300,303 字节，摘要
+`5725e17b4bd31a7d1f723215ebc2402028658615a1b9fcab0d11f4445dedd5f2`；
+tokenizer 摘要
+`fc79977ab8ac1b4fedc4b83e5eb86414438030dd7b2c31c701310efb58f9c7b8`。
+实验 ticket、server 和 handler 均使用这组真实内容摘要，哈希约
+10.7 s（启动期成本，不计入推理延迟）。仍未接入 Decode Scheduler、
 V 检索/RDMA 或同条件性能比较。
