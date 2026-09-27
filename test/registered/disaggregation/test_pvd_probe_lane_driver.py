@@ -25,10 +25,10 @@ from test_pvd_cuda_refresh_driver import pump, req
 from test_pvd_cuda_sparse_delivery import case, complete
 
 
-@pytest.mark.parametrize("ending", ["install", "cancel", "retract"])
-def test_driver_releases_target_arbiter_while_private_q_is_pending(
-    monkeypatch, ending
-):
+@pytest.mark.parametrize(
+    "ending", ["install", "cancel", "retract", "cancel_delivery"]
+)
+def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, ending):
     monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", "4")
     driver = CUDARefreshDriver(
         TargetExecutionArbiter(), max_requests=2, max_prefix_tokens=64
@@ -107,7 +107,28 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(
             assert captures == []
             formal_forward = driver.arbiter.acquire()
             driver.arbiter.release(formal_forward)
-            if ending == "cancel":
+            delivery_region = None
+            if ending == "cancel_delivery":
+                release.set()
+
+                def pending_write():
+                    for delivery in c.store.entries[c.entry.key].deliveries.values():
+                        handle = delivery.transfer_handle
+                        if (
+                            handle is not None
+                            and not handle.transport_state.is_locally_safe_to_release
+                        ):
+                            return True
+                    return False
+
+                pump(driver, c, pending_write, finish=False)
+                active_round = c.sink._rounds[control._active]
+                delivery_region = next(iter(active_round.values())).identity.region_id
+                assert delivery_region not in c.engine.released
+                driver.cancel(request, "cancel during RDMA delivery")
+                driver.poll()
+                assert delivery_region not in c.engine.released
+            elif ending == "cancel":
                 driver.cancel(request, "test cancellation")
             elif ending == "retract":
                 request.is_retracted = True
@@ -119,8 +140,9 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(
                 pump(
                     driver,
                     c,
-                    lambda: control.group.coordinator.snapshot()["installed_tokens"]
-                    == 4,
+                    lambda: (
+                        control.group.coordinator.snapshot()["installed_tokens"] == 4
+                    ),
                 )
             else:
                 pump(driver, c, lambda: not driver._records)
@@ -128,6 +150,8 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(
                 assert c.registry.snapshot() == {}
                 assert c.registry.budget.snapshot()["reservations"] == 0
                 assert c.sink.snapshot()["pending_rounds"] == 0
+                if delivery_region is not None:
+                    assert delivery_region in c.engine.released
             assert captures == []
             assert not driver.arbiter.busy
             assert lane.reply_budget.snapshot()["reservations"] == 0

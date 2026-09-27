@@ -104,9 +104,8 @@ def test_private_q_lane_runs_existing_v_search_and_sparse_install(
                 fixture.close()
 
     asyncio.run(run())
+    expected_source = "committed" if boundary_start else "predicted"
     assert any(
-        "query_source="
-        + ("committed" if boundary_start else "predicted")
-        + " probe_source=private_lane" in record.message
+        f"query_source={expected_source} probe_source=private_lane" in record.message
         for record in caplog.records
     )
