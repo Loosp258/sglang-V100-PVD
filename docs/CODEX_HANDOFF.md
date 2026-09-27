@@ -490,3 +490,125 @@ are P `7bc027db6ce702fb57050c5e8b53cf72c51526db`, V and D
 `a0005f0d4cdf2efe47e8464051c8980ec74ce351`. The seven pre-existing
 dirty local files and all untracked validation bundles remain untouched.
 No Git push occurred.
+
+## 9. 2026-09-27 16k Decode-segment and early-ticket validation
+
+Section 8's next-priority text predates the new D Req-arrival implementation.
+Commit `c70692a21` adds a bounded prompt-only sidecar ticket keyed to the
+exact D Req, delivery, Entry transfer ID, and worker epoch. It warms only the
+private draft/target prefix caches; the Q reply is discarded and later
+admission reconciles against the completed initial Prompt receipt. Commit
+`632dd7eed` adds early/late 32-gap timing to the SSE fact benchmark. The
+new early-ticket path passed **101 focused tests on V Linux**. The isolated
+P checkout stayed at `7bc027db6`; V and D used clean `c70692a21` checkouts.
+
+All following observations used the same 15,875-token Qwen2.5-7B input
+within each output-length pair, P TP2, V two GPUs, D formal GPU1 plus
+sidecar GPU0 for PVD, 18,432-token context, V exact index threshold 16,384,
+M64/lead32/predict32, and one client. The P process was restarted before
+the 128-token full-KV control and before the deferred-fence PVD diagnostic
+to clear its prompt cache. The 128-token input SHA-256 was
+`4a8877d0d093bc6a38c813bb49ce3cadc817e78c7540d46359a04f96464e2fa5`;
+the 256-token input SHA-256 was
+`11306f421ea8400d445404cd80b0c4e8e0cfaf49c34ee0e889683adb7eeaa3a9`.
+These are single runs, not distributions. The output hashes differ between
+PVD and full KV; first-code correctness is a narrow check only.
+
+| Mode | Output | Wall | TTFT | First 32 gap p50 | Last 32 gap p50 | Max gap | First-code correct |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| PVD, Req-arrival early ticket | 128 | 33.59 s | 9.59 s | 0.138 s | 0.043 s | 12.05 s | yes |
+| Full KV | 128 | 20.55 s | 9.30 s | 0.084 s | 0.085 s | 0.46 s | yes |
+| PVD, early ticket plus borrowed Prompt reader/deferred layer fences | 128 | 34.13 s | 10.30 s | 0.133 s | 0.042 s | 12.27 s | yes; PVD output hash unchanged |
+| PVD, Req-arrival early ticket | 256 | 39.25 s | 8.48 s | 0.138 s | 0.045 s | 11.94 s | no |
+| Full KV | 256 | 31.67 s | 8.96 s | 0.084 s | 0.085 s | 0.46 s | no |
+
+The first 64 formal Decode tokens still use the imported **full Prompt bank**
+through the custom PVD sparse-attention adapter. They pay host metadata
+`.tolist()` and per-layer pointer/row planning plus CUDA completion fences;
+they do not yet benefit from a small retrieved bank. The first M64 refresh
+then installs that sparse bank. At 16k, PVD's first 32 gaps were slower than
+full KV's by about 54 ms/token, while the last 32 gaps were faster by about
+42 ms/token. These segment timings support the adapter/full-bank path as a
+contributor to early Decode cost; no per-kernel profile yet allocates the
+exact 54 ms among metadata, fences, attention and other scheduling work.
+The roughly 12-second first boundary stall dominates the 128-token
+end-to-end gap. On the 256-token run, two later cached refreshes took
+2.17/2.23 seconds each end-to-end and largely overlapped Decode, but PVD
+still finished 7.58 seconds behind full KV. Neither 256-token run returned
+the expected first code; do not infer quality parity from these samples.
+
+The new early ticket did **not** demonstrate an end-to-end improvement over
+the earlier n=0-only 16k PVD observation (32.49 seconds in section 8).
+In the 128-token early-ticket run, P's last prefill batch was logged at
+12:49:01 and the sidecar's `draft prefix cache action=prefill` at 12:49:08.
+In the deferred-fence repeat, those log seconds were 13:05:53 and 13:06:00.
+The draft action log is emitted **after** draft prefix preparation/generation,
+so it is not a sidecar-start marker; the draft stage itself took about
+5.2 seconds and target probe about 13.9 seconds. Gateway sends P and D POSTs
+concurrently. Existing logs cannot distinguish D Req creation, owner-loop
+queueing, sidecar ticket dispatch, and GPU compute start; do not attribute
+the seven-second log separation to Gateway sequencing. Timing stamps at the
+early-ticket scheduling/execution seam are the next diagnostic.
+
+The borrowed-reader/deferred-fence 16k diagnostic set
+`PVD_REUSE_FORWARD_BANK_LEASE=1` and `PVD_DEFER_LAYER_FENCES=1` on D.
+The first startup intentionally failed its guard because the existing
+scratch-reservation limit was 64 versus the required minimum of 113 for a
+four-request/28-layer bound. A separate validation JSON raised the bound to
+256; the successful run showed no observed traceback or quarantine and had
+the same PVD output hash, but its total time did not improve. Do not enable
+these opt-ins by default based on this sample.
+
+Next: timestamp the early ticket from D Req creation through sidecar accept
+and prefix compute, then move or speed the first target prefix work so it
+actually overlaps P Prefill and first formal Decode. Profile the first
+64-token PVD full-bank attention path and test avoiding its repeated host
+metadata/synchronization overhead. Re-evaluate output quality, true-Q recall,
+and repeated randomized 16k+ throughput before claiming a PVD advantage.
+
+## 10. 2026-09-27 early-ticket correction and same-GPU design checkpoint
+
+Section 9 records the first early-ticket trials. A later timing probe
+(`2436a30af`) found that the early ticket was not actually scheduled: D's
+`Req.origin_input_ids` is an `array("q")`, while the ticket constructor in
+`c70692a21` accepted only lists and tuples. Commit `63f5eb2e0` accepts this
+production type. Thirteen focused Linux tests passed after the fix. The
+older section 9 conclusion about the ticket's effect applies only to the
+pre-fix trials; it does not measure an active early ticket.
+
+A fresh 16k single-request PVD repeat with the same 15,875-token input
+and 128-token output reduced wall time from 33.2246 to 24.1776 seconds and the
+maximum token gap from 11.8927 to 2.6252 seconds. TTFT was 9.3155 vs
+9.5864 seconds. First-32 gap p50 was 0.13883 vs 0.13763 seconds, and
+last-32 gap p50 was 0.04307 vs 0.04330 seconds (pre-fix vs post-fix).
+The output SHA-256 was unchanged, but the first-code fact was incorrect
+in both runs. D logged the ticket request start 1.373 ms after scheduling,
+19.20 seconds of sidecar work, and P's last Prefill about 9 seconds after
+the early ticket started. The first boundary wait fell from about 11.85
+to 2.58 seconds. This demonstrates early sidecar work overlapping P Prefill
+and initial formal Decode on **separate D GPUs**. It does not establish a
+PVD speed advantage over full KV or validate output quality.
+
+The requested architecture uses the **same GPU** for formal Decode and
+prediction, while other requests continue producing tokens during that
+prediction. The current inline D path does not meet this requirement:
+`cuda_refresh_driver.py` acquires `TargetExecutionArbiter` for synchronous
+capture, and `cuda_scheduler_binding.py::ready_to_prepare` stops Decode
+batch preparation while it is busy. The tested sidecar path avoids that
+global wait by using another GPU, so its timing cannot be used as evidence
+for same-GPU coexistence.
+
+SGLang's native `STANDALONE` speculation shares the Scheduler's batch
+contract: `EAGLEWorker.forward_batch_generation` runs draft, installs
+`batch.spec_info`, runs target verification, and returns accepted tokens
+for formal request processing. `StandaloneWorker` constructs its draft
+worker with the target worker's request/allocator interface. Thus the
+whole native worker is not a prediction-only API whose tokens can merely
+be ignored. PVD already reuses lower-level SGLang model forwards in
+`draft_forward_adapter.py` and `draft_runner_sglang.py`. A same-GPU
+implementation should give prediction a private Req/KV branch, advance
+that branch in bounded Scheduler turns while normal request Decode
+continues, send only predicted query vectors to V, then leave V search
+and delivery asynchronous while the original request formally decodes.
+Its candidate tokens must never enter formal output IDs, sequence length,
+or KV mappings. No same-GPU implementation or benchmark is validated yet.
