@@ -255,7 +255,12 @@ class CUDADecodeSchedulerBinding:
     @property
     def pending(self):
         self._check()
-        return bool(self.driver._records or self.scheduler.waiting_queue)
+        prewarmer = getattr(self.driver, "cuda_prompt_prewarm", None)
+        return bool(
+            self.driver._records
+            or self.scheduler.waiting_queue
+            or (prewarmer is not None and prewarmer.pending)
+        )
 
     def ready_to_prepare(self, batch):
         """Gate BEFORE prepare_for_decode allocates another generated KV row."""

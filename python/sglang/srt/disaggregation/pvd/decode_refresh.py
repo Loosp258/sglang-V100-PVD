@@ -596,6 +596,9 @@ class PVDDecodeRefresher:
 
     def release_request(self, req):
         """Also used when a queued request is removed without finished_reason."""
+        prompt_prewarm = getattr(self.manager, "cuda_prompt_prewarm", None)
+        if prompt_prewarm is not None:
+            prompt_prewarm.cancel(req)
         close_gate = getattr(self.manager, "close_bootstrap_gate", None)
         if close_gate is not None:
             close_gate(req)

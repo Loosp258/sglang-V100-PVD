@@ -21,6 +21,9 @@ from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
 )
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 
+_DEFAULT_CACHE_IDLE_SECONDS = 5.0
+_EARLY_PROMPT_CACHE_IDLE_SECONDS = 60.0
+
 
 def _materialize_reply(ticket: ProbeLaneTicket, queries) -> ProbeLaneReply:
     """Select exact positions/heads without copying unused Q to host."""
@@ -110,15 +113,22 @@ class ProbeLaneCUDAHandler:
         self.device = torch.device(pipeline.probe.device)
         self._cached_req = None
         self._cached_incarnation = None
+        self._cached_entry_transfer_id = None
         self._cached_used_at = None
+        self._cached_idle_seconds = _DEFAULT_CACHE_IDLE_SECONDS
 
-    def retire_idle_cache(self, *, max_idle_seconds: float = 5.0) -> None:
+    def retire_idle_cache(self, *, max_idle_seconds: float | None = None) -> None:
         if threading.get_ident() != self.owner_thread:
             raise ProbeLaneProtocolError("CUDA sidecar handler changed owner thread")
+        idle_seconds = (
+            getattr(self, "_cached_idle_seconds", _DEFAULT_CACHE_IDLE_SECONDS)
+            if max_idle_seconds is None
+            else max_idle_seconds
+        )
         if (
             self._cached_incarnation is not None
             and self._cached_used_at is not None
-            and time.monotonic() - self._cached_used_at >= max_idle_seconds
+            and time.monotonic() - self._cached_used_at >= idle_seconds
         ):
             self.close()
 
@@ -133,7 +143,9 @@ class ProbeLaneCUDAHandler:
                 self.pipeline.probe.retire_cached_request(self._cached_req)
             self._cached_req = None
             self._cached_incarnation = None
+            self._cached_entry_transfer_id = None
             self._cached_used_at = None
+            self._cached_idle_seconds = _DEFAULT_CACHE_IDLE_SECONDS
 
     def _prepare_cache(self, window) -> None:
         provider = self.pipeline.provider
@@ -143,7 +155,12 @@ class ProbeLaneCUDAHandler:
         ):
             return
         identity = (window.prefix.request_id, window.incarnation)
-        if self._cached_incarnation != identity:
+        same_cache = (
+            self._cached_incarnation == identity
+            and getattr(self, "_cached_entry_transfer_id", None)
+            == window.entry_transfer_id
+        )
+        if not same_cache:
             self.close()
             if provider.factory.prefix_cache_enabled:
                 provider.set_sidecar_cache_identity(*identity)
@@ -152,6 +169,23 @@ class ProbeLaneCUDAHandler:
                 self.pipeline.probe.register_cached_request(req)
                 self._cached_req = req
             self._cached_incarnation = identity
+            self._cached_entry_transfer_id = window.entry_transfer_id
+            same_cache = False
+        early_prompt = ":prompt-only:" in window.prefix.version
+        # The regular n=0 ticket appends P's first token to the early prompt
+        # prefix. Keep that cache under its bounded lease until the first
+        # positive target-token refresh actually consumes it.
+        keep_early_lease = (
+            same_cache
+            and window.target_tokens == 0
+            and getattr(self, "_cached_idle_seconds", _DEFAULT_CACHE_IDLE_SECONDS)
+            == _EARLY_PROMPT_CACHE_IDLE_SECONDS
+        )
+        self._cached_idle_seconds = (
+            _EARLY_PROMPT_CACHE_IDLE_SECONDS
+            if early_prompt or keep_early_lease
+            else _DEFAULT_CACHE_IDLE_SECONDS
+        )
         self._cached_used_at = time.monotonic()
 
     def __call__(self, ticket: ProbeLaneTicket) -> ProbeLaneReply:

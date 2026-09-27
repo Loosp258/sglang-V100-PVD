@@ -146,6 +146,7 @@ def admit_received_cuda_request(
     lane_client=None,
     lane_checkpoint=None,
     prewarm_sidecar=False,
+    early_prewarm_owner=None,
 ):
     """Claim a prepared CUDA request in one owner-thread transaction.
 
@@ -208,6 +209,7 @@ def admit_received_cuda_request(
         lane_client=lane_client,
         lane_checkpoint=lane_checkpoint,
         prewarm_sidecar=prewarm_sidecar,
+        early_prewarm_owner=early_prewarm_owner,
     )
     try:
         retirement = CUDARequestRelease(

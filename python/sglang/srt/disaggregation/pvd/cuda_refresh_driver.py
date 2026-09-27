@@ -75,6 +75,8 @@ class _Request:
     prewarm_state: str = "disabled"
     prewarm_error: str | None = None
     prewarm_overlapped_refresh: bool = False
+    early_prewarm_owner: object = None
+    early_refresh_installed: bool = False
     refresh: object = None
     close_task: object = None
     capture_lease: object = None
@@ -179,6 +181,7 @@ class CUDARefreshDriver:
         lane_client=None,
         lane_checkpoint=None,
         prewarm_sidecar=False,
+        early_prewarm_owner=None,
     ):
         self._owner()
         if type(initial_import_pending) is not bool:
@@ -291,6 +294,16 @@ class CUDARefreshDriver:
             raise LifecycleError("checkpoint identity requires a private probe lane")
         elif prewarm_sidecar:
             raise LifecycleError("sidecar prewarm requires a private probe lane")
+        if early_prewarm_owner is not None:
+            prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+            if (
+                prewarmer is None
+                or not prewarm_sidecar
+                or lane_client is not prewarmer.lane_client
+                or not prewarmer.owns(early_prewarm_owner, req, initial_session)
+                or early_prewarm_owner.task is None
+            ):
+                raise LifecycleError("exact live D Req-arrival prewarm owner required")
         lock = controller.pipeline._lock
         if self._execution_lock is not None and lock is not self._execution_lock:
             raise LifecycleError("all requests must share the target execution lock")
@@ -308,7 +321,15 @@ class CUDARefreshDriver:
             float(timeout_seconds),
             lane_client=lane_client,
             lane_checkpoint=lane_checkpoint,
-            prewarm_state="armed" if prewarm_sidecar else "disabled",
+            prewarm_task=(
+                early_prewarm_owner.task if early_prewarm_owner is not None else None
+            ),
+            prewarm_state=(
+                "early_pending"
+                if early_prewarm_owner is not None
+                else ("armed" if prewarm_sidecar else "disabled")
+            ),
+            early_prewarm_owner=early_prewarm_owner,
             provisional=initial_import_pending,
             provisional_source=initial_session,
             provisional_pool_owner=pool_owner,
@@ -572,6 +593,10 @@ class CUDARefreshDriver:
                 self.quarantine_provisional(record.req, reason)
                 return
         record.stopping = True
+        prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+        if prewarmer is not None:
+            prewarmer.cancel(record.req)
+        record.early_prewarm_owner = None
         if record.prewarm_task is not None and not record.prewarm_task.done():
             record.prewarm_task.cancel()
         if record.refresh is not None:
@@ -583,6 +608,23 @@ class CUDARefreshDriver:
             if record.full_session is not None or record.provisional_source is not None:
                 self._quarantine_receiver(record, exc)
             raise
+
+    def _complete_early_prewarm_if_ready(self, record):
+        owner = record.early_prewarm_owner
+        prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+        if (
+            prewarmer is not None
+            and owner is not None
+            and record.early_refresh_installed
+            and (
+                getattr(record, "prewarm_task", None) is None
+                or record.prewarm_task.done()
+            )
+            and owner.task is not None
+            and owner.task.done()
+        ):
+            prewarmer.complete(owner)
+            record.early_prewarm_owner = None
 
     def cancel(self, req, reason="request finished, cancelled or retracted"):
         self._owner()
@@ -638,22 +680,45 @@ class CUDARefreshDriver:
     def _finish_prewarm(self, record):
         task = record.prewarm_task
         if task is None or not task.done():
+            self._complete_early_prewarm_if_ready(record)
             return
+        phase = record.prewarm_state
         record.prewarm_task = None
+        early = phase == "early_pending"
         try:
-            task.result()
+            result = task.result()
         except asyncio.CancelledError:
-            record.prewarm_state = "cancelled"
+            record.prewarm_state = (
+                "armed" if early and not record.stopping else "cancelled"
+            )
         except Exception as exc:  # noqa: BLE001 - sidecar failures are optional.
-            record.prewarm_state = "failed"
             record.prewarm_error = f"{type(exc).__name__}: {exc}"[:512]
+            record.prewarm_state = (
+                "armed" if early and not record.stopping else "failed"
+            )
             _timeline(
                 "PVD timeline event=sidecar_prewarm_failed request_id=%s reason=%s",
                 record.req.rid,
                 record.prewarm_error,
             )
         else:
-            record.prewarm_state = "ready"
+            if early and result is not True:
+                record.prewarm_state = "armed"
+                record.prewarm_error = "early prompt-only ticket did not complete"
+            elif early:
+                # The n=0 ticket appends P's first token to the cached prompt;
+                # this avoids a second full-prefix forward.
+                record.prewarm_state = "append_armed"
+            else:
+                record.prewarm_state = "ready"
+        if record.stopping:
+            owner = record.early_prewarm_owner
+            prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+            if prewarmer is not None and owner is not None:
+                prewarmer.cancel(record.req)
+                record.early_prewarm_owner = None
+        else:
+            self._complete_early_prewarm_if_ready(record)
 
     def _advance(self):
         due = None
@@ -751,7 +816,7 @@ class CUDARefreshDriver:
                             and self._clock() >= record.deadline
                         ):
                             raise LifecycleError("CUDA refresh timeout")
-                        if record.prewarm_state == "armed":
+                        if record.prewarm_state in ("armed", "append_armed"):
                             if (
                                 record.lane_client is not None
                                 and n < boundary - state["lead_tokens"]
@@ -792,6 +857,8 @@ class CUDARefreshDriver:
                             if controller.try_install(
                                 {rank: n for rank in controller._routes}
                             ):
+                                record.early_refresh_installed = True
+                                self._complete_early_prewarm_if_ready(record)
                                 observed_at = record.boundary_observed_at
                                 record.boundary_observed_at = None
                                 record.refresh = record.deadline = None
@@ -976,12 +1043,23 @@ class CUDARefreshDriver:
                 self._stop(record, "CUDA refresh driver shutting down")
             except BaseException as exc:
                 failures.append(exc)
+        prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+        if prewarmer is not None:
+            try:
+                prewarmer.begin_shutdown()
+            except BaseException as exc:
+                failures.append(exc)
         if failures:
             raise failures[0]
 
     def close_loop(self):
         self._owner()
-        if not self._closing or self._records:
+        prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+        if (
+            not self._closing
+            or self._records
+            or (prewarmer is not None and prewarmer.pending)
+        ):
             raise LifecycleError(
                 "all CUDA controller owners must drain before loop close"
             )
@@ -992,10 +1070,15 @@ class CUDARefreshDriver:
 
     def snapshot(self):
         self._owner()
+        prewarmer = getattr(self, "cuda_prompt_prewarm", None)
+        early_prewarm = None if prewarmer is None else prewarmer.snapshot()
         return {
             "closing": self._closing,
             "source_quarantine": self._source_quarantine,
-            "drained": self._closing and not self._records,
+            "drained": self._closing
+            and not self._records
+            and not (early_prewarm is not None and early_prewarm["pending"]),
+            "early_prompt_prewarm": early_prewarm,
             "requests": {
                 key: {
                     "committed_tokens": len(r.outputs) - 1,
@@ -1003,6 +1086,7 @@ class CUDARefreshDriver:
                     "sidecar_prewarm": r.prewarm_state,
                     "sidecar_prewarm_error": r.prewarm_error,
                     "sidecar_prewarm_overlapped_refresh": r.prewarm_overlapped_refresh,
+                    "early_prompt_refresh_installed": r.early_refresh_installed,
                     "ready": r.ready,
                     "stopping": r.stopping,
                     "quarantined": r.quarantined,

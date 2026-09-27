@@ -17,6 +17,7 @@ from sglang.srt.disaggregation.pvd.cuda_prediction_startup import (
     CUDAPredictionStartup,
     build_cuda_prediction_startup,
 )
+from sglang.srt.disaggregation.pvd.cuda_prompt_prewarm import CUDAPromptPrewarmer
 from sglang.srt.disaggregation.pvd.cuda_route_discovery import (
     CUDARouteDiscoveryQueue,
 )
@@ -67,12 +68,17 @@ class CUDAPredictiveServing:
     target_scratch_budget: TransferBudget
     head_mapping: QueryHeadMapping
     sidecar: ProbeSidecarProcess | None = None
+    prompt_prewarm: CUDAPromptPrewarmer | None = None
 
     def close_drained(self):
         """Best-effort orderly close; process exit still owns model-pool memory."""
-        self.target.close_drained()
+        if self.target.close_drained() is False:
+            return False
+        if self.prompt_prewarm is not None:
+            self.prompt_prewarm.close_drained()
         if self.sidecar is not None:
             self.sidecar.close()
+        return True
 
 
 def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
@@ -328,7 +334,24 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             scratch_budget,
             head_mapping,
             sidecar,
+            (
+                CUDAPromptPrewarmer(
+                    target.driver,
+                    lane_client=sidecar.client,
+                    checkpoint=sidecar.checkpoint,
+                    target_model_id=prediction.target_model_id,
+                    probe_config=prediction.pipeline.probe_config,
+                    head_dim=runner.model_config.head_dim,
+                    timeout_seconds=limits.request_timeout_seconds,
+                    max_prefix_tokens=min(limits.max_sequence_tokens, 16_384 - 1),
+                )
+                if sidecar is not None and limits.sidecar_prefix_prewarm
+                else None
+            ),
         )
+        if installed.prompt_prewarm is not None:
+            manager.cuda_prompt_prewarm = installed.prompt_prewarm
+            target.driver.cuda_prompt_prewarm = installed.prompt_prewarm
         scheduler.pvd_cuda_components = installed
         return installed
     except BaseException:

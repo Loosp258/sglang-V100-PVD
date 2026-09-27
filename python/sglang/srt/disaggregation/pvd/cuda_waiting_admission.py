@@ -85,6 +85,12 @@ class CUDAWaitingAdmissionCoordinator:
         preflight = preflight_received_cuda_admission(
             session, selected_binding, self.driver
         )
+        prompt_prewarm = getattr(self.manager, "cuda_prompt_prewarm", None)
+        early_prewarm_owner = (
+            prompt_prewarm.reconcile(session)
+            if prompt_prewarm is not None
+            else None
+        )
         resources = self.prepare(preflight)
         if not isinstance(resources, CUDAWaitingAdmissionResources):
             raise TypeError("explicit CUDA waiting admission resources required")
@@ -137,8 +143,11 @@ class CUDAWaitingAdmissionCoordinator:
                 lane_client=resources.lane_client,
                 lane_checkpoint=resources.lane_checkpoint,
                 prewarm_sidecar=resources.sidecar_prefix_prewarm,
+                early_prewarm_owner=early_prewarm_owner,
             )
         except BaseException:
+            if prompt_prewarm is not None:
+                prompt_prewarm.cancel(req, session=session)
             if assembly is not None and isinstance(assembly, CUDARoutedRequestAssembly):
                 if not getattr(assembly.controller, "_refresh_driver_claimed", False):
                     self.driver._loop.run_until_complete(assembly.discard_unstarted())

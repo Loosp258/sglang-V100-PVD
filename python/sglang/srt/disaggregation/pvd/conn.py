@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+import logging
 import math
 import os
 import threading
@@ -52,6 +53,8 @@ from sglang.srt.disaggregation.pvd.transfer_progress import (
 )
 from sglang.srt.disaggregation.pvd.upload_manager import PVDUploadManager
 from sglang.srt.disaggregation.pvd.worker_epoch import worker_epoch
+
+logger = logging.getLogger(__name__)
 
 
 class PVDConnectionError(RuntimeError):
@@ -1114,6 +1117,12 @@ class PVDKVReceiver:
             if getattr(mgr, "waiting_queue_bootstrap", False)
             else None
         )
+        self.prompt_prewarm = getattr(mgr, "cuda_prompt_prewarm", None)
+        if self.prompt_prewarm is not None:
+            try:
+                self.prompt_prewarm.start(req, self.session)
+            except Exception as exc:  # noqa: BLE001 - cache work is optional.
+                logger.debug("PVD prompt-only sidecar prewarm was skipped: %s", exc)
 
     def init(self, prefill_dp_rank: int):
         self._entry_future = self.kv_mgr.control.submit(
@@ -1247,7 +1256,11 @@ class PVDKVReceiver:
         self.session.schedule_close()
         if self.bootstrap_gate is not None:
             self.kv_mgr.close_bootstrap_gate(self.req)
+        if self.prompt_prewarm is not None:
+            self.prompt_prewarm.cancel(self.req, session=self.session)
 
     def clear(self):
         if self.conclude_state != KVPoll.Success:
             self.session.schedule_close()
+            if self.prompt_prewarm is not None:
+                self.prompt_prewarm.cancel(self.req, session=self.session)

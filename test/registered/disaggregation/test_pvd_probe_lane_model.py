@@ -95,8 +95,18 @@ def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
     handler._cached_req = None
     handler._cached_incarnation = None
     handler._cached_used_at = None
-    first = SimpleNamespace(prefix=SimpleNamespace(request_id="rid"), incarnation="a")
-    second = SimpleNamespace(prefix=first.prefix, incarnation="b")
+    first = SimpleNamespace(
+        prefix=SimpleNamespace(request_id="rid", version="a:0"),
+        incarnation="a",
+        entry_transfer_id="entry-1",
+        target_tokens=0,
+    )
+    second = SimpleNamespace(
+        prefix=first.prefix,
+        incarnation="b",
+        entry_transfer_id="entry-1",
+        target_tokens=0,
+    )
 
     handler._prepare_cache(first)
     first_req = probe.live
@@ -122,6 +132,84 @@ def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
     handler.close()
     assert len(probe.events) == 4
     assert draft_events[-1] == ("retire", None)
+
+
+def test_prompt_only_cache_gets_bounded_lease_and_entry_switch_retires_it():
+    class Probe:
+        prefix_budget = object()
+
+        def __init__(self):
+            self.live = None
+            self.events = []
+
+        def register_cached_request(self, req):
+            self.live = req
+            self.events.append(("register", req))
+
+        def retire_cached_request(self, req):
+            assert self.live is req
+            self.live = None
+            self.events.append(("retire", req))
+
+    probe = Probe()
+    handler = ProbeLaneCUDAHandler.__new__(ProbeLaneCUDAHandler)
+    handler.pipeline = SimpleNamespace(
+        probe=probe,
+        provider=SimpleNamespace(
+            factory=SimpleNamespace(prefix_cache_enabled=False),
+            retire_sidecar_cache=lambda: None,
+        ),
+    )
+    handler.owner_thread = threading.get_ident()
+    handler._cached_req = None
+    handler._cached_incarnation = None
+    handler._cached_used_at = None
+    early = SimpleNamespace(
+        prefix=SimpleNamespace(request_id="rid", version="epoch:prompt-only:delivery"),
+        incarnation="epoch",
+        entry_transfer_id="entry-1",
+    )
+    handler._prepare_cache(early)
+    assert handler._cached_idle_seconds == 60.0
+    handler._cached_used_at = time.monotonic() - 10
+    handler.retire_idle_cache()
+    assert handler._cached_incarnation == ("rid", "epoch")
+
+    append = SimpleNamespace(
+        prefix=SimpleNamespace(request_id="rid", version="epoch:0"),
+        incarnation="epoch",
+        entry_transfer_id="entry-1",
+        target_tokens=0,
+    )
+    cached_req = probe.live
+    handler._prepare_cache(append)
+    assert probe.live is cached_req
+    assert handler._cached_idle_seconds == 60.0
+
+    formal_refresh = SimpleNamespace(
+        prefix=SimpleNamespace(request_id="rid", version="epoch:1"),
+        incarnation="epoch",
+        entry_transfer_id="entry-1",
+        target_tokens=1,
+    )
+    handler._prepare_cache(formal_refresh)
+    assert probe.live is cached_req
+    assert handler._cached_idle_seconds == 5.0
+
+    replacement = SimpleNamespace(
+        prefix=SimpleNamespace(request_id="rid", version="epoch:0"),
+        incarnation="epoch",
+        entry_transfer_id="entry-2",
+        target_tokens=0,
+    )
+    handler._prepare_cache(replacement)
+    assert handler._cached_entry_transfer_id == "entry-2"
+    assert handler._cached_idle_seconds == 5.0
+    assert [event[0] for event in probe.events] == [
+        "register",
+        "retire",
+        "register",
+    ]
 
 
 def test_sidecar_idle_ttl_starts_after_long_handler_work(monkeypatch):

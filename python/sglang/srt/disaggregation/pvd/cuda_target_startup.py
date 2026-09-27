@@ -54,7 +54,7 @@ class CUDATargetServingComponents:
     binding: CUDADecodeSchedulerBinding
 
     def close_drained(self):
-        """Close an idle binding; the exact model pools remain process-owned."""
+        """Close an idle binding, or return False while canceled sidecar work drains."""
         self.driver._owner()
         if (
             self.scheduler.pvd_cuda_binding is not self.binding
@@ -69,11 +69,17 @@ class CUDATargetServingComponents:
             raise LifecycleError("CUDA target still active or ownership changed")
         try:
             self.driver.begin_shutdown()
+            prewarmer = getattr(self.driver, "cuda_prompt_prewarm", None)
+            if prewarmer is not None and prewarmer.pending:
+                # The ordinary Scheduler poll loop still owns this event loop.
+                # Let it drain the canceled Unix request without waiting here.
+                return False
             self.binding.close()
             self.workspace.close()
         except BaseException:
             _STARTUP_QUARANTINE.append(self)
             raise
+        return True
 
 
 def install_cuda_target_components(
