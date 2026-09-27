@@ -671,3 +671,75 @@ prediction and V search; it does not prove a long-context speed advantage or
 that every Scheduler poll produces a formal token. Measure those separately
 before enabling the opt-in by default. Preserve the seven pre-existing dirty
 files and local `.pvd-validation-*.bundle` artifacts when continuing work.
+
+## 12. 2026-09-28 same-GPU long-context and concurrent control
+
+Matched live controls now exist for the same-GPU path. On the 10.10.1.x
+CloudLab lease, P used Qwen2.5-7B TP2 and 512-token Prefill chunks on GPUs
+0/1; V used both GPUs, 32,768 pages per shard and an explicit 16,384-row
+exact-search threshold; D ran target and draft on **GPU1**, with GPU0 idle.
+The P/V services and Gateway route were kept fixed across each D-mode switch.
+D used context/max-total 18,432, 2 GiB staging, `mlx5_0`, and 128 greedy
+output tokens. PVD used M64/lead32/predict32, cooperative prediction, Prompt
+KV seeding and the checked-in
+`pvd_qwen_v100s_serving_limits_triton_m64_samegpu_16k.json` profile. The
+three-case 16k PVD run preceded the profile's cache-budget increase; it had
+a 1.5 GiB target-prefix budget. The successful two-request 8k run used the
+checked-in 3 GiB budget. The full-KV D control used the same D checkout base,
+model, context, staging and source/route, with predictive serving disabled.
+
+| Workload and matched input set | Same-GPU PVD | Full KV | First-code check |
+| --- | ---: | ---: | --- |
+| 3 sequential 15,875–16,019-token prompts, median request wall | 27.63 s | 19.42 s | 3/3 in each mode |
+| Same 16k set, median TTFT / Decode duration | 9.28 / 18.35 s | 8.18 / 11.24 s | 128 SSE events per request |
+| 4 roughly 8k prompts, two synchronized requests per wave, wave walls | 23.21 / 22.59 s | 16.28 / 16.24 s | 4/4 in each mode |
+| Same 8k set, total time for two waves | 45.79 s | 32.52 s | 128 SSE events per request |
+
+The input-set hashes matched between modes: 16k
+`3aa5529da7b91a18d13545ed58b299a55b95b8ee14e65492d66a156219d2973e`,
+8k `41c623d9d464abc27f9e8cb906cd9a7536a9202d6c5c0351550b1ce5b0d342e6`.
+Output hashes **differed** between modes; the first-code check is narrow and
+does not establish generation-quality parity. These are three sequential 16k
+cases and two 8k waves, not a broad throughput sweep. The 16k single-request
+PVD trace had early-32 inter-token p50 about 0.139 s and late-32 about
+0.043 s; full KV stayed near 0.084 s in both segments. The first PVD refresh
+waited about 1.1 s at M64. Same-GPU prediction work consumes time between
+formal forwards, while the pre-refresh PVD full-bank adapter remains costly;
+the measurements do not isolate those two costs per kernel. At the end of
+the successful paired run, D GPU1 used 24,670 MiB and GPU0 had no compute
+process. The current configuration has no speed advantage over full KV.
+
+The first paired 8k PVD attempt exposed a real multi-request bug: request B
+reached lead position 32 while A owned the sole private draft branch, and B
+was aborted with `CUDA prediction is active or quarantined`. Commit
+`514a88bc5` defers B's refresh with a deadline while B remains eligible for
+formal Decode. The next attempt exposed a separate capacity issue: the
+1.5 GiB target-prefix reservation held A's cache and B was aborted with
+`cooperative target capture requires reserved private prefix cache`.
+Commit `faf92fa73` evicts idle private target caches under pressure and
+raises this long-context profile's budget to 3 GiB. The final paired run
+returned four complete HTTP 200 streams with no D abort. Its trace directly
+shows B's prediction deferred at committed token 32 while A predicted at
+token 54, followed by a two-row formal target batch that committed A token
+55 and B token 33. Thus the second request continues formal Decode while
+waiting for the private branch; it may still wait at its own refresh
+boundary if its result is not ready.
+
+On V's independent Linux test checkout, the driver and target-probe suites
+passed **65 tests** after the behavior and fixture changes. Ruff E/F/I and
+format checks passed for the four touched Python files at `e1a942c90`.
+One unrelated pytest configuration warning (`asyncio_mode`) remained.
+The final style-only commit followed the 65-test run. Client JSON reports
+are `validation/logs/{samegpu_long16_3cases,full_long16_3cases,full_8k_pair4,samegpu_8k_cachefix_pair4}.json`
+on V. D timeline logs are `validation/logs/d-samegpu_long16.log` and
+`validation/logs/d-samegpu_8k_cachefix.log`. The final D serving checkout
+was `faf92fa73`; the local branch includes later fixture/style commits.
+
+All experiment service groups were stopped (P 104275, V 213228, D 201835,
+Gateway 218395). A final check found no listeners on the test ports and no
+GPU compute processes on any node. No Git push occurred. Next, profile the
+initial full-Prompt PVD attention adapter and its host metadata/fences, then
+measure a shorter same-GPU prediction horizon and a refreshed M value under
+matched 16k/8k workloads. Recheck retrieval recall and full output quality
+before treating first-code success as acceptance. Preserve the seven
+pre-existing dirty files and validation bundles.
