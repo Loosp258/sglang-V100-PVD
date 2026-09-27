@@ -125,17 +125,76 @@ class HttpShardClient(ShardClient):
         *,
         session: Optional[aiohttp.ClientSession] = None,
         timeout_seconds: float = 30.0,
+        background_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        if background_loop is not None and (
+            session is not None
+            or not isinstance(background_loop, asyncio.AbstractEventLoop)
+            or not background_loop.is_running()
+            or background_loop.is_closed()
+        ):
+            raise ValueError("background control RPC requires a running I/O loop")
+        if background_loop is not None:
+            try:
+                owner_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                owner_loop = None
+            if owner_loop is background_loop:
+                raise ValueError("control I/O loop must differ from owner loop")
         self.rank = rank
         self.base_url = base_url.rstrip("/")
         self._session = session
         self._owns_session = session is None
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         self._closed = False
+        self._background_loop = background_loop
+        self._background_inflight = set()
+        self._background_close_future = None
+
+    @staticmethod
+    async def _await_background(future):
+        wrapped = asyncio.wrap_future(future)
+        try:
+            return await asyncio.shield(wrapped)
+        except asyncio.CancelledError:
+            # A mutating RPC may have reached V. Wait for its real completion
+            # before its destination or client can be retired by the owner.
+            while not wrapped.done():
+                try:
+                    await asyncio.shield(wrapped)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                wrapped.result()
+            except BaseException:
+                pass
+            raise
 
     async def _request(self, method: str, path: str, payload=None) -> Mapping:
         if self._closed:
             raise CoordinatorError("V shard control client is closed")
+        if self._background_loop is None:
+            return await self._request_on_loop(method, path, payload)
+        if asyncio.get_running_loop() is self._background_loop:
+            raise CoordinatorError("control I/O loop must differ from owner loop")
+        if not self._background_loop.is_running():
+            raise CoordinatorError("V shard control I/O loop stopped")
+        coroutine = self._request_on_loop(method, path, payload)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, self._background_loop)
+        except BaseException:
+            coroutine.close()
+            raise
+        self._background_inflight.add(future)
+        try:
+            return await self._await_background(future)
+        finally:
+            if future.done():
+                self._background_inflight.discard(future)
+
+    async def _request_on_loop(self, method: str, path: str, payload=None) -> Mapping:
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         async with self._session.request(
@@ -282,6 +341,29 @@ class HttpShardClient(ShardClient):
 
     async def close(self) -> None:
         self._closed = True
+        if self._background_loop is not None:
+            if not self._background_loop.is_running():
+                raise CoordinatorError("V shard control I/O loop stopped before close")
+            pending = tuple(self._background_inflight)
+            for future in pending:
+                try:
+                    await self._await_background(future)
+                except Exception:
+                    pass  # The caller observes RPC failures; close drains I/O.
+                self._background_inflight.discard(future)
+            if self._session is not None and self._owns_session:
+                if self._background_close_future is None:
+                    coroutine = self._session.close()
+                    try:
+                        self._background_close_future = asyncio.run_coroutine_threadsafe(
+                            coroutine, self._background_loop
+                        )
+                    except BaseException:
+                        coroutine.close()
+                        raise
+                await self._await_background(self._background_close_future)
+            self._session = None
+            return
         if self._session is not None and self._owns_session:
             await self._session.close()
         self._session = None

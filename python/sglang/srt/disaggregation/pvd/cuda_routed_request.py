@@ -128,6 +128,7 @@ def assemble_routed_cuda_request(
     d_rails: Mapping[int, str] | None = None,
     d_endpoints: Mapping[int, str] | None = None,
     search_io_loop: asyncio.AbstractEventLoop | None = None,
+    delivery_io_loop: asyncio.AbstractEventLoop | None = None,
 ) -> CUDARoutedRequestAssembly:
     """Fail closed on mismatched Entry/layout/selected shard metadata.
 
@@ -248,7 +249,11 @@ def assemble_routed_cuda_request(
                 route.url,
                 **({"background_loop": search_io_loop} if search_io_loop else {}),
             )
-            control_clients[route.rank] = HttpShardClient(route.rank, route.url)
+            control_clients[route.rank] = HttpShardClient(
+                route.rank,
+                route.url,
+                **({"background_loop": delivery_io_loop} if delivery_io_loop else {}),
+            )
         routing = RoutedShardSearchClient(
             storage_layout=selected.manifest.layout,
             compute_layout=compute_layout,

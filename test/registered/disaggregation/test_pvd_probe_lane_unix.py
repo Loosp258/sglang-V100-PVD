@@ -200,9 +200,7 @@ def test_background_unix_exchange_finishes_while_owner_loop_is_paused(socket_dir
 def test_cancelled_background_exchange_drains_before_budget_refund(socket_dir):
     context = multiprocessing.get_context("spawn")
     entered, release = context.Event(), context.Event()
-    process, control = _start_child_server(
-        socket_dir, gates=(entered, release)
-    )
+    process, control = _start_child_server(socket_dir, gates=(entered, release))
     io_loop, io_thread = _start_background_loop()
     try:
         budget = TransferBudget(1 << 20, 1)

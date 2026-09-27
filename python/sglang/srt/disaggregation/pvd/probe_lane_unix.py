@@ -118,7 +118,9 @@ class ProbeLaneUnixClient:
             except RuntimeError:
                 owner_loop = None
             if owner_loop is background_loop:
-                raise ProbeLaneProtocolError("probe I/O loop must differ from owner loop")
+                raise ProbeLaneProtocolError(
+                    "probe I/O loop must differ from owner loop"
+                )
         self.expected_server_pid = expected_server_pid
         self.reply_budget = reply_budget
         self.background_loop = background_loop

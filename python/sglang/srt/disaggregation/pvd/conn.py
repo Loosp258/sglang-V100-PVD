@@ -712,6 +712,7 @@ class PVDKVManager:
             poll_interval_seconds=poll_interval_seconds,
             initial_import_pending=initial_import_pending,
             search_io_loop=search_io_loop,
+            delivery_io_loop=self.control.loop,
         )
 
     def client_for(self, req) -> PVDCoordinatorClient:
