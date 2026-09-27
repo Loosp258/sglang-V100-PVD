@@ -1213,7 +1213,7 @@ def test_long_sidecar_prefix_chunks_prefill_and_append_then_reuses_final_logits(
 def test_a_failed_long_cache_chunk_invalidates_and_retires_the_partial_prefill():
     class FailsOnSecondChunk(FakeExecutor):
         def forward(self, inputs):
-            if len(self.calls) == 1:
+            if len(self.calls) == 0:
                 self.calls.append(inputs)
                 return torch.zeros(self.vocab)
             self.calls.append(inputs)
