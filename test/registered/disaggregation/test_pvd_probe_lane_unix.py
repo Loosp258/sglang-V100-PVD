@@ -8,6 +8,7 @@ import socket
 import stat
 import struct
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -64,17 +65,27 @@ def server(
     )
 
 
-def client(tmp_path, *, server_pid=None, budget=None):
+def client(tmp_path, *, server_pid=None, budget=None, background_loop=None):
     return ProbeLaneUnixClient(
         private_dir(tmp_path),
         "probe.sock",
         expected_server_pid=os.getpid() if server_pid is None else server_pid,
         reply_budget=budget or TransferBudget(1 << 20, 4),
+        background_loop=background_loop,
     )
 
 
-def _child_server(directory, parent_pid, control):
+def _child_server(directory, parent_pid, control, delay, gates):
     async def run():
+        async def handler(bound):
+            if gates is not None:
+                entered, release = gates
+                entered.set()
+                await asyncio.to_thread(release.wait)
+            if delay:
+                await asyncio.sleep(delay)
+            return reply_for(bound)
+
         service = await ProbeLaneUnixServer(
             directory,
             "probe.sock",
@@ -82,7 +93,7 @@ def _child_server(directory, parent_pid, control):
             target_model_id="target-checkpoint",
             weights_sha256="a" * 64,
             tokenizer_sha256="b" * 64,
-            handler=reply_for,
+            handler=handler,
             reply_budget=TransferBudget(1 << 20, 4),
         ).start()
         try:
@@ -95,11 +106,11 @@ def _child_server(directory, parent_pid, control):
     asyncio.run(run())
 
 
-def _start_child_server(socket_dir):
+def _start_child_server(socket_dir, *, delay=0, gates=None):
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe()
     process = context.Process(
-        target=_child_server, args=(socket_dir, os.getpid(), child)
+        target=_child_server, args=(socket_dir, os.getpid(), child, delay, gates)
     )
     process.start()
     child.close()
@@ -123,6 +134,112 @@ def _stop_child_server(process, control):
         assert process.exitcode == 0
     finally:
         control.close()
+
+
+def _start_background_loop():
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(ready.set)
+        loop.run_forever()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert ready.wait(5)
+    return loop, thread
+
+
+def _stop_background_loop(loop, thread):
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    loop.close()
+
+
+def test_background_unix_exchange_finishes_while_owner_loop_is_paused(socket_dir):
+    process, control = _start_child_server(socket_dir, delay=0.05)
+    io_loop, io_thread = _start_background_loop()
+    try:
+        budget = TransferBudget(1 << 20, 1)
+        lane = client(
+            socket_dir,
+            server_pid=process.pid,
+            budget=budget,
+            background_loop=io_loop,
+        )
+
+        async def run():
+            async def exchange():
+                async with lane.request(ticket()) as rows:
+                    return tuple(row.layer for row in rows)
+
+            task = asyncio.create_task(exchange())
+            for _ in range(100):
+                if lane._background_inflight:
+                    break
+                await asyncio.sleep(0.001)
+            assert len(lane._background_inflight) == 1
+            future = next(iter(lane._background_inflight))
+            # Block the owner as a synchronous target Decode forward does.
+            assert future.result(timeout=5)
+            assert future.done()
+            assert not task.done()
+            assert budget.snapshot()["reservations"] == 1
+            assert await task == (0, 1)
+            assert budget.snapshot()["reservations"] == 0
+            assert not lane._background_inflight
+
+        asyncio.run(run())
+    finally:
+        _stop_background_loop(io_loop, io_thread)
+        _stop_child_server(process, control)
+
+
+def test_cancelled_background_exchange_drains_before_budget_refund(socket_dir):
+    context = multiprocessing.get_context("spawn")
+    entered, release = context.Event(), context.Event()
+    process, control = _start_child_server(
+        socket_dir, gates=(entered, release)
+    )
+    io_loop, io_thread = _start_background_loop()
+    try:
+        budget = TransferBudget(1 << 20, 1)
+        lane = client(
+            socket_dir,
+            server_pid=process.pid,
+            budget=budget,
+            background_loop=io_loop,
+        )
+
+        async def run():
+            async def exchange():
+                async with lane.request(ticket()):
+                    pass
+
+            task = asyncio.create_task(exchange())
+            for _ in range(100):
+                if lane._background_inflight:
+                    break
+                await asyncio.sleep(0.001)
+            assert len(lane._background_inflight) == 1
+            assert entered.wait(5)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert budget.snapshot()["reservations"] == 1
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert budget.snapshot()["reservations"] == 0
+            assert not lane._background_inflight
+
+        asyncio.run(run())
+    finally:
+        release.set()
+        _stop_background_loop(io_loop, io_thread)
+        _stop_child_server(process, control)
 
 
 def test_real_process_credentials_and_stale_pid_after_restart(socket_dir):

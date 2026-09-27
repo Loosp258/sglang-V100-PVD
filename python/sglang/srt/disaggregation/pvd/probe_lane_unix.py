@@ -93,15 +93,36 @@ async def _write_frame(writer: asyncio.StreamWriter, frame: bytes, *, limit: int
 
 class ProbeLaneUnixClient:
     def __init__(
-        self, directory, name, *, expected_server_pid: int, reply_budget: TransferBudget
+        self,
+        directory,
+        name,
+        *,
+        expected_server_pid: int,
+        reply_budget: TransferBudget,
+        background_loop: asyncio.AbstractEventLoop | None = None,
     ):
         self.path = _private_socket_path(directory, name)
         if type(expected_server_pid) is not int or expected_server_pid <= 0:
             raise ProbeLaneProtocolError("exact sidecar PID required")
         if not isinstance(reply_budget, TransferBudget):
             raise ProbeLaneProtocolError("explicit host Q reply budget required")
+        if background_loop is not None and (
+            not isinstance(background_loop, asyncio.AbstractEventLoop)
+            or not background_loop.is_running()
+            or background_loop.is_closed()
+        ):
+            raise ProbeLaneProtocolError("running probe I/O loop required")
+        if background_loop is not None:
+            try:
+                owner_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                owner_loop = None
+            if owner_loop is background_loop:
+                raise ProbeLaneProtocolError("probe I/O loop must differ from owner loop")
         self.expected_server_pid = expected_server_pid
         self.reply_budget = reply_budget
+        self.background_loop = background_loop
+        self._background_inflight = set()
 
     @asynccontextmanager
     async def request(self, ticket: ProbeLaneTicket):
@@ -110,9 +131,12 @@ class ProbeLaneUnixClient:
         The bound includes raw frame, slices, mutable decoding and cloned Q,
         plus fixed metadata overhead. Callers must not retain Q after exit.
         """
+        if self.background_loop is not None and (
+            asyncio.get_running_loop() is self.background_loop
+        ):
+            raise ProbeLaneProtocolError("probe I/O loop must differ from owner loop")
         frame = encode_ticket(ticket)
-        remaining = ticket.deadline_monotonic - time.monotonic()
-        if remaining <= 0:
+        if ticket.deadline_monotonic <= time.monotonic():
             raise ProbeLaneProtocolError("probe ticket expired before send")
         owner = f"pvd-probe-lane:{uuid.uuid4().hex}"
         self.reply_budget.reserve(
@@ -138,15 +162,57 @@ class ProbeLaneUnixClient:
                 except OSError:
                     pass
 
-        try:
+        async def timed_exchange():
+            remaining = ticket.deadline_monotonic - time.monotonic()
+            if remaining <= 0:
+                raise ProbeLaneProtocolError("probe ticket expired before send")
             try:
-                rows = await asyncio.wait_for(exchange(), timeout=remaining)
+                return await asyncio.wait_for(exchange(), timeout=remaining)
             except TimeoutError as exc:
                 raise ProbeLaneProtocolError("probe lane request timed out") from exc
             except (OSError, asyncio.IncompleteReadError) as exc:
                 raise ProbeLaneProtocolError(
                     "probe lane closed before complete reply"
                 ) from exc
+
+        try:
+            if self.background_loop is None:
+                rows = await timed_exchange()
+            else:
+                if not self.background_loop.is_running():
+                    raise ProbeLaneProtocolError("probe I/O loop stopped")
+                coroutine = timed_exchange()
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        coroutine, self.background_loop
+                    )
+                except BaseException:
+                    coroutine.close()
+                    raise
+                self._background_inflight.add(future)
+                wrapped = asyncio.wrap_future(future)
+                try:
+                    # The owner loop may pause for a synchronous Decode forward.
+                    # Keep the exchange and its host reply budget alive until the
+                    # actual I/O coroutine exits, including after cancellation.
+                    try:
+                        rows = await asyncio.shield(wrapped)
+                    except asyncio.CancelledError:
+                        while not wrapped.done():
+                            try:
+                                await asyncio.shield(wrapped)
+                            except asyncio.CancelledError:
+                                continue
+                            except Exception:
+                                break
+                        try:
+                            wrapped.result()
+                        except BaseException:
+                            pass
+                        raise
+                finally:
+                    if wrapped.done():
+                        self._background_inflight.discard(future)
             yield rows
         finally:
             self.reply_budget.release(owner)

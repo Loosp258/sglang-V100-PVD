@@ -260,6 +260,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 startup_timeout=sidecar_config.startup_timeout_seconds,
                 directory_parent=sidecar_config.directory_parent,
                 cuda_visible_devices=sidecar_config.cuda_visible_devices,
+                background_loop=manager.control.loop,
             )
 
         def prepare(_preflight):

@@ -96,6 +96,7 @@ def launch_probe_sidecar(
     directory_parent: str | Path | None = None,
     python_executable: str | Path = sys.executable,
     cuda_visible_devices: str | None = None,
+    background_loop=None,
 ) -> ProbeSidecarProcess:
     """Start a GPU0 sidecar with exact child identity and bounded startup wait.
 
@@ -232,6 +233,7 @@ def launch_probe_sidecar(
             "probe.sock",
             expected_server_pid=child.pid,
             reply_budget=reply_budget,
+            background_loop=background_loop,
         )
         logger.info("PVD probe sidecar ready pid=%d device=cuda:0", child.pid)
         return ProbeSidecarProcess(child, root, client, checkpoint, reader_thread)

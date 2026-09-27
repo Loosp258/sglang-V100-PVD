@@ -637,7 +637,7 @@ class CUDARefreshDriver:
                             or record.provisional_source is not None
                         ):
                             self._quarantine_receiver(record, exc)
-                            return
+                            return False
                     else:
                         if session is not None:
                             session.manager.decode_sessions.pop(session.key)
@@ -753,11 +753,13 @@ class CUDARefreshDriver:
                     n,
                     self._clock(),
                 )
+                return record.lane_client is not None
             except BaseException:
                 coroutine.close()
                 self._release_capture(record)
                 record.deadline = None
                 raise
+        return False
 
     def poll(self):
         self._owner()
@@ -799,10 +801,12 @@ class CUDARefreshDriver:
             finally:
                 self._pumping = False
         failures = []
+        launched_sidecar = False
 
         def advance():
+            nonlocal launched_sidecar
             try:
-                self._advance()
+                launched_sidecar = self._advance()
             except BaseException as exc:
                 failures.append(exc)
 
@@ -811,7 +815,10 @@ class CUDARefreshDriver:
             # Each turn is nonblocking: stop is already scheduled before
             # run_forever. Extra bounded turns let callbacks completed on the
             # control I/O loop be consumed before another target forward.
-            for _ in range(self._poll_turns):
+            for turn in range(self._poll_turns + 1):
+                if turn == self._poll_turns and not launched_sidecar:
+                    break
+                launched_sidecar = False
                 self._loop.call_soon(advance)
                 self._loop.call_soon(self._loop.stop)
                 self._loop.run_forever()

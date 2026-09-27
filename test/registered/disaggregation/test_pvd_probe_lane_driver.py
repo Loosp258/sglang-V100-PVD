@@ -3,6 +3,7 @@
 import asyncio
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -23,11 +24,23 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_cuda_prefetch_request import controller
 from test_pvd_cuda_refresh_driver import pump, req
 from test_pvd_cuda_sparse_delivery import case, complete
+from test_pvd_probe_lane_unix import _start_background_loop, _stop_background_loop
 
 
-@pytest.mark.parametrize("ending", ["install", "cancel", "retract", "cancel_delivery"])
-def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, ending):
-    monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", "4")
+@pytest.mark.parametrize(
+    "ending,background",
+    [
+        ("install", False),
+        ("install", True),
+        ("cancel", False),
+        ("retract", False),
+        ("cancel_delivery", False),
+    ],
+)
+def test_driver_releases_target_arbiter_while_private_q_is_pending(
+    monkeypatch, ending, background
+):
+    monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", "1" if ending == "install" else "4")
     driver = CUDARefreshDriver(
         TargetExecutionArbiter(), max_requests=2, max_prefix_tokens=64
     )
@@ -41,11 +54,19 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, 
     with tempfile.TemporaryDirectory(prefix="pvd-lane-", dir="/tmp") as name:
         directory = Path(name)
         directory.chmod(0o700)
-        entered, release = asyncio.Event(), asyncio.Event()
+        entered, release = (
+            (threading.Event(), threading.Event())
+            if background
+            else (asyncio.Event(), asyncio.Event())
+        )
+        io_loop, io_thread = _start_background_loop() if background else (None, None)
 
         async def handler(bound):
             entered.set()
-            await release.wait()
+            if background:
+                await asyncio.to_thread(release.wait)
+            else:
+                await release.wait()
             queries = tuple(
                 QueryVectors(
                     bound.target_model_id,
@@ -82,12 +103,16 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, 
             handler=handler,
             reply_budget=server_budget,
         )
-        driver._loop.run_until_complete(service.start())
+        if background:
+            asyncio.run_coroutine_threadsafe(service.start(), io_loop).result(5)
+        else:
+            driver._loop.run_until_complete(service.start())
         lane = ProbeLaneUnixClient(
             directory,
             "probe.sock",
             expected_server_pid=os.getpid(),
             reply_budget=TransferBudget(1 << 20, 1),
+            background_loop=io_loop,
         )
         driver.register(
             request,
@@ -99,6 +124,20 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, 
         )
         try:
             request.output_ids.extend((3, 4, 5))
+            driver.poll()
+            # A newly scheduled private ticket begins in this same Scheduler
+            # poll, leaving its full lead window for sidecar computation.
+            assert lane.reply_budget.snapshot()["reservations"] == 1
+            if background:
+                assert entered.wait(5)
+                formal_forward = driver.arbiter.acquire()
+                try:
+                    release.set()
+                    future = next(iter(lane._background_inflight))
+                    assert future.result(timeout=5)
+                    assert not driver._records[request.rid].refresh.done()
+                finally:
+                    driver.arbiter.release(formal_forward)
             pump(driver, c, entered.is_set)
             assert not driver.arbiter.busy
             assert driver._records[request.rid].capture_lease is None
@@ -158,7 +197,11 @@ def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, 
             release.set()
             driver.begin_shutdown()
             pump(driver, c, lambda: not driver._records)
-            driver._loop.run_until_complete(service.aclose())
+            if background:
+                asyncio.run_coroutine_threadsafe(service.aclose(), io_loop).result(5)
+                _stop_background_loop(io_loop, io_thread)
+            else:
+                driver._loop.run_until_complete(service.aclose())
             driver._loop.run_until_complete(search.close())
             driver._loop.run_until_complete(ctx.__aexit__(None, None, None))
             driver.close_loop()
