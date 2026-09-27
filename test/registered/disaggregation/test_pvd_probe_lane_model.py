@@ -3,6 +3,7 @@
 import dataclasses
 import threading
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -121,3 +122,34 @@ def test_sidecar_prefix_cache_is_bound_to_incarnation_and_reaped():
     handler.close()
     assert len(probe.events) == 4
     assert draft_events[-1] == ("retire", None)
+
+
+def test_sidecar_idle_ttl_starts_after_long_handler_work(monkeypatch):
+    bound = ticket()
+    source = tuple(_full_query(bound, layer) for layer in bound.layers)
+    handler = ProbeLaneCUDAHandler.__new__(ProbeLaneCUDAHandler)
+    handler.owner_thread = threading.get_ident()
+    handler.weights_sha256 = bound.weights_sha256
+    handler.tokenizer_sha256 = bound.tokenizer_sha256
+    handler.device = torch.device("cpu")
+    handler.pipeline = SimpleNamespace(
+        probe_config=SimpleNamespace(
+            target_model_id=bound.target_model_id,
+            layers=bound.layers,
+            head_start=bound.head_start,
+            head_count=bound.head_count,
+        ),
+        query_branch=lambda prefix: nullcontext(source),
+    )
+    handler._cached_incarnation = ("request", "incarnation")
+    handler._cached_used_at = time.monotonic() - 10
+    handler._prepare_cache = lambda window: None
+    retired = []
+    handler.close = lambda: retired.append(True)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
+
+    before = time.monotonic()
+    verify_reply(bound, handler(bound))
+    assert handler._cached_used_at >= before
+    handler.retire_idle_cache()
+    assert not retired

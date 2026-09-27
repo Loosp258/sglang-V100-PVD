@@ -192,4 +192,7 @@ class ProbeLaneCUDAHandler:
                 raise
         # No branch-owned GPU tensor is reachable from the returned reply.
         verify_reply(ticket, reply)
+        # The idle TTL starts after the CUDA work finishes. A long first
+        # prefill can exceed the TTL while the handler is still busy.
+        self._cached_used_at = time.monotonic()
         return reply
