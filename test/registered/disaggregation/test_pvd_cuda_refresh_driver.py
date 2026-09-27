@@ -12,6 +12,9 @@ from sglang.srt.disaggregation.pvd.cpu_decode_lifecycle import (
     LifecycleError,
     TargetExecutionArbiter,
 )
+from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+    ConcurrentPredictionWorker,
+)
 from sglang.srt.disaggregation.pvd.cuda_prefetch_request import CUDAPrefetchRequest
 from sglang.srt.disaggregation.pvd.cuda_refresh_driver import (
     CUDARefreshDriver,
@@ -294,6 +297,45 @@ def test_cooperative_prediction_keeps_formal_turns_running_before_search(monkeyp
         driver.poll()
         assert record.refresh is not None and not driver.arbiter.busy
         assert captures == [(12,)]
+        pump(driver, c, lambda: record.refresh is None)
+        assert control.can_decode(4)
+
+
+def test_concurrent_prediction_uses_private_owner_and_releases_query_to_v(monkeypatch):
+    with synchronous(monkeypatch) as (driver, c, control, request, captures):
+        scheduler_thread = threading.get_ident()
+        executed = []
+
+        def predict(job, context):
+            executed.append((threading.get_ident(), job.committed_position))
+            context.raise_if_cancelled()
+            prefix = CommittedPrefix(
+                job.request_id,
+                job.prefix_tokens,
+                job.committed_position,
+                job.prefix_version,
+            )
+            return control.pipeline.probe.capture_committed(
+                prefix, (len(prefix.tokens),)
+            )
+
+        worker = ConcurrentPredictionWorker(predict)
+        driver._concurrent_prediction = True
+        driver.bind_prediction_worker(worker, threading.RLock())
+        request.output_ids.extend([3] * 3)  # n=3, boundary=4.
+        record = driver._records[request.rid]
+        # The scheduler's formal-priority poll still queues the separate
+        # worker, so the ready peer can start formal Decode immediately.
+        driver.poll(allow_prediction=False)
+        assert record.refresh is not None
+        assert record.concurrent_prediction_job is not None
+        assert not driver.arbiter.busy
+        assert control.can_decode(3)
+        pump(driver, c, lambda: record.ready)
+        assert executed == [(worker.owner_thread_id, 3)]
+        assert worker.owner_thread_id != scheduler_thread
+        assert captures == [(12,)]
+        request.output_ids.append(4)
         pump(driver, c, lambda: record.refresh is None)
         assert control.can_decode(4)
 

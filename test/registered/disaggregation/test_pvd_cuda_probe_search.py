@@ -15,6 +15,9 @@ from sglang.srt.disaggregation.pvd.cuda_probe_search import (
     CUDAProbeSearchSession,
 )
 from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
+from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+    PredictionCancelledError,
+)
 from sglang.srt.disaggregation.pvd.draft_hf import VocabularySignature
 from sglang.srt.disaggregation.pvd.prediction import (
     DraftPrediction,
@@ -72,9 +75,11 @@ def bridge(monkeypatch):
             yield
 
     monkeypatch.setattr(torch.random, "fork_rng", fork)
-    monkeypatch.setattr(
-        torch.cuda, "synchronize", lambda device: calls.append(str(device))
-    )
+    class FakeStream:
+        def synchronize(self):
+            calls.append("cuda:0")
+
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: FakeStream())
     return store, session, window, pipeline, route, budget, calls
 
 
@@ -223,6 +228,203 @@ def test_cuda_policy_capture_to_actual_http_preserves_rows_identity_and_rng(
     asyncio.run(run())
 
 
+def test_worker_capture_avoids_rng_fork_and_hands_off_bounded_cpu_queries(
+    monkeypatch,
+):
+    _, _, window, pipeline, _, _, _ = bridge(monkeypatch)
+    prefix = window.prefix
+    events = []
+
+    @contextmanager
+    def private_branch():
+        events.append("probe_enter")
+        try:
+            yield
+        finally:
+            events.append("probe_exit")
+
+    monkeypatch.setattr(pipeline.probe, "branch", private_branch)
+    pipeline.probe.device = "cpu"
+    pipeline.probe.head_dim = 8
+    monkeypatch.setattr(pipeline.probe, "_drain_private", lambda: events.append("fence"))
+
+    @contextmanager
+    def draft_branch():
+        events.append("draft_enter")
+        try:
+            yield
+        finally:
+            events.append("draft_exit")
+
+    monkeypatch.setattr(pipeline.provider, "branch", draft_branch)
+
+    def iter_predict(prefix, max_tokens):
+        assert max_tokens == pipeline.draft_config.predict_tokens
+        events.append("draft_step")
+        yield object()
+        return DraftPrediction(prefix.request_id, prefix.version, (31, 32))
+
+    monkeypatch.setattr(pipeline.provider, "iter_predict", iter_predict)
+
+    def capture(prefix, prediction):
+        assert not torch.is_grad_enabled()
+        assert prediction.tokens == (31, 32)
+        events.append("target_capture")
+        return (
+            QueryVectors(
+                vector_space=pipeline.probe_config.target_model_id,
+                version="worker-q",
+                layer=0,
+                head_start=0,
+                head_count=1,
+                positions=(4, 5),
+                valid_length=2,
+                vectors=torch.ones((2, 1, 8)),
+                prefix_version=prefix.version,
+                positional_encoding="rope_applied",
+                request_id=prefix.request_id,
+            ),
+        )
+
+    monkeypatch.setattr(pipeline.probe, "capture", capture)
+    monkeypatch.setattr(
+        torch.random,
+        "fork_rng",
+        lambda **kwargs: pytest.fail("worker capture must not fork RNG"),
+    )
+    # The worker path uses its private single-flight lock, not the scheduler
+    # pipeline's ordinary scope lock.
+    pipeline._lock.acquire()
+    try:
+        queries = pipeline.capture_for_worker(prefix, lambda: None)
+    finally:
+        pipeline._lock.release()
+    assert queries[0].vectors.device.type == "cpu"
+    assert pipeline._worker_cpu_queries
+    assert events == [
+        "draft_enter",
+        "draft_step",
+        "draft_exit",
+        "probe_enter",
+        "target_capture",
+        "fence",
+        "probe_exit",
+    ]
+    assert not pipeline._scope_active and not pipeline._worker_capture_lock.locked()
+
+
+def test_worker_capture_cancellation_closes_draft_before_probe(monkeypatch):
+    _, _, window, pipeline, _, _, _ = bridge(monkeypatch)
+    events, checks = [], []
+
+    @contextmanager
+    def draft_branch():
+        events.append("draft_enter")
+        try:
+            yield
+        finally:
+            events.append("draft_exit")
+
+    monkeypatch.setattr(pipeline.provider, "branch", draft_branch)
+
+    def iter_predict(prefix, max_tokens):
+        try:
+            yield object()
+            return DraftPrediction(prefix.request_id, prefix.version, (31, 32))
+        finally:
+            events.append("draft_closed")
+
+    monkeypatch.setattr(pipeline.provider, "iter_predict", iter_predict)
+
+    def cancel_after_one_step():
+        checks.append(True)
+        if len(checks) == 3:
+            raise PredictionCancelledError("cancelled at completed forward boundary")
+
+    monkeypatch.setattr(
+        pipeline.probe,
+        "capture",
+        lambda *args: pytest.fail("cancelled work must not start target capture"),
+    )
+    with pytest.raises(PredictionCancelledError, match="completed forward"):
+        pipeline.capture_for_worker(window.prefix, cancel_after_one_step)
+    assert events == ["draft_enter", "draft_closed", "draft_exit"]
+    assert not pipeline._scope_active and not pipeline._worker_capture_lock.locked()
+
+
+def test_committed_worker_capture_uses_cpu_handoff_without_rng_fork(monkeypatch):
+    _, _, window, pipeline, _, _, _ = bridge(monkeypatch)
+    pipeline.probe.device = "cpu"
+    pipeline.probe.head_dim = 8
+    monkeypatch.setattr(pipeline.probe, "_drain_private", lambda: None)
+
+    @contextmanager
+    def private_branch():
+        yield
+
+    monkeypatch.setattr(pipeline.probe, "branch", private_branch)
+
+    def capture_committed(prefix, positions):
+        assert positions == (2,)
+        return (
+            QueryVectors(
+                vector_space=pipeline.probe_config.target_model_id,
+                version="committed-worker-q",
+                layer=0,
+                head_start=0,
+                head_count=1,
+                positions=positions,
+                valid_length=1,
+                vectors=torch.ones((1, 1, 8)),
+                prefix_version=prefix.version,
+                positional_encoding="rope_applied",
+                request_id=prefix.request_id,
+            ),
+        )
+
+    monkeypatch.setattr(pipeline.probe, "capture_committed", capture_committed)
+    monkeypatch.setattr(
+        torch.random,
+        "fork_rng",
+        lambda **kwargs: pytest.fail("committed worker capture must not fork RNG"),
+    )
+    queries = pipeline.capture_committed_for_worker(window.prefix, (2,))
+    assert queries[0].vectors.device.type == "cpu"
+    assert pipeline._worker_cpu_queries
+
+
+def test_cuda_session_accepts_only_worker_marked_cpu_query_rows(monkeypatch):
+    _, session, window, pipeline, route, _, calls = bridge(monkeypatch)
+    monkeypatch.setattr(
+        session,
+        "_query_device",
+        CUDAProbeSearchSession._query_device.__get__(session),
+    )
+    query = QueryVectors(
+        vector_space=pipeline.probe_config.target_model_id,
+        version="worker-cpu-q",
+        layer=0,
+        head_start=0,
+        head_count=1,
+        positions=(5,),
+        valid_length=1,
+        vectors=torch.ones((1, 1, 8)),
+        prefix_version=window.prefix.version,
+        positional_encoding="rope_applied",
+        request_id=window.prefix.request_id,
+    )
+    pipeline._worker_cpu_queries = True
+    prepared = session.prepare_from_queries(
+        window,
+        pipeline,
+        (query,),
+        routes=(route,),
+        head_mapping=QueryHeadMapping(1, 1),
+    )
+    assert prepared.queries[0].rows == ((1.0,) * 8,)
+    assert "cuda:0" not in calls
+
+
 def test_budget_refuses_before_draft_probe_or_copy(monkeypatch):
     _, session, window, pipeline, route, _, calls = bridge(monkeypatch)
     session.copy_budget = TransferBudget(1, 1)
@@ -247,11 +449,13 @@ def test_copy_unknown_retains_source_destination_and_reservation(monkeypatch):
         probe=SimpleNamespace(quarantine_query_copy=lambda: quarantined.append(True))
     )
 
-    def fail(device):
-        assert device == torch.device("cuda:0")
-        raise RuntimeError("copy completion unknown")
+    class BrokenStream:
+        def synchronize(self):
+            raise RuntimeError("copy completion unknown")
 
-    monkeypatch.setattr(torch.cuda, "synchronize", fail)
+    monkeypatch.setattr(
+        torch.cuda, "current_stream", lambda device: BrokenStream()
+    )
     with pytest.raises(RuntimeError, match="completion unknown"):
         with session._prepare_scope((route,), window):
             session._query_rows(source, (1,), 0, pipeline)
@@ -295,7 +499,7 @@ def test_cuda_query_copy_respects_nonzero_query_head_start(monkeypatch):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device unavailable")
 def test_cuda_query_copy_pinned_batch_matches_source_and_budget(monkeypatch):
-    original = torch.cuda.synchronize
+    original = torch.cuda.current_stream
     _, session, window, _, route, budget, _ = bridge(monkeypatch)
     routes = tuple(replace(route, query_head=head) for head in range(3))
     source = torch.arange(48, dtype=torch.float16, device="cuda:0").reshape(2, 3, 8)
@@ -303,11 +507,18 @@ def test_cuda_query_copy_pinned_batch_matches_source_and_budget(monkeypatch):
     pipeline = SimpleNamespace(probe_config=SimpleNamespace(head_start=0))
     synchronizations = []
 
-    def fence(device):
-        synchronizations.append(device)
-        original(device)
+    class RecordingStream:
+        def __init__(self, stream):
+            self.stream = stream
 
-    monkeypatch.setattr(torch.cuda, "synchronize", fence)
+        def synchronize(self):
+            synchronizations.append(torch.device("cuda:0"))
+            self.stream.synchronize()
+
+    def current_stream(device):
+        return RecordingStream(original(device))
+
+    monkeypatch.setattr(torch.cuda, "current_stream", current_stream)
     with session._prepare_scope(routes, window):
         for head in range(3):
             assert session._query_rows(source, (1,), head, pipeline) == (

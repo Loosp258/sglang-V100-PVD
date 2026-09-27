@@ -388,6 +388,40 @@ def test_ready_subset_keeps_canonical_requests_and_refreshes_latest_tokens(monke
         assert batch.input_ids.tolist() == [5, 7]
 
 
+def test_private_prediction_pauses_only_its_request(monkeypatch):
+    with setup(monkeypatch) as t:
+        predicting = t.c.request
+        peer = NS(
+            rid="peer",
+            output_ids=[6],
+            is_retracted=False,
+            finished=lambda: False,
+        )
+        batch = Batch([predicting, peer])
+        active = NS(
+            stopping=False,
+            quarantined=False,
+            concurrent_prediction_job=object(),
+            controller=NS(can_decode=lambda _: True),
+        )
+        other = NS(
+            stopping=False,
+            quarantined=False,
+            controller=NS(can_decode=lambda _: True),
+        )
+        t.binding._record = lambda req: active if req is predicting else other
+        t.b.driver._observe = lambda _: 0
+
+        view = t.binding.select_ready_batch(batch)
+        assert view.reqs == [peer]
+        assert batch.reqs == [predicting, peer]
+        peer.output_ids.append(7)
+        assert t.binding.select_ready_batch(batch).input_ids.tolist() == [7]
+
+        active.concurrent_prediction_job = None
+        assert t.binding.select_ready_batch(batch) is batch
+
+
 def test_capacity_aborts_once_and_waits_for_both_closes(monkeypatch):
     with setup(monkeypatch) as t:
         batch = Batch([t.c.request])

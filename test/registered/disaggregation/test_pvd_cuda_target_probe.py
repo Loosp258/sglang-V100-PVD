@@ -458,6 +458,25 @@ def test_busy_target_does_not_charge_or_allocate(monkeypatch):
     c.lock.release()
 
 
+def test_private_drain_fences_only_its_current_stream(monkeypatch):
+    c = environment(monkeypatch)
+    calls = []
+
+    class Stream:
+        def synchronize(self):
+            calls.append(True)
+
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: Stream())
+    monkeypatch.setattr(
+        c.probe,
+        "_drain_private",
+        CUDALlamaTargetProbe._drain_private.__get__(c.probe),
+    )
+    c.probe._drain_private()
+    assert calls == [True]
+    assert c.probe.snapshot()["completion_policy"] == "current_stream_synchronize"
+
+
 def test_capacity_refusal_returns_target_lock(monkeypatch):
     c = environment(monkeypatch)
     c.probe.budget = TransferBudget(1, 1)

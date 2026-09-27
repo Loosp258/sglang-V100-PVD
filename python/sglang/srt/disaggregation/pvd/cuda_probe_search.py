@@ -9,8 +9,12 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import replace
 
 import torch
+from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+    PredictionCancelledError,
+)
 from sglang.srt.disaggregation.pvd.cuda_target_probe import CUDALlamaTargetProbe
 from sglang.srt.disaggregation.pvd.draft_forward_adapter import DraftForwardAdapter
 from sglang.srt.disaggregation.pvd.draft_runner_sglang import SGLangDraftRunnerFactory
@@ -76,6 +80,9 @@ class CUDAPredictionPipeline(PredictionPipeline):
         )
         self._scope_active = False
         self._quarantined = False
+        self._worker_capture_lock = threading.Lock()
+        self._worker_copy_retained = None
+        self._worker_cpu_queries = False
 
     @contextmanager
     def _scope(self):
@@ -263,6 +270,156 @@ class CUDAPredictionPipeline(PredictionPipeline):
             )
             yield queries
 
+    def capture_for_worker(self, prefix, cancel_requested):
+        """Run draft and target capture on the bound worker thread, without RNG fork."""
+        self.probe._require_main_thread()
+        if not callable(cancel_requested):
+            raise PredictionConfigError("worker cancellation callback required")
+        if not isinstance(prefix, CommittedPrefix):
+            raise PredictionConfigError("immutable committed prefix required")
+        if (
+            self._scope_active
+            or self._quarantined
+            or self.probe._quarantined
+            or self.provider.degraded
+        ):
+            raise PredictionConfigError("CUDA prediction is active or quarantined")
+        if not self._worker_capture_lock.acquire(blocking=False):
+            raise PredictionConfigError("worker prediction capture is busy")
+        self._scope_active = True
+        steps = None
+        try:
+            cancel_requested()
+            with self.provider.branch():
+                steps = self.provider.iter_predict(
+                    prefix, self.draft_config.predict_tokens
+                )
+                try:
+                    while True:
+                        cancel_requested()
+                        try:
+                            next(steps)
+                        except StopIteration as completed:
+                            prediction = completed.value
+                            break
+                        cancel_requested()
+                finally:
+                    if steps is not None:
+                        steps.close()
+
+            if (
+                not isinstance(prediction, DraftPrediction)
+                or prediction.request_id != prefix.request_id
+                or prediction.prefix_version != prefix.version
+                or len(prediction.tokens) > self.draft_config.predict_tokens
+            ):
+                raise PredictionConfigError(
+                    "draft returned a foreign or oversized branch"
+                )
+            cancel_requested()
+            with self.probe.branch(), torch.inference_mode():
+                queries = self.probe.capture(prefix, prediction)
+                allowed = range(
+                    len(prefix.tokens), len(prefix.tokens) + len(prediction.tokens)
+                )
+                return self._copy_worker_queries_to_cpu(prefix, queries, allowed)
+        except PredictionCancelledError:
+            raise
+        finally:
+            self._scope_active = False
+            self._quarantined |= self.probe._quarantined or self.provider.degraded
+            if not self._quarantined:
+                self._worker_capture_lock.release()
+
+    def capture_committed_for_worker(self, prefix, positions):
+        """Capture authoritative committed Q without a cross-thread RNG context."""
+        self.probe._require_main_thread()
+        if (
+            not isinstance(prefix, CommittedPrefix)
+            or not isinstance(positions, tuple)
+            or not 1 <= len(positions) <= 64
+            or any(
+                type(position) is not int or not 0 <= position < len(prefix.tokens)
+                for position in positions
+            )
+            or tuple(sorted(set(positions))) != positions
+        ):
+            raise PredictionConfigError(
+                "committed query positions must be inside the prefix"
+            )
+        if (
+            self._scope_active
+            or self._quarantined
+            or self.probe._quarantined
+            or self.provider.degraded
+        ):
+            raise PredictionConfigError("CUDA prediction is active or quarantined")
+        if not self._worker_capture_lock.acquire(blocking=False):
+            raise PredictionConfigError("worker prediction capture is busy")
+        self._scope_active = True
+        try:
+            with self.probe.branch(), torch.inference_mode():
+                queries = self.probe.capture_committed(prefix, positions)
+                return self._copy_worker_queries_to_cpu(prefix, queries, positions)
+        finally:
+            self._scope_active = False
+            self._quarantined |= self.probe._quarantined or self.provider.degraded
+            if not self._quarantined:
+                self._worker_capture_lock.release()
+
+    def _copy_worker_queries_to_cpu(self, prefix, queries, allowed_positions):
+        """Copy a bounded result off the private probe before its lease closes."""
+        allowed_positions = tuple(allowed_positions)
+        validated = self._validate_queries(prefix, queries, allowed_positions)
+        probe = self.probe
+        max_bytes = (
+            len(allowed_positions)
+            * len(self.probe_config.layers)
+            * self.probe_config.head_count
+            * probe.head_dim
+            * 4
+        )
+        copied, retained, copied_bytes = [], [validated], 0
+        self._worker_copy_retained = retained
+        try:
+            for query in validated:
+                tensor = query.vectors
+                if (
+                    query.positions != allowed_positions
+                    or query.valid_length != len(allowed_positions)
+                    or not isinstance(tensor, torch.Tensor)
+                    or tensor.device != torch.device(probe.device)
+                    or tensor.dtype not in (torch.float16, torch.float32)
+                    or tuple(tensor.shape)
+                    != (
+                        len(allowed_positions),
+                        self.probe_config.head_count,
+                        probe.head_dim,
+                    )
+                ):
+                    raise PredictionConfigError(
+                        "worker query tensor is outside the admitted CUDA shape"
+                    )
+                copied_bytes += tensor.numel() * 4
+                if copied_bytes > max_bytes:
+                    raise PredictionConfigError(
+                        "worker host query copy exceeds its admitted byte bound"
+                    )
+                host = tensor.detach().to(device="cpu", non_blocking=False)
+                retained.append(host)
+                copied.append(replace(query, vectors=host))
+            # Keep the CUDA sources and host destinations alive until every
+            # transfer on this worker stream has completed. The probe branch
+            # still owns its reservation and execution lease here.
+            probe._drain_private()
+        except BaseException:
+            if probe._active and getattr(probe, "_execution_held", False):
+                probe.quarantine_query_copy()
+            raise
+        self._worker_copy_retained = None
+        self._worker_cpu_queries = True
+        return tuple(copied)
+
 
 class CUDAProbeSearchSession(ProbeSearchSession):
     """CPU session identity/version checks plus explicitly owned CUDA copies.
@@ -292,20 +449,25 @@ class CUDAProbeSearchSession(ProbeSearchSession):
         self._copy_unknown = False
         self._copy_heads = ()
         self._copy_cache = None
+        self._worker_cpu_queries = False
 
     def _validate_pipeline(self, pipeline):
         if not isinstance(pipeline, CUDAPredictionPipeline) or (
             torch.device(pipeline.probe.device) != self.device
         ):
             raise PredictionConfigError("matching CUDA prediction pipeline required")
+        worker_cpu_queries = getattr(pipeline, "_worker_cpu_queries", False)
+        if type(worker_cpu_queries) is not bool:
+            raise PredictionConfigError("worker query placement marker is invalid")
+        self._worker_cpu_queries = worker_cpu_queries
         if self._copy_unknown:
             raise PredictionConfigError("query copy is quarantined")
 
     def _query_device(self, tensor):
-        return tensor.device == self.device and tensor.dtype in (
-            torch.float16,
-            torch.float32,
-        )
+        supported_dtype = tensor.dtype in (torch.float16, torch.float32)
+        if self._worker_cpu_queries:
+            return tensor.device.type == "cpu" and supported_dtype
+        return tensor.device == self.device and supported_dtype
 
     @contextmanager
     def _prepare_scope(self, routes, window):
@@ -369,9 +531,11 @@ class CUDAProbeSearchSession(ProbeSearchSession):
                         )
             except BaseException:
                 # An unsuccessful submission may still have enqueued work.
-                self._finish_copy(pipeline)
+                if tensor.device.type == "cuda":
+                    self._finish_copy(pipeline)
                 raise
-            self._finish_copy(pipeline)
+            if tensor.device.type == "cuda":
+                self._finish_copy(pipeline)
             converted = host.to(dtype=torch.float32)
             self._copy_retained.append(converted)
             if not torch.isfinite(converted).all():
@@ -386,7 +550,7 @@ class CUDAProbeSearchSession(ProbeSearchSession):
 
     def _finish_copy(self, pipeline):
         try:
-            torch.cuda.synchronize(self.device)
+            torch.cuda.current_stream(self.device).synchronize()
         except BaseException:
             self._copy_unknown = True
             pipeline.probe.quarantine_query_copy()

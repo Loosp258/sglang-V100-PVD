@@ -101,7 +101,7 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
             )
 
     def _synchronize(self):
-        torch.cuda.synchronize(self.device)
+        torch.cuda.current_stream(self.device).synchronize()
 
     def _drain_stage(self, source, copies, owner):
         try:
@@ -186,5 +186,5 @@ class CUDASparseWorkingSet(_SparseWorkingSetCore):
             "next_boundary": None if self._next is None else self._next.boundary,
             "retained_stage": self._retained_stage is not None,
             "source_guard_held": self._retained_source_guard is not None,
-            "completion_policy": "device_synchronize",
+            "completion_policy": "current_stream_synchronize",
         }

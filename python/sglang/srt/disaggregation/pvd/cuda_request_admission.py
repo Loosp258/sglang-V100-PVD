@@ -168,7 +168,15 @@ def admit_received_cuda_request(
         or not isinstance(importer, CUDAPromptBootstrap)
         or not isinstance(pool_owner, ResourceGuard)
         or controller.group is not importer.group
-        or controller.pipeline._lock is not importer._lock
+        or (
+            controller.pipeline._lock is not importer._lock
+            and not (
+                driver._concurrent_prediction
+                and driver._prediction_worker is not None
+                and controller.pipeline._lock is driver._prediction_lock
+                and importer._lock is driver._execution_lock
+            )
+        )
         or not isinstance(clients, Mapping)
         or set(clients) != set(controller._routes)
         or not isinstance(pool_owner.value, CUDAModelPools)

@@ -391,6 +391,110 @@ def test_the_last_sequence_row_is_taken_from_a_two_dimensional_result():
     assert int(torch.argmax(logits).item()) == 7
 
 
+def test_cuda_drain_fences_only_the_adapter_current_stream(monkeypatch):
+    made = adapter(device="cuda:0")
+    owner = object()
+    made._pending_owners.append(owner)
+    calls = []
+
+    class Stream:
+        def synchronize(self):
+            calls.append("stream")
+
+    def current_stream(device):
+        assert device == torch.device("cuda:0")
+        return Stream()
+
+    monkeypatch.setattr(torch.cuda, "current_stream", current_stream)
+    made.drain()
+    assert calls == ["stream"]
+    assert not made._pending_owners
+
+
+def test_unknown_stream_completion_retains_adapter_owners(monkeypatch):
+    made = adapter(device="cuda:0")
+    owner = object()
+    made._pending_owners.append(owner)
+
+    class BrokenStream:
+        def synchronize(self):
+            raise RuntimeError("stream completion unknown")
+
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: BrokenStream())
+    with pytest.raises(DraftLifecycleError, match="completion unknown"):
+        made.drain()
+    assert made._pending_owners == [owner]
+    assert made._completion_error is not None
+
+
+def test_direct_raw_forward_is_narrowly_opt_in_and_skips_runner_wrapper(monkeypatch):
+    qwen2_type = type("Qwen2ForCausalLM", (), {})
+    qwen2_type.__module__ = "sglang.srt.models.qwen2"
+
+    class RawRunner(RealShapedModelRunner):
+        def __init__(self):
+            super().__init__()
+            self.device = "cuda"
+            self.model = qwen2_type()
+            self.tp_size = self.pp_size = 1
+            self.graph_runner = None
+            self.enable_elastic_ep = False
+            self.is_draft_worker = True
+            self.raw_calls = []
+
+        def forward(self, batch):
+            raise AssertionError("the wrapped ModelRunner.forward must be skipped")
+
+        def _forward_raw(self, batch, skip_attn_backend_init, pp_proxy_tensors):
+            self.raw_calls.append((batch, skip_attn_backend_init, pp_proxy_tensors))
+            return ModelRunnerOutputDouble(
+                LogitsProcessorOutputDouble(torch.ones(1, self.vocab))
+            )
+
+    class Stream:
+        def synchronize(self):
+            pass
+
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: Stream())
+    runner = RawRunner()
+    made = adapter(
+        runner,
+        architecture="Qwen2ForCausalLM",
+        device="cuda:0",
+        direct_raw_forward=True,
+    )
+    assert made.forward(extend_inputs()).shape == (runner.vocab,)
+    assert len(runner.raw_calls) == 1
+    assert runner.raw_calls[0][1:] == (False, None)
+
+
+def test_direct_raw_forward_refuses_non_qwen2_and_multirank_runners():
+    with pytest.raises(DraftCapabilityError, match="direct raw forward"):
+        adapter(
+            RealShapedModelRunner(),
+            architecture="LlamaForCausalLM",
+            direct_raw_forward=True,
+        )
+
+    qwen2_type = type("Qwen2ForCausalLM", (), {})
+    qwen2_type.__module__ = "sglang.srt.models.qwen2"
+    runner = RealShapedModelRunner()
+    runner.device = "cuda"
+    runner.model = qwen2_type()
+    runner.tp_size = 2
+    runner.pp_size = 1
+    runner.graph_runner = None
+    runner.enable_elastic_ep = False
+    runner.is_draft_worker = True
+    with pytest.raises(DraftCapabilityError, match="direct raw forward"):
+        adapter(
+            runner,
+            architecture="Qwen2ForCausalLM",
+            device="cuda:0",
+            direct_raw_forward=True,
+        )
+
+
 def test_an_empty_logits_matrix_is_refused():
     class Empty(RealShapedModelRunner):
         def forward(self, batch):

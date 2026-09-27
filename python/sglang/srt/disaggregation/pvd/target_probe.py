@@ -331,6 +331,9 @@ class _LlamaTargetProbeCore(TargetProbe):
         self._quarantined = False
         self._private_state = None
         self._private_failure = None
+        # The ordinary path remains Scheduler-thread-owned. An explicitly
+        # isolated CUDA prediction worker may claim this probe before use.
+        self._owner_thread_id = threading.get_ident()
 
     def _validate_placement(self, runner):
         if runner.device != "cpu" or any(
@@ -345,12 +348,32 @@ class _LlamaTargetProbeCore(TargetProbe):
     def _drain_private(self):
         """CPU is synchronous; CUDA subclass fences before any pool cleanup."""
 
-    @staticmethod
-    def _require_main_thread():
-        if threading.current_thread() is not threading.main_thread():
-            raise PredictionConfigError(
-                "offline probe is main-thread-only; target must be quiescent"
-            )
+    def _require_main_thread(self):
+        owner = getattr(self, "_owner_thread_id", threading.main_thread().ident)
+        if threading.get_ident() != owner:
+            raise PredictionConfigError("target probe used outside its owner thread")
+
+    def bind_private_worker(self, thread_id: int) -> None:
+        """Move an unused CUDA probe to one dedicated prediction thread.
+
+        The concurrent path must use its own private prefix. A live request
+        cache or a Prompt seed source would otherwise cross the formal Req's
+        release boundary without a request-row lease.
+        """
+        self._require_main_thread()
+        if (
+            not str(self.device).startswith("cuda:")
+            or type(thread_id) is not int
+            or thread_id <= 0
+            or self._active
+            or self._quarantined
+            or self._private_state is not None
+            or self._prompt_seed_source is not None
+            or self.prefix_budget is not None
+            or self._prefix_caches
+        ):
+            raise PredictionConfigError("only an idle uncached CUDA probe can move")
+        self._owner_thread_id = thread_id
 
     @contextmanager
     def branch(self):

@@ -310,7 +310,7 @@ class CUDASparseAttentionWorkspace:
             raise SparsePayloadError("attention workspace closed or quarantined")
 
     def _synchronize(self):
-        torch.cuda.synchronize(self.device)
+        torch.cuda.current_stream(self.device).synchronize()
 
     def begin_deferred_forward(self):
         self._check()
@@ -459,7 +459,7 @@ class CUDASparseAttentionWorkspace:
                 raise SparsePayloadError("attention output must own distinct storage")
             # The whole-model consumer can already hold this exact bank's
             # reader for the complete forward. Re-entering read() for every
-            # layer adds another device-wide completion fence per layer. The
+            # layer adds another completion fence per layer. The
             # borrowed path is valid only while that same bank has a live
             # reader; this workspace still fences each layer's own kernels
             # before releasing its tensor and budget owners.
@@ -695,7 +695,7 @@ class CUDASparseAttentionWorkspace:
             "explicit_scratch_bytes": 0
             if self._scratch is None
             else self._scratch.numel() * 4,
-            "completion_policy": "device_synchronize",
+            "completion_policy": "current_stream_synchronize",
             "attention_impl": self.attention_impl,
             "sdpa_reserved_bytes": (
                 sdpa_workspace_bytes(

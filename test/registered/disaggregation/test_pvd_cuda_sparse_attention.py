@@ -27,6 +27,20 @@ from test_pvd_cuda_rank_install import complete, setup
 from test_pvd_cuda_working_set import options, packed_payloads
 
 
+def test_workspace_completion_fences_only_its_current_stream(monkeypatch):
+    workspace = object.__new__(attention.CUDASparseAttentionWorkspace)
+    workspace.device = torch.device("cuda:0")
+    calls = []
+
+    class Stream:
+        def synchronize(self):
+            calls.append(True)
+
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: Stream())
+    workspace._synchronize()
+    assert calls == [True]
+
+
 def buffers(decode_tokens=0, q_heads=4, *, dtype=torch.float32, device="cpu"):
     generator = torch.Generator().manual_seed(731)
     q = torch.randn(q_heads, 3, generator=generator).to(device=device, dtype=dtype)

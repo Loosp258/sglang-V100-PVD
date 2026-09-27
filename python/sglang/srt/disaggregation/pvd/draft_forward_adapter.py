@@ -151,6 +151,7 @@ class DraftForwardAdapter(ModelExecutor):
         device: Optional[Any] = None,
         forward_batch_factory: Optional[Any] = None,
         transient_bytes_bound: Optional[int] = None,
+        direct_raw_forward: bool = False,
     ) -> None:
         if not architecture or not attention_backend:
             raise DraftCapabilityError(
@@ -167,6 +168,27 @@ class DraftForwardAdapter(ModelExecutor):
         self._runner = model_runner
         self._architecture = str(architecture)
         self._attention_backend = str(attention_backend)
+        if type(direct_raw_forward) is not bool:
+            raise DraftCapabilityError("direct_raw_forward must be a bool")
+        if direct_raw_forward:
+            runner_model = getattr(model_runner, "model", None)
+            model_type = type(runner_model)
+            if (
+                self._architecture != "Qwen2ForCausalLM"
+                or model_type.__name__ != "Qwen2ForCausalLM"
+                or model_type.__module__ != "sglang.srt.models.qwen2"
+                or getattr(model_runner, "device", None) != "cuda"
+                or getattr(model_runner, "tp_size", None) != 1
+                or getattr(model_runner, "pp_size", None) != 1
+                or getattr(model_runner, "graph_runner", None) is not None
+                or getattr(model_runner, "enable_elastic_ep", True)
+                or not getattr(model_runner, "is_draft_worker", False)
+            ):
+                raise DraftCapabilityError(
+                    "direct raw forward is limited to draft TP1/PP1 dense Qwen2 "
+                    "without CUDA graphs or elastic EP"
+                )
+        self._direct_raw_forward = direct_raw_forward
         self._bytes_per_token = bytes_per_token
         self._device = torch.device(
             device if device is not None else getattr(model_runner, "device", "cpu")
@@ -340,7 +362,7 @@ class DraftForwardAdapter(ModelExecutor):
             raise DraftLifecycleError(self._completion_error)
         try:
             if self._device.type == "cuda":
-                torch.cuda.synchronize(self._device)
+                torch.cuda.current_stream(self._device).synchronize()
         except BaseException as exc:
             self._completion_error = (
                 f"draft completion unknown; adapter quarantined: {exc}"
@@ -373,12 +395,20 @@ class DraftForwardAdapter(ModelExecutor):
         }
         try:
             with torch.inference_mode():
-                output = self._runner.forward(batch)
+                if self._direct_raw_forward:
+                    if getattr(batch.forward_mode, "is_cuda_graph", lambda: False)():
+                        raise DraftLifecycleError(
+                            "direct raw forward refuses CUDA graph batches"
+                        )
+                    output = self._runner._forward_raw(batch, False, None)
+                else:
+                    output = self._runner.forward(batch)
             self._pending_owners.append(output)
             return self._last_position_logits(output)
         finally:
-            # Conservative device-wide fence: no stream-overlap claim. It also
-            # covers a runner that launched work and then raised before output.
+            # It also covers a runner that launched work before raising. Only
+            # work submitted to the current worker stream may be retired here;
+            # other streams retain their independent progress.
             self.drain()
 
     @staticmethod

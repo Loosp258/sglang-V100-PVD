@@ -302,6 +302,10 @@ class CUDADecodeSchedulerBinding:
                 raise LifecycleError("unregistered request in CUDA running batch")
             if record.stopping or record.quarantined:
                 continue
+            if getattr(record, "concurrent_prediction_job", None) is not None:
+                # A waits for its private query; the remaining ready rows keep
+                # their ordinary formal Decode batch on this same GPU.
+                continue
             if record.controller.can_decode(self.driver._observe(record)):
                 ready_indices.append(index)
 

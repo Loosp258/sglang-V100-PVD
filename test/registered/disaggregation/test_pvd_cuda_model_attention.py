@@ -605,7 +605,18 @@ def test_cold_model_stage_profile_fences_and_ignores_other_layers(monkeypatch, c
     monkeypatch.setattr(
         attention_module, "time", SimpleNamespace(perf_counter=lambda: next(times))
     )
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: fences.append(device))
+    class Stream:
+        def __init__(self, device):
+            self.device = device
+
+        def synchronize(self):
+            fences.append(self.device)
+
+    monkeypatch.setattr(
+        torch.cuda,
+        "current_stream",
+        lambda device: Stream(torch.device(device)),
+    )
     caplog.set_level("INFO")
     profile = _ColdModelStageProfile(torch.device("cuda:0"))
     profile.mark(0, "qkv_projection")
@@ -615,6 +626,24 @@ def test_cold_model_stage_profile_fences_and_ignores_other_layers(monkeypatch, c
     assert "layer=0 stage=qkv_projection elapsed_seconds=0.250000" in caplog.text
     assert "layer=1 stage=layer_begin elapsed_seconds=0.250000" in caplog.text
     assert "layer=2" not in caplog.text
+
+
+def test_model_consumer_completion_fences_only_its_current_stream(monkeypatch):
+    from sglang.srt.disaggregation.pvd.cuda_model_attention import (
+        CUDAModelSparseConsumer,
+    )
+
+    calls = []
+
+    class Stream:
+        def synchronize(self):
+            calls.append(True)
+
+    consumer = object.__new__(CUDAModelSparseConsumer)
+    consumer.device = torch.device("cuda:0")
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device: Stream())
+    consumer._synchronize()
+    assert calls == [True]
 
 
 def test_real_cuda_model_smoke_is_blocked_not_passed_without_device(

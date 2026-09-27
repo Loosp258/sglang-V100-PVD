@@ -99,6 +99,7 @@ class _Request:
     prediction_last_poll: int = -1
     prediction_future: object = None
     prediction_cache_identity: tuple[str, str] | None = None
+    concurrent_prediction_job: object = None
     draft_cache_identity: tuple[str, str] | None = None
     draft_warm_prefix: CommittedPrefix | None = None
     draft_warm_steps: object = None
@@ -126,6 +127,11 @@ class CUDARefreshDriver:
         self._clock = clock
         self._records = {}
         self._execution_lock = None
+        self._prediction_lock = None
+        self._prediction_worker = None
+        self._concurrent_prediction = (
+            os.environ.get("PVD_CONCURRENT_PREDICTION", "0") == "1"
+        )
         self._closing = self._pumping = False
         self._source_quarantine = None
         self._last_poll_at = None
@@ -159,6 +165,21 @@ class CUDARefreshDriver:
             not self._owns_loop and current is not self._loop
         ):
             raise LifecycleError("CUDA refresh must use its original owner loop")
+
+    def bind_prediction_worker(self, worker, prediction_lock):
+        """Attach the isolated prediction owner before admitting requests."""
+        self._owner()
+        if (
+            not self._concurrent_prediction
+            or self._records
+            or self._prediction_worker is not None
+            or prediction_lock is self._execution_lock
+            or not callable(getattr(worker, "submit", None))
+            or not callable(getattr(worker, "poll", None))
+        ):
+            raise LifecycleError("isolated prediction worker binding is invalid")
+        self._prediction_worker = worker
+        self._prediction_lock = prediction_lock
 
     def _tokens(self, values):
         if (
@@ -339,7 +360,14 @@ class CUDARefreshDriver:
             ):
                 raise LifecycleError("exact live D Req-arrival prewarm owner required")
         lock = controller.pipeline._lock
-        if self._execution_lock is not None and lock is not self._execution_lock:
+        if self._concurrent_prediction:
+            if (
+                self._prediction_worker is None
+                or lock is not self._prediction_lock
+                or lock is self._execution_lock
+            ):
+                raise LifecycleError("isolated prediction lock/worker mismatch")
+        elif self._execution_lock is not None and lock is not self._execution_lock:
             raise LifecycleError("all requests must share the target execution lock")
         probe = controller.pipeline.probe
         if lane_client is None and getattr(probe, "prefix_budget", None) is not None:
@@ -367,7 +395,8 @@ class CUDARefreshDriver:
             and callable(warm_iterator)
             else None
         )
-        self._execution_lock = lock
+        if not self._concurrent_prediction:
+            self._execution_lock = lock
         self._records[req.rid] = _Request(
             req,
             controller,
@@ -759,6 +788,11 @@ class CUDARefreshDriver:
             finally:
                 record.draft_warm_steps = None
         record.draft_warm_prefix = None
+        if record.concurrent_prediction_job is not None:
+            # Cancellation is a request to the private owner. Its CUDA work
+            # and buffers remain owned by that worker until its own fence.
+            record.concurrent_prediction_job.cancel()
+            record.concurrent_prediction_job = None
         if record.prediction_steps is not None:
             try:
                 record.prediction_steps.close()
@@ -909,8 +943,26 @@ class CUDARefreshDriver:
     def _advance(self, *, allow_prediction=True):
         due = None
         launched_sidecar = False
+        if self._prediction_worker is not None:
+            # Only the Scheduler thread completes asyncio query futures.
+            self._prediction_worker.poll()
         for key, record in tuple(self._records.items()):
             self._finish_prewarm(record)
+            job = record.concurrent_prediction_job
+            if job is not None and job.done() and not record.stopping:
+                record.concurrent_prediction_job = None
+                try:
+                    queries = job.result()
+                    future = record.prediction_future
+                    if future is None or future.done():
+                        raise LifecycleError("concurrent query future is stale")
+                    future.set_result(queries)
+                    record.prediction_future = None
+                    record.prediction_prefix = None
+                    record.prediction_boundary = None
+                except BaseException as exc:
+                    record.error = exc
+                    self._stop(record, "concurrent CUDA prediction failed")
             if record.quarantined:
                 continue
             if record.provisional and not record.stopping:
@@ -1158,8 +1210,13 @@ class CUDARefreshDriver:
         if due is not None and not self._closing and not self.arbiter.busy:
             record, n, boundary = due
             try:
+                if self._concurrent_prediction and self._prediction_worker.busy:
+                    # A second branch waits without blocking ready formal
+                    # requests. The worker keeps canceled jobs until fenced.
+                    return launched_sidecar
                 if (
                     self._cooperative_prediction
+                    and not self._concurrent_prediction
                     and record.lane_client is None
                     and (
                         record.draft_warm_prefix is not None
@@ -1184,8 +1241,13 @@ class CUDARefreshDriver:
                     return launched_sidecar
                 cooperative = (
                     self._cooperative_prediction
+                    and not self._concurrent_prediction
                     and record.lane_client is None
                     and n < boundary
+                )
+                concurrent = (
+                    self._concurrent_prediction
+                    and record.lane_client is None
                 )
                 identity = record.controller.group.coordinator.identity
                 prefix = CommittedPrefix(
@@ -1197,11 +1259,12 @@ class CUDARefreshDriver:
                 if record.deadline is None:
                     record.deadline = self._clock() + record.timeout
                 future = None
-                if cooperative:
+                if cooperative or concurrent:
                     future = self._loop.create_future()
                     record.prediction_prefix = prefix
                     record.prediction_boundary = boundary
                     record.prediction_future = future
+                if cooperative:
                     provider = getattr(record.controller.pipeline, "provider", None)
                     factory = getattr(provider, "factory", None)
                     if getattr(factory, "prefix_cache_enabled", False):
@@ -1219,7 +1282,7 @@ class CUDARefreshDriver:
                     clients=record.clients,
                     execution_scope=(
                         None
-                        if cooperative or record.lane_client is not None
+                        if cooperative or concurrent or record.lane_client is not None
                         else lambda: self._capture(record)
                     ),
                     index_ready_wait_seconds=record.timeout,
@@ -1236,6 +1299,23 @@ class CUDARefreshDriver:
                     coroutine.close()
                     self._release_capture(record)
                     raise
+                if concurrent:
+                    from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+                        PredictionJob,
+                    )
+
+                    record.concurrent_prediction_job = self._prediction_worker.submit(
+                        PredictionJob(
+                            request_id=record.req.rid,
+                            incarnation=identity[1],
+                            prefix_version=prefix.version,
+                            committed_position=n,
+                            prefix_tokens=prefix.tokens,
+                            committed_query_positions=(
+                                (len(prefix.tokens) - 1,) if n == boundary else ()
+                            ),
+                        )
+                    )
                 if cooperative and allow_prediction:
                     queries = self._prediction_step(record)
                     if queries is not None:
@@ -1253,7 +1333,12 @@ class CUDARefreshDriver:
                     prefix.committed_position,
                     self._clock(),
                 )
-                return launched_sidecar or cooperative or record.lane_client is not None
+                return (
+                    launched_sidecar
+                    or cooperative
+                    or concurrent
+                    or record.lane_client is not None
+                )
             except Exception as exc:
                 record.error = exc
                 self._stop(record, "same-GPU prediction or CUDA refresh failed")
@@ -1358,6 +1443,9 @@ class CUDARefreshDriver:
             raise LifecycleError(
                 "all CUDA controller owners must drain before loop close"
             )
+        if self._prediction_worker is not None:
+            self._prediction_worker.close(timeout=30.0)
+            self._prediction_worker.poll()
         if self._owns_loop and not self._loop.is_closed():
             if asyncio.all_tasks(self._loop):
                 raise LifecycleError("pending owner-loop tasks prevent close")

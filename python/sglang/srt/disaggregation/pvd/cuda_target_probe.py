@@ -51,7 +51,7 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
         self.dtype = next(iter(dtypes))
 
     def _drain_private(self):
-        torch.cuda.synchronize(self.device)
+        torch.cuda.current_stream(self.device).synchronize()
 
     @contextmanager
     def _cooperative_step(self):
@@ -131,7 +131,7 @@ class CUDALlamaTargetProbe(_LlamaTargetProbeCore):
             "prefix_cache_budget": None
             if self.prefix_budget is None
             else self.prefix_budget.snapshot(),
-            "completion_policy": "device_synchronize",
+            "completion_policy": "current_stream_synchronize",
         }
 
     def retire_cached_request(self, req):

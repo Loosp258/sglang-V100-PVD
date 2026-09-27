@@ -3,7 +3,8 @@
 The whole-forward scope owns the target execution lock, allocator lease and
 Prompt readers. The caller must use that lock for EVERY target/probe forward
 and tie the pool guard to actual allocator retirement (not a no-op callback).
-Device synchronization is a correctness baseline, not compute/network overlap.
+Completion fences cover the current stream; Prompt readers keep their separate
+completion protocol.
 """
 
 import logging
@@ -43,7 +44,7 @@ class _ColdModelStageProfile:
     def mark(self, layer, stage):
         if layer not in (0, 1):
             return
-        torch.cuda.synchronize(self.device)
+        torch.cuda.current_stream(self.device).synchronize()
         now = time.perf_counter()
         logger.info(
             "PVD cold target stage: layer=%d stage=%s elapsed_seconds=%.6f",
@@ -155,7 +156,7 @@ class CUDAModelSparseConsumer:
         self.workspace._check()
 
     def _synchronize(self):
-        torch.cuda.synchronize(self.device)
+        torch.cuda.current_stream(self.device).synchronize()
 
     @contextmanager
     def bind(self, bindings, *, pool_owner):

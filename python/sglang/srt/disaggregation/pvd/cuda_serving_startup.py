@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import torch
@@ -137,6 +138,25 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     ):
         raise LifecycleError("explicit PVD retrieval and draft budgets required")
     model = runner.model.config
+    concurrent_prediction = os.environ.get("PVD_CONCURRENT_PREDICTION") == "1"
+    if concurrent_prediction:
+        from sglang.srt.models.qwen2 import Qwen2ForCausalLM
+
+        if (
+            type(runner.model) is not Qwen2ForCausalLM
+            or runner.tp_size != 1
+            or runner.pp_size != 1
+            or not args.disable_cuda_graph
+            or not args.disable_overlap_schedule
+            or limits.probe_sidecar is not None
+            or limits.probe_prefix_cache_bytes
+            or limits.draft_prefix_cache_bytes
+            or os.environ.get("PVD_SEED_PROBE_FROM_PROMPT_KV") == "1"
+        ):
+            raise LifecycleError(
+                "concurrent prediction requires TP1 graph-disabled Qwen2, "
+                "no sidecar and no Prompt/draft prefix cache or Prompt seed"
+            )
     head_mapping = QueryHeadMapping(
         model.num_attention_heads, runner.model_config.get_total_num_kv_heads()
     )
@@ -144,6 +164,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     kv_pool = runner.token_to_kv_pool_allocator.get_kvcache()
     kv_dtype = kv_pool.get_key_buffer(0).dtype
     lock = threading.RLock()
+    prediction_lock = threading.RLock() if concurrent_prediction else lock
     bank_budget = TransferBudget(
         args.pvd_retrieval_bank_budget_bytes, limits.bank_max_reservations
     )
@@ -171,7 +192,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     route_queue = CUDARouteDiscoveryQueue(
         manager, max_inflight=scheduler.max_running_requests
     )
-    prediction = target = sidecar = None
+    prediction = target = sidecar = prediction_worker = None
     try:
         prediction = build_cuda_prediction_startup(
             runner,
@@ -180,7 +201,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             draft_mem_fraction_static=args.pvd_draft_mem_fraction_static,
             target_model_id=args.pvd_retrieval_vector_space,
             placement=placement,
-            execution_lock=lock,
+            execution_lock=prediction_lock,
             max_prefix_tokens=(
                 limits.max_sequence_tokens - args.pvd_draft_predict_tokens
             ),
@@ -190,7 +211,29 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             target_scratch_budget=scratch_budget,
             prefix_budget=prefix_budget,
             draft_prefix_cache_budget=draft_prefix_cache_budget,
+            concurrent_prediction=concurrent_prediction,
         )
+        if concurrent_prediction:
+            from sglang.srt.eplb.expert_distribution import (
+                _ExpertDistributionRecorderNoop,
+                get_global_expert_distribution_recorder,
+            )
+            from sglang.srt.state_capturer.indexer_topk import (
+                get_global_indexer_capturer,
+            )
+            from sglang.srt.state_capturer.routed_experts import (
+                get_global_experts_capturer,
+            )
+
+            if (
+                type(get_global_expert_distribution_recorder())
+                is not _ExpertDistributionRecorderNoop
+                or get_global_indexer_capturer() is not None
+                or get_global_experts_capturer() is not None
+            ):
+                raise LifecycleError(
+                    "concurrent prediction requires disabled global model recorders"
+                )
         if prediction.target_scratch_budget is not scratch_budget:
             raise LifecycleError("prediction did not retain the shared target budget")
 
@@ -323,15 +366,50 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             route_queue=route_queue,
             prepare_cuda_admission=prepare,
         )
+        if concurrent_prediction:
+            from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
+                ConcurrentPredictionWorker,
+            )
+            from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
+
+            @contextmanager
+            def private_stream_context(stream):
+                with torch.cuda.device(device), torch.cuda.stream(stream):
+                    yield
+
+            def run_private_prediction(job, context):
+                prefix = CommittedPrefix(
+                    job.request_id,
+                    job.prefix_tokens,
+                    job.committed_position,
+                    job.prefix_version,
+                )
+                if job.committed_query_positions:
+                    return prediction.pipeline.capture_committed_for_worker(
+                        prefix, job.committed_query_positions
+                    )
+                return prediction.pipeline.capture_for_worker(
+                    prefix, context.raise_if_cancelled
+                )
+
+            prediction_worker = ConcurrentPredictionWorker(
+                run_private_prediction,
+                stream_factory=lambda: torch.cuda.Stream(device=device),
+                context_factory=private_stream_context,
+                completion_fence=lambda stream: stream.synchronize(),
+                max_prefix_tokens=limits.max_sequence_tokens,
+            )
+            prediction.pipeline.probe.bind_private_worker(
+                prediction_worker.owner_thread_id
+            )
+            target.driver.bind_prediction_worker(prediction_worker, prediction_lock)
         if (
             target.execution_lock is not lock
             or target.backend.consumer._lock is not lock
-            or prediction.pipeline.probe._execution_lock is not lock
+            or prediction.pipeline.probe._execution_lock is not prediction_lock
             or target.workspace._budget is not scratch_budget
         ):
-            raise LifecycleError(
-                "CUDA target and prediction do not share execution owners"
-            )
+            raise LifecycleError("CUDA target or prediction execution owner mismatch")
         installed = CUDAPredictiveServing(
             target,
             prediction,
@@ -361,6 +439,11 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
         scheduler.pvd_cuda_components = installed
         return installed
     except BaseException:
+        if prediction_worker is not None:
+            try:
+                prediction_worker.close(timeout=30.0)
+            except BaseException:
+                _STARTUP_QUARANTINE.append(prediction_worker)
         if sidecar is not None:
             try:
                 sidecar.close()

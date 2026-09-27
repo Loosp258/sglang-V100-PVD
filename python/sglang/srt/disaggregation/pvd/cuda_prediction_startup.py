@@ -118,6 +118,7 @@ def build_cuda_prediction_startup(
     target_scratch_budget: TransferBudget,
     prefix_budget: TransferBudget | None = None,
     draft_prefix_cache_budget: TransferBudget | None = None,
+    concurrent_prediction: bool = False,
     target_tokenizer: Any = None,
     draft_tokenizer: Any = None,
     tokenizer_loader: Callable[[str, str | None], Any] = _load_tokenizer,
@@ -135,6 +136,8 @@ def build_cuda_prediction_startup(
     """
     if not isinstance(execution_lock, _RLOCK_TYPE):
         raise PredictionConfigError("shared target execution RLock required")
+    if type(concurrent_prediction) is not bool:
+        raise PredictionConfigError("concurrent_prediction must be boolean")
     if (
         not isinstance(placement, DraftPlacement)
         or placement.max_concurrent_branches != 1
@@ -289,6 +292,7 @@ def build_cuda_prediction_startup(
             bytes_per_token=bytes_per_token,
             device=device,
             transient_bytes_bound=draft_transient_bytes_bound,
+            direct_raw_forward=concurrent_prediction,
         )
         factory = SGLangDraftRunnerFactory(
             adapter,
