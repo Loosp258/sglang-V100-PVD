@@ -820,6 +820,28 @@ Six synchronous `first_poll` calls still took **1.04–1.18 s**. This reduces
 copy-fence granularity without an established end-to-end speedup; the
 synchronous draft/target-Q execution remains the main performance gap.
 
+### 同请求首轮与次轮 Q probe / First versus second probe in one request
+
+同一 2095-token Prompt 允许输出 36 token，M16 在 D 时钟 10 与 26
+分别发起边界 16、32 刷新。目标 Q probe 首轮 **0.757 s**，
+第二轮（私有前缀缓存已有正式 KV）仅 **0.095 s**；对应的
+`first_poll` 为 **1.038/0.380 s**，draft 仍为
+**0.259/0.263 s**。首代码正确。该单请求不构成吞吐结论，
+但直接定位到首次把完整 Prompt 在 D 重新前向的冷成本。
+下一实现候选是从已验证的 D 完整 Prompt KV 初始化独立 probe
+缓存；必须保持源请求与目标缓存的身份、布局、生命周期、预算和
+CUDA 完成证明，不能借用 live KV 行作为可变私有缓存。
+
+For one 2095-token prompt producing 36 tokens, M16 initiated refreshes
+for boundaries 16 and 32 at D clocks 10 and 26. Target-Q probe time fell
+from **0.757 s** on the cold first round to **0.095 s** once the private
+prefix cache held committed KV; synchronous `first_poll` fell from
+**1.038 to 0.380 s**, while draft stayed at **0.259/0.263 s**. The first
+code was correct. This single request is not a throughput result, but it
+isolates the cold full-Prompt recomputation. A candidate next step is to
+seed the independently owned probe cache from D's verified full Prompt KV,
+with strict request/layout/lifetime/budget and CUDA-completion checks.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
