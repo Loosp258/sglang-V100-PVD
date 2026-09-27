@@ -12,7 +12,10 @@ from pvd_controlled_prefetch import ControlledFixture
 from sglang.srt.disaggregation.pvd.probe_lane_identity import (
     ProbeLaneCheckpointIdentity,
 )
-from sglang.srt.disaggregation.pvd.probe_lane_protocol import ProbeLaneReply
+from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
+    ProbeLaneProtocolError,
+    ProbeLaneReply,
+)
 from sglang.srt.disaggregation.pvd.probe_lane_unix import (
     ProbeLaneUnixClient,
     ProbeLaneUnixServer,
@@ -107,5 +110,67 @@ def test_private_q_lane_runs_existing_v_search_and_sparse_install(
     expected_source = "committed" if boundary_start else "predicted"
     assert any(
         f"query_source={expected_source} probe_source=private_lane" in record.message
+        for record in caplog.records
+    )
+
+
+def test_private_lane_capacity_failure_is_attributed_and_refunded(caplog):
+    caplog.set_level(
+        "WARNING", logger="sglang.srt.disaggregation.pvd.cpu_prefetch_request"
+    )
+
+    async def run():
+        fixture = ControlledFixture(*components())
+        prefix = fixture.refresh_prefix(3)
+        checkpoint = ProbeLaneCheckpointIdentity("a" * 64, "b" * 64, 100, 10)
+        with tempfile.TemporaryDirectory(prefix="pvd-lane-", dir="/tmp") as name:
+            directory = Path(name)
+            directory.chmod(0o700)
+            server_budget = TransferBudget(1, 1)
+            client_budget = TransferBudget(1 << 20, 1)
+
+            def forbidden(_ticket):
+                raise AssertionError("capacity refusal must precede the Q handler")
+
+            service = await ProbeLaneUnixServer(
+                directory,
+                "probe.sock",
+                expected_client_pid=os.getpid(),
+                target_model_id="target",
+                weights_sha256=checkpoint.weights_sha256,
+                tokenizer_sha256=checkpoint.tokenizer_sha256,
+                handler=forbidden,
+                reply_budget=server_budget,
+            ).start()
+            lane = ProbeLaneUnixClient(
+                directory,
+                "probe.sock",
+                expected_server_pid=os.getpid(),
+                reply_budget=client_budget,
+            )
+            try:
+                async with fixture.clients() as clients:
+                    with pytest.raises(ProbeLaneProtocolError, match="complete reply"):
+                        await fixture.request.refresh(
+                            prefix,
+                            query_positions=(len(prefix.tokens),),
+                            clients=clients,
+                            pack_source=fixture.pack_source,
+                            lane_client=lane,
+                            lane_checkpoint=checkpoint,
+                            lane_deadline_monotonic=time.monotonic() + 10,
+                        )
+                    assert fixture.packed_specs == []
+                    assert not fixture.request.can_decode(4)
+                    assert client_budget.snapshot()["reservations"] == 0
+                    assert server_budget.snapshot()["reservations"] == 0
+            finally:
+                await service.aclose()
+                fixture.close()
+
+    asyncio.run(run())
+    assert any(
+        "query_source=predicted probe_source=private_lane "
+        "error_type=ProbeLaneProtocolError" in record.message
         for record in caplog.records
     )

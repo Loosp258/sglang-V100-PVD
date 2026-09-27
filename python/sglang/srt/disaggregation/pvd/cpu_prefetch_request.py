@@ -280,7 +280,21 @@ class _PrefetchRequestCore:
                 time.perf_counter() - refresh_started,
             )
             return epoch  # ready-to-install only; clock has NOT advanced
-        except BaseException:
+        except BaseException as exc:
+            try:
+                logger.log(
+                    logging.INFO
+                    if isinstance(exc, asyncio.CancelledError)
+                    else logging.WARNING,
+                    "PVD refresh failed: request_id=%s query_source=%s "
+                    "probe_source=%s error_type=%s",
+                    prefix.request_id,
+                    query_source,
+                    "private_lane" if lane_client is not None else "inline",
+                    type(exc).__name__,
+                )
+            except Exception:
+                pass  # Diagnostics cannot change cancellation or ownership.
             self.cancel("probe/search/packing failed or was cancelled")
             raise
         finally:

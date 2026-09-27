@@ -25,9 +25,7 @@ from test_pvd_cuda_refresh_driver import pump, req
 from test_pvd_cuda_sparse_delivery import case, complete
 
 
-@pytest.mark.parametrize(
-    "ending", ["install", "cancel", "retract", "cancel_delivery"]
-)
+@pytest.mark.parametrize("ending", ["install", "cancel", "retract", "cancel_delivery"])
 def test_driver_releases_target_arbiter_while_private_q_is_pending(monkeypatch, ending):
     monkeypatch.setenv("PVD_REFRESH_POLL_TURNS", "4")
     driver = CUDARefreshDriver(
