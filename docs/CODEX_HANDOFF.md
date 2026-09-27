@@ -952,3 +952,51 @@ predictive D mode after the control. Next isolate the first-32 cache-warm
 cost, reduce the M64 refresh wait, and compare a shorter prediction budget
 with matched quality checks. Preserve the pre-existing dirty tracked files
 and validation bundles.
+
+## 16. 2026-09-28 clarified same-GPU concurrency requirement
+
+The user clarified that Scheduler interleaving is insufficient. When request A
+reaches its lead position, A's private draft and target-Q prediction work must
+run **physically concurrently on the same GPU** with formal Decode of ready
+requests B/C. A may resume formal Decode after its query has been sent to V;
+V search and KV delivery should overlap that remaining formal window. The
+acceptance test must show overlapping prediction and formal CUDA kernel
+intervals in a GPU trace, plus B/C output progress and measured latency cost.
+The existing 16k and concurrent controls in sections 12–15 do not meet this
+requirement: they prove only interleaving across Scheduler turns.
+
+Commit `7a0051334` is one prerequisite, not a concurrent serving path. It
+migrates `model_executor.forward_context` from a process-global current value
+to `ContextVar`, preserving nested scope behavior; a two-thread isolation test
+was added. The local Windows installation lacks pytest and cannot import the
+Linux-only SGLang runtime, so a standalone importlib two-thread check and
+compileall passed. The new pytest file has not yet been run in a Linux checkout.
+No production PVD concurrency or performance claim follows from this commit.
+
+The current physical serialization is explicit. Formal
+`CUDARankBatchExecutor.run` and the private `CUDAPredictionPipeline` use the
+same reentrant target execution lock; the driver advances private generators
+only after formal turns. `DraftForwardAdapter.drain`,
+`CUDALlamaTargetProbe._drain_private`, `CUDAModelSparseConsumer._synchronize`,
+the sparse attention workspace, and CUDA query-copy retirement all use
+device-wide synchronization. Moving a generator to a thread or adding a CUDA
+stream while these remain would not establish overlap.
+
+The safe redesign must give the private branch one worker thread and stream
+from creation through cleanup, keep formal and private attention/KV state
+separate, replace device-wide completion with proven stream/event ownership,
+and deliver only completed bounded Q data back to the Scheduler. Prompt-KV
+seeding currently pins the pool object but does not itself pin specific
+request rows against release/reuse; either establish exact row lifetime or
+disable seed in the concurrent mode. Gate the first implementation to the
+validated TP1, graph-disabled, dense Qwen2.5 subset and audit global model
+hooks before running shared target weights on two threads. Do not merely
+remove locks; cancellation, retraction, bank installation and unknown CUDA
+completion must keep their existing fail-closed behavior.
+
+On the CloudLab D node, GPU1 had an existing `sglang::scheduler` process using
+about 17,986 MiB when inspected; GPU0 was idle. A short synthetic V100S
+two-stream probe on GPU0 showed approximately 47.94 ms of overlap between two
+48 ms `torch.cuda._sleep` kernels. This establishes device capability for
+concurrent kernels, not that two real model forwards can safely or profitably
+overlap. The probe did not touch GPU1 or modify serving code.
