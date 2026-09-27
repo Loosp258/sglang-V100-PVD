@@ -97,6 +97,7 @@ class _Request:
     prediction_prefix: CommittedPrefix | None = None
     prediction_boundary: int | None = None
     prediction_last_poll: int = -1
+    prediction_future: object = None
 
 
 class CUDARefreshDriver:
@@ -665,6 +666,10 @@ class CUDARefreshDriver:
                 record.prediction_steps = None
                 record.prediction_prefix = None
                 record.prediction_boundary = None
+        if record.prediction_future is not None:
+            if not record.prediction_future.done():
+                record.prediction_future.cancel()
+            record.prediction_future = None
         prewarmer = getattr(self, "cuda_prompt_prewarm", None)
         if prewarmer is not None:
             prewarmer.cancel(record.req)
@@ -888,6 +893,19 @@ class CUDARefreshDriver:
                             and self._clock() >= record.deadline
                         ):
                             raise LifecycleError("CUDA refresh timeout")
+                        if record.prediction_steps is not None:
+                            if record.prediction_boundary != boundary:
+                                raise LifecycleError("prediction boundary changed")
+                            queries = self._prediction_step(record)
+                            if queries is not None:
+                                future = record.prediction_future
+                                if future is None or future.done():
+                                    raise LifecycleError("prediction future is stale")
+                                future.set_result(queries)
+                                record.prediction_future = None
+                                record.prediction_prefix = None
+                                record.prediction_boundary = None
+                                launched_sidecar = True
                         if record.prewarm_state in ("armed", "append_armed"):
                             if (
                                 record.lane_client is not None
@@ -995,61 +1013,36 @@ class CUDARefreshDriver:
         if due is not None and not self._closing and not self.arbiter.busy:
             record, n, boundary = due
             try:
-                queries = None
-                if (
+                cooperative = (
                     self._cooperative_prediction
                     and record.lane_client is None
                     and n < boundary
-                ):
-                    if record.prediction_steps is None:
-                        record.prediction_prefix = CommittedPrefix(
-                            record.req.rid,
-                            record.prompt + record.outputs,
-                            n,
-                            f"{record.controller.group.coordinator.identity[1]}:{n}",
-                        )
-                        record.prediction_boundary = boundary
-                        record.prediction_steps = (
-                            record.controller.pipeline.iter_queries(
-                                record.prediction_prefix
-                            )
-                        )
-                        record.deadline = self._clock() + record.timeout
-                    if record.prediction_boundary != boundary:
-                        raise LifecycleError("prediction boundary changed")
-                    queries = self._prediction_step(record)
-                    if queries is None:
-                        return launched_sidecar
-                elif record.prediction_steps is not None:
-                    # A may reach its boundary while the private branch is
-                    # still running. Keep advancing that snapshot; formal
-                    # Decode peers are scheduled independently.
-                    if record.prediction_boundary != boundary:
-                        raise LifecycleError("prediction boundary changed")
-                    queries = self._prediction_step(record)
-                    if queries is None:
-                        return launched_sidecar
-                prefix = record.prediction_prefix
-                if prefix is None:
-                    prefix = CommittedPrefix(
-                        record.req.rid,
-                        record.prompt + record.outputs,
-                        n,
-                        f"{record.controller.group.coordinator.identity[1]}:{n}",
+                )
+                prefix = CommittedPrefix(
+                    record.req.rid,
+                    record.prompt + record.outputs,
+                    n,
+                    f"{record.controller.group.coordinator.identity[1]}:{n}",
+                )
+                record.deadline = self._clock() + record.timeout
+                future = None
+                if cooperative:
+                    future = self._loop.create_future()
+                    record.prediction_prefix = prefix
+                    record.prediction_boundary = boundary
+                    record.prediction_future = future
+                    record.prediction_steps = record.controller.pipeline.iter_queries(
+                        prefix
                     )
-                if record.deadline is None:
-                    record.deadline = self._clock() + record.timeout
-                if queries is None and record.lane_client is None:
+                elif record.lane_client is None:
                     record.capture_lease = self.arbiter.acquire()
                 coroutine = record.controller.refresh(
                     prefix,
-                    query_positions=(
-                        len(prefix.tokens) + boundary - prefix.committed_position - 1,
-                    ),
+                    query_positions=(len(prefix.tokens) + boundary - n - 1,),
                     clients=record.clients,
                     execution_scope=(
                         None
-                        if queries is not None or record.lane_client is not None
+                        if cooperative or record.lane_client is not None
                         else lambda: self._capture(record)
                     ),
                     index_ready_wait_seconds=record.timeout,
@@ -1058,7 +1051,7 @@ class CUDARefreshDriver:
                     lane_deadline_monotonic=(
                         record.deadline if record.lane_client is not None else None
                     ),
-                    prepared_queries=queries,
+                    query_future=future,
                 )
                 try:
                     record.refresh = self._loop.create_task(coroutine)
@@ -1066,8 +1059,14 @@ class CUDARefreshDriver:
                     coroutine.close()
                     self._release_capture(record)
                     raise
-                record.prediction_prefix = None
-                record.prediction_boundary = None
+                if cooperative:
+                    queries = self._prediction_step(record)
+                    if queries is not None:
+                        future.set_result(queries)
+                        record.prediction_steps = None
+                        record.prediction_future = None
+                        record.prediction_prefix = None
+                        record.prediction_boundary = None
                 _timeline(
                     "PVD timeline event=refresh_scheduled request_id=%s "
                     "boundary=%d committed_tokens=%d t=%.6f",
@@ -1076,7 +1075,7 @@ class CUDARefreshDriver:
                     prefix.committed_position,
                     self._clock(),
                 )
-                return launched_sidecar or record.lane_client is not None
+                return launched_sidecar or cooperative or record.lane_client is not None
             except Exception as exc:
                 record.error = exc
                 self._stop(record, "same-GPU prediction or CUDA refresh failed")

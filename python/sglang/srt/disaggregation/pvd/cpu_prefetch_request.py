@@ -114,6 +114,7 @@ class _PrefetchRequestCore:
         lane_checkpoint=None,
         lane_deadline_monotonic=None,
         prepared_queries=None,
+        query_future=None,
     ):
         """Predict ahead of boundary; a first start AT it uses committed Q.
 
@@ -132,6 +133,14 @@ class _PrefetchRequestCore:
             lane_client is not None or execution_scope is not None
         ):
             raise ValueError("completed local queries exclude lane and inline capture")
+        if query_future is not None and (
+            prepared_queries is not None
+            or lane_client is not None
+            or execution_scope is not None
+            or not isinstance(query_future, asyncio.Future)
+            or query_future.get_loop() is not asyncio.get_running_loop()
+        ):
+            raise ValueError("owner-loop query future excludes other probe sources")
         if lane_client is not None:
             from sglang.srt.disaggregation.pvd.probe_lane_identity import (
                 ProbeLaneCheckpointIdentity,
@@ -188,7 +197,19 @@ class _PrefetchRequestCore:
                 start = len(routes)
                 routes.extend(self._routes[rank])
                 partitions[rank] = tuple(range(start, len(routes)))
-            if prepared_queries is not None:
+            if query_future is not None:
+                # Begin the refresh at the authoritative prefix BEFORE Decode
+                # advances. Private same-GPU prediction can then yield across
+                # formal turns without regressing the monotonic refresh clock.
+                queries = await query_future
+                prepared = self._session.prepare_from_queries(
+                    window,
+                    self.pipeline,
+                    queries,
+                    routes=tuple(routes),
+                    head_mapping=self.mapping,
+                )
+            elif prepared_queries is not None:
                 prepared = self._session.prepare_from_queries(
                     window,
                     self.pipeline,
@@ -286,7 +307,7 @@ class _PrefetchRequestCore:
                 query_source,
                 (
                     "precomputed"
-                    if prepared_queries is not None
+                    if prepared_queries is not None or query_future is not None
                     else "private_lane" if lane_client is not None else "inline"
                 ),
                 len(self._routes),
@@ -309,7 +330,7 @@ class _PrefetchRequestCore:
                     query_source,
                     (
                         "precomputed"
-                        if prepared_queries is not None
+                        if prepared_queries is not None or query_future is not None
                         else "private_lane" if lane_client is not None else "inline"
                     ),
                     type(exc).__name__,

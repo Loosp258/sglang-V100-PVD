@@ -278,14 +278,15 @@ def test_cooperative_prediction_keeps_formal_turns_running_before_search(monkeyp
         record = driver._records[request.rid]
         driver.poll()
         assert steps == [("draft", 3)]
-        assert record.refresh is None and not driver.arbiter.busy
+        assert record.refresh is not None and not driver.arbiter.busy
 
         # The formal result processor can commit A's next token, while the
         # same scheduler may also commit B/C, between private GPU forwards.
         request.output_ids.append(4)
+        assert not control.can_decode(4)
         driver.poll()
         assert steps == [("draft", 3), ("probe", 3)]
-        assert record.refresh is None and not driver.arbiter.busy
+        assert record.refresh is not None and not driver.arbiter.busy
         driver.poll()
         assert record.refresh is not None and not driver.arbiter.busy
         assert captures == [(12,)]
