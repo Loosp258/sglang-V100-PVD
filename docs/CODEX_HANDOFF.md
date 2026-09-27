@@ -882,3 +882,73 @@ labels. Logs remain on the remote lease: PVD D
 remotely; only aggregates were copied into this handoff. Next isolate the
 PVD full-bank adapter overhead and reduce prediction-induced gaps, then
 repeat multiple cases and verify exact output parity and retrieval recall.
+
+## 15. 2026-09-28 formal Decode priority and same-GPU draft cache
+
+The Scheduler now polls refresh I/O before selecting a formal batch but does
+not run a private prediction forward until after that formal batch. The
+cooperative driver permits at most one private forward per poll. Its optional
+`PVD_COOPERATIVE_DRAFT_PREWARM=1` prepares the draft Prompt prefix one chunk
+per formal turn while the request is alone; admission of a second request
+cancels this single-slot warmup. A pending warmup defers refresh prediction
+until the private branch closes. Draft cache ownership is bound to the exact
+request incarnation and retired conditionally on that identity. The same-GPU
+startup path now passes the configured `draft_prefix_cache_bytes` budget into
+the draft factory; this missing connection previously left caching disabled.
+Candidate tokens remain private and never enter formal output IDs or KV rows.
+
+Focused Linux tests of serving startup, refresh driver and cooperative draft
+passed (63 tests); Ruff E/F/I and format checks passed for the changed startup
+and focused driver/test files. `git diff --check` and local compileall passed.
+The first remote 16k attempts failed because the old P validation checkout
+lacked the repository's chunked TorchNative Prefill query compaction. Without
+it, P's SDPA path repeatedly grew temporary tensors and OOMed around 16k.
+Copying the already existing backend implementation into that isolated
+validation checkout restored normal Prefill speed. Two failed attempts also
+left V entries occupying its contiguous pages; V/D were restarted before the
+usable comparison. These failed requests are excluded from timings below.
+
+The matched 15,875-Prompt-token, 128-output run used P TP2, V TP2 exact
+index, D target and draft together on GPU1, M64/lead32/predict32, and the
+same input hash as section 14. The first cold D run before budget wiring took
+73.08 s and had a 28.98 s first target batch; it is diagnostic only. After
+budget wiring, `draft_prefix_warm_done` occurred, the prediction used an
+`append` cache action, and private prediction fell from 65 to 34 steps.
+
+| 16k single request | PVD with cache warmup | Full KV control |
+| --- | ---: | ---: |
+| Client wall | 28.088 s | 19.275 s |
+| TTFT | 8.538 s | 8.145 s |
+| Decode duration | 19.549 s | 11.130 s |
+| Maximum inter-token gap | 2.814 s | 0.458 s |
+
+PVD's 127 measured formal batches summed to 10.723 s across a 19.547 s
+span, leaving 8.824 s between batches. The first 32 batch gaps totalled
+4.698 s because draft cache preparation was spread through early formal
+Decode. The largest M64 gap was 2.780 s, with refresh ready 2.761 s after
+the preceding boundary batch. Prediction's 34 steps spanned 5.625 s; four V
+search calls overlapped in a 1.498 s wall window. Those spans overlap formal
+work and must not be added. Both modes returned the expected first fact code;
+the complete PVD output hash matched the earlier PVD run but differed from
+full KV. This one run does not establish answer parity or a quality score.
+
+The concurrent control used exactly matched 5,009- and 1,009-token prompts,
+80 output tokens each, one-second launch stagger, and the same P/V/Gateway
+route across D modes. PVD pair wall was 11.082 s versus full KV 6.691 s.
+Both requests returned 80 tokens and each complete output hash matched its
+full-KV counterpart. During A's 43 private prediction steps (4.286 s span),
+B formally committed 35 tokens, from token 30 through 64; its longest
+commit-to-commit interval inside that span was 0.166 s. This proves B kept
+making formal progress while A predicted, but the slower pair wall shows that
+same-GPU private work still consumes scheduling/GPU time. Kernel-level
+simultaneity and unaffected peer latency are not claimed.
+
+Remote reports are V `validation/logs/priority16_cachewired_case1.json`,
+`priority_full16_case1.json`, `priority_pair1.json`, and
+`priority_fullpair1.json`; D traces are
+`validation/logs/d-priority16-cachewired.log` and
+`d-priority-fullpair.log`. The P/V/D/Gateway services were switched back to
+predictive D mode after the control. Next isolate the first-32 cache-warm
+cost, reduce the M64 refresh wait, and compare a shorter prediction budget
+with matched quality checks. Preserve the pre-existing dirty tracked files
+and validation bundles.

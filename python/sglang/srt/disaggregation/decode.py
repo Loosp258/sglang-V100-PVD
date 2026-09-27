@@ -1719,7 +1719,9 @@ class SchedulerDisaggregationDecodeMixin:
             cpu_release_state = self.poll_pvd_cpu_releases()
             cuda_binding = binding_for(self)
             if cuda_binding is not None:
-                cuda_binding.poll()
+                # Progress refresh I/O before scheduling, but give ready formal
+                # Decode rows first use of this Scheduler turn's GPU time.
+                cuda_binding.poll(allow_prediction=False)
             if profile_phases:
                 phase_done("first_poll")
             if self._engine_paused:

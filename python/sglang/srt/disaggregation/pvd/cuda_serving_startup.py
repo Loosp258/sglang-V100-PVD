@@ -156,6 +156,11 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
         if limits.probe_prefix_cache_bytes
         else None
     )
+    draft_prefix_cache_budget = (
+        TransferBudget(limits.draft_prefix_cache_bytes, 1)
+        if limits.draft_prefix_cache_bytes
+        else None
+    )
     placement = DraftPlacement(
         gpu_id=runner.gpu_id,
         tp_rank=0,
@@ -184,6 +189,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             probe_transient_bytes_bound=limits.probe_transient_bytes_bound,
             target_scratch_budget=scratch_budget,
             prefix_budget=prefix_budget,
+            draft_prefix_cache_budget=draft_prefix_cache_budget,
         )
         if prediction.target_scratch_budget is not scratch_budget:
             raise LifecycleError("prediction did not retain the shared target budget")

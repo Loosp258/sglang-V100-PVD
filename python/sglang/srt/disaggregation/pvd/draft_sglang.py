@@ -852,10 +852,17 @@ class SGLangDraftProvider(DraftProvider):
             with self._lock:
                 self._sidecar_cache_identity = identity
 
-    def retire_sidecar_cache(self) -> None:
-        """Fence and retire the one cached prefix at sidecar request close/idle."""
+    def retire_sidecar_cache(
+        self, *, if_identity: Optional[Tuple[str, str]] = None
+    ) -> bool:
+        """Fence and retire only the exact closing request's cached prefix."""
         with self._execution_lock:
             with self._lock:
+                if (
+                    if_identity is not None
+                    and self._sidecar_cache_identity != if_identity
+                ):
+                    return False
                 if self._active:
                     raise DraftLifecycleError(
                         "cannot retire draft prefix cache while a branch is open"
@@ -874,6 +881,7 @@ class SGLangDraftProvider(DraftProvider):
                     raise
             with self._lock:
                 self._sidecar_cache_identity = None
+        return True
 
     @property
     def prefix_cache_snapshot(self) -> Optional[dict]:
@@ -1134,6 +1142,67 @@ class SGLangDraftProvider(DraftProvider):
         with self._execution_lock:
             return self._advance_cooperative_locked(steps)
 
+    def iter_warm_prefix(
+        self, prefix: CommittedPrefix
+    ) -> Generator[DraftForwardProgress, None, bool]:
+        """Populate the retained draft prefix cache without generating tokens.
+
+        Call inside ``branch()`` on its owner thread. The caller may run formal
+        Decode between yielded forwards. The branch stays open while preparing
+        the prefix, then its normal release path preserves cached rows and
+        drops any branch-owned rows. Returns False without forwarding when an
+        exact cache identity/capacity is unavailable.
+        """
+        record = self._require_branch()
+        owner_thread = threading.get_ident()
+        if not isinstance(prefix, CommittedPrefix):
+            raise PredictionConfigError("immutable committed prefix required")
+        if not prefix.tokens:
+            raise PredictionConfigError("an empty prefix cannot warm a cache")
+        self._check_tokens(prefix.tokens, "prefix")
+        self.capabilities.require_shape(
+            prefix_tokens=len(prefix.tokens), predict_tokens=1
+        )
+        if not getattr(self.factory, "prefix_cache_enabled", False):
+            return False
+        identity = self._sidecar_cache_identity
+        cache_snapshot = self.prefix_cache_snapshot
+        if (
+            identity is None
+            or identity[0] != prefix.request_id
+            or cache_snapshot is None
+            or len(prefix.tokens) > cache_snapshot["max_tokens"]
+        ):
+            return False
+
+        prepare = getattr(record.handle, "iter_prepare_prefix", None)
+        if not callable(prepare):
+            raise DraftCapabilityError(
+                "this draft handle does not support cooperative prefix preparation"
+            )
+        steps = prepare(prefix.tokens)
+        try:
+            with self._execution_lock:
+                if self.degraded:
+                    raise DraftWorkerError("shared draft worker is quarantined")
+                more, value = self._advance_cooperative_locked(steps)
+            while more:
+                yield value
+                more, value = self._advance_cooperative(steps, owner_thread)
+            # Do not retain PreparedDraftPrefix.last_logits after the branch
+            # closes. The cache owns its bounded CPU copy of the logits.
+            return record.handle.prefix_cache_action in ("prefill", "append", "hit")
+        except BaseException:
+            # Closing a paused prefix generator marks a partially written cache
+            # invalid. Do that under the same lock before handle.release can
+            # retire its rows and reservation.
+            with self._execution_lock:
+                try:
+                    steps.close()
+                finally:
+                    self._retire_locked(record.branch_id)
+            raise
+
     def iter_predict(
         self, prefix: CommittedPrefix, max_tokens: int
     ) -> Generator[DraftForwardProgress, None, DraftPrediction]:
@@ -1151,9 +1220,9 @@ class SGLangDraftProvider(DraftProvider):
         exhausted. This path is greedy and does not open an RNG fork scope;
         callers must not wrap it in ``PredictionPipeline.query_branch()``,
         whose forked RNG scope would span the scheduler's formal Decode turns.
-        Cooperative execution bypasses the optional shared sidecar prefix
-        cache because its single mutable KV lease cannot span scheduler yields;
-        this path always uses branch-private prefix rows.
+        The one-slot draft prefix cache remains owned by this branch across
+        scheduler yields. Formal target Decode uses different pools, and
+        another draft branch cannot open until this branch closes.
         """
         record = self._require_branch()
         owner_thread = threading.get_ident()
@@ -1182,12 +1251,6 @@ class SGLangDraftProvider(DraftProvider):
             with self._execution_lock:
                 if self.degraded:
                     raise DraftWorkerError("shared draft worker is quarantined")
-                if getattr(self.factory, "prefix_cache_enabled", False):
-                    # The cache has one shared mutable request/KV slot. A
-                    # cooperative prediction cannot hold that lease while
-                    # yielding to the scheduler, so use only this handle's
-                    # private rows. The synchronous API keeps cache support.
-                    record.handle.set_prefix_cache_identity(None)
                 prefix_steps = prepare(prefix.tokens)
                 more, value = self._advance_cooperative_locked(prefix_steps)
 
@@ -1215,10 +1278,10 @@ class SGLangDraftProvider(DraftProvider):
         tokens = self._validate(produced, budgeted)
         source = self.describe()
         if getattr(self.factory, "prefix_cache_enabled", False):
-            source["prefix"] = "recomputed-cooperative-cache-bypassed"
+            source["prefix"] = record.handle.prefix_cache_action
             logger.info(
                 "PVD draft prefix cache action=%s request_id=%s tokens=%d",
-                "recomputed-cooperative-cache-bypassed",
+                record.handle.prefix_cache_action,
                 prefix.request_id,
                 len(prefix.tokens),
             )

@@ -15,6 +15,7 @@ from sglang.srt.disaggregation.pvd.cuda_serving_limits import (
 from sglang.srt.disaggregation.pvd.probe_lane_identity import (
     ProbeLaneCheckpointIdentity,
 )
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
 def _setup(monkeypatch, *, wrong_lock=False, wrong_budget=False, fail_target=False):
@@ -110,6 +111,7 @@ def test_composition_shares_one_lock_and_target_scratch_budget(monkeypatch):
     assert installed.target_scratch_budget is target["target_scratch_budget"]
     assert installed.target.execution_lock is prediction["execution_lock"]
     assert prediction["max_prefix_tokens"] == 60
+    assert prediction["draft_prefix_cache_budget"] is None
     assert target["max_prefix_tokens"] == 64
     admission = target["prepare_cuda_admission"](object())
     assert admission.pipeline is installed.prediction.pipeline
@@ -124,6 +126,17 @@ def test_composition_shares_one_lock_and_target_scratch_budget(monkeypatch):
     assert target["max_sequence_tokens"] == 64
     assert target["num_query_heads"] == 28
     assert target["total_kv_heads"] == 4
+
+
+def test_same_gpu_draft_prefix_cache_budget_reaches_prediction(monkeypatch):
+    scheduler, limits, observed = _setup(monkeypatch)
+    startup.install_cuda_predictive_serving(
+        scheduler, replace(limits, draft_prefix_cache_bytes=384 << 20)
+    )
+    budget = observed["prediction"]["draft_prefix_cache_budget"]
+    assert isinstance(budget, TransferBudget)
+    assert budget.snapshot()["staging_bytes"] == 384 << 20
+    assert budget.snapshot()["max_inflight"] == 1
 
 
 def test_explicit_sidecar_reaches_admission_and_is_owned_until_close(

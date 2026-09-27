@@ -98,6 +98,10 @@ class _Request:
     prediction_boundary: int | None = None
     prediction_last_poll: int = -1
     prediction_future: object = None
+    prediction_cache_identity: tuple[str, str] | None = None
+    draft_cache_identity: tuple[str, str] | None = None
+    draft_warm_prefix: CommittedPrefix | None = None
+    draft_warm_steps: object = None
 
 
 class CUDARefreshDriver:
@@ -126,6 +130,7 @@ class CUDARefreshDriver:
         self._source_quarantine = None
         self._last_poll_at = None
         self._poll_number = 0
+        self._last_private_step_poll = -1
         self._cooperative_prediction = (
             os.environ.get("PVD_COOPERATIVE_PREDICTION", "0") == "1"
         )
@@ -339,6 +344,29 @@ class CUDARefreshDriver:
         probe = controller.pipeline.probe
         if lane_client is None and getattr(probe, "prefix_budget", None) is not None:
             probe.register_cached_request(req)
+        provider = getattr(controller.pipeline, "provider", None)
+        factory = getattr(provider, "factory", None)
+        cache_enabled = bool(
+            self._cooperative_prediction
+            and lane_client is None
+            and getattr(factory, "prefix_cache_enabled", False)
+        )
+        cache_identity = (identity[0], identity[1]) if cache_enabled else None
+        cache_snapshot = (
+            getattr(provider, "prefix_cache_snapshot", None) if cache_enabled else None
+        )
+        cache_can_hold_prefix = bool(
+            cache_snapshot
+            and cache_snapshot["max_tokens"] >= len(prompt) + len(outputs)
+        )
+        warm_iterator = getattr(controller.pipeline, "iter_prepare_prefix_cache", None)
+        warm_prefix = (
+            CommittedPrefix(req.rid, prompt + outputs, 0, f"{identity[1]}:0")
+            if cache_can_hold_prefix
+            and os.environ.get("PVD_COOPERATIVE_DRAFT_PREWARM") == "1"
+            and callable(warm_iterator)
+            else None
+        )
         self._execution_lock = lock
         self._records[req.rid] = _Request(
             req,
@@ -362,6 +390,8 @@ class CUDARefreshDriver:
             provisional=initial_import_pending,
             provisional_source=initial_session,
             provisional_pool_owner=pool_owner,
+            draft_cache_identity=cache_identity,
+            draft_warm_prefix=warm_prefix,
         )
         if initial_import_pending:
             # Make release_request() delegate to this driver before any bank
@@ -499,6 +529,11 @@ class CUDARefreshDriver:
 
     async def _close_controller(self, record):
         await record.controller.aclose()
+        if record.draft_cache_identity is not None:
+            record.controller.pipeline.provider.retire_sidecar_cache(
+                if_identity=record.draft_cache_identity
+            )
+            record.draft_cache_identity = None
         probe = record.controller.pipeline.probe
         if (
             record.lane_client is None
@@ -602,9 +637,18 @@ class CUDARefreshDriver:
 
     def _prediction_step(self, record):
         """Run one private forward, fencing and releasing its seed pin before Decode."""
-        if record.prediction_last_poll == self._poll_number:
+        if (
+            record.prediction_last_poll == self._poll_number
+            or getattr(self, "_last_private_step_poll", -1) == self._poll_number
+        ):
             return None
         record.prediction_last_poll = self._poll_number
+        self._last_private_step_poll = self._poll_number
+        if getattr(record, "prediction_cache_identity", None) is not None:
+            record.controller.pipeline.provider.set_sidecar_cache_identity(
+                *record.prediction_cache_identity
+            )
+            record.prediction_cache_identity = None
         seed_scope = nullcontext()
         if os.environ.get("PVD_SEED_PROBE_FROM_PROMPT_KV") == "1":
             retirement = record.retirement
@@ -643,6 +687,50 @@ class CUDARefreshDriver:
         )
         return None
 
+    def _warm_draft_step(self, record):
+        """Prepare one draft prefix chunk after formal Decode has run."""
+        if (
+            record.draft_warm_prefix is None
+            or self._last_private_step_poll == self._poll_number
+        ):
+            return False
+        self._last_private_step_poll = self._poll_number
+        if record.draft_warm_steps is None:
+            record.controller.pipeline.provider.set_sidecar_cache_identity(
+                *record.draft_cache_identity
+            )
+            record.draft_warm_steps = (
+                record.controller.pipeline.iter_prepare_prefix_cache(
+                    record.draft_warm_prefix
+                )
+            )
+        finished = False
+        try:
+            progress = next(record.draft_warm_steps)
+        except StopIteration:
+            finished = True
+        else:
+            if getattr(progress, "sequence_length", None) == len(
+                record.draft_warm_prefix.tokens
+            ):
+                # The last chunk already ran. Complete cache publication and
+                # branch release now, without a second model forward.
+                try:
+                    next(record.draft_warm_steps)
+                except StopIteration:
+                    finished = True
+                else:
+                    raise LifecycleError("draft warmup forwarded past its prefix")
+        if finished:
+            record.draft_warm_steps = None
+            record.draft_warm_prefix = None
+            _timeline(
+                "PVD timeline event=draft_prefix_warm_done request_id=%s t=%.6f",
+                record.req.rid,
+                self._clock(),
+            )
+        return True
+
     def _stop(self, record, reason):
         if record.stopping or record.quarantined:
             return
@@ -665,6 +753,12 @@ class CUDARefreshDriver:
                 self.quarantine_provisional(record.req, reason)
                 return
         record.stopping = True
+        if record.draft_warm_steps is not None:
+            try:
+                record.draft_warm_steps.close()
+            finally:
+                record.draft_warm_steps = None
+        record.draft_warm_prefix = None
         if record.prediction_steps is not None:
             try:
                 record.prediction_steps.close()
@@ -680,6 +774,7 @@ class CUDARefreshDriver:
                 record.prediction_steps = None
                 record.prediction_prefix = None
                 record.prediction_boundary = None
+                record.prediction_cache_identity = None
         if record.prediction_future is not None:
             if not record.prediction_future.done():
                 record.prediction_future.cancel()
@@ -811,7 +906,7 @@ class CUDARefreshDriver:
         else:
             self._complete_early_prewarm_if_ready(record)
 
-    def _advance(self):
+    def _advance(self, *, allow_prediction=True):
         due = None
         launched_sidecar = False
         for key, record in tuple(self._records.items()):
@@ -907,7 +1002,7 @@ class CUDARefreshDriver:
                             and self._clock() >= record.deadline
                         ):
                             raise LifecycleError("CUDA refresh timeout")
-                        if record.prediction_steps is not None:
+                        if allow_prediction and record.prediction_steps is not None:
                             if record.prediction_boundary != boundary:
                                 raise LifecycleError("prediction boundary changed")
                             queries = self._prediction_step(record)
@@ -1028,6 +1123,38 @@ class CUDARefreshDriver:
                 except BaseException:
                     coroutine.close()
                     raise
+        if allow_prediction:
+            # The one-slot draft cache should not make a second live request
+            # wait for a long prefix warmup. Warm only while this is the sole
+            # registered request, and do at most one private step per poll.
+            if len(self._records) > 1:
+                for record in self._records.values():
+                    if record.draft_warm_prefix is not None:
+                        try:
+                            if record.draft_warm_steps is not None:
+                                record.draft_warm_steps.close()
+                            record.draft_warm_steps = None
+                            record.draft_warm_prefix = None
+                        except Exception as exc:
+                            record.error = exc
+                            self._stop(
+                                record, "draft prefix warmup cancellation failed"
+                            )
+            elif not self.arbiter.busy:
+                record = next(iter(self._records.values()), None)
+                if (
+                    record is not None
+                    and not record.provisional
+                    and not record.stopping
+                    and record.draft_warm_prefix is not None
+                    and self._last_private_step_poll != self._poll_number
+                ):
+                    try:
+                        self._warm_draft_step(record)
+                    except Exception as exc:
+                        record.error = exc
+                        self._stop(record, "draft prefix warmup failed")
+                    return True
         if due is not None and not self._closing and not self.arbiter.busy:
             record, n, boundary = due
             try:
@@ -1035,7 +1162,8 @@ class CUDARefreshDriver:
                     self._cooperative_prediction
                     and record.lane_client is None
                     and (
-                        getattr(record.controller.pipeline, "_scope_active", False)
+                        record.draft_warm_prefix is not None
+                        or getattr(record.controller.pipeline, "_scope_active", False)
                         or any(
                             other is not record and other.prediction_steps is not None
                             for other in self._records.values()
@@ -1059,11 +1187,12 @@ class CUDARefreshDriver:
                     and record.lane_client is None
                     and n < boundary
                 )
+                identity = record.controller.group.coordinator.identity
                 prefix = CommittedPrefix(
                     record.req.rid,
                     record.prompt + record.outputs,
                     n,
-                    f"{record.controller.group.coordinator.identity[1]}:{n}",
+                    f"{identity[1]}:{n}",
                 )
                 if record.deadline is None:
                     record.deadline = self._clock() + record.timeout
@@ -1073,6 +1202,12 @@ class CUDARefreshDriver:
                     record.prediction_prefix = prefix
                     record.prediction_boundary = boundary
                     record.prediction_future = future
+                    provider = getattr(record.controller.pipeline, "provider", None)
+                    factory = getattr(provider, "factory", None)
+                    if getattr(factory, "prefix_cache_enabled", False):
+                        cache_identity = (identity[0], identity[1])
+                        record.prediction_cache_identity = cache_identity
+                        record.draft_cache_identity = cache_identity
                     record.prediction_steps = record.controller.pipeline.iter_queries(
                         prefix
                     )
@@ -1101,7 +1236,7 @@ class CUDARefreshDriver:
                     coroutine.close()
                     self._release_capture(record)
                     raise
-                if cooperative:
+                if cooperative and allow_prediction:
                     queries = self._prediction_step(record)
                     if queries is not None:
                         future.set_result(queries)
@@ -1109,6 +1244,7 @@ class CUDARefreshDriver:
                         record.prediction_future = None
                         record.prediction_prefix = None
                         record.prediction_boundary = None
+                        record.prediction_cache_identity = None
                 _timeline(
                     "PVD timeline event=refresh_scheduled request_id=%s "
                     "boundary=%d committed_tokens=%d t=%.6f",
@@ -1123,7 +1259,7 @@ class CUDARefreshDriver:
                 self._stop(record, "same-GPU prediction or CUDA refresh failed")
         return launched_sidecar
 
-    def poll(self):
+    def poll(self, *, allow_prediction=True):
         self._owner()
         if self._source_quarantine is not None:
             raise LifecycleError(
@@ -1159,7 +1295,7 @@ class CUDARefreshDriver:
         if not self._owns_loop:
             self._pumping = True
             try:
-                self._advance()
+                self._advance(allow_prediction=allow_prediction)
                 return self.snapshot()
             finally:
                 self._pumping = False
@@ -1169,7 +1305,7 @@ class CUDARefreshDriver:
         def advance():
             nonlocal launched_sidecar
             try:
-                launched_sidecar = self._advance()
+                launched_sidecar = self._advance(allow_prediction=allow_prediction)
             except BaseException as exc:
                 failures.append(exc)
 

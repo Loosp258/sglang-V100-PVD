@@ -166,6 +166,80 @@ class CUDAPredictionPipeline(PredictionPipeline):
             self._scope_active = False
             self._quarantined |= self.probe._quarantined or self.provider.degraded
 
+    def iter_prepare_prefix_cache(self, prefix):
+        """Warm only the draft prefix cache in bounded scheduler steps.
+
+        This deliberately does not generate draft tokens or capture target Q:
+        those outputs would be stale by the time a later refresh is due. The
+        final prefix forward is drained and its branch is released before its
+        progress record is yielded, leaving only the retained cache rows.
+        """
+        self.probe._require_main_thread()
+        if (
+            self._scope_active
+            or self._quarantined
+            or self.probe._quarantined
+            or self.provider.degraded
+        ):
+            raise PredictionConfigError("CUDA prediction is active or quarantined")
+        if not isinstance(prefix, CommittedPrefix):
+            raise PredictionConfigError("immutable committed prefix required")
+        if not self.provider.factory.prefix_cache_enabled:
+            return False
+
+        self._scope_active = True
+        steps = None
+        final_progress = None
+        warmed = False
+        try:
+            with self.provider.branch():
+                steps = self.provider.iter_warm_prefix(prefix)
+                try:
+                    while True:
+                        try:
+                            progress = next(steps)
+                        except StopIteration as completed:
+                            warmed = completed.value is True
+                            break
+                        if (
+                            progress.stage != "prefix"
+                            or progress.forward_mode != "extend"
+                            or progress.sequence_length > len(prefix.tokens)
+                        ):
+                            raise PredictionConfigError(
+                                "draft prefix warm returned invalid progress"
+                            )
+                        if progress.sequence_length == len(prefix.tokens):
+                            final_progress = progress
+                            # The handle's final chunk yields once before its
+                            # cache publication. Resume it now; this consumes
+                            # no additional ModelRunner forward.
+                            try:
+                                next(steps)
+                            except StopIteration as completed:
+                                warmed = completed.value is True
+                            else:
+                                raise PredictionConfigError(
+                                    "draft prefix warm advanced beyond its final chunk"
+                                )
+                            break
+                        yield progress
+                finally:
+                    if steps is not None:
+                        steps.close()
+
+            if final_progress is not None:
+                # The branch and cache publication are complete now. Release
+                # the pipeline scope before notifying the scheduler so it can
+                # admit another private step without a completion-only poll.
+                self._scope_active = False
+                self._quarantined |= self.probe._quarantined or self.provider.degraded
+                yield final_progress
+            return warmed
+        finally:
+            self._scope_active = False
+            self._quarantined |= self.probe._quarantined or self.provider.degraded
+
     @contextmanager
     def query_branch(self, prefix):
         started = time.perf_counter()

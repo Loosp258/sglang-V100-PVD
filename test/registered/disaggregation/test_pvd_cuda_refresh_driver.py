@@ -18,6 +18,7 @@ from sglang.srt.disaggregation.pvd.cuda_refresh_driver import (
     _Request,
     _task_site,
 )
+from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient
 from test_pvd_cuda_prefetch_request import controller
 from test_pvd_cuda_sparse_delivery import case, complete
@@ -297,6 +298,88 @@ def test_cooperative_prediction_keeps_formal_turns_running_before_search(monkeyp
         assert control.can_decode(4)
 
 
+def test_cooperative_prediction_waits_until_after_formal_decode(monkeypatch):
+    with synchronous(monkeypatch) as (driver, _, control, request, _):
+        driver._cooperative_prediction = True
+        steps = []
+        cache_identities = []
+        provider = SimpleNamespace(
+            factory=SimpleNamespace(prefix_cache_enabled=True),
+            set_sidecar_cache_identity=lambda *identity: cache_identities.append(
+                identity
+            ),
+            retire_sidecar_cache=lambda **kwargs: True,
+        )
+        monkeypatch.setattr(control.pipeline, "provider", provider, raising=False)
+
+        def predict(prefix):
+            steps.append(("draft", prefix.committed_position))
+            yield None
+            steps.append(("probe", prefix.committed_position))
+            yield None
+            return ("queries",)
+
+        monkeypatch.setattr(control.pipeline, "iter_queries", predict, raising=False)
+        request.output_ids.extend([3] * 3)
+        record = driver._records[request.rid]
+
+        # The first poll may schedule refresh I/O, but must not take a private
+        # model step ahead of the ready formal batch.
+        driver.poll(allow_prediction=False)
+        assert record.refresh is not None, repr(record.error)
+        assert steps == []
+        assert cache_identities == []
+        assert control.can_decode(3)
+
+        request.output_ids.append(4)  # Formal result processing ran first.
+        driver.poll(allow_prediction=True)
+        assert steps == [("draft", 3)]
+        assert cache_identities == [control.group.coordinator.identity[:2]]
+        assert not driver.arbiter.busy
+
+
+def test_draft_prefix_warmup_runs_only_after_formal_turn(monkeypatch):
+    with synchronous(monkeypatch) as (driver, _, control, request, _):
+        driver._cooperative_prediction = True
+        steps = []
+        identities = []
+
+        def warm(prefix):
+            steps.append(("chunk-1", prefix.committed_position))
+            yield None
+            steps.append(("chunk-2", prefix.committed_position))
+            yield None
+
+        provider = SimpleNamespace(
+            set_sidecar_cache_identity=lambda *identity: identities.append(identity),
+            retire_sidecar_cache=lambda **kwargs: True,
+        )
+        monkeypatch.setattr(control.pipeline, "provider", provider, raising=False)
+        monkeypatch.setattr(
+            control.pipeline, "iter_prepare_prefix_cache", warm, raising=False
+        )
+        record = driver._records[request.rid]
+        record.draft_cache_identity = control.group.coordinator.identity[:2]
+        record.draft_warm_prefix = CommittedPrefix(
+            request.rid,
+            record.prompt + record.outputs,
+            0,
+            "warm:0",
+        )
+
+        driver.poll(allow_prediction=False)
+        assert steps == []
+        driver.poll(allow_prediction=True)
+        assert steps == [("chunk-1", 0)]
+        assert identities == [record.draft_cache_identity]
+
+        request.output_ids.append(3)  # Formal Decode committed before next step.
+        driver.poll(allow_prediction=False)
+        assert steps == [("chunk-1", 0)]
+        driver.poll(allow_prediction=True)
+        assert steps == [("chunk-1", 0), ("chunk-2", 0)]
+
+
 def test_cooperative_refresh_waits_for_private_branch_then_starts(monkeypatch):
     monkeypatch.delenv("PVD_SEED_PROBE_FROM_PROMPT_KV", raising=False)
     driver = CUDARefreshDriver(
@@ -348,6 +431,12 @@ def test_cooperative_refresh_waits_for_private_branch_then_starts(monkeypatch):
         assert record.deadline == 120  # Waiting for the shared branch is bounded.
 
         pipeline._scope_active = False
+        record.draft_warm_prefix = CommittedPrefix(
+            request.rid, record.prompt + record.outputs, 0, "warm:0"
+        )
+        assert driver._advance(allow_prediction=False) is False
+        assert record.refresh is None
+        record.draft_warm_prefix = None
         assert driver._advance() is True
         assert record.refresh is not None and record.prediction_steps is not None
         assert record.error is None

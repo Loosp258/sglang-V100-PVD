@@ -204,7 +204,7 @@ class CUDADecodeSchedulerBinding:
             )
         return record.controller.can_decode(0)
 
-    def poll(self):
+    def poll(self, *, allow_prediction=True):
         self._check()
         if self.route_queue is not None:
             unclaimed = [
@@ -234,7 +234,7 @@ class CUDADecodeSchedulerBinding:
                         )
         # Emit already-stopped requests before poll can retire their records.
         self._abort_stopped()
-        self.driver.poll()
+        self.driver.poll(allow_prediction=allow_prediction)
         self._abort_stopped()
         return self.driver.snapshot()
 
