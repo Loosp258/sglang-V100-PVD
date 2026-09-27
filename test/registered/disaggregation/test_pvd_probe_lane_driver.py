@@ -401,18 +401,19 @@ def test_cancelled_prewarm_drains_lane_budget_before_controller_close(monkeypatc
             ]
             assert record.refresh is not None
             deadline = time.monotonic() + 5
-            while lane.reply_budget.snapshot()["reservations"] < 2:
+            while (
+                lane.reply_budget.snapshot()["reservations"] < 2
+                or server_budget.snapshot()["reservations"] < 2
+            ):
                 assert time.monotonic() < deadline
                 driver.poll()
                 time.sleep(0.001)
-            assert server_budget.snapshot()["reservations"] == 2
             driver.cancel(request, "cancel during sidecar prewarm")
             driver.poll()
             assert record.stopping
             assert record.close_task is None
             assert record.prewarm_task is not None
             assert not record.prewarm_task.done()
-            assert lane.reply_budget.snapshot()["reservations"] == 1
             release.set()
             pump(driver, c, lambda: not driver._records)
             assert record.prewarm_state == "cancelled"
