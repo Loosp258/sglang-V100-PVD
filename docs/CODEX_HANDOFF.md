@@ -381,3 +381,9 @@ original phase-4 duplicate D-GPU1 draft removal and phase-5 V/CAGRA work.
 The 32-token horizon remains an opt-in experimental bound; later-position
 draft errors and budget pressure need broader real-GPU tests before it can be
 called production-ready.
+
+After measurement, the exact experiment process groups on P/V/D and Gateway
+were stopped. Ports 30002/30003/9100/9300/9301/8001 had no listeners and
+all three nodes reported no GPU compute processes. The isolated V checkout at
+`ac3169962` and D checkout at `c418e7a4d` were clean. The seven pre-existing
+dirty local files and all validation bundles remain untouched; no push occurred.
