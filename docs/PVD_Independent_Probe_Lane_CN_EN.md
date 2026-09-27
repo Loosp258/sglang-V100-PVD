@@ -115,3 +115,13 @@ smoke：28 层 Q 与直接 probe 逐值一致，私有池/预算归还，峰值 
 约 16.33 GB。该 smoke 使用固定**测试用**摘要测试协议绑定，尚未计算
 权重文件真实 SHA256；也没有经 Unix socket 运行真实模型进程，更未
 验证 serving、RDMA 或性能收益。
+
+跨进程真实模型检查点 / Real-model Unix gate: 同一 D GPU0 的独立
+model-owner 进程加载 7B+0.5B，另一个 `spawn` 的 CPU-only 进程通过
+受限 Unix socket 传 ticket、收 Q；全部 28 层 FP32 Q 的 SHA256 与
+直接目标 probe 的 Q 逐层一致。客户端和服务端 host 回复预算归还，
+目标/draft 私有池与 CUDA 预算也归还；进程退出后没有保留实验服务。
+`run_pvd_qwen_dual_draft_gpu.py` 报告
+`real_model_q_cross_process_unix_matched=true`。实验 ticket 仍使用
+固定**测试用**摘要而非实际权重 SHA；尚未接入 Decode Scheduler、
+V 检索/RDMA 或同条件性能比较。

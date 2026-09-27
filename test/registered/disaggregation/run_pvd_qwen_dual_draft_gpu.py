@@ -12,13 +12,49 @@ the script does not select or download model weights.
 """
 
 import argparse
+import asyncio
 import copy
+import hashlib
+import multiprocessing
 import os
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
+
+
+def _lane_client_process(directory, server_pid, control):
+    """CPU-only peer; no model object, CUDA context or committed Req crosses."""
+    try:
+        from sglang.srt.disaggregation.pvd.probe_lane_unix import ProbeLaneUnixClient
+        from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
+
+        budget = TransferBudget(16 << 20, 1)
+        client = ProbeLaneUnixClient(
+            directory,
+            "probe.sock",
+            expected_server_pid=server_pid,
+            reply_budget=budget,
+        )
+        control.send(os.getpid())
+        ticket = control.recv()
+
+        async def request():
+            async with client.request(ticket) as queries:
+                return tuple(
+                    hashlib.sha256(query.vectors.numpy().tobytes()).hexdigest()
+                    for query in queries
+                )
+
+        digests = asyncio.run(request())
+        control.send(("ok", digests, budget.snapshot()))
+    except BaseException as exc:
+        control.send(("error", repr(exc)))
+    finally:
+        control.close()
 
 
 def _runner_canaries(runner):
@@ -534,6 +570,58 @@ def validate_dual_model(
         torch.testing.assert_close(actual.vectors, expected, rtol=0, atol=0)
     assert all(query.vectors.device.type == "cpu" for query in lane_reply)
 
+    from sglang.srt.disaggregation.pvd.probe_lane_unix import ProbeLaneUnixServer
+
+    expected_digests = tuple(
+        hashlib.sha256(query.numpy().tobytes()).hexdigest() for query in reference_q
+    )
+    with tempfile.TemporaryDirectory(prefix="pvd-real-lane-", dir="/tmp") as name:
+        directory = Path(name)
+        directory.chmod(0o700)
+        context = multiprocessing.get_context("spawn")
+        parent, child = context.Pipe()
+        peer = context.Process(
+            target=_lane_client_process, args=(directory, os.getpid(), child)
+        )
+        peer.start()
+        child.close()
+        try:
+            if not parent.poll(30) or parent.recv() != peer.pid:
+                raise AssertionError("CPU-only probe lane peer did not start")
+
+            async def serve_one():
+                reply_budget = TransferBudget(16 << 20, 1)
+                service = await ProbeLaneUnixServer(
+                    directory,
+                    "probe.sock",
+                    expected_client_pid=peer.pid,
+                    target_model_id=target_identity,
+                    weights_sha256=lane_ticket.weights_sha256,
+                    tokenizer_sha256=lane_ticket.tokenizer_sha256,
+                    handler=lane_handler,
+                    reply_budget=reply_budget,
+                ).start()
+                try:
+                    parent.send(lane_ticket)
+                    status = await asyncio.wait_for(
+                        asyncio.to_thread(parent.recv), timeout=90
+                    )
+                    assert status[0] == "ok", status
+                    assert status[1] == expected_digests
+                    assert status[2]["reservations"] == 0
+                finally:
+                    await service.aclose()
+                assert reply_budget.snapshot()["reservations"] == 0
+
+            asyncio.run(serve_one())
+            peer.join(timeout=10)
+            assert peer.exitcode == 0
+        finally:
+            if peer.is_alive():
+                peer.terminate()
+                peer.join(timeout=5)
+            parent.close()
+
     torch.cuda.synchronize(device)
     target_cpu_rng_after = torch.get_rng_state()
     target_cuda_rng_after = torch.cuda.get_rng_state(device)
@@ -599,6 +687,7 @@ def validate_dual_model(
             item["positional_encoding"] == "rope_applied" for item in query_evidence
         ),
         "isolated_lane_handler_q_matches_direct_probe": True,
+        "real_model_q_cross_process_unix_matched": True,
         "target_model_state_canaries_unchanged": True,
         "cpu_cuda_rng_unchanged": True,
         "draft_pool_storage_verified_private": provider.pool_ownership.storage_verified,
