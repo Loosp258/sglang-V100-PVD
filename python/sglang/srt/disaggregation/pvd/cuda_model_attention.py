@@ -127,6 +127,10 @@ class CUDAModelSparseConsumer:
         self._packed_owner = self._owner + ":packed-qkv"
         self._bound, self._outputs, self._pending = None, [], None
         self._packed_inputs, self._packed_charged = [], False
+        self._borrow_forward_bank = (
+            os.environ.get("PVD_REUSE_FORWARD_BANK_LEASE") == "1"
+        )
+        self._bank_groups = {}
         self._seen, self._quarantine, self._held = set(), None, None
         self._active = False
 
@@ -154,6 +158,7 @@ class CUDAModelSparseConsumer:
         if not self._lock.acquire(blocking=False):
             raise SparsePayloadError("target execution is busy")
         self._active = True
+        self._bank_groups.clear()
         self._packed_inputs.clear()
         self._packed_charged = False
         stack, pinned, charged = ExitStack(), False, False
@@ -208,6 +213,8 @@ class CUDAModelSparseConsumer:
                     )
                 installed = exchange.coordinator.snapshot()["completed"]
                 groups = stack.enter_context(peer.read(binding.decode_tokens))
+                if self._borrow_forward_bank:
+                    self._bank_groups[binding.slot] = groups
                 if any(
                     (spec.operation_id, spec.target_tokens)
                     != (installed.operation_id, installed.target_tokens)
@@ -237,7 +244,8 @@ class CUDAModelSparseConsumer:
                 )
             if any(not b.exchange.can_decode(b.decode_tokens) for b in bound.values()):
                 raise SparsePayloadError(
-                    "request cancelled or installation permission changed during forward"
+                    "request cancelled or installation permission changed "
+                    "during forward"
                 )
         except BaseException as exc:
             failure = exc
@@ -249,6 +257,7 @@ class CUDAModelSparseConsumer:
                 self._synchronize()
                 stack.close()  # Includes Prompt reader completion fences.
                 self._pending = None
+                self._bank_groups.clear()
                 self._outputs.clear()
                 self._packed_inputs.clear()
                 if self._packed_charged:
@@ -435,6 +444,11 @@ class CUDAModelSparseConsumer:
                     mapping=self.mapping,
                     resources=resources,
                     scale=layer.scaling,
+                    borrowed_groups=(
+                        self._bank_groups[binding.slot]
+                        if self._borrow_forward_bank
+                        else None
+                    ),
                 )
             finally:
                 resources.request_release()
@@ -474,7 +488,8 @@ def make_cuda_sparse_backend(
         or not runner.server_args.disable_cuda_graph
     ):
         raise SparsePayloadError(
-            "CUDA sparse backend requires TP1/PP1 unquantized Llama/Qwen2, native attention, page 1, no graphs/overlap/speculation"
+            "CUDA sparse backend requires TP1/PP1 unquantized Llama/Qwen2, "
+            "native attention, page 1, no graphs/overlap/speculation"
         )
     if not isinstance(workspace, CUDASparseAttentionWorkspace):
         raise SparsePayloadError("explicit CUDA workspace required")

@@ -169,6 +169,38 @@ def test_model_pool_mapping_matches_dense_oracle_and_retirement_is_fenced(monkey
     torch.testing.assert_close(c.pool.k[11], c.k[0], rtol=0, atol=0)
 
 
+def test_forward_bank_lease_reuse_skips_only_nested_reader_fence(monkeypatch):
+    monkeypatch.setenv("PVD_REUSE_FORWARD_BANK_LEASE", "1")
+    c = fixture(monkeypatch)
+    bank_syncs, workspace_syncs = [], []
+    monkeypatch.setattr(
+        c.binding.participant._bank,
+        "_synchronize",
+        lambda: bank_syncs.append("bank"),
+    )
+    monkeypatch.setattr(
+        c.workspace, "_synchronize", lambda: workspace_syncs.append("workspace")
+    )
+    with c.consumer.bind([c.binding], pool_owner=c.owner):
+        assert run(c).shape == (1, 12)
+        assert bank_syncs == []  # Outer reader cannot retire before forward ends.
+        assert workspace_syncs == ["workspace"]  # Layer kernel is still fenced.
+    assert bank_syncs == ["bank"]
+    assert c.drains == [True]
+    assert c.binding.participant._bank.snapshot()["readers"] == 0
+
+
+def test_forward_bank_lease_reuse_refuses_foreign_group_mapping(monkeypatch):
+    monkeypatch.setenv("PVD_REUSE_FORWARD_BANK_LEASE", "1")
+    c = fixture(monkeypatch)
+    with pytest.raises(SparsePayloadError, match="borrowed Prompt reader"):
+        with c.consumer.bind([c.binding], pool_owner=c.owner):
+            c.consumer._bank_groups[1] = {}
+            run(c)
+    assert c.binding.participant._bank.snapshot()["readers"] == 0
+    assert c.budget.snapshot()["used_staging_bytes"] == 0
+
+
 def test_model_accepts_explicit_disabled_speculation_and_rejects_active(monkeypatch):
     c = fixture(monkeypatch)
     c.batch.spec_algorithm = SpeculativeAlgorithm.NONE

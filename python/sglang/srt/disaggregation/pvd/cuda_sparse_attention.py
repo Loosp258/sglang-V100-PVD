@@ -12,6 +12,7 @@ import math
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -309,7 +310,17 @@ class CUDASparseAttentionWorkspace:
     def _synchronize(self):
         torch.cuda.synchronize(self.device)
 
-    def execute(self, participant, *, decode_tokens, layer, mapping, resources, scale):
+    def execute(
+        self,
+        participant,
+        *,
+        decode_tokens,
+        layer,
+        mapping,
+        resources,
+        scale,
+        borrowed_groups=None,
+    ):
         self._check()
         if self._active:
             raise SparsePayloadError("attention workspace cannot run concurrently")
@@ -399,7 +410,31 @@ class CUDASparseAttentionWorkspace:
                 for t in (*tensors[:3], self._scratch)
             ):
                 raise SparsePayloadError("attention output must own distinct storage")
-            with participant.read(decode_tokens) as groups:
+            # The whole-model consumer can already hold this exact bank's
+            # reader for the complete forward. Re-entering read() for every
+            # layer adds another device-wide completion fence per layer. The
+            # borrowed path is valid only while that same bank has a live
+            # reader; this workspace still fences each layer's own kernels
+            # before releasing its tensor and budget owners.
+            if borrowed_groups is not None:
+                participant._live()
+                if (
+                    bank._current is None
+                    or borrowed_groups is not bank._current.groups
+                    or bank._readers < 1
+                    or participant._last is None
+                    or participant._phase in ("parked", "applied")
+                    or not participant._last.epoch.target_tokens
+                    <= decode_tokens
+                    < participant._boundary
+                ):
+                    raise SparsePayloadError("borrowed Prompt reader is not live")
+            reader = (
+                nullcontext(borrowed_groups)
+                if borrowed_groups is not None
+                else participant.read(decode_tokens)
+            )
+            with reader as groups:
                 for head in range(mapping.total_kv_heads):
                     if (layer, head) not in groups:
                         raise SparsePayloadError(
@@ -427,8 +462,8 @@ class CUDASparseAttentionWorkspace:
                             raise SparsePayloadError(
                                 "Triton attention requires standard attention scale"
                             )
-                        from sglang.srt.disaggregation.pvd.triton_sparse_attention import (
-                            PromptPointerView,
+                        from sglang.srt.disaggregation.pvd import (
+                            triton_sparse_attention,
                         )
 
                         owner = f"{self._owner}:tables:{uuid.uuid4().hex}"
@@ -439,7 +474,8 @@ class CUDASparseAttentionWorkspace:
                         )
                         self._budget.reserve(owner, table_bytes, 1)
                         triton_owner = owner
-                        triton_view = PromptPointerView.from_groups(
+                        view_type = triton_sparse_attention.PromptPointerView
+                        triton_view = view_type.from_groups(
                             groups,
                             layer=layer,
                             kv_heads=mapping.total_kv_heads,

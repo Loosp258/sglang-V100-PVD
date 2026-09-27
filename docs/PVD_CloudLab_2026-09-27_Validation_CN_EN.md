@@ -518,6 +518,37 @@ The two runs logged 24 refreshes in M8 versus 48 in M4 (12 requests each).
 Fewer refreshes helped this workload; neither broader answer quality nor
 the final latency target is established.
 
+### D 侧前向读租约复用 / D forward bank-reader reuse
+
+新增默认关闭的 `PVD_REUSE_FORWARD_BANK_LEASE=1`：整段模型前向已经为
+每个 request 持有 Prompt bank 读租约时，稀疏 attention 每层复用**同一**
+live bank/group 对象，不再嵌套进入第二个读租约。仍保留 workspace
+每层 CUDA 完成栅栏、前向结束栅栏和 bank 最终读者栅栏；无 live
+读者、非当前 group、错误刷新边界一律拒绝。CPU 夹具验证嵌套 bank
+栅栏从每层两次读者作用域降为整段前向一次，数值/故障回归
+**120 passed**，Ruff E/F/I 通过。
+
+V100S 上相同 M8/Top-4/packed Q 事实负载，两轮首代码均 6/6 正确，
+六个输出哈希与未开启复用的 M8 逐一相同，且无观察到 RDMA 错误或
+quarantine。但中位请求耗时约 **5.17/5.17 s**，未开启时约
+**5.10/5.16 s**；未证明端到端改善，因此不默认开启。
+仅删去已无待执行 GPU 工作的嵌套读者栅栏，关键的**每层 workspace
+同步**仍在；若要进一步合并同步，必须先让每层的指针表、行索引、
+预算、输出与 Prompt 读租约都延迟持有到整段前向的最终 CUDA 栅栏。
+
+The opt-in `PVD_REUSE_FORWARD_BANK_LEASE=1` borrows the exact live Prompt
+bank reader already owned by the whole model forward, rather than entering
+a nested bank reader per layer. The workspace still synchronizes each layer,
+and the forward and bank readers still synchronize on retirement. Invalid
+or stale borrowed groups fail closed. CPU numerical/failure tests passed
+**120/120** and Ruff E/F/I passed. On V100S, two identical M8 fact runs
+answered 6/6 codes with hashes equal to the prior M8 path and no observed
+RDMA/quarantine errors. Median latency was **5.17/5.17 s** versus
+**5.10/5.16 s** without the opt-in: no established speedup, so it remains
+off by default. Removing the more costly per-layer workspace sync requires
+forward-scoped ownership of all pending tables, rows, budgets and outputs;
+simply deleting that fence would be unsafe.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.
