@@ -105,3 +105,13 @@ GPU0 模型执行、Scheduler 异步派发或与正式 Decode 的计算重叠。
 Q 回复预留 host 字节与一个并发槽，写完/拒绝/异常时归还。容量不足
 不调用 handler，也不消耗 nonce。协议、Unix 与 V 检索相关测试合计
 **50 passed**；目前仍是假模型 handler。
+
+真实模型 handler 检查点 / Real-model handler gate: `probe_lane_model.py`
+现在可由独立进程的主线程执行私有 `CUDAPredictionPipeline`，仅将 ticket
+指定的 post-RoPE Q 位置/层/head 拷到 CPU，并在退出预测分支前做 CUDA
+完成栅栏。2026-09-27 在新的 CloudLab D 节点 GPU0，以本地
+Qwen2.5-7B-Instruct + Qwen2.5-0.5B-Instruct 运行单独的 dual-model
+smoke：28 层 Q 与直接 probe 逐值一致，私有池/预算归还，峰值 allocated
+约 16.33 GB。该 smoke 使用固定**测试用**摘要测试协议绑定，尚未计算
+权重文件真实 SHA256；也没有经 Unix socket 运行真实模型进程，更未
+验证 serving、RDMA 或性能收益。

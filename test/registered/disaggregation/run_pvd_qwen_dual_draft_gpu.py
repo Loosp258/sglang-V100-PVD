@@ -16,6 +16,7 @@ import copy
 import os
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -442,13 +443,15 @@ def validate_dual_model(
     target_reserved_with_draft = torch.cuda.memory_reserved(device)
 
     query_evidence = []
+    reference_q = []
     with pipeline.query_branch(prefix) as queries:
         prediction = provider.last_prediction
         if prediction is None or len(prediction.tokens) != 2:
             raise AssertionError("draft provider did not produce exactly two tokens")
         if any(not target_vocabulary.contains(token) for token in prediction.tokens):
             raise AssertionError(
-                "draft emitted a padded/out-of-range id outside the shared tokenizer vocabulary"
+                "draft emitted a padded/out-of-range id outside the shared "
+                "tokenizer vocabulary"
             )
         if len(queries) != target_runner.model.config.num_hidden_layers:
             raise AssertionError("target Q was not captured for every model layer")
@@ -480,8 +483,56 @@ def validate_dual_model(
                     "positional_encoding": query.positional_encoding,
                 }
             )
+            reference_q.append(
+                query.vectors.detach().to(device="cpu", dtype=torch.float32).clone()
+            )
         prediction_tokens = tuple(prediction.tokens)
         del queries
+
+    from sglang.srt.disaggregation.pvd.probe_lane_model import ProbeLaneCUDAHandler
+    from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
+        ProbeLaneTicket,
+        verify_reply,
+    )
+    from sglang.srt.disaggregation.pvd.probe_search import ProbeWindow
+
+    # This smoke uses fixed *test-only* digest values to exercise binding;
+    # a serving sidecar must hash the exact checkpoint and tokenizer files.
+    lane_window = ProbeWindow(
+        "dual-model-smoke-incarnation",
+        "dual-model-smoke-operation",
+        "dual-model-smoke-entry",
+        prefix,
+        2,
+        tuple(range(len(prefix_tokens), len(prefix_tokens) + 2)),
+    )
+    lane_ticket = ProbeLaneTicket.issue(
+        lane_window,
+        target_model_id=target_identity,
+        weights_sha256="a" * 64,
+        tokenizer_sha256="b" * 64,
+        layers=tuple(range(target_runner.model.config.num_hidden_layers)),
+        head_start=0,
+        head_count=target_runner.model.config.num_attention_heads,
+        head_dim=target_runner.model_config.head_dim,
+        max_reply_bytes=(
+            target_runner.model.config.num_hidden_layers
+            * 2
+            * target_runner.model.config.num_attention_heads
+            * target_runner.model_config.head_dim
+            * 4
+        ),
+        deadline_monotonic=time.monotonic() + 60,
+    )
+    lane_handler = ProbeLaneCUDAHandler(
+        pipeline,
+        weights_sha256=lane_ticket.weights_sha256,
+        tokenizer_sha256=lane_ticket.tokenizer_sha256,
+    )
+    lane_reply = verify_reply(lane_ticket, lane_handler(lane_ticket))
+    for actual, expected in zip(lane_reply, reference_q, strict=True):
+        torch.testing.assert_close(actual.vectors, expected, rtol=0, atol=0)
+    assert all(query.vectors.device.type == "cpu" for query in lane_reply)
 
     torch.cuda.synchronize(device)
     target_cpu_rng_after = torch.get_rng_state()
@@ -547,6 +598,7 @@ def validate_dual_model(
         "target_q_post_rope": all(
             item["positional_encoding"] == "rope_applied" for item in query_evidence
         ),
+        "isolated_lane_handler_q_matches_direct_probe": True,
         "target_model_state_canaries_unchanged": True,
         "cpu_cuda_rng_unchanged": True,
         "draft_pool_storage_verified_private": provider.pool_ownership.storage_verified,
@@ -557,9 +609,9 @@ def validate_dual_model(
         "draft_branch_scratch_reserved_bytes": provider.max_scratch_used_during_branch,
         "draft_branch_scratch_refunded": True,
         "draft_persistent_known_tensor_bytes": retained.total_bytes,
-        "draft_persistent_budget_used_after_branch": provider.persistent_budget.snapshot()[
-            "used_staging_bytes"
-        ],
+        "draft_persistent_budget_used_after_branch": (
+            provider.persistent_budget.snapshot()["used_staging_bytes"]
+        ),
         "target_probe_budget_refunded": True,
         "target_allocated_bytes_before_draft": target_allocated_before_draft,
         "target_reserved_bytes_before_draft": target_reserved_before_draft,

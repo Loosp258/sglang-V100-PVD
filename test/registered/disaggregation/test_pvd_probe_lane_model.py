@@ -1,0 +1,55 @@
+"""Pure selection tests for the isolated real-CUDA handler's reply shape."""
+
+import dataclasses
+
+import pytest
+import torch
+from sglang.srt.disaggregation.pvd.prediction import QueryVectors
+from sglang.srt.disaggregation.pvd.probe_lane_model import _materialize_reply
+from sglang.srt.disaggregation.pvd.probe_lane_protocol import (
+    ProbeLaneProtocolError,
+    verify_reply,
+)
+from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
+from test_pvd_probe_lane_protocol import ticket
+
+
+def _full_query(bound, layer):
+    # Probe has positions 3 and 4 and four Q heads. Ticket asks only position
+    # 4, heads 2 and 3; unrelated positions/heads may never reach D.
+    rows = torch.arange(2 * 4 * 4, dtype=torch.float32).reshape(2, 4, 4)
+    return QueryVectors(
+        bound.target_model_id,
+        "private-target-probe",
+        layer,
+        0,
+        4,
+        (3, 4),
+        2,
+        rows + layer * 100,
+        prefix_version=bound.window.prefix.version,
+        positional_encoding=ROPE_APPLIED,
+        request_id=bound.window.prefix.request_id,
+    )
+
+
+def test_handler_reply_selects_only_ticket_positions_heads_and_layers():
+    bound = ticket()
+    source = tuple(_full_query(bound, layer) for layer in bound.layers)
+    reply = _materialize_reply(bound, source)
+    verified = verify_reply(bound, reply)
+    assert len(verified) == 2
+    assert tuple(verified[0].vectors.shape) == (1, 2, 4)
+    torch.testing.assert_close(verified[0].vectors[0], source[0].vectors[1, 2:4])
+    source[0].vectors.zero_()
+    assert verified[0].vectors[0, 0, 0] == 24
+
+
+def test_handler_reply_rejects_missing_position_and_foreign_layer():
+    bound = ticket()
+    source = tuple(_full_query(bound, layer) for layer in bound.layers)
+    missing = dataclasses.replace(source[0], positions=(2, 3))
+    with pytest.raises(ProbeLaneProtocolError, match="positions"):
+        _materialize_reply(bound, (missing, source[1]))
+    with pytest.raises(ProbeLaneProtocolError, match="layer coverage"):
+        _materialize_reply(bound, (source[0], source[0]))
