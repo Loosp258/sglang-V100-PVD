@@ -585,6 +585,42 @@ reader-only M8 and **2.37/2.13 s** for full KV. This tiny, unsynchronized
 sample does not establish a causal speedup or the final end-to-end target,
 so deferred fences stay disabled by default.
 
+### 跳过不可达的末尾刷新 / Skip unreachable terminal refresh
+
+实测 M8/20-token 请求中，每个请求只安装边界 8、16 的两轮工作集，
+却仍额外启动边界 24 的 draft 预测和目标模型 Q probe。前一版本两轮
+共 12 个请求产生 **36** 次预测阶段日志，但只有 **24** 次刷新完成。
+P 的首 token 不推进 D 时钟，因此 `max_new_tokens <= next_boundary`
+时，最终 D 时钟至多为 `max_new_tokens - 1`，该工作集绝不被 Decode
+读取。新调度门槛只对明确的整数生成上限跳过这类刷新；缺失或未知
+上限保留原行为，上限在到达边界前变化仍可重新安排。相关驱动测试
+**36 passed**，Ruff E/F/I 通过。
+
+相同三机、M8/Top-4、两个客户端、六个事实 Prompt 的两轮中，
+每轮首代码 **6/6 正确**，完整输出哈希与改动前逐一一致；两轮共
+**24/24** 次预测阶段均对应完成的刷新，不再有 12 次末尾无用
+预测。中位请求耗时约 **4.47/4.45 s**，此前延迟栅栏配置约
+**5.09/5.08 s**，完整 KV 约 **2.37/2.13 s**。这仍是有限的
+非屏障负载，尚未达到端到端性能目标。另以单个 28-token 请求
+验证边界 8、16、24 均正常刷新并安装，首代码正确，无观察到
+quarantine 或 RDMA 错误。
+
+With a 20-token generation cap, D only consumes refresh boundaries 8 and
+16, yet the old scheduler also launched draft and target-Q work for boundary
+24. Across 12 requests, it logged **36** prediction stages but only **24**
+completed refreshes. Because P's first token never advances D's clock,
+`max_new_tokens <= next_boundary` proves no later D token can read that
+workset. The new check skips only explicit integer caps; unknown limits
+retain the old path, and a changed cap can be reconsidered before the
+boundary. Driver tests passed **36/36**, Ruff E/F/I clean. Two same-seed
+six-fact V100S replays retained **6/6** correct first codes and identical
+complete-output hashes; all **24/24** prediction stages now corresponded to
+completed refreshes. Median latency was **4.47/4.45 s**, down from
+**5.09/5.08 s** with deferred fences alone, but still slower than full KV's
+**2.37/2.13 s**. A separate 28-token request confirmed boundaries 8, 16,
+and 24 all refreshed and installed correctly. This is not yet a broad
+quality or end-to-end performance acceptance.
+
 ## 未完成 / Remaining work
 
 1. **Performance:** predictive sparse refresh still loses to warmed full KV under two-client load even after avoiding native CAGRA cold build. Determine a measured admission strategy (exact first, background CAGRA promotion only when the Entry is likely to be reused) and preserve index/version/retirement fencing before implementing it. The 2048-row exact threshold is an experiment, not a new default.

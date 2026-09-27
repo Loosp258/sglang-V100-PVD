@@ -147,6 +147,18 @@ class CUDARefreshDriver:
             raise LifecycleError("nonempty nonnegative token sequence required")
         return tuple(values)
 
+    @staticmethod
+    def _may_decode_past_boundary(req, boundary):
+        """Avoid a speculative refresh that the request's token cap cannot use.
+
+        The first output token belongs to P, so D's final clock is at most
+        max_new_tokens - 1.  Unknown or mutable-looking limits fail open: the
+        normal refresh protocol remains responsible for those requests.
+        """
+        params = getattr(req, "sampling_params", None)
+        limit = getattr(params, "max_new_tokens", None)
+        return type(limit) is not int or limit > boundary
+
     def register(
         self,
         req,
@@ -650,6 +662,7 @@ class CUDARefreshDriver:
                         elif (
                             record.refresh is None
                             and n >= boundary - state["lead_tokens"]
+                            and self._may_decode_past_boundary(record.req, boundary)
                         ):
                             if due is None:
                                 due = (record, n, boundary)

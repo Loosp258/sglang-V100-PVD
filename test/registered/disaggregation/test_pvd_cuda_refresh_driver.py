@@ -153,6 +153,29 @@ def test_sync_owner_loop_runs_two_http_rounds_from_actual_req_counts(monkeypatch
         assert capture_threads == [owner, owner]
 
 
+def test_terminal_token_cap_skips_unreachable_refresh(monkeypatch):
+    with synchronous(monkeypatch) as (driver, _, _, request, captures):
+        request.sampling_params = SimpleNamespace(max_new_tokens=4)
+        request.output_ids.extend([3] * 3)  # D clock 3; next boundary 4.
+        driver.poll()
+        assert driver._records[request.rid].refresh is None
+        assert not driver.arbiter.busy
+        assert captures == []
+        # If the live request's cap increases before the boundary, the normal
+        # refresh is still scheduled instead of permanently suppressing it.
+        request.sampling_params.max_new_tokens = 5
+        driver.poll()
+        assert driver._records[request.rid].refresh is not None
+
+
+@pytest.mark.parametrize(
+    "limit,expected", [(None, True), (False, True), (4, False), (5, True)]
+)
+def test_terminal_cap_check_fails_open_for_unknown_limits(limit, expected):
+    request = SimpleNamespace(sampling_params=SimpleNamespace(max_new_tokens=limit))
+    assert CUDARefreshDriver._may_decode_past_boundary(request, 4) is expected
+
+
 def test_opt_in_bounded_poll_turns_run_capture_before_next_scheduler_poll(
     monkeypatch,
 ):
