@@ -396,10 +396,6 @@ class DraftForwardAdapter(ModelExecutor):
         try:
             with torch.inference_mode():
                 if self._direct_raw_forward:
-                    if getattr(batch.forward_mode, "is_cuda_graph", lambda: False)():
-                        raise DraftLifecycleError(
-                            "direct raw forward refuses CUDA graph batches"
-                        )
                     output = self._runner._forward_raw(batch, False, None)
                 else:
                     output = self._runner.forward(batch)

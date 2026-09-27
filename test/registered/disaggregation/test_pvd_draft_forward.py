@@ -464,8 +464,11 @@ def test_direct_raw_forward_is_narrowly_opt_in_and_skips_runner_wrapper(monkeypa
         direct_raw_forward=True,
     )
     assert made.forward(extend_inputs()).shape == (runner.vocab,)
-    assert len(runner.raw_calls) == 1
-    assert runner.raw_calls[0][1:] == (False, None)
+    # ForwardMode.DECODE is graph-eligible, but graph execution is disabled
+    # on this runner. The private branch still needs one decode step per token.
+    assert made.forward(decode_inputs(position=5)).shape == (runner.vocab,)
+    assert len(runner.raw_calls) == 2
+    assert all(call[1:] == (False, None) for call in runner.raw_calls)
 
 
 def test_direct_raw_forward_refuses_non_qwen2_and_multirank_runners():
