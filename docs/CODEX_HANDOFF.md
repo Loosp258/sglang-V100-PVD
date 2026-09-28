@@ -1053,3 +1053,64 @@ dirty tracked files and validation bundles when continuing. The next
 performance work is to remove repeated long-prefix target-Q recomputation,
 measure peer-token latency against a matched full-KV run, and reduce A's
 M64 wait while retaining the proven stream isolation and kernel overlap.
+
+## 18. 2026-09-28 safe private long-prefix reuse
+
+Local commits `93f2f2154`, `9bffbec7c`, and `ae7e8c709` restore private
+prefix reuse in the opt-in concurrent predictor. The draft's sidecar cache
+retains one request identity. The target-Q probe retains up to
+`scheduler.max_running_requests` private request markers and their bounded KV,
+with LRU retirement. A marker is never a formal Decode Req or formal KV row;
+request-id reuse with a new incarnation retires the old private mapping.
+Late committed-only probes do not displace the early-prediction cache. Normal
+worker shutdown retires both caches on the worker's own CUDA stream and fences
+before exit; quarantine retains uncertain owners. The cached config is
+`test/registered/disaggregation/pvd_qwen_v100s_serving_limits_triton_m64_concurrent_cached_16k.json`.
+Prompt-KV seeding remains disabled because formal allocator rows still need
+an exact lifetime lease. The startup gate remains TP1/PP1, Qwen2, no CUDA
+graphs, and no sidecar. This cache does not turn speculative tokens into
+formal output.
+
+On the CloudLab V100S P/V/D nodes, matched concurrent 5,005/1,005-prompt-token
+requests, each requesting 160 output tokens, returned HTTP 200 and identical
+output hashes for cached and no-cache configurations on the same code. The
+no-cache pair took **26.146 s**, and the final cached pair took **22.852 s**
+for one run each (3.294 s, 12.6% shorter). A's second target probe used
+`append` at 5,038 cached / 5,133 committed prefix tokens; its second capture
+took 3.055 s versus 6.183 s without caching. The draft's one-slot cache was
+displaced by B and still did a prefill for A. Earlier one-run cached code with
+a one-slot target owner took 24.830 s on this pair, demonstrating why target
+markers must survive B's prediction. Reports are on V under
+`validation/logs/concurrent_pair_5k_retain_160_9bffbec7c.json` and
+`concurrent_pair_5k_nocache_160_9bffbec7c.json`; D traces are
+`validation/logs/d-concurrent-retain-9bffbec7c.log` and
+`d-concurrent-no-cache-5k-9bffbec7c.log`.
+
+The cached 15,805-prompt-token single request completed 160 output tokens
+with HTTP 200 in 65.955 s. First prediction capture cost 37.279 s to fill
+the long prefix; second capture used draft and target `append` and cost
+7.686 s. The report is V
+`validation/logs/concurrent_single_16k_cached_160_9bffbec7c.json` and the
+D trace is `d-concurrent-retain-9bffbec7c.log`. A matched no-cache 16k run
+failed during quadratic TorchNative target attention while requesting a
+26.27 GiB CUDA allocation; it returned HTTP 503. Its trace is D
+`validation/logs/d-concurrent-no-cache-control-9bffbec7c.log`. No valid 16k
+wall-time speedup or full-KV speedup can be inferred from that failed control.
+
+The safe analogy to SGLang native EAGLE is retaining verified prefix KV and
+discarding speculative suffix KV. Native EAGLE can commit accepted prediction
+rows into its formal request KV mapping; PVD cannot do that because predictions
+only guide V retrieval. The remaining performance costs are the first long
+prefix fill, the draft's one-slot cache under multiple requests, and refresh
+wait after capture/search/delivery. A matched full-KV comparison and repeat
+runs are still required for an end-to-end performance claim.
+
+Linux targeted validation after the shutdown change: 27 tests passed across
+the worker, prefix-cache, and CUDA startup suites. Earlier cache commits had
+184 focused tests passing, then 61 after target multi-request retention.
+Local Windows compileall and `git diff --check` passed. The 16k no-cache OOM
+was an experiment failure, not a passing performance result. At the end of
+this run, the P, V, D, and Gateway process groups launched by this session
+were terminated; ports 30002, 9100, 30003, and 8001 and `nvidia-smi`
+compute-process lists were empty on their respective nodes. Preserve the
+pre-existing dirty local tracked files and historical validation bundles.
