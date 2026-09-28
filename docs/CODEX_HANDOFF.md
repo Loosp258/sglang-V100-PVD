@@ -1114,3 +1114,34 @@ this run, the P, V, D, and Gateway process groups launched by this session
 were terminated; ports 30002, 9100, 30003, and 8001 and `nvidia-smi`
 compute-process lists were empty on their respective nodes. Preserve the
 pre-existing dirty local tracked files and historical validation bundles.
+
+## 19. 2026-09-28 cached PVD versus full KV without periodic refresh
+
+The full step-by-step report is `docs/PVD_CACHED_VS_FULL_KV_20260928.md`;
+`scripts/pvd_compare_decode_logs.py` reproduces the 16k D timeline from the
+CloudLab logs. The full-KV control ran with refresh interval 4096, larger than
+the 256-token completion, and its D log has zero periodic refresh events.
+PVD used the cached concurrent M64/lead32/predict32 config. P TP2, V two
+GPUs, D TP1 on GPU1, model, P/V/Gateway processes, prompt, and sampling were
+matched. Each D mode received a separate excluded 16k warmup.
+
+The matched 15,875-prompt/256-output single request took 77.266 s for cached
+PVD (TTFT 8.508, Decode 68.758) and 29.742 s for no-refresh full KV (TTFT
+8.146, Decode 21.596). Both returned the expected first fact code, but full
+output hashes differed. D logged 255 formal batches each: PVD formal sum
+14.954 s versus full KV 21.337 s; time between batches was 53.801 s versus
+0.258 s. PVD's three capture times were 38.376, 6.853, and 6.863 s. Its
+lead-position pauses were 38.229, 6.803, and 6.813 s, while M64/M128/M192
+boundary gaps were only 0.023/0.010/0.018 s. Thus V search and sparse KV
+delivery were largely covered, but this request could not Decode while its
+same-GPU private prediction captured Q. This is the main measured slowdown.
+
+The matched 5,009/1,009-prompt, two-request, 160-output rounds took
+22.382/22.491 s for cached PVD and 11.000/10.940 s for no-refresh full KV.
+All four corresponding complete output hashes matched. No full-KV speed
+advantage is established; the current cached PVD path remains substantially
+slower in both profiles. The report lists each 32-batch segment, each refresh
+stage, initial fan-in/index timing, evidence paths, and measurement limits.
+The P/V/D/Gateway process groups used for this run were terminated. Ports
+30002, 9100, 8001, 29001, and 30003 and `nvidia-smi` compute-process lists
+were empty on the respective nodes after cleanup.
