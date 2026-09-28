@@ -356,9 +356,8 @@ class _LlamaTargetProbeCore(TargetProbe):
     def bind_private_worker(self, thread_id: int) -> None:
         """Move an unused CUDA probe to one dedicated prediction thread.
 
-        The concurrent path must use its own private prefix. A live request
-        cache or a Prompt seed source would otherwise cross the formal Req's
-        release boundary without a request-row lease.
+        A cache may be registered later by that worker using a private request
+        marker. A live formal Req or Prompt seed cannot cross threads.
         """
         self._require_main_thread()
         if (
@@ -369,7 +368,6 @@ class _LlamaTargetProbeCore(TargetProbe):
             or self._quarantined
             or self._private_state is not None
             or self._prompt_seed_source is not None
-            or self.prefix_budget is not None
             or self._prefix_caches
         ):
             raise PredictionConfigError("only an idle uncached CUDA probe can move")

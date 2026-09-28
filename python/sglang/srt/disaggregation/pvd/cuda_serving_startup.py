@@ -149,13 +149,11 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             or not args.disable_cuda_graph
             or not args.disable_overlap_schedule
             or limits.probe_sidecar is not None
-            or limits.probe_prefix_cache_bytes
-            or limits.draft_prefix_cache_bytes
             or os.environ.get("PVD_SEED_PROBE_FROM_PROMPT_KV") == "1"
         ):
             raise LifecycleError(
                 "concurrent prediction requires TP1 graph-disabled Qwen2, "
-                "no sidecar and no Prompt/draft prefix cache or Prompt seed"
+                "no sidecar or Prompt seed"
             )
     head_mapping = QueryHeadMapping(
         model.num_attention_heads, runner.model_config.get_total_num_kv_heads()
@@ -367,10 +365,17 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             prepare_cuda_admission=prepare,
         )
         if concurrent_prediction:
+            from sglang.srt.disaggregation.pvd.concurrent_prefix_cache import (
+                ConcurrentPrefixCacheOwner,
+            )
             from sglang.srt.disaggregation.pvd.concurrent_prediction_worker import (
                 ConcurrentPredictionWorker,
             )
             from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
+
+            prefix_cache_owner = ConcurrentPrefixCacheOwner(
+                prediction.pipeline.probe, prediction.pipeline.provider
+            )
 
             @contextmanager
             def private_stream_context(stream):
@@ -378,6 +383,8 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                     yield
 
             def run_private_prediction(job, context):
+                context.raise_if_cancelled()
+                prefix_cache_owner.prepare(job)
                 prefix = CommittedPrefix(
                     job.request_id,
                     job.prefix_tokens,
