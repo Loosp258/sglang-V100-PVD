@@ -1145,3 +1145,20 @@ stage, initial fan-in/index timing, evidence paths, and measurement limits.
 The P/V/D/Gateway process groups used for this run were terminated. Ports
 30002, 9100, 8001, 29001, and 30003 and `nvidia-smi` compute-process lists
 were empty on the respective nodes after cleanup.
+
+## 20. 2026-09-28 prediction-horizon sweep
+
+The detailed report is `docs/PVD_PREDICT_HORIZON_SWEEP_20260928.md`. With
+M64 and the same 15,875-token input/256-output request, the measured client
+wall times for predict/lead 32, 16, 8, 4, and 2 were 74.927, 68.164,
+63.373, 61.650, and 62.190 s. All returned the expected first fact code.
+Predict4's later cached captures were 1.481 and 1.452 s, but its M128/M192
+boundary gaps grew to 0.746 and 0.719 s. Predict2 reduced those captures
+further but increased the boundary gaps to 0.937 and 0.915 s. A separate
+predict4 three-case 16k fact check passed 3/3 first codes, while its full
+output hashes still differed from the historical full-KV control. The
+observed predict4 minimum is based on one request per profile and is not yet
+a justified serving default. The cold private target-Q prefix remains the
+dominant cost; the no-refresh full-KV control was 29.742 s. This session
+terminated its P/V/D/Gateway process groups after the sweep; their ports and
+GPU compute-process lists were empty on all three nodes.
