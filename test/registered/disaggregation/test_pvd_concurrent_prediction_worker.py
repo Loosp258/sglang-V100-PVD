@@ -270,6 +270,76 @@ def test_scheduler_thread_owns_submit_and_poll():
         worker.close()
 
 
+def test_graceful_close_retires_private_cache_on_worker_stream():
+    owner_id = threading.get_ident()
+    stream = object()
+    calls = []
+
+    @contextmanager
+    def stream_context(actual_stream):
+        assert actual_stream is stream
+        calls.append("enter")
+        try:
+            yield
+        finally:
+            calls.append("exit")
+
+    def retire():
+        assert threading.get_ident() != owner_id
+        calls.append("retire")
+
+    def fence(actual_stream):
+        assert actual_stream is stream
+        calls.append("fence")
+
+    worker = ConcurrentPredictionWorker(
+        lambda _job, _context: "ok",
+        stream_factory=lambda: stream,
+        context_factory=stream_context,
+        completion_fence=fence,
+        shutdown_callback=retire,
+    )
+    worker.close()
+    worker.close()
+    assert worker.state == "closed"
+    assert calls == ["enter", "retire", "exit", "fence"]
+
+
+def test_quarantined_worker_keeps_private_cache_owner():
+    retired = []
+
+    def fail(_job, _context):
+        raise RuntimeError("failed forward")
+
+    worker = ConcurrentPredictionWorker(
+        fail,
+        shutdown_callback=lambda: retired.append(True),
+    )
+    future = worker.submit(_job())
+    _poll_until_done(worker, future)
+    worker.close()
+    assert worker.state == "quarantined"
+    assert retired == []
+
+
+def test_shutdown_cleanup_failure_quarantines_worker_after_fence():
+    calls = []
+
+    def retire():
+        calls.append("retire")
+        raise RuntimeError("cleanup failed")
+
+    worker = ConcurrentPredictionWorker(
+        lambda _job, _context: "ok",
+        completion_fence=lambda _stream: calls.append("fence"),
+        shutdown_callback=retire,
+    )
+    worker.close()
+    assert calls == ["retire", "fence"]
+    assert worker.state == "quarantined"
+    assert worker.snapshot()["quarantine_error"] == "RuntimeError"
+
+
 def _capture_error(callback, errors: list[PredictionWorkerError]) -> None:
     try:
         callback()

@@ -223,7 +223,9 @@ class ConcurrentPredictionWorker:
     stream factory also runs there once at startup. ``context_factory(stream)``
     creates a context manager around each callback (for example,
     ``torch.cuda.stream(stream)``). ``completion_fence(stream)`` runs after
-    callback/context cleanup and before a result is made pollable.
+    callback/context cleanup and before a result is made pollable. On graceful
+    shutdown, ``shutdown_callback()`` runs on the worker's stream and is fenced
+    before the thread exits. A quarantined worker retains its private owners.
 
     Only the construction thread may submit, cancel, poll, or close. The worker
     exposes its own ``owner_thread_id`` for startup code that must bind
@@ -237,6 +239,7 @@ class ConcurrentPredictionWorker:
         stream_factory: Callable[[], Any] | None = None,
         context_factory: Callable[[Any], AbstractContextManager[Any]] | None = None,
         completion_fence: Callable[[Any], None] | None = None,
+        shutdown_callback: Callable[[], None] | None = None,
         max_prefix_tokens: int = 65536,
         startup_timeout: float = 10.0,
         name: str = "pvd-prediction-worker",
@@ -247,6 +250,7 @@ class ConcurrentPredictionWorker:
             or (stream_factory is not None and not callable(stream_factory))
             or (context_factory is not None and not callable(context_factory))
             or (completion_fence is not None and not callable(completion_fence))
+            or (shutdown_callback is not None and not callable(shutdown_callback))
         ):
             raise PredictionWorkerError("synchronous worker callbacks are required")
         if type(max_prefix_tokens) is not int or max_prefix_tokens <= 0:
@@ -265,6 +269,7 @@ class ConcurrentPredictionWorker:
         self._stream_factory = stream_factory
         self._context_factory = context_factory or _default_stream_context
         self._completion_fence = completion_fence or _default_completion_fence
+        self._shutdown_callback = shutdown_callback
         self.max_prefix_tokens = max_prefix_tokens
         self._scheduler_thread_id = threading.get_ident()
         self._worker_thread_id: int | None = None
@@ -501,6 +506,22 @@ class ConcurrentPredictionWorker:
             if active is not None:
                 self._completions.put(_Completion(active, error=exc))
         finally:
+            if self._shutdown_callback is not None:
+                with self._lock:
+                    safe_to_retire = self._state != "quarantined"
+                if safe_to_retire:
+                    try:
+                        try:
+                            with self._context_factory(self._stream):
+                                self._shutdown_callback()
+                        finally:
+                            self._completion_fence(self._stream)
+                    except BaseException as exc:  # noqa: BLE001 - retain uncertain CUDA owners.
+                        with self._lock:
+                            self._quarantine_locked(
+                                exc,
+                                (self._stream, self._callback, self._shutdown_callback),
+                            )
             with self._lock:
                 if self._state not in ("quarantined", "closed"):
                     self._state = "closed" if self._closing else "idle"

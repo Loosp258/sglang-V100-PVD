@@ -407,6 +407,7 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
                 stream_factory=lambda: torch.cuda.Stream(device=device),
                 context_factory=private_stream_context,
                 completion_fence=lambda stream: stream.synchronize(),
+                shutdown_callback=prefix_cache_owner.retire,
                 max_prefix_tokens=limits.max_sequence_tokens,
             )
             prediction.pipeline.probe.bind_private_worker(
