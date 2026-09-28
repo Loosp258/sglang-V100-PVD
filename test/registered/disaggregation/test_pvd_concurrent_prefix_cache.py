@@ -34,7 +34,7 @@ def test_cache_reuses_same_incarnation_and_retires_before_request_id_reuse():
         ),
         retire_sidecar_cache=lambda **kw: calls.append(("retire-draft", kw)),
     )
-    owner = ConcurrentPrefixCacheOwner(probe, provider)
+    owner = ConcurrentPrefixCacheOwner(probe, provider, max_cached_requests=2)
     owner.prepare(job())
     owner.prepare(job(length=64))
     assert [kind for kind, *_ in calls] == ["register", "register-draft"]
@@ -42,18 +42,39 @@ def test_cache_reuses_same_incarnation_and_retires_before_request_id_reuse():
     assert first_marker.rid == "a"
     assert not hasattr(first_marker, "req_pool_idx")
 
-    owner.prepare(job(incarnation="second"))
+    owner.prepare(job(request_id="b"))
     assert [kind for kind, *_ in calls] == [
         "register",
         "register-draft",
-        "retire-draft",
-        "retire-probe",
         "register",
+        "retire-draft",
         "register-draft",
     ]
-    assert calls[2][1] == {"if_identity": ("a", "first")}
-    assert calls[3][1] is first_marker
-    assert calls[4][1] is not first_marker
+    assert calls[2][1].rid == "b"
+    assert calls[3][1] == {"if_identity": ("a", "first")}
+    owner.prepare(job(incarnation="second"))
+    assert calls[5][0] == "retire-probe"
+    assert calls[5][1] is first_marker
+    assert calls[6][0] == "register"
+    assert calls[6][1] is not first_marker
+    assert calls[7][0] == "retire-draft"
+    assert calls[8][0] == "register-draft"
+
+
+def test_target_cache_evicts_oldest_marker_at_request_capacity():
+    calls = []
+    probe = SimpleNamespace(
+        prefix_budget=object(),
+        register_cached_request=lambda req: calls.append(("register", req)),
+        retire_cached_request=lambda req: calls.append(("retire", req)),
+    )
+    provider = SimpleNamespace(factory=SimpleNamespace(prefix_cache_enabled=False))
+    owner = ConcurrentPrefixCacheOwner(probe, provider, max_cached_requests=2)
+    owner.prepare(job("a"))
+    owner.prepare(job("b"))
+    owner.prepare(job("c"))
+    assert calls[2] == ("retire", calls[0][1])
+    assert calls[3][0] == "register"
 
 
 def test_cache_refuses_cross_thread_retirement_and_quarantines_failed_release():

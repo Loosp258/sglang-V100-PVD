@@ -864,6 +864,18 @@ class _LlamaTargetProbeCore(TargetProbe):
                     rows=suffix_rows,
                     query_capture=capture,
                 )
+                logging.getLogger(__name__).info(
+                    "PVD target probe prefix cache action=%s request_id=%s "
+                    "cached_tokens=%d committed_tokens=%d",
+                    (
+                        "prefill"
+                        if committed_start == 0
+                        else "hit" if not new_committed else "append"
+                    ),
+                    prefix.request_id,
+                    committed_start,
+                    len(prefix.tokens),
+                )
                 return result
             finally:
                 try:

@@ -374,7 +374,9 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
             from sglang.srt.disaggregation.pvd.prediction import CommittedPrefix
 
             prefix_cache_owner = ConcurrentPrefixCacheOwner(
-                prediction.pipeline.probe, prediction.pipeline.provider
+                prediction.pipeline.probe,
+                prediction.pipeline.provider,
+                max_cached_requests=scheduler.max_running_requests,
             )
 
             @contextmanager
@@ -384,7 +386,8 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
 
             def run_private_prediction(job, context):
                 context.raise_if_cancelled()
-                prefix_cache_owner.prepare(job)
+                if not job.committed_query_positions:
+                    prefix_cache_owner.prepare(job)
                 prefix = CommittedPrefix(
                     job.request_id,
                     job.prefix_tokens,
