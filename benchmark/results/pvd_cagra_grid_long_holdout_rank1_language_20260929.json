@@ -1,0 +1,85 @@
+{
+  "model": "Qwen2.5-7B-Instruct",
+  "prompt_mode": "language",
+  "prompt_tokens": 4096,
+  "kv_heads": 56,
+  "group_size": 4,
+  "graph_count": 14,
+  "degree": 16,
+  "build_algorithm": "exact_per_head_knn_from_graph",
+  "extend_algorithm": "cuvs_cagra_native_extend",
+  "measurements": [
+    {
+      "n": 3328,
+      "prefix": 0,
+      "tail": 0,
+      "repeat": 0,
+      "assembly_seconds": 0.01144229102646932,
+      "build_seconds": 0.7729166691424325,
+      "extend_seconds": 0.0
+    },
+    {
+      "n": 3328,
+      "prefix": 2816,
+      "tail": 512,
+      "repeat": 0,
+      "assembly_seconds": 0.011172829021234065,
+      "build_seconds": 0.5553159700939432,
+      "extend_seconds": 0.32687277399236336
+    },
+    {
+      "n": 3840,
+      "prefix": 0,
+      "tail": 0,
+      "repeat": 0,
+      "assembly_seconds": 0.00972222990822047,
+      "build_seconds": 0.9978759030927904,
+      "extend_seconds": 0.0
+    },
+    {
+      "n": 3840,
+      "prefix": 3328,
+      "tail": 512,
+      "repeat": 0,
+      "assembly_seconds": 0.012224611942656338,
+      "build_seconds": 0.7682422811049037,
+      "extend_seconds": 0.29062695807078853
+    },
+    {
+      "n": 3840,
+      "prefix": 3328,
+      "tail": 512,
+      "repeat": 1,
+      "assembly_seconds": 0.012321803893428296,
+      "build_seconds": 0.7682121759862639,
+      "extend_seconds": 0.2913316339836456
+    },
+    {
+      "n": 3840,
+      "prefix": 0,
+      "tail": 0,
+      "repeat": 1,
+      "assembly_seconds": 0.010876999993342906,
+      "build_seconds": 1.003354955057148,
+      "extend_seconds": 0.0
+    },
+    {
+      "n": 3328,
+      "prefix": 2816,
+      "tail": 512,
+      "repeat": 1,
+      "assembly_seconds": 0.011932845984119922,
+      "build_seconds": 0.5435149428085424,
+      "extend_seconds": 0.2510100820218213
+    },
+    {
+      "n": 3328,
+      "prefix": 0,
+      "tail": 0,
+      "repeat": 1,
+      "assembly_seconds": 0.009334141155704856,
+      "build_seconds": 0.766204779909458,
+      "extend_seconds": 0.0
+    }
+  ]
+}

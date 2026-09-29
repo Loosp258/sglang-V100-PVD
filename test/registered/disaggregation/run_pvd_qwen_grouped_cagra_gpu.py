@@ -524,6 +524,104 @@ def _prompt_tokens(model_path, count):
     return mode, tuple(encoded[:count])
 
 
+def latency_grid_probe(sources, *, prompt_count, prompt_mode):
+    """Measure full and one-extend exact degree-16 graphs on real model K."""
+    import gc
+
+    import cupy as cp
+
+    from cuvs.neighbors import cagra
+
+    keys = sorted(sources)
+    if len(keys) != 56:
+        raise ValueError("latency grid requires all 56 local KV heads")
+    degree = 16
+    specs = []
+    for item in os.environ["PVD_CAGRA_LATENCY_GRID"].split(","):
+        n, prefix = map(int, item.split(":"))
+        if not 256 <= n <= prompt_count or (prefix and not 256 <= prefix < n):
+            raise ValueError(f"invalid latency grid point {item}")
+        specs.append((n, prefix))
+    repeats = int(os.environ.get("PVD_CAGRA_LATENCY_REPEATS", "2"))
+    if not 1 <= repeats <= 5:
+        raise ValueError("latency grid repeats must be in [1, 5]")
+    raw = [cp.from_dlpack(sources[key]) for key in keys]
+    stream = cp.cuda.get_current_stream()
+
+    def seed(dataset, rows):
+        graph = cp.empty((4 * rows, degree), dtype=cp.uint32)
+        for head in range(4):
+            begin, end = head * rows, (head + 1) * rows
+            matrix = dataset[begin:end]
+            scores = matrix @ matrix.T
+            cp.fill_diagonal(scores, -cp.inf)
+            neighbors = cp.argpartition(scores, -degree, axis=1)[:, -degree:]
+            top_scores = cp.take_along_axis(scores, neighbors, axis=1)
+            neighbors = cp.take_along_axis(
+                neighbors, cp.argsort(-top_scores, axis=1), axis=1
+            )
+            graph[begin:end] = neighbors.astype(cp.uint32) + begin
+        return cagra.from_graph(graph, dataset, metric="inner_product"), graph
+
+    # CUDA library initialization belongs outside the measured grid.
+    warm = cp.arange(4 * 256 * 128, dtype=cp.float32).reshape(4 * 256, 128)
+    warm_index, warm_graph = seed(warm, 256)
+    cagra.extend(cagra.ExtendParams(), warm_index, warm[:4 * 64].copy())
+    stream.synchronize()
+    del warm_index, warm_graph, warm
+    gc.collect()
+
+    results = []
+    for repeat in range(repeats):
+        ordered = specs if repeat % 2 == 0 else list(reversed(specs))
+        for n, prefix in ordered:
+            first_rows = prefix or n
+            build_seconds = extend_seconds = assembly_seconds = 0.0
+            for first in range(0, len(raw), 4):
+                selected = raw[first:first + 4]
+                started = time.perf_counter()
+                means = [value[:first_rows].mean(axis=0) for value in selected]
+                initial = cp.ascontiguousarray(cp.concatenate([
+                    value[:first_rows] - mean
+                    for value, mean in zip(selected, means)
+                ]))
+                tail = None
+                if prefix:
+                    tail = cp.ascontiguousarray(cp.concatenate([
+                        value[prefix:n] - mean
+                        for value, mean in zip(selected, means)
+                    ]))
+                stream.synchronize()
+                assembly_seconds += time.perf_counter() - started
+                started = time.perf_counter()
+                index, graph = seed(initial, first_rows)
+                stream.synchronize()
+                build_seconds += time.perf_counter() - started
+                if tail is not None:
+                    started = time.perf_counter()
+                    cagra.extend(cagra.ExtendParams(), index, tail)
+                    stream.synchronize()
+                    extend_seconds += time.perf_counter() - started
+                del index, graph, initial, tail
+                gc.collect()
+                stream.synchronize()
+            results.append({
+                "n": n, "prefix": prefix, "tail": n - prefix if prefix else 0,
+                "repeat": repeat, "assembly_seconds": assembly_seconds,
+                "build_seconds": build_seconds,
+                "extend_seconds": extend_seconds,
+            })
+    return {
+        "model": "Qwen2.5-7B-Instruct", "prompt_mode": prompt_mode,
+        "prompt_tokens": prompt_count, "kv_heads": len(keys),
+        "kv_head_ids": sorted({head for _, head in keys}),
+        "group_size": 4, "graph_count": 14, "degree": degree,
+        "build_algorithm": "exact_per_head_knn_from_graph",
+        "extend_algorithm": "cuvs_cagra_native_extend",
+        "measurements": results,
+    }
+
+
 def validate(runner, *, checkpoint=False):
     if not checkpoint:
         raise ValueError("a real Qwen2.5 checkpoint is required")
@@ -539,8 +637,9 @@ def validate(runner, *, checkpoint=False):
         raise ValueError("real Qwen2 model required")
     device = torch.device("cuda:0")
     prompt_count = int(os.environ.get("PVD_CAGRA_RECALL_ROWS", "1024"))
-    if not 256 <= prompt_count <= 2304:
-        raise ValueError("PVD_CAGRA_RECALL_ROWS must be in [256, 2304]")
+    max_rows = 4096 if os.environ.get("PVD_CAGRA_LATENCY_GRID") else 2304
+    if not 256 <= prompt_count <= max_rows:
+        raise ValueError(f"PVD_CAGRA_RECALL_ROWS must be in [256, {max_rows}]")
     top_k = 10
     full_shard = os.environ.get("PVD_CAGRA_GROUP_FULL_SHARD") == "1"
     layers = (
@@ -626,6 +725,12 @@ def validate(runner, *, checkpoint=False):
         for source in sources.values()
     ):
         raise AssertionError("target Prompt K extraction has an unexpected shape")
+    if os.environ.get("PVD_CAGRA_LATENCY_GRID"):
+        if not full_shard:
+            raise ValueError("latency grid requires PVD_CAGRA_GROUP_FULL_SHARD=1")
+        return latency_grid_probe(
+            sources, prompt_count=prompt_count, prompt_mode=prompt_mode
+        )
 
     # Observe the actual attention input at the next-token position. The
     # attention module receives Q after the model applies RoPE; this avoids

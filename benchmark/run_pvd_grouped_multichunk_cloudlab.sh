@@ -22,4 +22,5 @@ export PVD_CAGRA_RECALL_ROWS="${PVD_CAGRA_RECALL_ROWS:-2155}"
 "$CONDA_PREFIX/bin/python" "$probe" \
   --architecture qwen2 \
   --model-path "$root/models/Qwen2.5-7B-Instruct" \
-  --context-length 2304 --max-total-tokens 4096
+  --context-length "${PVD_CAGRA_CONTEXT_LENGTH:-2304}" \
+  --max-total-tokens "${PVD_CAGRA_MAX_TOTAL_TOKENS:-4096}"

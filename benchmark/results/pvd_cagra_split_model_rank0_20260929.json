@@ -1,0 +1,39 @@
+{
+  "schema": "pvd-exact16-split-latency-v1",
+  "build": {
+    "coefficients": [
+      0.07846982823275794,
+      -0.011923829340457215,
+      0.06940193287729204
+    ],
+    "training_points": 116,
+    "train_mae_ms": 7.857955201811954,
+    "train_p95_abs_error_ms": 26.708872537212656
+  },
+  "extend": {
+    "coefficients": [
+      0.05357775208876072,
+      0.08048854185540018,
+      0.34532719467336725,
+      -0.030122470895104687,
+      -0.013224023302215759,
+      -0.013563215004396237
+    ],
+    "training_points": 90,
+    "train_mae_ms": 22.1027590583229,
+    "train_p95_abs_error_ms": 58.27376797964039
+  },
+  "domain": {
+    "min_n": 256,
+    "max_n": 4096,
+    "min_prefix": 256,
+    "max_prefix": 3968,
+    "min_tail": 64,
+    "max_tail": 2048
+  },
+  "training_sources": [
+    "benchmark\\results\\pvd_cagra_grid_train_rank0_20260929.json",
+    "benchmark\\results\\pvd_cagra_grid_short_tail_rank0_20260929.json",
+    "benchmark\\results\\pvd_cagra_grid_long_rank0_20260929.json"
+  ]
+}
