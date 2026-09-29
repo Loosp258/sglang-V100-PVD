@@ -122,6 +122,40 @@ directly, its first sparse search waits for V only when it reaches the search
 before V finishes; this probe does not measure that overlap or the time
 between final KV arrival and native build start.
 
+### If V gates initial KV delivery on graph READY
+
+The Case 40 online V log (`v-group4a_20260929.log` on node1) recorded three
+accepted chunk commits and an immediate Entry commit. Its first 512-row
+prefix is explicit in the index log. The remaining upload is consistent with
+512 more rows and a coalesced final 1132 rows; the HTTP access log does not
+print payload ranges directly. Rank 0 chunk commits were at 11:18:49.672,
+50.899, and 51.921 UTC; final Entry commit was at 51.923. Rank 1 commits
+were at 49.682, 51.251, and 52.253; final Entry commit was at 52.256.
+`conn.py` can skip a nonfinal publish while the previous one is still running,
+which explains why the online final insert need not be only 108 rows.
+
+An offline replay with the inferred `0/512/1024/2156` boundaries, degree-16
+exact graph seed, and the same Case 40 K/Q measured the following per-rank
+aggregate native times across 14 graphs:
+
+| Rank | Build first 512 | Extend next 512 | Extend final 1132 | Mean/min Top-10 recall |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | .090 s | .319 s | .522 s | 1.000/1.00 |
+| 1 | .089 s | .296 s | .503 s | 1.000/1.00 |
+
+At the recorded arrival intervals, each early build and first extend can
+finish before that rank's final chunk. If V starts native work immediately
+when eligible and both modes incur comparable scheduling overhead, the final
+chunk leaves about .522/.503 s of incremental work, versus .362/.361 s for
+one complete-build degree-16 graph. The **slower rank's** readiness is then
+about .14 s earlier with complete-build. If V sends initial KV to D only
+after both ranks are READY, this projects about .14 s less D waiting, before
+any V→D transfer or service overhead. This is a trace-driven projection, not
+an online D measurement; the exact degree-16 complete-build arm also had
+lower recall (.9866/.9902 mean and .80/.90 worst head) than this replay.
+The previously reported .264/.250 s final `extend` applies only to a
+five-chunk `512×4+108` replay, not to this coalesced arrival shape.
+
 To isolate the role of four-head grouping in the **complete-KV, no-extend**
 case, the degree-16 exact-seed arm also ran both group sizes in both orders.
 Each row uses the same Case 40 K/Q and cuVS setup; seconds are sums across
@@ -163,6 +197,9 @@ Set `PVD_CAGRA_GROUP_BUILD_ALGO=exact_block_knn` and
 `PVD_CAGRA_EXACT_GRAPH_DEGREE=8`, `16`, or `32`; omitting the build-algorithm
 variable keeps the IVF-PQ reference. Raw logs are on node0 under
 `$SGLANG_PVD_ROOT/validation/logs/group4-*-20260929.log`.
+For the coalesced replay, set `PVD_CAGRA_GROUP_PREFIX=512`,
+`PVD_CAGRA_GROUP_CHUNK_ROWS=0`, and
+`PVD_CAGRA_GROUP_BOUNDARIES=0,512,1024,2156`.
 
 cuVS API reference: https://docs.nvidia.com/cuvs/api-reference/python-api-neighbors-cagra
 

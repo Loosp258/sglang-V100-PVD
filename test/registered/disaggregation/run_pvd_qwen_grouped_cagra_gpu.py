@@ -237,6 +237,18 @@ def full_shard_centered_probe(
         step = chunk_rows or rows - prefix
         boundaries.extend(range(prefix + step, rows, step))
         boundaries.append(rows)
+    requested_boundaries = os.environ.get("PVD_CAGRA_GROUP_BOUNDARIES")
+    if requested_boundaries:
+        requested = [int(value) for value in requested_boundaries.split(",")]
+        if (
+            len(requested) < 3
+            or requested[0] != 0
+            or requested[1] != prefix
+            or requested[-1] != rows
+            or any(a >= b for a, b in zip(requested, requested[1:]))
+        ):
+            raise ValueError("PVD_CAGRA_GROUP_BOUNDARIES must span 0, prefix, rows")
+        boundaries = requested
     exact = {
         key: cp.argsort(
             -(head_queries[key].astype(cp.float64)

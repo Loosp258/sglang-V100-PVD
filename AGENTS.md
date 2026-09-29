@@ -140,6 +140,12 @@ as the default until the streaming path passes the gates below.
   IVF-PQ, or 0.380/0.364 s with exact degree 32 on the same Case 40 fixture;
   the latter lost some recall relative to both complete IVF-PQ and the
   degree-32 incremental arm.
+  A Case 40 trace replay for exact degree 16 found that online upload can
+  coalesce the final chunk to 1132 rows. Its final `extend` then took
+  0.522/0.503 s on ranks 0/1, versus 0.362/0.361 s for a complete build.
+  With graph-gated V→D delivery and immediate progress, complete-build is
+  projected to make the slower rank READY about 0.14 s earlier, but had worse
+  sampled recall; this is not a live D-wait measurement.
   The production backend is unchanged. Graph-buffer ownership, memory,
   broader real-Q quality and online P/V/D timing are required before serving.
 
