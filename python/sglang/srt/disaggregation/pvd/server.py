@@ -322,6 +322,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt-index-cagra-graph-degree", type=_positive_int, default=64
     )
     parser.add_argument(
+        "--prompt-index-cagra-exact-head-seed", action="store_true",
+        help="Experimental exact per-head degree-16 KNN seed for four-head CAGRA.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-intermediate-degree", type=_positive_int, default=128
     )
     parser.add_argument(
@@ -404,6 +408,14 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         args, "chunked_cagra_upload", False
     ):
         raise ValueError("grouped CAGRA requires chunked upload")
+    if getattr(args, "prompt_index_cagra_exact_head_seed", False) and (
+        index_mode != "cagra"
+        or args.prompt_index_group_heads != 4
+        or args.prompt_index_cagra_graph_degree != 16
+        or args.prompt_index_metric != "ip"
+        or not args.chunked_cagra_upload
+    ):
+        raise ValueError("exact head seed requires chunked four-head degree-16 IP CAGRA")
     shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
     exact_max_rows = getattr(args, "prompt_index_exact_max_rows", None)
     if exact_max_rows is not None and (
@@ -577,6 +589,8 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
             intermediate_degree=args.prompt_index_cagra_intermediate_degree,
             itopk_size=args.prompt_index_cagra_itopk_size,
         )
+        if getattr(args, "prompt_index_cagra_exact_head_seed", False):
+            native_kwargs["exact_head_groups"] = 4
         if shared_native is not None:
             native_kwargs["global_native_cap_bytes"] = shared_native
         native = CagraIndexBackend(**native_kwargs)

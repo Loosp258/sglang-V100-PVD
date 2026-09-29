@@ -1,0 +1,131 @@
+{
+  "by_prompt": {
+    "1009": {
+      "ranks": [
+        {
+          "baseline_full_seconds": 0.3564424514770508,
+          "split_full_seconds": 1.177273154258728,
+          "prefix_seconds": {
+            "512": 0.21844661235809326
+          },
+          "online_graph_seconds": {
+            "0": {
+              "build_seconds": 0.9318234999999999,
+              "extend_seconds": 0.0
+            },
+            "512": {
+              "build_seconds": 0.958226,
+              "extend_seconds": 0.2683995
+            }
+          }
+        },
+        {
+          "baseline_full_seconds": 0.3695719242095947,
+          "split_full_seconds": 1.0681521892547607,
+          "prefix_seconds": {
+            "512": 0.22545111179351807
+          },
+          "online_graph_seconds": {
+            "0": {
+              "build_seconds": 0.935694,
+              "extend_seconds": 0.0
+            },
+            "512": {
+              "build_seconds": 0.8422215,
+              "extend_seconds": 0.29352049999999996
+            }
+          }
+        }
+      ],
+      "pilot_samples_per_arm": [
+        2,
+        2
+      ]
+    },
+    "1509": {
+      "ranks": [
+        {
+          "baseline_full_seconds": 0.510249137878418,
+          "split_full_seconds": 1.3238662481307983,
+          "prefix_seconds": {
+            "1024": 0.3580547571182251
+          },
+          "online_graph_seconds": {
+            "0": {
+              "build_seconds": 1.2000549999999999,
+              "extend_seconds": 0.0
+            },
+            "1024": {
+              "build_seconds": 0.9653214999999999,
+              "extend_seconds": 0.22300999999999999
+            }
+          }
+        },
+        {
+          "baseline_full_seconds": 0.5286121368408203,
+          "split_full_seconds": 1.5225497484207153,
+          "prefix_seconds": {
+            "1024": 0.3714956045150757
+          },
+          "online_graph_seconds": {
+            "0": {
+              "build_seconds": 1.183192,
+              "extend_seconds": 0.0
+            },
+            "1024": {
+              "build_seconds": 1.1503804999999998,
+              "extend_seconds": 0.2728265
+            }
+          }
+        }
+      ],
+      "pilot_samples_per_arm": [
+        2,
+        2
+      ]
+    },
+    "2159": {
+      "ranks": [
+        {
+          "baseline_full_seconds": 0.801926851272583,
+          "split_full_seconds": 2.1117007732391357,
+          "prefix_seconds": {
+            "2048": 0.8288438320159912
+          },
+          "online_graph_seconds": {
+            "0": {
+              "build_seconds": 1.3423875,
+              "extend_seconds": 0.0
+            },
+            "2048": {
+              "build_seconds": 1.2818555,
+              "extend_seconds": 0.1589985
+            }
+          }
+        },
+        {
+          "baseline_full_seconds": 0.8289811611175537,
+          "split_full_seconds": 2.2306723594665527,
+          "prefix_seconds": {
+            "2048": 0.8577175140380859
+          },
+          "online_graph_seconds": {
+            "0": {
+              "build_seconds": 1.348833,
+              "extend_seconds": 0.0
+            },
+            "2048": {
+              "build_seconds": 1.371982,
+              "extend_seconds": 0.178027
+            }
+          }
+        }
+      ],
+      "pilot_samples_per_arm": [
+        2,
+        2
+      ]
+    }
+  },
+  "arrival_definition": "V graph execution start, an upper bound on complete chunk arrival"
+}

@@ -31,6 +31,7 @@ class _NativeIndex:
     resources: object = None
     native: object = None
     vectors: object = None
+    graph: object = None
     rows: int = 0
     disposed: bool = False
     probe_allocations: list = field(default_factory=list)
@@ -170,22 +171,53 @@ class CagraNativeRuntime:
         if owner.limit.get_allocated_bytes() != 0:
             raise IndexCompletionUnknown("cuVS cap probe left allocations alive")
 
-    def build(self, owner, vectors, *, metric, graph_degree, intermediate_degree):
+    def build(self, owner, vectors, *, metric, graph_degree, intermediate_degree,
+              exact_head_groups=0):
         with self.scope(owner):
             owner.resources = self.Resources(
                 stream=torch.cuda.current_stream(self.device).cuda_stream
             )
             self._verify_allocator_bridge(owner)
             owner.vectors = vectors  # Already an owned, budgeted extraction copy.
-            params = self.cagra.IndexParams(
-                metric="inner_product" if metric == "ip" else "sqeuclidean",
-                graph_degree=graph_degree,
-                intermediate_graph_degree=intermediate_degree,
-                build_algo="ivf_pq",
-            )
-            owner.native = self.cagra.build(
-                params, self.cp.from_dlpack(vectors), resources=owner.resources
-            )
+            if exact_head_groups:
+                if metric != "ip" or len(vectors) % exact_head_groups:
+                    raise IndexSearchError("exact grouped CAGRA needs inner product and equal heads")
+                per_head = len(vectors) // exact_head_groups
+                if per_head <= graph_degree:
+                    raise IndexSearchError("exact head has fewer rows than graph degree")
+                from rmm.allocators.cupy import rmm_cupy_allocator
+
+                with self.cp.cuda.using_allocator(rmm_cupy_allocator):
+                    dataset = self.cp.from_dlpack(vectors)
+                    graph = self.cp.empty((len(vectors), graph_degree), dtype=self.cp.uint32)
+                    for head in range(exact_head_groups):
+                        begin, end = head * per_head, (head + 1) * per_head
+                        matrix = dataset[begin:end]
+                        scores = matrix @ matrix.T
+                        self.cp.fill_diagonal(scores, -self.cp.inf)
+                        neighbors = self.cp.argpartition(
+                            scores, -graph_degree, axis=1
+                        )[:, -graph_degree:]
+                        values = self.cp.take_along_axis(scores, neighbors, axis=1)
+                        neighbors = self.cp.take_along_axis(
+                            neighbors, self.cp.argsort(-values, axis=1), axis=1
+                        )
+                        graph[begin:end] = neighbors.astype(self.cp.uint32) + begin
+                        del scores, neighbors, values
+                    owner.native = self.cagra.from_graph(
+                        graph, dataset, metric="inner_product", resources=owner.resources
+                    )
+                    owner.graph = graph
+            else:
+                params = self.cagra.IndexParams(
+                    metric="inner_product" if metric == "ip" else "sqeuclidean",
+                    graph_degree=graph_degree,
+                    intermediate_graph_degree=intermediate_degree,
+                    build_algo="ivf_pq",
+                )
+                owner.native = self.cagra.build(
+                    params, self.cp.from_dlpack(vectors), resources=owner.resources
+                )
             self.synchronize()
             if owner.native.trained is not True or owner.native.dim != vectors.shape[1]:
                 raise IndexSearchError(
@@ -260,6 +292,7 @@ class CagraNativeRuntime:
             # cuVS's Cython __dealloc__ destroys the native index. Keep its MR
             # and Resources alive until destruction and all streams complete.
             owner.native = None
+            owner.graph = None
             owner.resources = None
             self.synchronize()
             if owner.limit.get_allocated_bytes() != 0:
@@ -282,6 +315,7 @@ class CagraIndexBackend(IndexBackend):
         intermediate_degree,
         itopk_size,
         global_native_cap_bytes=None,
+        exact_head_groups=0,
         _runtime=None,
     ):
         self._device = torch.device(device)
@@ -306,6 +340,11 @@ class CagraIndexBackend(IndexBackend):
             raise ValueError("native CAGRA requires CUDA")
         self.cap = native_bytes_per_index
         self.graph_degree, self.intermediate_degree = graph_degree, intermediate_degree
+        if exact_head_groups not in (0, 4):
+            raise ValueError("exact CAGRA seed requires four grouped heads")
+        if exact_head_groups and graph_degree != 16:
+            raise ValueError("calibrated exact CAGRA seed requires degree 16")
+        self.exact_head_groups = exact_head_groups
         self.itopk_size = itopk_size
         self.runtime = (
             _runtime
@@ -420,13 +459,13 @@ class CagraIndexBackend(IndexBackend):
             owner = self.runtime.create(self.cap)
             self._owners[id(owner)] = owner
             try:
-                self.runtime.build(
-                    owner,
-                    vectors,
-                    metric=metric,
-                    graph_degree=self.graph_degree,
+                kwargs = dict(
+                    metric=metric, graph_degree=self.graph_degree,
                     intermediate_degree=self.intermediate_degree,
                 )
+                if self.exact_head_groups:
+                    kwargs["exact_head_groups"] = self.exact_head_groups
+                self.runtime.build(owner, vectors, **kwargs)
                 self.runtime.synchronize()
                 owner.rows = rows
                 return BuiltIndex(vector_space, metric, dim, rows, owner)

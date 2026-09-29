@@ -5,8 +5,11 @@ agreement and completion receipts remain on the Scheduler thread.
 """
 
 import asyncio
+import logging
 import math
+import time
 
+import aiohttp
 import torch
 from sglang.srt.disaggregation.pvd.decode_refresh import PVDDecodeSession
 from sglang.srt.disaggregation.pvd.fanin_scatter import scatter_rank_packed_bytes
@@ -28,6 +31,8 @@ from sglang.srt.disaggregation.pvd.sharding import (
     rank_packed_full_shard_fanin_plan,
     source_shard_intersections,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PVDDecodeFanInSession(PVDDecodeSession):
@@ -108,10 +113,52 @@ class PVDDecodeFanInSession(PVDDecodeSession):
         # polls would reject long prompts whose bounded writer needs more PUTs.
         return await asyncio.wait_for(self._deliver_fanin(interval), timeout=300)
 
+    async def _wait_for_both_indexes(self):
+        """Experimental initial V-to-D gate, bound to this selected Entry."""
+        routes = await self.client.selected_shard_routes(self.key)
+        if routes.manifest.key != self.key:
+            raise RuntimeError("index gate returned another Entry")
+        started = time.monotonic()
+        deadline = started + 240.0
+        timeout = aiohttp.ClientTimeout(total=10.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while True:
+                if self._closed or self.req.finished():
+                    raise RuntimeError("request closed while waiting for V graphs")
+                async def one(route):
+                    async with session.get(f"{route.url}/internal/v1/indexes") as reply:
+                        if reply.status != 200:
+                            raise RuntimeError(f"V rank {route.rank} index status {reply.status}")
+                        data = await reply.json()
+                        if data.get("enabled") is not True:
+                            raise RuntimeError("V Prompt index is disabled")
+                        return data.get("entries", {}).get(self.key.transfer_id)
+                gates = await asyncio.gather(*(one(route) for route in routes.shards))
+                if all(gate is not None and gate.get("searchable") is True for gate in gates):
+                    elapsed = time.monotonic() - started
+                    logger.info(
+                        "PVD initial fan-in graph gate READY: transfer_id=%s wait_seconds=%.6f",
+                        self.key.transfer_id, elapsed,
+                    )
+                    return
+                for gate in gates:
+                    if gate is not None and (
+                        gate.get("state") == "closed" or gate.get("exhausted") is True
+                    ):
+                        raise RuntimeError(f"V Prompt graph cannot become READY: {gate}")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for both V Prompt graphs")
+                await asyncio.sleep(0.05)
+
     async def _deliver_fanin(self, interval):
         async with self._fanin_lock:
             if self._closed or self.req.finished():
                 raise RuntimeError("request closed before fan-in publication")
+            if (
+                self.clock.round == 0
+                and getattr(self.manager, "wait_for_index_ready_before_fanin", False)
+            ):
+                await self._wait_for_both_indexes()
             client = await self._client()
             health = await client.request("preflight", {})
             if self._closed:
@@ -306,6 +353,10 @@ def refresh_fanin_steps(refresher, reqs):
     if not due:
         return []
     prepared = []
+    initial_started = {
+        s.key.transfer_id: time.monotonic()
+        for s in due if s.clock.round == 0
+    }
     try:
         for s in due:
             rows = manager.scheduler.req_to_token_pool.req_to_token[
@@ -385,5 +436,12 @@ def refresh_fanin_steps(refresher, reqs):
     if error:
         return [(s.req, error) for s in due]
     for s in due:
+        was_initial = s.clock.round == 0
         s._complete_refresh()
+        if was_initial:
+            logger.info(
+                "PVD initial KV installed from V: transfer_id=%s fanin_seconds=%.6f",
+                s.key.transfer_id,
+                time.monotonic() - initial_started[s.key.transfer_id],
+            )
     return []

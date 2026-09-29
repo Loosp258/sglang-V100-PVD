@@ -1,0 +1,921 @@
+{
+  "calibration": {
+    "by_prompt": {
+      "1009": {
+        "ranks": [
+          {
+            "baseline_full_seconds": 0.3564424514770508,
+            "split_full_seconds": 1.177273154258728,
+            "prefix_seconds": {
+              "512": 0.21844661235809326
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 0.9318234999999999,
+                "extend_seconds": 0.0
+              },
+              "512": {
+                "build_seconds": 0.958226,
+                "extend_seconds": 0.2683995
+              }
+            }
+          },
+          {
+            "baseline_full_seconds": 0.3695719242095947,
+            "split_full_seconds": 1.0681521892547607,
+            "prefix_seconds": {
+              "512": 0.22545111179351807
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 0.935694,
+                "extend_seconds": 0.0
+              },
+              "512": {
+                "build_seconds": 0.8422215,
+                "extend_seconds": 0.29352049999999996
+              }
+            }
+          }
+        ],
+        "pilot_samples_per_arm": [
+          2,
+          2
+        ]
+      },
+      "1509": {
+        "ranks": [
+          {
+            "baseline_full_seconds": 0.510249137878418,
+            "split_full_seconds": 1.3238662481307983,
+            "prefix_seconds": {
+              "1024": 0.3580547571182251
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.2000549999999999,
+                "extend_seconds": 0.0
+              },
+              "1024": {
+                "build_seconds": 0.9653214999999999,
+                "extend_seconds": 0.22300999999999999
+              }
+            }
+          },
+          {
+            "baseline_full_seconds": 0.5286121368408203,
+            "split_full_seconds": 1.5225497484207153,
+            "prefix_seconds": {
+              "1024": 0.3714956045150757
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.183192,
+                "extend_seconds": 0.0
+              },
+              "1024": {
+                "build_seconds": 1.1503804999999998,
+                "extend_seconds": 0.2728265
+              }
+            }
+          }
+        ],
+        "pilot_samples_per_arm": [
+          2,
+          2
+        ]
+      },
+      "2159": {
+        "ranks": [
+          {
+            "baseline_full_seconds": 0.801926851272583,
+            "split_full_seconds": 2.1117007732391357,
+            "prefix_seconds": {
+              "2048": 0.8288438320159912
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.3423875,
+                "extend_seconds": 0.0
+              },
+              "2048": {
+                "build_seconds": 1.2818555,
+                "extend_seconds": 0.1589985
+              }
+            }
+          },
+          {
+            "baseline_full_seconds": 0.8289811611175537,
+            "split_full_seconds": 2.2306723594665527,
+            "prefix_seconds": {
+              "2048": 0.8577175140380859
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.348833,
+                "extend_seconds": 0.0
+              },
+              "2048": {
+                "build_seconds": 1.371982,
+                "extend_seconds": 0.178027
+              }
+            }
+          }
+        ],
+        "pilot_samples_per_arm": [
+          2,
+          2
+        ]
+      }
+    },
+    "arrival_definition": "V graph execution start, an upper bound on complete chunk arrival"
+  },
+  "full": [
+    {
+      "case": 94001,
+      "repetitions": 430,
+      "started_unix": 1790695674.0657039,
+      "first_event_seconds": 2.427,
+      "wall_seconds": 4.557,
+      "completion_tokens": 6,
+      "tokens": 2159,
+      "transfer_id": "24d118a6-6007-45a7-adb6-a6d4b7d9db3f",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695674.8796291,
+            "end_unix": 1790695676.233,
+            "seconds": 1.353371,
+            "start_seconds": 0.8139252662658691,
+            "end_seconds": 2.1672961711883545
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695674.903225,
+            "end_unix": 1790695676.266,
+            "seconds": 1.362775,
+            "start_seconds": 0.8375210762023926,
+            "end_seconds": 2.20029616355896
+          }
+        ]
+      }
+    },
+    {
+      "case": 94002,
+      "repetitions": 100,
+      "started_unix": 1790695678.6832595,
+      "first_event_seconds": 1.228,
+      "wall_seconds": 1.952,
+      "completion_tokens": 6,
+      "tokens": 509,
+      "transfer_id": "c1a4eb8c-1d23-4d36-8531-44976c519312",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695678.901045,
+            "end_unix": 1790695679.801,
+            "seconds": 0.899955,
+            "start_seconds": 0.21778559684753418,
+            "end_seconds": 1.1177406311035156
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695678.908061,
+            "end_unix": 1790695679.811,
+            "seconds": 0.902939,
+            "start_seconds": 0.22480154037475586,
+            "end_seconds": 1.1277406215667725
+          }
+        ]
+      }
+    },
+    {
+      "case": 94003,
+      "repetitions": 300,
+      "started_unix": 1790695680.7013927,
+      "first_event_seconds": 1.967,
+      "wall_seconds": 3.143,
+      "completion_tokens": 6,
+      "tokens": 1509,
+      "transfer_id": "a785d7b4-7888-4d56-b2f7-35851cb751ae",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695681.215309,
+            "end_unix": 1790695682.521,
+            "seconds": 1.305691,
+            "start_seconds": 0.5139162540435791,
+            "end_seconds": 1.8196072578430176
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695681.234184,
+            "end_unix": 1790695682.502,
+            "seconds": 1.267816,
+            "start_seconds": 0.5327913761138916,
+            "end_seconds": 1.800607442855835
+          }
+        ]
+      }
+    },
+    {
+      "case": 94004,
+      "repetitions": 200,
+      "started_unix": 1790695683.9160304,
+      "first_event_seconds": 1.464,
+      "wall_seconds": 2.401,
+      "completion_tokens": 6,
+      "tokens": 1009,
+      "transfer_id": "ea6f8870-6582-4a48-8ed2-d78e1e9351c6",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695684.267317,
+            "end_unix": 1790695685.244,
+            "seconds": 0.976683,
+            "start_seconds": 0.3512866497039795,
+            "end_seconds": 1.3279695510864258
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695684.280606,
+            "end_unix": 1790695685.261,
+            "seconds": 0.980394,
+            "start_seconds": 0.3645756244659424,
+            "end_seconds": 1.3449695110321045
+          }
+        ]
+      }
+    },
+    {
+      "case": 94005,
+      "repetitions": 200,
+      "started_unix": 1790695686.3924377,
+      "first_event_seconds": 1.384,
+      "wall_seconds": 2.28,
+      "completion_tokens": 6,
+      "tokens": 1009,
+      "transfer_id": "e32dadf2-62df-4767-806b-e711d938b08e",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695686.754036,
+            "end_unix": 1790695687.641,
+            "seconds": 0.886964,
+            "start_seconds": 0.36159825325012207,
+            "end_seconds": 1.2485623359680176
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695686.767006,
+            "end_unix": 1790695687.658,
+            "seconds": 0.890994,
+            "start_seconds": 0.37456822395324707,
+            "end_seconds": 1.2655622959136963
+          }
+        ]
+      }
+    },
+    {
+      "case": 94006,
+      "repetitions": 300,
+      "started_unix": 1790695688.739999,
+      "first_event_seconds": 1.762,
+      "wall_seconds": 2.94,
+      "completion_tokens": 6,
+      "tokens": 1509,
+      "transfer_id": "2e87a4f7-b7a5-4196-8a17-8eb066b5ab25",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695689.246581,
+            "end_unix": 1790695690.341,
+            "seconds": 1.094419,
+            "start_seconds": 0.5065820217132568,
+            "end_seconds": 1.6010010242462158
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695689.264432,
+            "end_unix": 1790695690.363,
+            "seconds": 1.098568,
+            "start_seconds": 0.524432897567749,
+            "end_seconds": 1.6230008602142334
+          }
+        ]
+      }
+    },
+    {
+      "case": 94007,
+      "repetitions": 100,
+      "started_unix": 1790695691.742973,
+      "first_event_seconds": 1.061,
+      "wall_seconds": 1.763,
+      "completion_tokens": 6,
+      "tokens": 509,
+      "transfer_id": "c5b92775-86cf-4e98-98f0-b01f628fb0d5",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695691.956995,
+            "end_unix": 1790695692.684,
+            "seconds": 0.727005,
+            "start_seconds": 0.21402192115783691,
+            "end_seconds": 0.9410269260406494
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695691.9637852,
+            "end_unix": 1790695692.706,
+            "seconds": 0.742215,
+            "start_seconds": 0.22081208229064941,
+            "end_seconds": 0.9630270004272461
+          }
+        ]
+      }
+    },
+    {
+      "case": 94008,
+      "repetitions": 430,
+      "started_unix": 1790695693.5746677,
+      "first_event_seconds": 2.333,
+      "wall_seconds": 3.94,
+      "completion_tokens": 6,
+      "tokens": 2159,
+      "transfer_id": "a258fc0f-fa1f-4839-92e9-b7872559e292",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695694.3645961,
+            "end_unix": 1790695695.696,
+            "seconds": 1.331404,
+            "start_seconds": 0.7899284362792969,
+            "end_seconds": 2.1213324069976807
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695694.395109,
+            "end_unix": 1790695695.73,
+            "seconds": 1.334891,
+            "start_seconds": 0.8204412460327148,
+            "end_seconds": 2.155332326889038
+          }
+        ]
+      }
+    }
+  ],
+  "split": [
+    {
+      "case": 94001,
+      "repetitions": 430,
+      "started_unix": 1790695809.8560069,
+      "first_event_seconds": 2.752,
+      "wall_seconds": 4.387,
+      "completion_tokens": 6,
+      "tokens": 2159,
+      "transfer_id": "2e4befd6-a59c-4a0b-8699-aed0e37ea133",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "graph",
+            "pages": 2048,
+            "prefix": 2048,
+            "first_page": 0,
+            "start_unix": 1790695810.8150349,
+            "end_unix": 1790695812.119,
+            "seconds": 1.303965,
+            "start_seconds": 0.9590280055999756,
+            "end_seconds": 2.262993097305298
+          },
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 2048,
+            "start_unix": 1790695812.1193838,
+            "end_unix": 1790695812.307,
+            "seconds": 0.187616,
+            "start_seconds": 2.2633769512176514,
+            "end_seconds": 2.450993061065674
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "graph",
+            "pages": 2048,
+            "prefix": 2048,
+            "first_page": 0,
+            "start_unix": 1790695810.84523,
+            "end_unix": 1790695812.209,
+            "seconds": 1.36377,
+            "start_seconds": 0.9892232418060303,
+            "end_seconds": 2.3529932498931885
+          },
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 2048,
+            "start_unix": 1790695812.2103488,
+            "end_unix": 1790695812.432,
+            "seconds": 0.221651,
+            "start_seconds": 2.354341983795166,
+            "end_seconds": 2.575993061065674
+          }
+        ]
+      }
+    },
+    {
+      "case": 94002,
+      "repetitions": 100,
+      "started_unix": 1790695814.3044066,
+      "first_event_seconds": 1.124,
+      "wall_seconds": 1.861,
+      "completion_tokens": 6,
+      "tokens": 509,
+      "transfer_id": "85392e2b-7fcf-453d-90e9-b9d209f1886f",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695814.53662,
+            "end_unix": 1790695815.32,
+            "seconds": 0.78338,
+            "start_seconds": 0.23221325874328613,
+            "end_seconds": 1.0155932903289795
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695814.5414858,
+            "end_unix": 1790695815.327,
+            "seconds": 0.785514,
+            "start_seconds": 0.23707914352416992,
+            "end_seconds": 1.0225932598114014
+          }
+        ]
+      }
+    },
+    {
+      "case": 94003,
+      "repetitions": 300,
+      "started_unix": 1790695816.227071,
+      "first_event_seconds": 1.915,
+      "wall_seconds": 3.114,
+      "completion_tokens": 6,
+      "tokens": 1509,
+      "transfer_id": "ab57c966-19a0-49c4-90c1-33ed401292bf",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "graph",
+            "pages": 1024,
+            "prefix": 1024,
+            "first_page": 0,
+            "start_unix": 1790695816.594407,
+            "end_unix": 1790695817.5,
+            "seconds": 0.905593,
+            "start_seconds": 0.3673360347747803,
+            "end_seconds": 1.2729289531707764
+          },
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 1024,
+            "start_unix": 1790695817.50106,
+            "end_unix": 1790695817.731,
+            "seconds": 0.22994,
+            "start_seconds": 1.273988962173462,
+            "end_seconds": 1.5039288997650146
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "graph",
+            "pages": 1024,
+            "prefix": 1024,
+            "first_page": 0,
+            "start_unix": 1790695816.607615,
+            "end_unix": 1790695817.672,
+            "seconds": 1.064385,
+            "start_seconds": 0.38054394721984863,
+            "end_seconds": 1.4449288845062256
+          },
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 1024,
+            "start_unix": 1790695817.672183,
+            "end_unix": 1790695817.997,
+            "seconds": 0.324817,
+            "start_seconds": 1.4451119899749756,
+            "end_seconds": 1.7699289321899414
+          }
+        ]
+      }
+    },
+    {
+      "case": 94004,
+      "repetitions": 200,
+      "started_unix": 1790695819.4070368,
+      "first_event_seconds": 1.725,
+      "wall_seconds": 2.657,
+      "completion_tokens": 6,
+      "tokens": 1009,
+      "transfer_id": "14a7785a-85b8-45f4-85a1-69411755ace2",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "graph",
+            "pages": 512,
+            "prefix": 512,
+            "first_page": 0,
+            "start_unix": 1790695819.62161,
+            "end_unix": 1790695820.773,
+            "seconds": 1.15139,
+            "start_seconds": 0.21457314491271973,
+            "end_seconds": 1.3659632205963135
+          },
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 512,
+            "start_unix": 1790695820.773542,
+            "end_unix": 1790695821.011,
+            "seconds": 0.237458,
+            "start_seconds": 1.3665051460266113,
+            "end_seconds": 1.6039631366729736
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "graph",
+            "pages": 512,
+            "prefix": 512,
+            "first_page": 0,
+            "start_unix": 1790695819.627754,
+            "end_unix": 1790695820.521,
+            "seconds": 0.893246,
+            "start_seconds": 0.220717191696167,
+            "end_seconds": 1.1139631271362305
+          },
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 512,
+            "start_unix": 1790695820.521231,
+            "end_unix": 1790695820.741,
+            "seconds": 0.219769,
+            "start_seconds": 1.1141941547393799,
+            "end_seconds": 1.33396315574646
+          }
+        ]
+      }
+    },
+    {
+      "case": 94005,
+      "repetitions": 200,
+      "started_unix": 1790695822.1376178,
+      "first_event_seconds": 1.51,
+      "wall_seconds": 2.437,
+      "completion_tokens": 6,
+      "tokens": 1009,
+      "transfer_id": "5f22261a-d534-4eed-b243-6f7de4ccbd14",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "graph",
+            "pages": 512,
+            "prefix": 512,
+            "first_page": 0,
+            "start_unix": 1790695822.359938,
+            "end_unix": 1790695823.125,
+            "seconds": 0.765062,
+            "start_seconds": 0.2223200798034668,
+            "end_seconds": 0.987382173538208
+          },
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 512,
+            "start_unix": 1790695823.125659,
+            "end_unix": 1790695823.425,
+            "seconds": 0.299341,
+            "start_seconds": 0.9880411624908447,
+            "end_seconds": 1.2873821258544922
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "graph",
+            "pages": 512,
+            "prefix": 512,
+            "first_page": 0,
+            "start_unix": 1790695822.3678029,
+            "end_unix": 1790695823.159,
+            "seconds": 0.791197,
+            "start_seconds": 0.23018503189086914,
+            "end_seconds": 1.0213820934295654
+          },
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1009,
+            "prefix": 0,
+            "first_page": 512,
+            "start_unix": 1790695823.159728,
+            "end_unix": 1790695823.527,
+            "seconds": 0.367272,
+            "start_seconds": 1.0221102237701416,
+            "end_seconds": 1.3893821239471436
+          }
+        ]
+      }
+    },
+    {
+      "case": 94006,
+      "repetitions": 300,
+      "started_unix": 1790695824.6491766,
+      "first_event_seconds": 1.973,
+      "wall_seconds": 3.168,
+      "completion_tokens": 6,
+      "tokens": 1509,
+      "transfer_id": "5166f408-fb79-4154-a72e-84769baf2f24",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "graph",
+            "pages": 1024,
+            "prefix": 1024,
+            "first_page": 0,
+            "start_unix": 1790695824.99795,
+            "end_unix": 1790695826.023,
+            "seconds": 1.02505,
+            "start_seconds": 0.3487734794616699,
+            "end_seconds": 1.3738234043121338
+          },
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 1024,
+            "start_unix": 1790695826.0229201,
+            "end_unix": 1790695826.239,
+            "seconds": 0.21608,
+            "start_seconds": 1.3737435340881348,
+            "end_seconds": 1.5898234844207764
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "graph",
+            "pages": 1024,
+            "prefix": 1024,
+            "first_page": 0,
+            "start_unix": 1790695825.0116239,
+            "end_unix": 1790695826.248,
+            "seconds": 1.236376,
+            "start_seconds": 0.36244726181030273,
+            "end_seconds": 1.5988233089447021
+          },
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 1024,
+            "start_unix": 1790695826.249164,
+            "end_unix": 1790695826.47,
+            "seconds": 0.220836,
+            "start_seconds": 1.599987506866455,
+            "end_seconds": 1.8208234310150146
+          }
+        ]
+      }
+    },
+    {
+      "case": 94007,
+      "repetitions": 100,
+      "started_unix": 1790695827.8810892,
+      "first_event_seconds": 1.074,
+      "wall_seconds": 1.794,
+      "completion_tokens": 6,
+      "tokens": 509,
+      "transfer_id": "17effa02-544e-450c-81b3-a323cc6740fe",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695828.1052659,
+            "end_unix": 1790695828.847,
+            "seconds": 0.741734,
+            "start_seconds": 0.22417664527893066,
+            "end_seconds": 0.9659106731414795
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790695828.112977,
+            "end_unix": 1790695828.858,
+            "seconds": 0.745023,
+            "start_seconds": 0.2318878173828125,
+            "end_seconds": 0.9769108295440674
+          }
+        ]
+      }
+    },
+    {
+      "case": 94008,
+      "repetitions": 430,
+      "started_unix": 1790695829.7375944,
+      "first_event_seconds": 2.429,
+      "wall_seconds": 4.059,
+      "completion_tokens": 6,
+      "tokens": 2159,
+      "transfer_id": "a9702311-f1a8-4187-9a72-968bdfa9aaae",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "graph",
+            "pages": 2048,
+            "prefix": 2048,
+            "first_page": 0,
+            "start_unix": 1790695830.436254,
+            "end_unix": 1790695831.696,
+            "seconds": 1.259746,
+            "start_seconds": 0.6986596584320068,
+            "end_seconds": 1.9584057331085205
+          },
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 2048,
+            "start_unix": 1790695831.697619,
+            "end_unix": 1790695831.828,
+            "seconds": 0.130381,
+            "start_seconds": 1.9600245952606201,
+            "end_seconds": 2.0904057025909424
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "graph",
+            "pages": 2048,
+            "prefix": 2048,
+            "first_page": 0,
+            "start_unix": 1790695830.4638062,
+            "end_unix": 1790695831.844,
+            "seconds": 1.380194,
+            "start_seconds": 0.7262117862701416,
+            "end_seconds": 2.106405735015869
+          },
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 2048,
+            "start_unix": 1790695831.844597,
+            "end_unix": 1790695831.979,
+            "seconds": 0.134403,
+            "start_seconds": 2.1070027351379395,
+            "end_seconds": 2.241405725479126
+          }
+        ]
+      }
+    }
+  ]
+}

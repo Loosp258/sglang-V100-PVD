@@ -30,6 +30,14 @@ chunked_cagra_upload="${PVD_CHUNKED_CAGRA_UPLOAD:-0}"
 direct_pd_bootstrap="${PVD_DIRECT_PD_BOOTSTRAP:-0}"
 group_heads="${PVD_CAGRA_GROUP_HEADS:-1}"
 itopk_size="${PVD_CAGRA_ITOPK_SIZE:-64}"
+exact_head_seed="${PVD_CAGRA_EXACT_HEAD_SEED:-0}"
+gate_initial_fanin="${PVD_GATE_INITIAL_FANIN_ON_INDEX:-0}"
+split_policy_file="${PVD_SPLIT_POLICY_FILE:-}"
+if [[ "$chunked_cagra_upload" == 1 ]]; then
+  group_heads="${PVD_CAGRA_GROUP_HEADS:-4}"
+  itopk_size="${PVD_CAGRA_ITOPK_SIZE:-2048}"
+  exact_head_seed="${PVD_CAGRA_EXACT_HEAD_SEED:-1}"
+fi
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
 # link has the same path and pinned tokenizer bytes, while P/D links include
 # their own local weight shards.
@@ -44,11 +52,27 @@ fi
 if [[ ! "$cagra_extend25" =~ ^[01]$ ]] ||
    [[ ! "$chunked_cagra_upload" =~ ^[01]$ ]] ||
    [[ ! "$direct_pd_bootstrap" =~ ^[01]$ ]] ||
+   [[ ! "$exact_head_seed" =~ ^[01]$ ]] ||
+   [[ ! "$gate_initial_fanin" =~ ^[01]$ ]] ||
    [[ ! "$group_heads" =~ ^(1|2|4)$ ]] ||
    [[ ! "$itopk_size" =~ ^(64|128|256|512|1024|2048)$ ]] ||
    [[ "$group_heads" != 1 && "$chunked_cagra_upload" != 1 ]] ||
    [[ "$chunked_cagra_upload" == 1 && "$cagra_extend25" != 1 ]]; then
   echo 'chunked CAGRA requires PVD_CAGRA_EXTEND25=1 and a 0/1 feature flag' >&2
+  exit 2
+fi
+if [[ "$exact_head_seed" == 1 ]] &&
+   { [[ "$chunked_cagra_upload" != 1 ]] || [[ "$group_heads" != 4 ]]; }; then
+  echo 'exact degree-16 head seed requires chunked upload and four-head groups' >&2
+  exit 2
+fi
+if [[ "$gate_initial_fanin" == 1 && "$direct_pd_bootstrap" == 1 ]]; then
+  echo 'index-gated V fan-in and direct P-to-D KV are separate test arms' >&2
+  exit 2
+fi
+if [[ -n "$split_policy_file" ]] &&
+   { [[ "$chunked_cagra_upload" != 1 ]] || [[ ! -r "$split_policy_file" ]]; }; then
+  echo 'split predictor policy requires chunked upload and a readable JSON file' >&2
   exit 2
 fi
 if [[ "$direct_pd_bootstrap" == 1 ]] &&
@@ -113,6 +137,9 @@ case "$role" in
     export SGLANG_HOST_IP="$p_ip"
     export SGLANG_PVD_CHUNKED_CAGRA_UPLOAD="$chunked_cagra_upload"
     export SGLANG_PVD_DIRECT_PD_BOOTSTRAP="$direct_pd_bootstrap"
+    if [[ -n "$split_policy_file" ]]; then
+      export SGLANG_PVD_SPLIT_POLICY_FILE="$split_policy_file"
+    fi
     p_base_gpu_id=0
     p_rank_rails="$rail"
     p_ib_device="$rail"
@@ -169,6 +196,13 @@ case "$role" in
     if [[ "$chunked_cagra_upload" == 1 ]]; then
       chunked_args=(--chunked-cagra-upload)
     fi
+    exact_seed_args=()
+    graph_degree=8
+    intermediate_degree=16
+    if [[ "$exact_head_seed" == 1 ]]; then
+      exact_seed_args=(--prompt-index-cagra-exact-head-seed)
+      graph_degree=16
+    fi
     cuvs_site="$root/deps/$cuvs_env/lib/python3.12/site-packages"
     if [[ ! -d "$cuvs_site/cuvs" ]]; then
       echo 'isolated cuVS 25.02 environment is absent' >&2
@@ -194,10 +228,10 @@ case "$role" in
       --prompt-index-backend "$index_backend" \
       --prompt-index-cagra-native-bytes 536870912 \
       --prompt-index-cagra-global-native-bytes 671088640 \
-      --prompt-index-cagra-graph-degree 8 \
-      --prompt-index-cagra-intermediate-degree 16 \
+      --prompt-index-cagra-graph-degree "$graph_degree" \
+      --prompt-index-cagra-intermediate-degree "$intermediate_degree" \
       --prompt-index-group-heads "$group_heads" \
-      "${index_mode_args[@]}" "${chunked_args[@]}" \
+      "${index_mode_args[@]}" "${chunked_args[@]}" "${exact_seed_args[@]}" \
       --prompt-index-cagra-itopk-size "$itopk_size" \
       --experimental-cuda-sparse-packing "${pack_args[@]}" \
       --full-kv-fanin-max-slices "$fanin_max_slices" \
@@ -209,6 +243,7 @@ case "$role" in
   d)
     require_free_port 30003
     require_model "$model"
+    export SGLANG_PVD_GATE_INITIAL_FANIN_ON_INDEX="$gate_initial_fanin"
     d_base_gpu=1
     d_draft_device=cuda:1
     case "${PVD_PROBE_SIDECAR:-0}" in

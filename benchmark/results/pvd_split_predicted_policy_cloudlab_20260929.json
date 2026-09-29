@@ -1,0 +1,20 @@
+{
+  "schema": "pvd-exact16-split-policy-v1",
+  "model_sha256": "90060e84b8749d5666fdd0fd31dc07f216b5c10abdd7f619c0d32837bcf50418",
+  "arrivals_sha256": "b783650c159df4a53843d5e7ac3cf5dee4f6f2a6fcca68cccace30539ec1ce83",
+  "uncertainty_ms": 125.0,
+  "choices": {
+    "1009": {
+      "prefix": 0,
+      "predicted_gain_seconds": 0.0
+    },
+    "1509": {
+      "prefix": 0,
+      "predicted_gain_seconds": 0.0
+    },
+    "2159": {
+      "prefix": 0,
+      "predicted_gain_seconds": 0.0
+    }
+  }
+}

@@ -12,8 +12,9 @@ def main():
     parser.add_argument("--url", default="http://10.10.1.2:8001/generate")
     parser.add_argument("--case", type=int, required=True)
     parser.add_argument("--output-tokens", type=int, default=6)
+    parser.add_argument("--repetitions", type=int, default=430)
     args = parser.parse_args()
-    prompt = f"Case {args.case}. " + "EEFTRITON " * 430
+    prompt = f"Case {args.case}. " + "EEFTRITON " * args.repetitions
     payload = json.dumps(
         {
             "text": prompt,
@@ -28,6 +29,7 @@ def main():
     request = urllib.request.Request(
         args.url, data=payload, headers={"Content-Type": "application/json"}
     )
+    started_unix = time.time()
     started = time.perf_counter()
     first = None
     events = []
@@ -45,6 +47,8 @@ def main():
         json.dumps(
             {
                 "case": args.case,
+                "repetitions": args.repetitions,
+                "started_unix": started_unix,
                 "status": status,
                 "content_type": content_type,
                 "first_event_seconds": round(first, 3) if first is not None else None,

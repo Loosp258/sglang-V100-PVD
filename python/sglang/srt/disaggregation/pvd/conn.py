@@ -265,7 +265,23 @@ class PVDKVManager:
             os.environ.get("SGLANG_PVD_CHUNKED_CAGRA_UPLOAD") == "1"
             and scheduler.server_args.disaggregation_mode == "prefill"
         )
+        split_policy_path = os.environ.get("SGLANG_PVD_SPLIT_POLICY_FILE")
+        self.split_upload_policy = None
+        if split_policy_path:
+            if not self.chunked_cagra_upload:
+                raise PVDConnectionError("split upload policy requires chunked P-to-V")
+            from sglang.srt.disaggregation.pvd.split_upload_policy import SplitUploadPolicy
+
+            self.split_upload_policy = SplitUploadPolicy(
+                split_policy_path, page_size=self.page_size
+            )
         self.direct_pd_bootstrap = os.environ.get("SGLANG_PVD_DIRECT_PD_BOOTSTRAP") == "1"
+        self.wait_for_index_ready_before_fanin = (
+            os.environ.get("SGLANG_PVD_GATE_INITIAL_FANIN_ON_INDEX") == "1"
+            and scheduler.server_args.disaggregation_mode == "decode"
+        )
+        if self.wait_for_index_ready_before_fanin and self.direct_pd_bootstrap:
+            raise PVDConnectionError("index-gated V fan-in cannot use direct P-to-D KV")
         if self.direct_pd_bootstrap and self.tp_size != 1:
             raise PVDConnectionError("PVD direct initial KV currently requires TP1")
         if self.direct_pd_bootstrap and scheduler.server_args.disaggregation_mode == "prefill" and not self.chunked_cagra_upload:
@@ -1000,6 +1016,20 @@ class PVDKVSender:
             )
         )
         self._expected_pages = next(iter(shards.values())).page_count
+        self._predicted_prefix_rows = (
+            mgr.split_upload_policy.prefix_for(len(req.origin_input_ids))
+            if getattr(mgr, "split_upload_policy", None) is not None else None
+        )
+        self._predicted_prefix_pages = (
+            self._predicted_prefix_rows // mgr.page_size
+            if self._predicted_prefix_rows is not None else None
+        )
+        if self._predicted_prefix_rows is not None:
+            logger.info(
+                "PVD predicted Prompt split: transfer_id=%s tokens=%d prefix=%d",
+                self.key.transfer_id, len(req.origin_input_ids),
+                self._predicted_prefix_rows,
+            )
 
     def init(self, num_kv_indices: int, aux_index: Optional[int] = None):
         if num_kv_indices != self._expected_pages:
@@ -1016,6 +1046,20 @@ class PVDKVSender:
             return last_chunk
         if num_pages <= 0 or self._final_submitted:
             return False
+        if not last_chunk and self._predicted_prefix_pages is not None:
+            if self._predicted_prefix_pages == 0 or self._next_page:
+                return False
+            reached = self._next_page + num_pages
+            if reached < self._predicted_prefix_pages:
+                return False
+            if reached > self._predicted_prefix_pages:
+                logger.info(
+                    "PVD predicted split missed Prefill boundary: transfer_id=%s "
+                    "wanted=%d reached=%d; sending complete Prompt",
+                    self.key.transfer_id, self._predicted_prefix_rows, reached,
+                )
+                self._predicted_prefix_pages = 0
+                return False
         if not last_chunk and (
             self._next_page + num_pages >= self._expected_pages
             or (self._publish_future is not None and not self._publish_future.done())

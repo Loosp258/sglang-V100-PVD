@@ -7,6 +7,7 @@ cannot predict whether a prefix build overlaps the remaining Prefill/upload.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -116,8 +117,22 @@ def optimize_two_rank(
         raise ValueError("two models and two arrival traces are required")
     if uncertainty_ms < 0:
         raise ValueError("uncertainty threshold must be nonnegative")
+
+    def graph_times_for_rank(model: dict, trace: dict, prefix: int) -> dict:
+        measured = trace.get("online_graph_seconds", {}).get(str(prefix))
+        if measured is None:
+            return predict(model, n, prefix)
+        build = float(measured["build_seconds"])
+        extend = float(measured["extend_seconds"])
+        if build <= 0 or extend < 0 or (prefix == 0 and extend != 0):
+            raise ValueError("invalid online graph calibration")
+        return {"build_seconds": build, "extend_seconds": extend}
+
     try:
-        full_builds = [predict(model, n, 0)["build_seconds"] for model in models]
+        full_builds = [
+            graph_times_for_rank(model, trace, 0)["build_seconds"]
+            for model, trace in zip(models, arrivals)
+        ]
     except ValueError as exc:
         return {
             "recommendation": 0,
@@ -138,7 +153,10 @@ def optimize_two_rank(
         rank_ready = []
         graph_times = []
         try:
-            graph_times = [predict(model, n, prefix) for model in models]
+            graph_times = [
+                graph_times_for_rank(model, trace, prefix)
+                for model, trace in zip(models, arrivals)
+            ]
         except ValueError as exc:
             rejected[str(prefix)] = str(exc)
             continue
@@ -216,6 +234,11 @@ def main() -> None:
     optimize_parser.add_argument("arrivals", type=Path)
     optimize_parser.add_argument("--model-rank1", type=Path)
     optimize_parser.add_argument("--uncertainty-ms", type=float, default=125.0)
+    policy_parser = sub.add_parser("compile-policy")
+    policy_parser.add_argument("model", type=Path)
+    policy_parser.add_argument("arrivals", type=Path)
+    policy_parser.add_argument("--output", type=Path, required=True)
+    policy_parser.add_argument("--uncertainty-ms", type=float, default=125.0)
     args = parser.parse_args()
     if args.command == "fit":
         rows = []
@@ -252,6 +275,31 @@ def main() -> None:
         print(json.dumps(optimize_two_rank(
             [model, other], args.n, arrivals["ranks"], args.uncertainty_ms
         ), indent=2))
+    elif args.command == "compile-policy":
+        model = json.loads(args.model.read_text())
+        arrivals = json.loads(args.arrivals.read_text())
+        choices = {}
+        for n_text, trace in arrivals["by_prompt"].items():
+            n = int(n_text)
+            result = optimize_two_rank(
+                [model, model], n, trace["ranks"], args.uncertainty_ms
+            )
+            choices[str(n)] = {
+                "prefix": result["recommendation"],
+                "predicted_gain_seconds": (
+                    next((item["gain_vs_full_seconds"] for item in result["choices"]
+                          if item["prefix"] == result["recommendation"]), 0.0)
+                ),
+            }
+        policy = {
+            "schema": "pvd-exact16-split-policy-v1",
+            "model_sha256": hashlib.sha256(args.model.read_bytes()).hexdigest(),
+            "arrivals_sha256": hashlib.sha256(args.arrivals.read_bytes()).hexdigest(),
+            "uncertainty_ms": args.uncertainty_ms,
+            "choices": choices,
+        }
+        args.output.write_text(json.dumps(policy, indent=2) + "\n")
+        print(json.dumps(policy, indent=2))
     else:
         model = json.loads(args.model.read_text())
         if args.head_starts:
