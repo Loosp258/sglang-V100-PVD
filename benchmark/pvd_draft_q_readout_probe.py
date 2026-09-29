@@ -59,7 +59,7 @@ def prompts(tokenizer, source_root: Path, length: int):
     return train, valid
 
 
-def teacher_capture(model, token_ids, device):
+def teacher_capture(model, token_ids, device, *, next_token_positions=None):
     """Capture the actual post-RoPE Q/K used by each HF Qwen attention layer."""
     q_slots = [None] * model.config.num_hidden_layers
     k_slots = [None] * model.config.num_hidden_layers
@@ -86,14 +86,27 @@ def teacher_capture(model, token_ids, device):
     try:
         ids = torch.tensor(token_ids, dtype=torch.long, device=device)[None, :]
         with torch.inference_mode():
-            model.model(input_ids=ids, use_cache=False)
+            output = model.model(input_ids=ids, use_cache=False)
+            if next_token_positions is not None:
+                positions = torch.as_tensor(next_token_positions,
+                                            device=device, dtype=torch.long)
+                if (positions.ndim != 1 or len(positions) == 0
+                        or int(positions.min()) < 0
+                        or int(positions.max()) >= len(token_ids)):
+                    raise ValueError("next-token positions exceed the captured sequence")
+                next_tokens = model.lm_head(
+                    output.last_hidden_state[0, positions]
+                ).argmax(dim=-1).cpu().tolist()
         torch.cuda.synchronize(device)
     finally:
         for handle in handles:
             handle.remove()
     if any(item is None for item in q_slots + k_slots):
         raise RuntimeError("teacher failed to capture every Q/K layer")
-    return torch.stack(q_slots), torch.stack(k_slots)
+    captured = (torch.stack(q_slots), torch.stack(k_slots))
+    if next_token_positions is not None:
+        return (*captured, next_tokens)
+    return captured
 
 
 def student_features(model, token_ids, device, anchor_layers):
