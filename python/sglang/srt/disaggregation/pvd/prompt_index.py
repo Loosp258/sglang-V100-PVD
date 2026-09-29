@@ -181,11 +181,12 @@ class PromptIndexManager:
         self.positional_encoding = positional_encoding
         self.max_build_attempts = max_build_attempts
         self.budget = budget
-        if group_heads not in (1, 2):
-            raise ValueError("group_heads must be 1 or 2")
-        if group_heads == 2 and getattr(self.backend, "name", None) != "cagra":
-            raise ValueError("two-head grouping requires native CAGRA")
+        if group_heads not in (1, 2, 4):
+            raise ValueError("group_heads must be 1, 2 or 4")
+        if group_heads > 1 and getattr(self.backend, "name", None) != "cagra":
+            raise ValueError("grouped heads require native CAGRA")
         self.group_heads = group_heads
+
         # Where this manager's copies live: the backend's declared device, so
         # vectors are born where they will be searched. The KV pool is never
         # moved to match; extraction copies across instead.
@@ -213,6 +214,9 @@ class PromptIndexManager:
         )
         if shared:
             budget.reserve(self._shared_owner, shared, 0)
+
+    def _group_key(self, layer: int) -> Tuple[int, int]:
+        return (layer - layer % (self.group_heads // 2), -1)
 
     @property
     def quarantined(self):
@@ -410,6 +414,7 @@ class PromptIndexManager:
             vectors = []
             built = {}
             new_means = {}
+            grouped_datasets = []
             try:
                 vectors = extract_prompt_k(
                     packed, layout=layout, manifest=manifest,
@@ -422,9 +427,9 @@ class PromptIndexManager:
                 )
                 if not vectors:
                     raise PromptVectorError("chunk produced no Prompt K vectors")
-                if self.group_heads == 2:
-                    if len(vectors) % 2:
-                        raise IndexSearchError("grouped chunk lacks a paired KV head")
+                if self.group_heads > 1:
+                    if len(vectors) % self.group_heads:
+                        raise IndexSearchError("grouped chunk lacks complete KV heads")
                     self._reserve(group_owner, sum(
                         item.vectors.numel() * item.vectors.element_size()
                         + (item.head_dim * 4 if first_page == 0 else 0)
@@ -447,21 +452,33 @@ class PromptIndexManager:
                             v.head_dim, metric=self.metric,
                         ) for v in vectors
                     ))
-                if self.group_heads == 2:
-                    for layer in sorted({item.layer for item in vectors}):
+                if self.group_heads > 1:
+                    for group_start in range(0, len(vectors), self.group_heads):
                         pair = sorted(
-                            (item for item in vectors if item.layer == layer),
-                            key=lambda item: item.kv_head,
+                            vectors[group_start:group_start + self.group_heads],
+                            key=lambda item: (item.layer, item.kv_head),
                         )
-                        if len(pair) != 2 or pair[0].token_count != pair[1].token_count:
-                            raise IndexSearchError("grouped layer has mismatched KV heads")
+                        base_layer = pair[0].layer
+                        base_head = pair[0].kv_head - pair[0].kv_head % 2
+                        expected_keys = [
+                            (base_layer + offset // 2, base_head + offset % 2)
+                            for offset in range(self.group_heads)
+                        ]
+                        if (
+                            base_layer % (self.group_heads // 2)
+                            or [(item.layer, item.kv_head) for item in pair] != expected_keys
+                            or len({item.token_count for item in pair}) != 1
+                        ):
+                            raise IndexSearchError("grouped chunk has mismatched KV heads")
                         count, dim = pair[0].token_count, pair[0].head_dim
                         grouped = torch.empty(
-                            (2 * count, dim), device=pair[0].vectors.device,
+                            (self.group_heads * count, dim),
+                            device=pair[0].vectors.device,
                             dtype=torch.float32,
                         )
+                        grouped_datasets.append(grouped)
                         for offset, item in enumerate(pair):
-                            key = (layer, item.kv_head)
+                            key = (item.layer, item.kv_head)
                             mean = (
                                 record.group_means[key] if first_page
                                 else item.vectors.mean(dim=0)
@@ -471,17 +488,17 @@ class PromptIndexManager:
                             segment = grouped[offset * count:(offset + 1) * count]
                             segment.copy_(item.vectors)
                             segment.sub_(mean)
-                        key = (layer, -1)
+                        key = self._group_key(base_layer)
                         if first_page:
                             previous = record.indexes[key]
                             built[key] = self.backend.extend(previous, grouped)
-                            expected = previous.count + 2 * count
+                            expected = previous.count + self.group_heads * count
                         else:
                             built[key] = self.backend.build(
                                 grouped, vector_space=self.vector_space,
                                 metric=self.metric,
                             )
-                            expected = 2 * count
+                            expected = self.group_heads * count
                         if (
                             built[key].count != expected
                             or built[key].dim != dim
@@ -514,13 +531,13 @@ class PromptIndexManager:
             except BaseException as exc:
                 if isinstance(exc, IndexCompletionUnknown):
                     self._quarantine(exc)
-                    self._retain_operation(record, owner, scratch_owner, index_owner, group_owner, vectors, built, packed, exc)
+                    self._retain_operation(record, owner, scratch_owner, index_owner, group_owner, vectors, grouped_datasets, built, packed, exc)
                     raise
                 try:
                     self._fence(packed)
                     self._dispose({**record.indexes, **built})
                 except IndexCompletionUnknown:
-                    self._retain_operation(record, owner, scratch_owner, index_owner, group_owner, vectors, built, packed, exc)
+                    self._retain_operation(record, owner, scratch_owner, index_owner, group_owner, vectors, grouped_datasets, built, packed, exc)
                     raise
                 record.indexes.clear()
                 record.vectors.clear()
@@ -536,7 +553,7 @@ class PromptIndexManager:
                 return "fallback" if stored else "failed"
             self._release_owners((scratch_owner,))
             record.provisional_owners.append(owner)
-            if self.group_heads == 2:
+            if self.group_heads > 1:
                 record.provisional_owners.append(group_owner)
                 record.group_means.update(new_means)
                 record.group_boundaries.append(valid_rows)
@@ -568,8 +585,8 @@ class PromptIndexManager:
         count = (manifest.page_count - 1) * record.vectors[next(iter(record.vectors))].mapping.page_size + manifest.last_page_valid_tokens
         for key, item in list(record.vectors.items()):
             index = (
-                record.indexes[(key[0], -1)]
-                if self.group_heads == 2 else record.indexes[key]
+                record.indexes[self._group_key(key[0])]
+                if self.group_heads > 1 else record.indexes[key]
             )
             if index.count != count * self.group_heads:
                 raise IndexSearchError("provisional graph is missing Prompt rows")
@@ -583,7 +600,7 @@ class PromptIndexManager:
                 item.vectors, mapping, item.positional_encoding,
                 item.source_dtype,
             )
-        if self.group_heads == 2 and record.group_boundaries[-1] != count:
+        if self.group_heads > 1 and record.group_boundaries[-1] != count:
             raise IndexSearchError("grouped graph boundaries are incomplete")
         record.gate.begin_build()
         record.budget_owners = tuple(record.provisional_owners)
@@ -666,10 +683,13 @@ class PromptIndexManager:
             vectors_owner = f"{epoch}:vectors"
             index_owner = f"{epoch}:index"
             scratch_owner = f"{epoch}:build-scratch"
+            group_owner = f"{epoch}:group"
             mapping_version = record.id_mapping_version
 
-        owners = (vectors_owner, index_owner, scratch_owner)
+        owners = (vectors_owner, index_owner, scratch_owner, group_owner)
         vectors = []
+        build_inputs = []
+        group_means = {}
         built = {}
         item = None
         extracted_at = None
@@ -692,6 +712,47 @@ class PromptIndexManager:
             if not vectors:
                 raise PromptVectorError("the shard produced no Prompt K vectors")
             extracted_at = time.perf_counter()
+            if self.group_heads > 1:
+                if len(vectors) % self.group_heads:
+                    raise IndexSearchError("stored shard lacks complete grouped KV heads")
+                self._reserve(group_owner, sum(
+                    item.vectors.numel() * item.vectors.element_size()
+                    + item.head_dim * 4 for item in vectors
+                ))
+                for first in range(0, len(vectors), self.group_heads):
+                    group = sorted(
+                        vectors[first:first + self.group_heads],
+                        key=lambda item: (item.layer, item.kv_head),
+                    )
+                    base_layer = group[0].layer
+                    base_head = group[0].kv_head - group[0].kv_head % 2
+                    expected_keys = [
+                        (base_layer + offset // 2, base_head + offset % 2)
+                        for offset in range(self.group_heads)
+                    ]
+                    if (
+                        base_layer % (self.group_heads // 2)
+                        or [(item.layer, item.kv_head) for item in group] != expected_keys
+                        or len({item.token_count for item in group}) != 1
+                    ):
+                        raise IndexSearchError("stored shard has mismatched grouped heads")
+                    count, dim = group[0].token_count, group[0].head_dim
+                    grouped = torch.empty(
+                        (self.group_heads * count, dim),
+                        device=group[0].vectors.device, dtype=torch.float32,
+                    )
+                    build_inputs.append((self._group_key(base_layer), grouped))
+                    for offset, member in enumerate(group):
+                        key = (member.layer, member.kv_head)
+                        mean = member.vectors.mean(dim=0)
+                        group_means[key] = mean
+                        grouped[offset * count:(offset + 1) * count].copy_(
+                            member.vectors - mean
+                        )
+            else:
+                build_inputs = [
+                    ((item.layer, item.kv_head), item.vectors) for item in vectors
+                ]
             build_path = getattr(self.backend, "build_path", None)
             if callable(build_path):
                 backend_path = build_path(int(vectors[0].vectors.shape[0]))
@@ -701,10 +762,7 @@ class PromptIndexManager:
             # they have different lifetimes, so one reservation cannot
             # describe both without lying about one of them.
             if self.budget is not None:
-                shapes = [
-                    (int(item.vectors.shape[0]), int(item.vectors.shape[1]))
-                    for item in vectors
-                ]
+                shapes = [tuple(value.shape) for _, value in build_inputs]
                 self._reserve(
                     index_owner,
                     sum(
@@ -723,12 +781,19 @@ class PromptIndexManager:
                         for rows, dim in shapes
                     ),
                 )
-            for item in vectors:
+            for key, value in build_inputs:
                 head_started = time.perf_counter()
-                built[(item.layer, item.kv_head)] = self.backend.build(
-                    item.vectors, vector_space=self.vector_space, metric=self.metric
+                built[key] = self.backend.build(
+                    value, vector_space=self.vector_space, metric=self.metric
                 )
-                self._validate_built_index(built[(item.layer, item.kv_head)], item)
+                if (
+                    not isinstance(built[key], BuiltIndex)
+                    or built[key].count != value.shape[0]
+                    or built[key].dim != value.shape[1]
+                    or built[key].vector_space != self.vector_space
+                    or built[key].metric != self.metric
+                ):
+                    raise IndexSearchError("CAGRA build metadata mismatch")
                 # The reservation is max(per-head scratch), not their sum.
                 # Python return alone does not make native builds sequential.
                 self._fence(packed)
@@ -743,7 +808,7 @@ class PromptIndexManager:
                 self._dispose(built)
             except IndexCompletionUnknown:
                 self._retain_operation(
-                    record, owners, vectors, built, item, packed, exc
+                    record, owners, vectors, build_inputs, built, item, packed, exc
                 )
                 raise
             # Completed Python frames can keep allocations alive via traceback
@@ -768,7 +833,7 @@ class PromptIndexManager:
                 self._dispose(built)
             except IndexCompletionUnknown:
                 self._retain_operation(
-                    record, owners, vectors, built, item, packed, exc
+                    record, owners, vectors, build_inputs, built, item, packed, exc
                 )
                 raise
             traceback.clear_frames(exc.__traceback__)
@@ -790,23 +855,29 @@ class PromptIndexManager:
             if self.quarantined:
                 # Another operation may have failed after our final fence.
                 # Never publish READY after the worker's quarantine boundary.
-                self._retain_operation(record, owners, vectors, built, item, packed)
+                self._retain_operation(record, owners, vectors, build_inputs, built, item, packed)
                 raise IndexCompletionUnknown(self._quarantine_reason)
             if self._entries.get(transfer_id) is not record:
                 # Closed while we were building. Drop what we made and refund.
                 try:
                     self._dispose(built)
                 except IndexCompletionUnknown:
-                    self._retain_operation(record, owners, vectors, built, item, packed)
+                    self._retain_operation(record, owners, vectors, build_inputs, built, item, packed)
                     raise
                 item = None
                 vectors.clear()
                 built.clear()
                 self._release_owners(owners)
                 return False
-            record.budget_owners = (vectors_owner, index_owner)
+            record.budget_owners = (
+                (vectors_owner, index_owner, group_owner)
+                if self.group_heads > 1 else (vectors_owner, index_owner)
+            )
             record.vectors = {(v.layer, v.kv_head): v for v in vectors}
             record.indexes = built
+            if self.group_heads > 1:
+                record.group_means = group_means
+                record.group_boundaries = [0, vectors[0].token_count]
             record.gate.mark_ready(
                 IndexDescriptor(
                     index_version=f"idx:{transfer_id}:{attempt_token}",
@@ -886,8 +957,11 @@ class PromptIndexManager:
                 entry_transfer_id=transfer_id,
             )
             item = record.vectors.get(key)
-            group_index = record.indexes.get((identity.layer, -1))
-            grouped = self.group_heads == 2 and group_index is not None
+            group_index = (
+                record.indexes.get(self._group_key(identity.layer))
+                if self.group_heads > 1 else None
+            )
+            grouped = group_index is not None
             index = group_index if grouped else record.indexes.get(key)
             group_mean = record.group_means.get(key) if grouped else None
             group_boundaries = tuple(record.group_boundaries) if grouped else ()
@@ -997,13 +1071,16 @@ class PromptIndexManager:
     ) -> Selection:
         if mean is None or len(boundaries) < 2:
             raise IndexSearchError("grouped CAGRA index lacks a head mean or mapping")
-        if top_k > len(mapping) or index.count != 2 * len(mapping):
+        if top_k > len(mapping) or index.count != self.group_heads * len(mapping):
             raise IndexSearchError("grouped CAGRA row count or Top-K is invalid")
-        local_head = identity.kv_head % 2
+        local_head = (
+            identity.layer % (self.group_heads // 2) * 2
+            + identity.kv_head % 2
+        )
         words = [0] * ((index.count + 31) // 32)
         sections = []
         for begin, end in zip(boundaries[:-1], boundaries[1:]):
-            start = 2 * begin + local_head * (end - begin)
+            start = self.group_heads * begin + local_head * (end - begin)
             sections.append((begin, end, start))
             for row in range(start, start + end - begin):
                 words[row // 32] |= 1 << (row % 32)
@@ -1070,7 +1147,7 @@ class PromptIndexManager:
                 raise IndexSearchError("queries must have non-empty 2-D shape")
             if type(top_k) is not int or top_k <= 0:
                 raise IndexSearchError("top_k must be a positive integer")
-        if self.group_heads == 2:
+        if self.group_heads > 1:
             if metadata is not None:
                 metadata["path"] = "grouped_cagra"
             return tuple(

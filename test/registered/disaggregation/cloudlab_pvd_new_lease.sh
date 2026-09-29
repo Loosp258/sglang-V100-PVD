@@ -44,9 +44,9 @@ fi
 if [[ ! "$cagra_extend25" =~ ^[01]$ ]] ||
    [[ ! "$chunked_cagra_upload" =~ ^[01]$ ]] ||
    [[ ! "$direct_pd_bootstrap" =~ ^[01]$ ]] ||
-   [[ ! "$group_heads" =~ ^[12]$ ]] ||
+   [[ ! "$group_heads" =~ ^(1|2|4)$ ]] ||
    [[ ! "$itopk_size" =~ ^(64|128|256|512|1024|2048)$ ]] ||
-   [[ "$group_heads" == 2 && "$chunked_cagra_upload" != 1 ]] ||
+   [[ "$group_heads" != 1 && "$chunked_cagra_upload" != 1 ]] ||
    [[ "$chunked_cagra_upload" == 1 && "$cagra_extend25" != 1 ]]; then
   echo 'chunked CAGRA requires PVD_CAGRA_EXTEND25=1 and a 0/1 feature flag' >&2
   exit 2

@@ -146,6 +146,85 @@ def main():
     assert backend.runtime.global_allocated_bytes() == 0
     print({"grouped_multi_extend": "passed"}, flush=True)
 
+    # Four local heads span two layers. Search must return token IDs from the
+    # requested layer and head after each of the three native append calls.
+    k = torch.randn(2, rows, 2, dim, dtype=torch.float16)
+    v = torch.zeros_like(k)
+    packed = torch.cat(tuple(
+        component.view(torch.uint8).flatten()
+        for component in (*k, *v)
+    ))
+    four_layout = KVLayoutSignature(
+        model_id="test-model", model_revision="rev", kv_dtype="torch.float16",
+        page_size=page_size, num_layers=2, total_kv_heads=2,
+        kv_heads_per_rank=2, head_dim=dim, tp_size=1, pp_size=1,
+        tensor_layout=PVD_TENSOR_LAYOUT, extra={
+            "component_count": 4,
+            "component_dtypes": ["torch.float16"] * 4,
+            "component_token_shapes": [[2, dim]] * 4,
+            "component_bytes_per_token": [dim * 4] * 4,
+        },
+    )
+    four_shard = KVShardManifest(
+        rank=0, rail="mlx5_0", expected_bytes=packed.numel(),
+        page_count=rows // page_size, last_page_valid_tokens=page_size,
+        layer_start=0, layer_end=2,
+    )
+    four_manager = PromptIndexManager(
+        vector_space="test/stream", backend=backend,
+        budget=TransferBudget(staging_bytes=1073741824, max_inflight=1),
+        group_heads=4,
+    )
+    transfer_id = "native-four-head-chunked-acceptance"
+    four_manager.open(transfer_id)
+    for pages in (128, 192, 256):
+        assert four_manager.progress_chunked(
+            transfer_id, packed, layout=four_layout, manifest=four_shard,
+            complete_pages=pages, stored=False,
+        ) in ("built_prefix", "extended")
+    four_manager.note_kv_readable(transfer_id)
+    assert four_manager.progress_chunked(
+        transfer_id, packed, layout=four_layout, manifest=four_shard,
+        complete_pages=256, stored=True,
+    ) == "ready"
+    for layer in (0, 1):
+        for head in (0, 1):
+            query = k[layer, 700:701, head].to(
+                "cuda:0", dtype=torch.float32
+            ).contiguous()
+            result = four_manager.search(
+                SearchRequestIdentity(
+                    vector_space="test/stream", positional_encoding="rope_applied",
+                    entry_transfer_id=transfer_id, layer=layer, kv_head=head,
+                ),
+                queries=query, top_k=4,
+            )
+            assert all(0 <= token < rows for token in result.selection.token_ids)
+            for token, score in zip(
+                result.selection.token_ids, result.selection.scores
+            ):
+                expected = float(torch.dot(query[0].cpu(), k[layer, token, head].float()))
+                assert abs(score - expected) < 0.03
+    requests = tuple(
+        (
+            SearchRequestIdentity(
+                vector_space="test/stream", positional_encoding="rope_applied",
+                entry_transfer_id=transfer_id, layer=layer, kv_head=head,
+            ),
+            k[layer, 700:701, head].to("cuda:0", dtype=torch.float32).contiguous(),
+            4,
+        )
+        for layer in (0, 1)
+        for head in (0, 1)
+    )
+    metadata = {}
+    assert len(four_manager.search_many(requests, metadata=metadata)) == 4
+    assert metadata["path"] == "grouped_cagra"
+    assert len(four_manager._entries[transfer_id].indexes) == 1
+    four_manager.close(transfer_id)
+    assert backend.runtime.global_allocated_bytes() == 0
+    print({"four_head_multi_extend": "passed"}, flush=True)
+
 
 if __name__ == "__main__":
     main()

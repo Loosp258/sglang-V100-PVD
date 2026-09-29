@@ -303,8 +303,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Experimental P-to-V chunk PUT and provisional native CAGRA build; requires a cuVS extend binding.",
     )
     parser.add_argument(
-        "--prompt-index-group-heads", type=int, choices=(1, 2), default=1,
-        help="Experimental same-layer KV-head grouping for chunked native CAGRA.",
+        "--prompt-index-group-heads", type=int, choices=(1, 2, 4), default=1,
+        help="Experimental KV-head grouping for chunked native CAGRA; four heads span two adjacent layers.",
     )
     parser.add_argument(
         "--prompt-index-cagra-native-bytes",
@@ -400,10 +400,10 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         or args.allow_cpu_for_tests
     ):
         raise ValueError("chunked CAGRA upload requires native CAGRA and Mooncake on CUDA")
-    if getattr(args, "prompt_index_group_heads", 1) == 2 and not getattr(
+    if getattr(args, "prompt_index_group_heads", 1) > 1 and not getattr(
         args, "chunked_cagra_upload", False
     ):
-        raise ValueError("two-head CAGRA grouping requires chunked upload")
+        raise ValueError("grouped CAGRA requires chunked upload")
     shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
     exact_max_rows = getattr(args, "prompt_index_exact_max_rows", None)
     if exact_max_rows is not None and (
