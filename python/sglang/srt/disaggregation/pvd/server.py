@@ -298,6 +298,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="exact",
     )
     parser.add_argument(
+        "--chunked-cagra-upload",
+        action="store_true",
+        help="Experimental P-to-V chunk PUT and provisional native CAGRA build; requires a cuVS extend binding.",
+    )
+    parser.add_argument(
+        "--prompt-index-group-heads", type=int, choices=(1, 2), default=1,
+        help="Experimental same-layer KV-head grouping for chunked native CAGRA.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-native-bytes",
         type=_positive_int,
         default=None,
@@ -385,6 +394,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _validate_args(args: argparse.Namespace) -> List[str]:
     index_mode = getattr(args, "prompt_index_backend", "exact")
+    if getattr(args, "chunked_cagra_upload", False) and (
+        index_mode != "cagra"
+        or args.transfer_backend != "mooncake"
+        or args.allow_cpu_for_tests
+    ):
+        raise ValueError("chunked CAGRA upload requires native CAGRA and Mooncake on CUDA")
+    if getattr(args, "prompt_index_group_heads", 1) == 2 and not getattr(
+        args, "chunked_cagra_upload", False
+    ):
+        raise ValueError("two-head CAGRA grouping requires chunked upload")
     shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
     exact_max_rows = getattr(args, "prompt_index_exact_max_rows", None)
     if exact_max_rows is not None and (
@@ -576,6 +595,7 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
         metric=getattr(args, "prompt_index_metric", "ip"),
         budget=budget,
         backend=backend,
+        group_heads=getattr(args, "prompt_index_group_heads", 1),
     )
 
 
@@ -753,6 +773,7 @@ def _create_store(
         delivery_timeout_secs=args.delivery_timeout_secs,
         allow_cpu_for_tests=args.allow_cpu_for_tests,
         prompt_index=prompt_index,
+        enable_chunked_upload=getattr(args, "chunked_cagra_upload", False),
         full_kv_fanin_max_slices=getattr(args, "full_kv_fanin_max_slices", None),
         full_kv_fanin_max_inflight=getattr(args, "full_kv_fanin_max_inflight", None),
         full_kv_fanin_native_batch=getattr(args, "full_kv_fanin_native_batch", False),
@@ -855,6 +876,7 @@ async def _serve_group(args: argparse.Namespace) -> None:
     rails = _validate_args(args)
     device_ids = _parse_device_ids(args.devices, args.world_size)
     stores: List[VectorKVStore] = []
+    shard_clients: List[LocalShardClient] = []
     preflights: List[dict] = []
     runners: List[web.AppRunner] = []
     reaper_task = None
@@ -876,17 +898,18 @@ async def _serve_group(args: argparse.Namespace) -> None:
             await web.TCPSite(runner, args.host, args.shard_port_base + rank).start()
             runners.append(runner)
 
+        shard_clients = [
+            LocalShardClient(
+                store,
+                preflight=preflights[rank],
+                shard_url=(
+                    f"http://{args.advertise_host}:{args.shard_port_base + rank}"
+                ),
+            )
+            for rank, store in enumerate(stores)
+        ]
         coordinator = VectorCoordinator(
-            [
-                LocalShardClient(
-                    store,
-                    preflight=preflights[rank],
-                    shard_url=(
-                        f"http://{args.advertise_host}:{args.shard_port_base + rank}"
-                    ),
-                )
-                for rank, store in enumerate(stores)
-            ],
+            shard_clients,
             entry_ttl_secs=args.entry_ttl_secs,
             delivery_timeout_secs=args.delivery_timeout_secs,
             max_entry_records=getattr(args, "max_entry_records", 8192),
@@ -928,6 +951,8 @@ async def _serve_group(args: argparse.Namespace) -> None:
             reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reaper_task
+        for client in shard_clients:
+            await client.drain_index_tasks()
         for runner in reversed(runners):
             await runner.cleanup()
         for store in reversed(stores):

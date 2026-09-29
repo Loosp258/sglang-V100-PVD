@@ -29,6 +29,7 @@ from sglang.srt.disaggregation.pvd.prompt_vectors import (
     extract_prompt_k,
 )
 from sglang.srt.disaggregation.pvd.protocol import KVLayoutSignature, KVShardManifest
+from sglang.srt.disaggregation.pvd.sharding import plan_prompt_chunk_puts
 
 ENTRY = "entry-1"
 MAPPING = "map-v1"
@@ -200,6 +201,105 @@ def test_padding_in_the_final_page_is_excluded():
     assert all(len(v.mapping) == 10 for v in vectors)
     padded_row = pool.k_buffer[0][11, 0, :].to(torch.float32)
     assert not any(torch.equal(v.vectors[-1], padded_row) for v in vectors)
+
+
+def test_proven_page_prefix_reads_only_its_rows_from_full_component_layout():
+    vectors, pool, pages = extract(prompt_tokens=10, readable_pages=1)
+    assert all(v.token_count == PAGE_SIZE for v in vectors)
+    for item in vectors:
+        expected = source_k(
+            pool,
+            layer=item.layer,
+            global_head=item.kv_head,
+            pages=pages,
+            page_size=PAGE_SIZE,
+            valid_tokens=PAGE_SIZE,
+        )
+        torch.testing.assert_close(item.vectors, expected, rtol=0, atol=0)
+    assert all(
+        v.token_count == 10 for v in extract(prompt_tokens=10, readable_pages=3)[0]
+    )
+
+
+def test_newly_completed_pages_are_copied_without_earlier_rows():
+    vectors, pool, pages = extract(prompt_tokens=10, readable_pages=3, first_page=1)
+    assert all(v.token_count == 6 for v in vectors)
+    for item in vectors:
+        expected = source_k(
+            pool,
+            layer=item.layer,
+            global_head=item.kv_head,
+            pages=pages,
+            page_size=PAGE_SIZE,
+            valid_tokens=10,
+        )[4:]
+        torch.testing.assert_close(item.vectors, expected, rtol=0, atol=0)
+        assert [item.mapping.token_of(row) for row in range(6)] == list(range(4, 10))
+
+
+def test_partial_component_writes_extract_then_extend_the_exact_full_k_rows():
+    pool = FakePool()
+    layout = storage_layout(pool)
+    complete, manifest, _ = pack_shard(pool, layout, rank=0, prompt_tokens=10)
+    destination = torch.full_like(complete.tensor, 255)
+    pieces = {}
+    for first_page, page_count in ((0, 1), (1, 2)):
+        packed_chunk = pack_full_prompt_kv_head_shard(
+            pool,
+            list(range(first_page, first_page + page_count)),
+            page_size=layout.page_size,
+            head_start=0,
+            head_count=layout.kv_heads_per_rank,
+        )
+        for span in plan_prompt_chunk_puts(
+            layout,
+            total_pages=manifest.page_count,
+            expected_bytes=manifest.expected_bytes,
+            first_page=first_page,
+            page_count=page_count,
+        ):
+            destination[span.remote_offset : span.remote_offset + span.length] = (
+                packed_chunk.tensor[span.local_offset : span.local_offset + span.length]
+            )
+        delta = extract_prompt_k(
+            destination,
+            layout=layout,
+            manifest=manifest,
+            entry_transfer_id=ENTRY,
+            id_mapping_version=MAPPING,
+            positional_encoding=ROPE_APPLIED,
+            readable_pages=first_page + page_count,
+            first_page=first_page,
+        )
+        for item in delta:
+            pieces.setdefault((item.layer, item.kv_head), []).append(item.vectors)
+    full = extract_prompt_k(
+        complete.tensor,
+        layout=layout,
+        manifest=manifest,
+        entry_transfer_id=ENTRY,
+        id_mapping_version=MAPPING,
+        positional_encoding=ROPE_APPLIED,
+    )
+    for item in full:
+        torch.testing.assert_close(
+            torch.cat(pieces[item.layer, item.kv_head]),
+            item.vectors,
+            rtol=0,
+            atol=0,
+        )
+
+
+@pytest.mark.parametrize("bad", (0, 4, True, -1))
+def test_unproven_page_prefix_bound_is_rejected(bad):
+    with pytest.raises(PromptVectorError, match="readable_pages"):
+        extract(prompt_tokens=10, readable_pages=bad)
+
+
+@pytest.mark.parametrize("bad", (-1, 3, True))
+def test_new_page_start_outside_readable_prefix_is_rejected(bad):
+    with pytest.raises(PromptVectorError, match="first_page"):
+        extract(prompt_tokens=10, readable_pages=1, first_page=bad)
 
 
 @pytest.mark.parametrize(

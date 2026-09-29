@@ -31,6 +31,7 @@ class _NativeIndex:
     resources: object = None
     native: object = None
     vectors: object = None
+    rows: int = 0
     disposed: bool = False
     probe_allocations: list = field(default_factory=list)
 
@@ -93,6 +94,18 @@ class CagraNativeRuntime:
     def synchronize(self):
         torch.cuda.synchronize(self.device)
 
+    @property
+    def supports_extend(self):
+        # This call shape was validated with cuVS 25.10 on V100S. Newer cuVS
+        # releases may require a caller-owned padded full dataset instead of
+        # the 25.10 additional-dataset argument; do not claim compatibility
+        # merely because they export a function with the same name.
+        return (
+            str(getattr(self.cuvs, "__version__", "")).startswith("25.10.")
+            and callable(getattr(self.cagra, "extend", None))
+            and callable(getattr(self.cagra, "ExtendParams", None))
+        )
+
     @contextmanager
     def scope(self, owner):
         # This lock covers every PVD CAGRA operation on this device. Other RMM
@@ -107,7 +120,10 @@ class CagraNativeRuntime:
 
     def create(self, byte_cap):
         with self.lock, torch.cuda.device(self.device):
-            if self.global_limit is not None and byte_cap > self.global_native_cap_bytes:
+            if (
+                self.global_limit is not None
+                and byte_cap > self.global_native_cap_bytes
+            ):
                 raise ValueError("per-index CAGRA cap exceeds shared native cap")
             limit = self.mr.LimitingResourceAdaptor(
                 self.global_limit
@@ -176,7 +192,35 @@ class CagraNativeRuntime:
                     "CAGRA returned an untrained or mismatched index"
                 )
 
-    def search(self, owner, queries, *, top_k, itopk_size):
+    def extend(self, owner, additional_vectors):
+        if not self.supports_extend:
+            raise IndexSearchError("this cuVS Python CAGRA has no extend binding")
+        with self.scope(owner):
+            self.cagra.extend(
+                self.cagra.ExtendParams(),
+                owner.native,
+                self.cp.from_dlpack(additional_vectors),
+                resources=owner.resources,
+            )
+            self.synchronize()
+            if (
+                owner.native.trained is not True
+                or owner.native.dim != additional_vectors.shape[1]
+            ):
+                raise IndexCompletionUnknown("CAGRA extend returned an invalid index")
+            # The native graph may still refer to its source dataset. Keep
+            # every supplied tensor through index disposal, with no new copy.
+            old = owner.vectors
+            owner.vectors = (
+                (*old, additional_vectors)
+                if isinstance(old, tuple)
+                else (
+                    old,
+                    additional_vectors,
+                )
+            )
+
+    def search(self, owner, queries, *, top_k, itopk_size, bitset=None):
         with self.scope(owner):
             rows = torch.empty(
                 (len(queries), top_k), device=self.device, dtype=torch.uint32
@@ -186,6 +230,10 @@ class CagraNativeRuntime:
             )
             # Pass buffers explicitly so the wrapper cannot allocate uncharged
             # device_ndarray outputs through a different allocator.
+            filter_arg = None
+            if bitset is not None:
+                filters = importlib.import_module("cuvs.neighbors.filters")
+                filter_arg = filters.from_bitset(self.cp.from_dlpack(bitset))
             self.cagra.search(
                 self.cagra.SearchParams(itopk_size=itopk_size),
                 owner.native,
@@ -193,6 +241,7 @@ class CagraNativeRuntime:
                 top_k,
                 neighbors=self.cp.from_dlpack(rows),
                 distances=self.cp.from_dlpack(scores),
+                filter=filter_arg,
                 resources=owner.resources,
             )
             self.synchronize()
@@ -273,13 +322,19 @@ class CagraIndexBackend(IndexBackend):
         if torch.device(self.runtime.device) != self._device:
             raise ValueError("CAGRA runtime device mismatch")
         runtime_cap = getattr(self.runtime, "global_native_cap_bytes", None)
-        if global_native_cap_bytes is not None and runtime_cap != global_native_cap_bytes:
+        if (
+            global_native_cap_bytes is not None
+            and runtime_cap != global_native_cap_bytes
+        ):
             raise ValueError("CAGRA runtime shared cap differs from configured cap")
         if runtime_cap is not None and (
             type(runtime_cap) is not int or runtime_cap < native_bytes_per_index
         ):
             raise ValueError("CAGRA runtime shared cap cannot cover an index")
-        if runtime_cap is not None and getattr(self.runtime, "global_limit", None) is None:
+        if (
+            runtime_cap is not None
+            and getattr(self.runtime, "global_limit", None) is None
+        ):
             raise ValueError("CAGRA runtime shared cap lacks a native root limiter")
         self._shared_native_cap = runtime_cap
         self._lock = threading.RLock()
@@ -373,6 +428,7 @@ class CagraIndexBackend(IndexBackend):
                     intermediate_degree=self.intermediate_degree,
                 )
                 self.runtime.synchronize()
+                owner.rows = rows
                 return BuiltIndex(vector_space, metric, dim, rows, owner)
             except BaseException as exc:
                 try:
@@ -387,7 +443,49 @@ class CagraIndexBackend(IndexBackend):
                     self._unknown = str(exc)
                 raise
 
-    def search(self, index, queries, *, top_k):
+    @property
+    def supports_extend(self):
+        return bool(getattr(self.runtime, "supports_extend", False)) and callable(
+            getattr(self.runtime, "extend", None)
+        )
+
+    def extend(self, index, additional_vectors):
+        """Extend one private graph; return the new count/versioned handle view.
+
+        A native failure may leave the graph partially changed. Quarantine the
+        backend and retain its owner until completion can be proved; callers
+        must never publish the provisional graph after such a failure.
+        """
+        with self._lock:
+            self._check()
+            if not self.supports_extend:
+                raise IndexSearchError("CAGRA extend requires a supported cuVS binding")
+            owner = index.handle
+            if self._owners.get(id(owner)) is not owner or owner.disposed:
+                raise IndexSearchError("unknown or disposed CAGRA index")
+            if index.count != owner.rows:
+                raise IndexSearchError("stale CAGRA index count after extend")
+            self._matrix(additional_vectors)
+            if additional_vectors.shape[1] != index.dim:
+                raise IndexSearchError("CAGRA extension dimension mismatch")
+            new_count = index.count + int(additional_vectors.shape[0])
+            self._shape(new_count, index.dim, index.metric)
+            try:
+                self.runtime.extend(owner, additional_vectors)
+                self.runtime.synchronize()
+            except BaseException as exc:
+                # Even a raised native call may have modified its index. A
+                # successful synchronize does not restore the old graph.
+                self._unknown = str(exc)
+                raise IndexCompletionUnknown(
+                    f"CAGRA extend completion/state is unknown: {exc}"
+                ) from exc
+            owner.rows = new_count
+            return BuiltIndex(
+                index.vector_space, index.metric, index.dim, new_count, owner
+            )
+
+    def search(self, index, queries, *, top_k, bitset=None):
         with self._lock:
             self._check()
             if (
@@ -395,13 +493,25 @@ class CagraIndexBackend(IndexBackend):
                 or index.handle.disposed
             ):
                 raise IndexSearchError("unknown or disposed CAGRA index")
+            if index.count != index.handle.rows:
+                raise IndexSearchError("stale CAGRA index count after extend")
             self._matrix(queries)
+            if bitset is not None and (
+                not isinstance(bitset, torch.Tensor)
+                or bitset.dtype != torch.uint32
+                or bitset.device != self.device
+                or bitset.ndim != 1
+                or not bitset.is_contiguous()
+                or bitset.numel() != (index.count + 31) // 32
+            ):
+                raise IndexSearchError("CAGRA filter bitset has an invalid shape/device")
             if queries.shape[1] != index.dim:
                 raise IndexSearchError("CAGRA query dimension mismatch")
             self.search_footprint(index.count, index.dim, len(queries), top_k)
             try:
                 rows, scores = self.runtime.search(
-                    index.handle, queries, top_k=top_k, itopk_size=self.itopk_size
+                    index.handle, queries, top_k=top_k, itopk_size=self.itopk_size,
+                    **({"bitset": bitset} if bitset is not None else {}),
                 )
                 self.runtime.synchronize()
                 if index.metric == "l2":
@@ -455,7 +565,10 @@ class CagraAutoIndexBackend(IndexBackend):
             raise TypeError("a configured CAGRA backend is required")
         if exact_max_rows is None:
             exact_max_rows = cagra.intermediate_degree
-        if type(exact_max_rows) is not int or exact_max_rows < cagra.intermediate_degree:
+        if (
+            type(exact_max_rows) is not int
+            or exact_max_rows < cagra.intermediate_degree
+        ):
             raise ValueError(
                 "exact_max_rows must be at least the CAGRA intermediate degree"
             )
@@ -489,9 +602,7 @@ class CagraAutoIndexBackend(IndexBackend):
         return self._for_rows(rows).build_scratch_footprint(rows, dim, metric=metric)
 
     def search_footprint(self, rows, dim, num_queries, top_k):
-        return self._for_rows(rows).search_footprint(
-            rows, dim, num_queries, top_k
-        )
+        return self._for_rows(rows).search_footprint(rows, dim, num_queries, top_k)
 
     def synchronize(self):
         with self._lock:
@@ -509,6 +620,21 @@ class CagraAutoIndexBackend(IndexBackend):
             index = selected.build(vectors, vector_space=vector_space, metric=metric)
             self._built[id(index)] = (index, selected)
             return index
+
+    @property
+    def supports_extend(self):
+        return self.cagra.supports_extend
+
+    def extend(self, index, additional_vectors):
+        """Replace the provisional CAGRA count view after a completed extend."""
+        with self._lock:
+            self.cagra._check()
+            if self._owner(index) is not self.cagra:
+                raise IndexSearchError("the exact short-Prompt path cannot extend")
+            replacement = self.cagra.extend(index, additional_vectors)
+            self._built.pop(id(index))
+            self._built[id(replacement)] = (replacement, self.cagra)
+            return replacement
 
     def _owner(self, index):
         entry = self._built.get(id(index))

@@ -1,0 +1,116 @@
+{
+  "schema": "pvd-grouped-multichunk-online-cloudlab-v1",
+  "order": [
+    "group1a",
+    "group2a",
+    "group2b",
+    "group1b"
+  ],
+  "chunk_rows": [
+    512,
+    512,
+    512,
+    512,
+    107
+  ],
+  "itopk_size": 2048,
+  "d_mode": "full",
+  "rows": [
+    {
+      "tag": "group1a",
+      "trial": 0,
+      "group_heads": 1,
+      "client_seconds": 19.807,
+      "prompt_sha256": "1104df20baeaa2ae7c0e50517199ca4f83c5947a99dc7f93a0e32b38b1b8ef1a",
+      "output_sha256": "c977dbe785221d34114d345fdf8ff4e18bb4af66750751dbea29407f9738735f",
+      "prompt_tokens": 2155,
+      "completion_tokens": 2,
+      "first_builds": [
+        {
+          "seconds": 18.968833,
+          "rank": 0,
+          "graphs": 56
+        },
+        {
+          "seconds": 18.95637,
+          "rank": 1,
+          "graphs": 56
+        }
+      ],
+      "ready_ranks": 2,
+      "failed_graphs": 0
+    },
+    {
+      "tag": "group2a",
+      "trial": 0,
+      "group_heads": 2,
+      "client_seconds": 10.376,
+      "prompt_sha256": "1104df20baeaa2ae7c0e50517199ca4f83c5947a99dc7f93a0e32b38b1b8ef1a",
+      "output_sha256": "c977dbe785221d34114d345fdf8ff4e18bb4af66750751dbea29407f9738735f",
+      "prompt_tokens": 2155,
+      "completion_tokens": 2,
+      "first_builds": [
+        {
+          "seconds": 9.411254,
+          "rank": 0,
+          "graphs": 28
+        },
+        {
+          "seconds": 9.726593,
+          "rank": 1,
+          "graphs": 28
+        }
+      ],
+      "ready_ranks": 2,
+      "failed_graphs": 0
+    },
+    {
+      "tag": "group2b",
+      "trial": 1,
+      "group_heads": 2,
+      "client_seconds": 10.58,
+      "prompt_sha256": "6c10d48a5b20f6a5f13512b280558d28b3696c8ea8725fd66987b3541d26742d",
+      "output_sha256": "c977dbe785221d34114d345fdf8ff4e18bb4af66750751dbea29407f9738735f",
+      "prompt_tokens": 2155,
+      "completion_tokens": 2,
+      "first_builds": [
+        {
+          "seconds": 9.736256,
+          "rank": 0,
+          "graphs": 28
+        },
+        {
+          "seconds": 9.887898,
+          "rank": 1,
+          "graphs": 28
+        }
+      ],
+      "ready_ranks": 2,
+      "failed_graphs": 0
+    },
+    {
+      "tag": "group1b",
+      "trial": 1,
+      "group_heads": 1,
+      "client_seconds": 19.459,
+      "prompt_sha256": "6c10d48a5b20f6a5f13512b280558d28b3696c8ea8725fd66987b3541d26742d",
+      "output_sha256": "c977dbe785221d34114d345fdf8ff4e18bb4af66750751dbea29407f9738735f",
+      "prompt_tokens": 2155,
+      "completion_tokens": 2,
+      "first_builds": [
+        {
+          "seconds": 18.632065,
+          "rank": 0,
+          "graphs": 56
+        },
+        {
+          "seconds": 18.778471,
+          "rank": 1,
+          "graphs": 56
+        }
+      ],
+      "ready_ranks": 2,
+      "failed_graphs": 0
+    }
+  ]
+}

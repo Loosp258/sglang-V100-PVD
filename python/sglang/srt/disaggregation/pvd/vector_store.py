@@ -19,6 +19,10 @@ from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
 )
 from sglang.srt.disaggregation.pvd.full_kv_fanin_writer import FullKVFanInWriter
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
+from sglang.srt.disaggregation.pvd.prompt_chunks import (
+    PromptChunkIdentity,
+    PromptChunkProgress,
+)
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
     PVD_RECEIVER_EPOCH_METADATA_KEY,
@@ -271,6 +275,13 @@ class EntryShardRecord:
     upload_begun: bool = False
     upload_terminal: Optional[TransportState] = None
     upload_committed_bytes: Optional[int] = None
+    upload_mode: str = "complete"
+    chunk_progress: Optional[PromptChunkProgress] = field(default=None, repr=False)
+    chunk_authorization: Optional[WriteAuthorization] = field(default=None, repr=False)
+    chunk_terminal: Optional[TransportState] = None
+    chunk_last_completed: Optional[PromptChunkIdentity] = field(
+        default=None, repr=False
+    )
 
     def to_dict(self):
         return {
@@ -288,6 +299,10 @@ class EntryShardRecord:
             "active_delivery_count": self.active_delivery_count,
             "resources_released": self.resources_released,
             "upload_pending": self.upload_pending,
+            "upload_mode": self.upload_mode,
+            "complete_pages": (
+                self.chunk_progress.complete_pages if self.chunk_progress else None
+            ),
             "release_requested": self.release_requested,
             "upload_identity": (
                 self.upload_identity.to_dict() if self.upload_identity else None
@@ -319,6 +334,7 @@ class VectorKVStore:
         allow_cpu_for_tests: bool = False,
         metrics: Optional[PVDMetrics] = None,
         prompt_index: Optional[Any] = None,
+        enable_chunked_upload: bool = False,
         max_entry_records: int = 8192,
         max_delivery_records: int = 65536,
         max_legacy_absent_fences: int = 4096,
@@ -410,6 +426,16 @@ class VectorKVStore:
         # store built without one behaves exactly as before. Full-Prompt
         # delivery stays index-independent; explicit sparse delivery leases it.
         self.prompt_index = prompt_index
+        if type(enable_chunked_upload) is not bool:
+            raise ValueError("enable_chunked_upload must be boolean")
+        if enable_chunked_upload and (
+            prompt_index is None
+            or not bool(
+                getattr(getattr(prompt_index, "backend", None), "supports_extend", False)
+            )
+        ):
+            raise ValueError("chunked upload requires a native extending index")
+        self.enable_chunked_upload = enable_chunked_upload
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.fused_cuda_sparse_packing = fused_cuda_sparse_packing
@@ -453,6 +479,7 @@ class VectorKVStore:
         self._absent_entry_cancellations = set()
         self._max_absent_entry_cancellations = max_absent_entry_cancellations
         self._lock = threading.RLock()
+        self._index_progress_lock = threading.Lock()
         self._refresh_metrics()
 
     def _refresh_metrics(self) -> None:
@@ -472,6 +499,12 @@ class VectorKVStore:
         *,
         uploader_epoch: Optional[str] = None,
     ) -> EntryShardRecord:
+        if manifest.upload_mode == "chunked_cagra" and (
+            not self.enable_chunked_upload or uploader_epoch is None
+        ):
+            raise EntryConflictError(
+                "chunked Prompt upload requires an enabled extending V lifecycle"
+            )
         shard = manifest.shard(self.rank)
         if manifest.layout.tp_size != self.world_size:
             raise EntryConflictError(
@@ -498,6 +531,7 @@ class VectorKVStore:
                 if (
                     existing.layout_fingerprint != manifest.layout.fingerprint
                     or existing.manifest != shard
+                    or existing.upload_mode != manifest.upload_mode
                 ):
                     raise EntryConflictError(
                         "entry key already exists with a different manifest"
@@ -543,6 +577,7 @@ class VectorKVStore:
                 state=EntryShardState.ALLOCATED,
                 created_at=now,
                 expires_at=now + self.entry_ttl_secs,
+                upload_mode=manifest.upload_mode,
             )
             record.allocation_guard = ResourceGuard(
                 allocation, lambda: self._free_allocation(record)
@@ -573,9 +608,15 @@ class VectorKVStore:
                 record.upload_authorization = WriteAuthorization(
                     identity, record.allocation_guard
                 )
+                if manifest.upload_mode == "chunked_cagra":
+                    record.chunk_progress = PromptChunkProgress(
+                        identity, manifest.layout, shard
+                    )
             self._pool_guard.pin(record.pool_owner)
             self.entries[manifest.key] = record
             self._live_entries[manifest.key] = record
+            if manifest.upload_mode == "chunked_cagra":
+                self.prompt_index.open(manifest.key.transfer_id)
             self.metrics.increment("vector_entries_created")
             self._refresh_metrics()
             return record
@@ -605,8 +646,9 @@ class VectorKVStore:
                 if entry.upload_close_requested:
                     raise EntryConflictError("upload authorization is closing")
                 # One-shot gate: a retry, or a second sender, is rejected here.
-                authorization.begin(identity)
-                entry.upload_begun = True
+                if entry.upload_mode == "complete":
+                    authorization.begin(identity)
+                    entry.upload_begun = True
             elif identity is not None:
                 raise EntryConflictError("entry has no lifecycle upload authorization")
             entry.state = transition(entry.state, EntryShardState.P_WRITING)
@@ -630,6 +672,10 @@ class VectorKVStore:
                     f"received {received_bytes} KV bytes, expected {entry.manifest.expected_bytes}",
                 )
                 raise EntryConflictError(entry.error)
+            if entry.upload_mode == "chunked_cagra" and (
+                entry.chunk_progress is None or not entry.chunk_progress.finished
+            ):
+                raise EntryConflictError("not every Prompt chunk is complete")
             entry.upload_committed_bytes = received_bytes
             if entry.upload_authorization is None:
                 # Legacy successful commit is an explicit completion report, not
@@ -648,6 +694,87 @@ class VectorKVStore:
             entry.allocation_guard.unpin(_LEGACY_UPLOAD_OWNER)
         return entry
 
+    def begin_chunk(
+        self, key: KVEntryKey, first_page: int, page_count: int
+    ) -> Dict[str, object]:
+        """Pin and consume a one-shot authorization for the next page range."""
+        with self._lock:
+            entry = self._entry(key)
+            progress = entry.chunk_progress
+            if (
+                progress is None
+                or entry.release_requested
+                or entry.state != EntryShardState.P_WRITING
+            ):
+                raise EntryConflictError("Entry cannot accept a Prompt chunk")
+            pending = progress.pending
+            if pending is not None:
+                if (pending.first_page, pending.page_count) == (
+                    first_page,
+                    page_count,
+                ):
+                    return pending.to_dict()
+                raise EntryConflictError("another Prompt chunk is in flight")
+            chunk = progress.begin(first_page, page_count)
+            try:
+                authorization = WriteAuthorization(
+                    chunk.write, entry.allocation_guard
+                )
+                authorization.begin(chunk.write)
+            except BaseException:
+                progress.failed = True
+                self._fail_entry_locked(entry, "Prompt chunk authorization failed")
+                raise
+            entry.chunk_authorization = authorization
+            entry.chunk_terminal = None
+            return chunk.to_dict()
+
+    def commit_chunk(
+        self, identity: WriteIdentity, transferred_bytes: int
+    ) -> Dict[str, object]:
+        """Advance the readable prefix after exact-byte and terminal proof."""
+        with self._lock:
+            entry = self._entry(identity.key)
+            progress = entry.chunk_progress
+            if progress is None:
+                raise EntryConflictError("Entry has no chunked upload")
+            if (
+                entry.chunk_last_completed is not None
+                and entry.chunk_last_completed.write == identity
+            ):
+                if transferred_bytes != entry.chunk_last_completed.chunk_bytes:
+                    raise EntryConflictError("replayed Prompt chunk byte count changed")
+                return {
+                    "chunk": entry.chunk_last_completed.to_dict(),
+                    "complete_pages": progress.complete_pages,
+                    "finished": progress.finished,
+                }
+            chunk = progress.pending
+            if (
+                entry.release_requested
+                or chunk is None
+                or chunk.write != identity
+                or entry.chunk_terminal != TransportState.TERMINAL_SUCCESS
+            ):
+                raise EntryConflictError("Prompt chunk has no closed successful PUT")
+            try:
+                progress.complete(
+                    chunk,
+                    transferred_bytes=transferred_bytes,
+                    terminal_success=True,
+                )
+            except Exception as exc:
+                self._fail_entry_locked(entry, str(exc))
+                raise EntryConflictError(str(exc)) from exc
+            entry.chunk_last_completed = chunk
+            entry.chunk_authorization = None
+            entry.chunk_terminal = None
+            return {
+                "chunk": chunk.to_dict(),
+                "complete_pages": progress.complete_pages,
+                "finished": progress.finished,
+            }
+
     def _publish_stored_locked(
         self, entry: EntryShardRecord, received_bytes: int
     ) -> None:
@@ -658,10 +785,12 @@ class VectorKVStore:
         for delivery in entry.deliveries.values():
             if delivery.state == DeliveryState.WAITING_SOURCE:
                 delivery.state = transition(delivery.state, DeliveryState.D_RESERVED)
-        if self.prompt_index is not None:
+        if self.prompt_index is not None and entry.upload_mode != "chunked_cagra":
             # Complete and visible: this is the only point an index may be
             # built from. Recording readiness is all that happens under the
-            # lock; the build itself is a separate, caller-driven step.
+            # lock for the complete-upload path. Chunked publication records
+            # it in the background, so final shard commit never waits for a
+            # provisional native build holding the index manager lock.
             self.prompt_index.note_kv_readable(entry.key.transfer_id)
         self.metrics.increment("vector_p_to_v_bytes", received_bytes)
         self.metrics.increment("vector_entries_stored")
@@ -701,6 +830,15 @@ class VectorKVStore:
         if not isinstance(closed, bool):
             raise EntryConflictError("upload sync requires a boolean closed flag")
 
+        with self._lock:
+            entry = self._entry(identity.key)
+            child = (
+                entry.upload_mode == "chunked_cagra"
+                and identity != entry.upload_identity
+            )
+        if child:
+            return self._sync_chunk_upload(identity, state, closed)
+
         observation = None
         with self._lock:
             entry = self._entry(identity.key)
@@ -729,6 +867,17 @@ class VectorKVStore:
             if state not in _UPLOAD_TERMINAL_STATES:
                 raise EntryConflictError(
                     "a closed upload report requires a transport terminal state"
+                )
+            if (
+                entry.upload_mode == "chunked_cagra"
+                and state == TransportState.TERMINAL_SUCCESS
+                and (
+                    entry.chunk_progress is None
+                    or not entry.chunk_progress.finished
+                )
+            ):
+                raise EntryConflictError(
+                    "aggregate upload has an incomplete Prompt chunk"
                 )
             effective = state
             if state == TransportState.NOT_SUBMITTED and entry.upload_begun:
@@ -759,6 +908,81 @@ class VectorKVStore:
         self._progress_releases()
         with self._lock:
             return self._upload_sync_reply_locked(entry, terminal_ack=True)
+
+    def _sync_chunk_upload(
+        self, identity: WriteIdentity, state: TransportState, closed: bool
+    ) -> Dict[str, object]:
+        """Close one child PUT only after its native terminal is reported."""
+        observation = None
+        with self._lock:
+            entry = self._entry(identity.key)
+            progress = entry.chunk_progress
+            if progress is None:
+                raise EntryConflictError("Entry has no chunked upload")
+            identity.validate_destination(entry.target_region)
+            if (
+                entry.chunk_last_completed is not None
+                and entry.chunk_last_completed.write == identity
+            ):
+                if state != TransportState.TERMINAL_SUCCESS or not closed:
+                    raise EntryConflictError("completed Prompt chunk changed terminal")
+                return self._chunk_sync_reply_locked(
+                    entry, identity, terminal_ack=True
+                )
+            chunk = progress.pending
+            if chunk is None or chunk.write != identity:
+                raise EntryConflictError("unknown Prompt chunk write identity")
+            authorization = entry.chunk_authorization
+            if authorization is None:
+                raise EntryConflictError("Prompt chunk has no authorization")
+            if state == TransportState.UNKNOWN:
+                self._isolated_reason = "P Prompt chunk terminal is unknown"
+                entry.upload_close_requested = True
+                return self._chunk_sync_reply_locked(
+                    entry, identity, terminal_ack=False
+                )
+            if not closed:
+                return self._chunk_sync_reply_locked(
+                    entry,
+                    identity,
+                    terminal_ack=entry.chunk_terminal is not None,
+                )
+            if state not in _UPLOAD_TERMINAL_STATES:
+                raise EntryConflictError("closed Prompt chunk needs a terminal")
+            effective = (
+                TransportState.TERMINAL_FAILED
+                if state == TransportState.NOT_SUBMITTED
+                else state
+            )
+            if entry.chunk_terminal is not None and entry.chunk_terminal != effective:
+                raise EntryConflictError("Prompt chunk terminal changed")
+            entry.chunk_terminal = effective
+            observation = (authorization, identity, effective)
+            if effective != TransportState.TERMINAL_SUCCESS:
+                progress.failed = True
+                self._fail_entry_locked(entry, "Prompt chunk PUT failed")
+        if observation is not None:
+            authorization, identity, effective = observation
+            authorization.close()
+            authorization.observe_terminal(identity, effective)
+        self._progress_releases()
+        with self._lock:
+            return self._chunk_sync_reply_locked(entry, identity, terminal_ack=True)
+
+    @staticmethod
+    def _chunk_sync_reply_locked(
+        entry: EntryShardRecord, identity: WriteIdentity, *, terminal_ack: bool
+    ) -> Dict[str, object]:
+        return {
+            "identity": identity.to_dict(),
+            "close_requested": bool(entry.upload_close_requested),
+            "terminal_ack": bool(terminal_ack),
+            "entry_state": entry.state.value,
+            "upload_terminal": (
+                entry.chunk_terminal.value if entry.chunk_terminal else None
+            ),
+            "resources_released": bool(entry.resources_released),
+        }
 
     def _upload_sync_reply_locked(
         self, entry: EntryShardRecord, *, terminal_ack: bool
@@ -1668,7 +1892,16 @@ class VectorKVStore:
         if entry.upload_authorization is not None and entry.upload_terminal is None:
             entry.upload_close_requested = True
 
-    def progress_prompt_indexes(self) -> Dict[str, int]:
+    def progress_prompt_indexes(self, *, wait_for_lock: bool = False) -> Dict[str, int]:
+        """Coalesce event-driven and periodic index progress for this shard."""
+        if not self._index_progress_lock.acquire(blocking=wait_for_lock):
+            return {"built": 0, "failed": 0, "deferred": 0, "skipped": 0}
+        try:
+            return self._progress_prompt_indexes_unlocked()
+        finally:
+            self._index_progress_lock.release()
+
+    def _progress_prompt_indexes_unlocked(self) -> Dict[str, int]:
         """Build one round of pending Prompt indexes. Bounded, caller-driven.
 
         Each candidate's allocation is pinned for the copy, so an Entry whose
@@ -1692,9 +1925,31 @@ class VectorKVStore:
         with self._lock:
             for entry in self._live_entries.values():
                 transfer_id = entry.key.transfer_id
-                if entry.state != EntryShardState.STORED or entry.release_requested:
+                chunked = entry.upload_mode == "chunked_cagra"
+                if entry.release_requested or entry.state not in (
+                    EntryShardState.STORED,
+                    EntryShardState.P_WRITING,
+                ):
                     continue
-                if not self.prompt_index.wants_build(transfer_id):
+                if entry.state == EntryShardState.P_WRITING and not chunked:
+                    continue
+                complete_pages = (
+                    entry.chunk_progress.complete_pages
+                    if chunked and entry.chunk_progress is not None
+                    else 0
+                )
+                existing_gate = self.prompt_index.gate_for(transfer_id)
+                if existing_gate is not None and existing_gate.searchable:
+                    continue
+                provisional_pages = self.prompt_index.provisional_pages(transfer_id)
+                if chunked and complete_pages and (
+                    complete_pages > provisional_pages
+                    or entry.state == EntryShardState.STORED
+                ):
+                    build_mode = "chunked"
+                elif entry.state == EntryShardState.STORED and self.prompt_index.wants_build(transfer_id):
+                    build_mode = "complete"
+                else:
                     continue
                 owner = f"prompt-index:{transfer_id}:{uuid.uuid4().hex[:8]}"
                 try:
@@ -1707,16 +1962,33 @@ class VectorKVStore:
                 packed = self.pool[offset : offset + entry.manifest.expected_bytes]
                 gate = self.prompt_index.gate_for(transfer_id)
                 deferrals = 0 if gate is None else gate.deferrals
-                candidates.append((entry, owner, packed, deferrals))
+                candidates.append((entry, owner, packed, deferrals, build_mode, complete_pages))
         built = failed = deferred = 0
-        for entry, owner, packed, deferrals_before in candidates:
+        for entry, owner, packed, deferrals_before, build_mode, complete_pages in candidates:
+            outcome = "failed"
             try:
-                ok = self.prompt_index.build(
-                    entry.key.transfer_id,
-                    packed,
-                    layout=entry.layout,
-                    manifest=entry.manifest,
-                )
+                if build_mode == "chunked":
+                    if entry.state == EntryShardState.STORED:
+                        self.prompt_index.note_kv_readable(entry.key.transfer_id)
+                    outcome = self.prompt_index.progress_chunked(
+                        entry.key.transfer_id, packed,
+                        layout=entry.layout, manifest=entry.manifest,
+                        complete_pages=complete_pages,
+                        stored=entry.state == EntryShardState.STORED,
+                    )
+                    if outcome == "fallback" and entry.state == EntryShardState.STORED:
+                        ok = self.prompt_index.build(
+                            entry.key.transfer_id, packed,
+                            layout=entry.layout, manifest=entry.manifest,
+                        )
+                    else:
+                        ok = outcome in ("built_prefix", "extended", "ready")
+                else:
+                    outcome = "complete"
+                    ok = self.prompt_index.build(
+                        entry.key.transfer_id, packed,
+                        layout=entry.layout, manifest=entry.manifest,
+                    )
             except Exception as exc:
                 ok = False
                 logger.warning(
@@ -1732,6 +2004,9 @@ class VectorKVStore:
                     entry.allocation_guard.unpin(owner)
             if ok:
                 built += 1
+                continue
+            if outcome == "deferred":
+                deferred += 1
                 continue
             gate = self.prompt_index.gate_for(entry.key.transfer_id)
             if gate is not None and gate.deferrals > deferrals_before:
@@ -1764,6 +2039,28 @@ class VectorKVStore:
             entries = list(self._release_pending.values())
         for entry in entries:
             try:
+                # The aggregate chunked identity never submits a native PUT.
+                # On cancellation it may close as NOT_SUBMITTED; any child
+                # whose native terminal is unresolved retains its own pin.
+                aggregate = None
+                with self._lock:
+                    if (
+                        entry.upload_mode == "chunked_cagra"
+                        and entry.upload_terminal is None
+                        and entry.upload_authorization is not None
+                    ):
+                        entry.upload_terminal = TransportState.NOT_SUBMITTED
+                        entry.upload_pending = False
+                        aggregate = (
+                            entry.upload_authorization,
+                            entry.upload_identity,
+                        )
+                if aggregate is not None:
+                    authorization, identity = aggregate
+                    authorization.close()
+                    authorization.observe_terminal(
+                        identity, TransportState.NOT_SUBMITTED
+                    )
                 entry.allocation_guard.request_release()
                 # The allocation callback can mark resources_released before
                 # ResourceGuard has finished it. Do not drop the pool's MR pin

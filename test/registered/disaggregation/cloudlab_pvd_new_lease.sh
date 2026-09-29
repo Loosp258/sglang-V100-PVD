@@ -25,6 +25,10 @@ draft_scratch_bytes="${PVD_DRAFT_SCRATCH_BYTES:-268435456}"
 retrieval_bank_bytes="${PVD_RETRIEVAL_BANK_BYTES:-268435456}"
 prefill_chunk_tokens="${PVD_PREFILL_CHUNK_TOKENS:-2048}"
 p_tp_size="${PVD_P_TP_SIZE:-1}"
+cagra_extend25="${PVD_CAGRA_EXTEND25:-0}"
+chunked_cagra_upload="${PVD_CHUNKED_CAGRA_UPLOAD:-0}"
+group_heads="${PVD_CAGRA_GROUP_HEADS:-1}"
+itopk_size="${PVD_CAGRA_ITOPK_SIZE:-64}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
 # link has the same path and pinned tokenizer bytes, while P/D links include
 # their own local weight shards.
@@ -34,6 +38,15 @@ python="$CONDA_PREFIX/bin/python"
 
 if [[ ! "$tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo 'PVD_RUN_TAG must be filename-safe' >&2
+  exit 2
+fi
+if [[ ! "$cagra_extend25" =~ ^[01]$ ]] ||
+   [[ ! "$chunked_cagra_upload" =~ ^[01]$ ]] ||
+   [[ ! "$group_heads" =~ ^[12]$ ]] ||
+   [[ ! "$itopk_size" =~ ^(64|128|256|512|1024|2048)$ ]] ||
+   [[ "$group_heads" == 2 && "$chunked_cagra_upload" != 1 ]] ||
+   [[ "$chunked_cagra_upload" == 1 && "$cagra_extend25" != 1 ]]; then
+  echo 'chunked CAGRA requires PVD_CAGRA_EXTEND25=1 and a 0/1 feature flag' >&2
   exit 2
 fi
 if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
@@ -91,8 +104,10 @@ case "$role" in
     require_free_port 30002
     require_model "$model"
     export SGLANG_HOST_IP="$p_ip"
-    p_base_gpu_id=1
+    export SGLANG_PVD_CHUNKED_CAGRA_UPLOAD="$chunked_cagra_upload"
+    p_base_gpu_id=0
     p_rank_rails="$rail"
+    p_ib_device="$rail"
     if [[ "$p_tp_size" == 2 ]]; then
       p_base_gpu_id=0
       p_rank_rails="$rail,$rail"
@@ -106,6 +121,7 @@ case "$role" in
       --pvd-vector-coordinator-url "http://$v_ip:9100" \
       --pvd-model-instance-id qwen25-7b-pvd \
       --pvd-rank-rails "$p_rank_rails" --disaggregation-transfer-backend mooncake \
+      --disaggregation-ib-device "$p_ib_device" \
       --pvd-transfer-staging-budget-bytes 67108864 \
       --pvd-transfer-max-inflight 16 \
       --mem-fraction-static 0.5 --context-length "$context_tokens" \
@@ -133,7 +149,19 @@ case "$role" in
       echo 'PVD_PROMPT_INDEX_BUDGET_BYTES must be in [1 GiB, 4 GiB]' >&2
       exit 2
     fi
-    cuvs_site="$root/deps/pvd-cagra25-venv/lib/python3.12/site-packages"
+    cuvs_env="pvd-cagra25-venv"
+    index_backend="cagra-auto"
+    index_mode_args=(--prompt-index-exact-max-rows "$exact_max_rows")
+    chunked_args=()
+    if [[ "$cagra_extend25" == 1 ]]; then
+      cuvs_env="pvd-cagra-extend25-venv"
+      index_backend="cagra"
+      index_mode_args=()
+    fi
+    if [[ "$chunked_cagra_upload" == 1 ]]; then
+      chunked_args=(--chunked-cagra-upload)
+    fi
+    cuvs_site="$root/deps/$cuvs_env/lib/python3.12/site-packages"
     if [[ ! -d "$cuvs_site/cuvs" ]]; then
       echo 'isolated cuVS 25.02 environment is absent' >&2
       exit 2
@@ -155,13 +183,14 @@ case "$role" in
       --transfer-staging-budget-bytes 67108864 --transfer-max-inflight 16 \
       --prompt-index-vector-space qwen25-7b-pvd \
       --prompt-index-budget-bytes "$index_budget" \
-      --prompt-index-backend cagra-auto \
+      --prompt-index-backend "$index_backend" \
       --prompt-index-cagra-native-bytes 536870912 \
       --prompt-index-cagra-global-native-bytes 671088640 \
       --prompt-index-cagra-graph-degree 8 \
       --prompt-index-cagra-intermediate-degree 16 \
-      --prompt-index-exact-max-rows "$exact_max_rows" \
-      --prompt-index-cagra-itopk-size 64 \
+      --prompt-index-group-heads "$group_heads" \
+      "${index_mode_args[@]}" "${chunked_args[@]}" \
+      --prompt-index-cagra-itopk-size "$itopk_size" \
       --experimental-cuda-sparse-packing "${pack_args[@]}" \
       --full-kv-fanin-max-slices "$fanin_max_slices" \
       --full-kv-fanin-max-inflight 2 \

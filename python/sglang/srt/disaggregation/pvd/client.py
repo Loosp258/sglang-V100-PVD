@@ -168,6 +168,27 @@ class PVDCoordinatorClient:
             raise PVDControlPlaneError(f"invalid upload sync reply: {exc}") from exc
         return reply
 
+    async def begin_chunk(
+        self, key: KVEntryKey, rank: int, first_page: int, page_count: int
+    ) -> Dict[str, Any]:
+        return await self._request(
+            "/v1/chunks/begin",
+            {
+                "key": key.to_dict(),
+                "rank": rank,
+                "first_page": first_page,
+                "page_count": page_count,
+            },
+        )
+
+    async def commit_chunk(
+        self, identity: WriteIdentity, received_bytes: int
+    ) -> Dict[str, Any]:
+        return await self._request(
+            "/v1/chunks/commit",
+            {"identity": identity.to_dict(), "received_bytes": received_bytes},
+        )
+
     async def admit_request(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._request("/v1/requests", request)
 

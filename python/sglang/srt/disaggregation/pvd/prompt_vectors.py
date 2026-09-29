@@ -47,7 +47,6 @@ from dataclasses import dataclass
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 import torch
-
 from sglang.srt.disaggregation.pvd.index_search import IdMapping
 
 #: Stored K already carries rotation by key position.
@@ -206,6 +205,8 @@ def extract_prompt_k(
     device: Optional[object] = None,
     layers: Optional[Sequence[int]] = None,
     kv_heads: Optional[Sequence[int]] = None,
+    readable_pages: Optional[int] = None,
+    first_page: int = 0,
     budget: Any = None,
     budget_owner: Optional[str] = None,
 ) -> List[PromptKVectors]:
@@ -224,6 +225,11 @@ def extract_prompt_k(
     stored shard is, which is what a caller that only wants to read its own
     KV wants; an index owner passes its backend's declared device so the
     vectors are born where they will be used.
+
+    ``readable_pages`` bounds extraction to a proven-complete page prefix in
+    the *full* component-major allocation. ``first_page`` extracts only newly
+    completed pages for native index extension. The caller must supply native
+    PUT terminal proof; this function checks bounds but grants no read right.
     """
     _require_text("entry_transfer_id", entry_transfer_id)
     _require_text("id_mapping_version", id_mapping_version)
@@ -255,7 +261,22 @@ def extract_prompt_k(
     if not 0 < last_valid <= page_size:
         raise PromptVectorError("last_page_valid_tokens is outside the page")
     total_rows = page_count * page_size
-    valid_tokens = (page_count - 1) * page_size + last_valid
+    if readable_pages is None:
+        valid_tokens = (page_count - 1) * page_size + last_valid
+    else:
+        if type(readable_pages) is not int or not 1 <= readable_pages <= page_count:
+            raise PromptVectorError("readable_pages is outside the shard")
+        valid_tokens = (
+            (page_count - 1) * page_size + last_valid
+            if readable_pages == page_count
+            else readable_pages * page_size
+        )
+    if type(first_page) is not int or not 0 <= first_page < page_count:
+        raise PromptVectorError("first_page is outside the shard")
+    if first_page * page_size >= valid_tokens:
+        raise PromptVectorError("first_page has no readable Prompt rows")
+    first_token = first_page * page_size
+    selected_tokens = valid_tokens - first_token
 
     expected = sum(sizes) * total_rows
     byte_view = packed if packed.dtype == torch.uint8 else packed.view(torch.uint8)
@@ -294,13 +315,17 @@ def extract_prompt_k(
         element = torch.empty(0, dtype=dtype).element_size()
         budget.reserve(
             budget_owner,
-            len(wanted_layers) * len(wanted_heads) * valid_tokens * head_dim * element,
+            len(wanted_layers)
+            * len(wanted_heads)
+            * selected_tokens
+            * head_dim
+            * element,
             0,
         )
 
     mapping = IdMapping(
         version=id_mapping_version,
-        token_ids=tuple(range(valid_tokens)),
+        token_ids=tuple(range(first_token, valid_tokens)),
         page_size=page_size,
     )
 
@@ -331,7 +356,7 @@ def extract_prompt_k(
                 # from under a live index. Device and dtype are both named,
                 # because a cast alone would leave the copy on the pool's
                 # device and tie a host backend to GPU memory.
-                source = slab[:valid_tokens, head - head_base, :]
+                source = slab[first_token:valid_tokens, head - head_base, :]
                 vectors = source.to(
                     device=target_device or source.device, dtype=dtype, copy=True
                 )

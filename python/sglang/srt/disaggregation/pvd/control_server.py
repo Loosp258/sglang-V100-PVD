@@ -237,6 +237,28 @@ class HttpShardClient(ShardClient):
             },
         )
 
+    async def begin_chunk(
+        self, key: KVEntryKey, first_page: int, page_count: int
+    ) -> Mapping:
+        return await self._request(
+            "POST",
+            "/internal/v1/chunks/begin",
+            {
+                "key": key.to_dict(),
+                "first_page": first_page,
+                "page_count": page_count,
+            },
+        )
+
+    async def commit_chunk(
+        self, identity: WriteIdentity, received_bytes: int
+    ) -> Mapping:
+        return await self._request(
+            "POST",
+            "/internal/v1/chunks/commit",
+            {"identity": identity.to_dict(), "received_bytes": received_bytes},
+        )
+
     async def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> Mapping:
         return await self._request(
             "POST",
@@ -436,6 +458,32 @@ def create_shard_app(
     app = web.Application(
         middlewares=[pvd_error_middleware], client_max_size=4 * 1024 * 1024
     )
+    index_tasks = set()
+
+    def kick_chunk_index() -> None:
+        if store.prompt_index is None or len(index_tasks) >= 32:
+            return
+        task = asyncio.create_task(
+            asyncio.to_thread(store.progress_prompt_indexes, wait_for_lock=True)
+        )
+        index_tasks.add(task)
+
+        def finished(done):
+            index_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception as exc:
+                logger.warning("V chunk index progress failed: %s", exc)
+
+        task.add_done_callback(finished)
+
+    async def finish_index_tasks(_app):
+        if index_tasks:
+            await asyncio.gather(*tuple(index_tasks), return_exceptions=True)
+
+    app.on_cleanup.append(finish_index_tasks)
 
     async def create_entry(request):
         data = await _payload(request)
@@ -469,11 +517,30 @@ def create_shard_app(
         )
         return web.json_response(result)
 
-    async def commit_entry(request):
+    async def begin_chunk(request):
         data = await _payload(request)
         return web.json_response(
-            store.commit_p_write(_key(data), int(data["received_bytes"])).to_dict()
+            store.begin_chunk(
+                _key(data), int(data["first_page"]), int(data["page_count"])
+            )
         )
+
+    async def commit_chunk(request):
+        data = await _payload(request)
+        result = store.commit_chunk(
+            WriteIdentity.from_dict(data["identity"]),
+            int(data["received_bytes"]),
+        )
+        if not result.get("finished"):
+            kick_chunk_index()
+        return web.json_response(result)
+
+    async def commit_entry(request):
+        data = await _payload(request)
+        entry = store.commit_p_write(_key(data), int(data["received_bytes"]))
+        if entry.upload_mode == "chunked_cagra":
+            kick_chunk_index()
+        return web.json_response(entry.to_dict())
 
     async def reserve_delivery(request):
         data = await _payload(request)
@@ -880,6 +947,8 @@ def create_shard_app(
             web.post("/internal/v1/entries/begin", begin_entry),
             web.post("/internal/v1/entries/commit", commit_entry),
             web.post("/internal/v1/uploads/sync", sync_upload),
+            web.post("/internal/v1/chunks/begin", begin_chunk),
+            web.post("/internal/v1/chunks/commit", commit_chunk),
             web.post("/internal/v1/deliveries", reserve_delivery),
             web.post("/internal/v1/fanin/reserve", reserve_fanin),
             web.post("/internal/v1/fanin/fence", fence_fanin),
@@ -1005,6 +1074,26 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             )
         )
 
+    async def begin_chunk(request):
+        data = await _payload(request)
+        return web.json_response(
+            await coordinator.begin_chunk(
+                _key(data),
+                int(data["rank"]),
+                int(data["first_page"]),
+                int(data["page_count"]),
+            )
+        )
+
+    async def commit_chunk(request):
+        data = await _payload(request)
+        return web.json_response(
+            await coordinator.commit_chunk(
+                WriteIdentity.from_dict(data["identity"]),
+                int(data["received_bytes"]),
+            )
+        )
+
     async def commit_entry(request):
         data = await _payload(request)
         token = data.get("first_token")
@@ -1082,6 +1171,8 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             web.post("/v1/entries/routes", selected_shard_routes),
             web.post("/v1/entries/commit", commit_entry),
             web.post("/v1/uploads/sync", sync_upload),
+            web.post("/v1/chunks/begin", begin_chunk),
+            web.post("/v1/chunks/commit", commit_chunk),
             web.post("/v1/select", select),
             web.post("/v1/deliveries", reserve_delivery),
             web.post("/v1/deliveries/start", start_delivery),

@@ -24,6 +24,56 @@ class PackedTransferSlice:
     length: int
 
 
+def plan_prompt_chunk_puts(
+    layout: KVLayoutSignature,
+    *,
+    total_pages: int,
+    expected_bytes: int,
+    first_page: int,
+    page_count: int,
+) -> Tuple[PackedTransferSlice, ...]:
+    """Map a page chunk packed by ``kv_packer`` into a complete V shard.
+
+    Both buffers are component-major. The chunk contains each component's
+    selected pages contiguously, while the destination contains every Prompt
+    page of each component. One PUT for the whole chunk would corrupt the
+    destination after its first component; each returned slice is one
+    component's checked, non-overlapping destination interval.
+
+    This is a byte plan only. It does not authorize a remote write or prove
+    that the source pages have finished producing their KV.
+    """
+    for name, value in (
+        ("total_pages", total_pages),
+        ("expected_bytes", expected_bytes),
+        ("first_page", first_page),
+        ("page_count", page_count),
+    ):
+        if type(value) is not int or value < (0 if name == "first_page" else 1):
+            raise ProtocolValidationError(f"{name} is outside the chunk layout")
+    if first_page + page_count > total_pages:
+        raise ProtocolValidationError("Prompt chunk exceeds the complete shard")
+    bytes_per_token = _component_bytes(layout)
+    bytes_per_page = [count * layout.page_size for count in bytes_per_token]
+    if expected_bytes != total_pages * sum(bytes_per_page):
+        raise ProtocolValidationError("complete shard bytes differ from the layout")
+
+    source_offset = destination_base = 0
+    transfers = []
+    for component_page_bytes in bytes_per_page:
+        length = page_count * component_page_bytes
+        remote_offset = destination_base + first_page * component_page_bytes
+        if (
+            remote_offset + length
+            > destination_base + total_pages * component_page_bytes
+        ):
+            raise ProtocolValidationError("Prompt chunk write exceeds its component")
+        transfers.append(PackedTransferSlice(source_offset, remote_offset, length))
+        source_offset += length
+        destination_base += total_pages * component_page_bytes
+    return tuple(transfers)
+
+
 @dataclass(frozen=True)
 class RankPackedScatter:
     """Compact local copy rule, repeated once for each token in one component."""

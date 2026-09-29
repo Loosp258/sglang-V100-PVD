@@ -59,6 +59,7 @@ from sglang.srt.disaggregation.pvd.index_lifecycle import (
 from sglang.srt.disaggregation.pvd.index_search import (
     BruteForceIndexBackend,
     BuiltIndex,
+    IdMapping,
     IndexBackend,
     IndexCompletionUnknown,
     IndexNotReadyError,
@@ -93,6 +94,11 @@ class EntryIndex:
     #: Live searches reading this record's tensors. The charge is not refunded
     #: while this is non-zero, even after close(): the memory is still held.
     users: int = 0
+    provisional_pages: int = 0
+    provisional_owners: List[str] = field(default_factory=list)
+    provisional_failed: bool = False
+    group_means: Dict[Tuple[int, int], torch.Tensor] = field(default_factory=dict)
+    group_boundaries: List[int] = field(default_factory=lambda: [0])
 
     def heads(self) -> List[Tuple[int, int]]:
         return sorted(self.indexes)
@@ -165,6 +171,7 @@ class PromptIndexManager:
         positional_encoding: str = ROPE_APPLIED,
         max_build_attempts: int = 3,
         budget: Any = None,
+        group_heads: int = 1,
     ) -> None:
         if not isinstance(vector_space, str) or not vector_space.strip():
             raise ValueError("vector_space must be a non-empty string")
@@ -174,6 +181,11 @@ class PromptIndexManager:
         self.positional_encoding = positional_encoding
         self.max_build_attempts = max_build_attempts
         self.budget = budget
+        if group_heads not in (1, 2):
+            raise ValueError("group_heads must be 1 or 2")
+        if group_heads == 2 and getattr(self.backend, "name", None) != "cagra":
+            raise ValueError("two-head grouping requires native CAGRA")
+        self.group_heads = group_heads
         # Where this manager's copies live: the backend's declared device, so
         # vectors are born where they will be searched. The KV pool is never
         # moved to match; extraction copies across instead.
@@ -299,7 +311,9 @@ class PromptIndexManager:
     def _release_budget_locked(self, record: EntryIndex) -> None:
         """Refund what this entry retains. Idempotent; safe when unset."""
         self._release_owners(record.budget_owners)
+        self._release_owners(record.provisional_owners)
         record.budget_owners = ()
+        record.provisional_owners.clear()
 
     def _retire_locked(self, record: EntryIndex) -> None:
         """Drop a detached record's copies once nothing is reading them.
@@ -338,9 +352,257 @@ class PromptIndexManager:
         gate = self.gate_for(transfer_id)
         if gate is None or not gate.kv_readable:
             return False
+        with self._lock:
+            record = self._entries.get(transfer_id)
+            if record is not None and record.provisional_pages:
+                return False
         return (
             gate.state in (IndexState.ABSENT, IndexState.FAILED) and not gate.exhausted
         )
+
+    def provisional_pages(self, transfer_id: str) -> int:
+        with self._lock:
+            record = self._entries.get(transfer_id)
+            return 0 if record is None else record.provisional_pages
+
+    def progress_chunked(
+        self, transfer_id: str, packed: torch.Tensor, *, layout: Any,
+        manifest: Any, complete_pages: int, stored: bool,
+    ) -> str:
+        """Build/extend only terminal-proven pages; publish only after STORED.
+
+        A failed provisional graph is retired and the ordinary full build may
+        retry after STORED. Capacity refusal retains the previous prefix.
+        """
+        started = time.perf_counter()
+        with self._lock:
+            if self.quarantined:
+                raise IndexCompletionUnknown(self._quarantine_reason)
+            record = self._entries.get(transfer_id)
+            if record is None:
+                raise IndexSearchError(f"no index gate for {transfer_id}")
+            if record.gate.searchable:
+                return "ready"
+            if record.provisional_failed:
+                return "fallback"
+            if complete_pages <= record.provisional_pages:
+                if stored and complete_pages == manifest.page_count and record.provisional_pages:
+                    return self._publish_provisional_locked(record, manifest)
+                return "unchanged"
+            if record.gate.state is IndexState.READY:
+                return "ready"
+            min_rows = getattr(self.backend, "exact_max_rows", None)
+            if min_rows is None:
+                min_rows = getattr(self.backend, "intermediate_degree", 0)
+            valid_rows = (
+                (manifest.page_count - 1) * layout.page_size
+                + manifest.last_page_valid_tokens
+                if complete_pages == manifest.page_count
+                else complete_pages * layout.page_size
+            )
+            if record.provisional_pages == 0 and valid_rows <= min_rows:
+                return "fallback" if stored else "deferred"
+            first_page = record.provisional_pages
+            owner = f"prompt-index:{transfer_id}:chunk:{uuid.uuid4().hex}"
+            scratch_owner = owner + ":scratch"
+            index_owner = owner + ":index"
+            group_owner = owner + ":group"
+            vectors = []
+            built = {}
+            new_means = {}
+            try:
+                vectors = extract_prompt_k(
+                    packed, layout=layout, manifest=manifest,
+                    entry_transfer_id=transfer_id,
+                    id_mapping_version=record.id_mapping_version,
+                    positional_encoding=self.positional_encoding,
+                    device=self.backend_device, readable_pages=complete_pages,
+                    first_page=first_page, budget=self.budget,
+                    budget_owner=owner,
+                )
+                if not vectors:
+                    raise PromptVectorError("chunk produced no Prompt K vectors")
+                if self.group_heads == 2:
+                    if len(vectors) % 2:
+                        raise IndexSearchError("grouped chunk lacks a paired KV head")
+                    self._reserve(group_owner, sum(
+                        item.vectors.numel() * item.vectors.element_size()
+                        + (item.head_dim * 4 if first_page == 0 else 0)
+                        for item in vectors
+                    ))
+                if first_page == 0:
+                    if self.budget is not None:
+                        self._reserve(index_owner, sum(
+                            self.backend.build_footprint(
+                                v.token_count * self.group_heads, v.head_dim,
+                                metric=self.metric,
+                            )
+                            for v in vectors[::self.group_heads]
+                        ))
+                if self.budget is not None:
+                    self._reserve(scratch_owner, max(
+                        self.backend.build_scratch_footprint(
+                            (valid_rows if first_page else v.token_count)
+                            * self.group_heads,
+                            v.head_dim, metric=self.metric,
+                        ) for v in vectors
+                    ))
+                if self.group_heads == 2:
+                    for layer in sorted({item.layer for item in vectors}):
+                        pair = sorted(
+                            (item for item in vectors if item.layer == layer),
+                            key=lambda item: item.kv_head,
+                        )
+                        if len(pair) != 2 or pair[0].token_count != pair[1].token_count:
+                            raise IndexSearchError("grouped layer has mismatched KV heads")
+                        count, dim = pair[0].token_count, pair[0].head_dim
+                        grouped = torch.empty(
+                            (2 * count, dim), device=pair[0].vectors.device,
+                            dtype=torch.float32,
+                        )
+                        for offset, item in enumerate(pair):
+                            key = (layer, item.kv_head)
+                            mean = (
+                                record.group_means[key] if first_page
+                                else item.vectors.mean(dim=0)
+                            )
+                            if first_page == 0:
+                                new_means[key] = mean
+                            segment = grouped[offset * count:(offset + 1) * count]
+                            segment.copy_(item.vectors)
+                            segment.sub_(mean)
+                        key = (layer, -1)
+                        if first_page:
+                            previous = record.indexes[key]
+                            built[key] = self.backend.extend(previous, grouped)
+                            expected = previous.count + 2 * count
+                        else:
+                            built[key] = self.backend.build(
+                                grouped, vector_space=self.vector_space,
+                                metric=self.metric,
+                            )
+                            expected = 2 * count
+                        if (
+                            built[key].count != expected
+                            or built[key].dim != dim
+                            or built[key].vector_space != self.vector_space
+                            or built[key].metric != self.metric
+                        ):
+                            raise IndexSearchError("grouped CAGRA metadata mismatch")
+                        self._fence(packed)
+                else:
+                    for item in vectors:
+                        key = (item.layer, item.kv_head)
+                        if first_page:
+                            previous = record.indexes[key]
+                            built[key] = self.backend.extend(previous, item.vectors)
+                            if built[key].count != previous.count + item.token_count:
+                                raise IndexSearchError("extended CAGRA row count mismatch")
+                        else:
+                            built[key] = self.backend.build(
+                                item.vectors, vector_space=self.vector_space,
+                                metric=self.metric,
+                            )
+                            self._validate_built_index(built[key], item)
+                        self._fence(packed)
+                self._fence(packed)
+            except TransferCapacityError as exc:
+                self._fence(packed)
+                self._release_owners((owner, scratch_owner, index_owner, group_owner))
+                traceback.clear_frames(exc.__traceback__)
+                return "deferred"
+            except BaseException as exc:
+                if isinstance(exc, IndexCompletionUnknown):
+                    self._quarantine(exc)
+                    self._retain_operation(record, owner, scratch_owner, index_owner, group_owner, vectors, built, packed, exc)
+                    raise
+                try:
+                    self._fence(packed)
+                    self._dispose({**record.indexes, **built})
+                except IndexCompletionUnknown:
+                    self._retain_operation(record, owner, scratch_owner, index_owner, group_owner, vectors, built, packed, exc)
+                    raise
+                record.indexes.clear()
+                record.vectors.clear()
+                record.provisional_pages = 0
+                record.provisional_failed = True
+                record.group_means.clear()
+                record.group_boundaries = [0]
+                self._release_owners((owner, scratch_owner, index_owner, group_owner))
+                self._release_owners(record.provisional_owners)
+                record.provisional_owners.clear()
+                traceback.clear_frames(exc.__traceback__)
+                logger.warning("PVD provisional index failed for %s: %s", transfer_id, exc)
+                return "fallback" if stored else "failed"
+            self._release_owners((scratch_owner,))
+            record.provisional_owners.append(owner)
+            if self.group_heads == 2:
+                record.provisional_owners.append(group_owner)
+                record.group_means.update(new_means)
+                record.group_boundaries.append(valid_rows)
+            if first_page == 0:
+                record.provisional_owners.append(index_owner)
+            record.indexes.update(built)
+            record.vectors = {(v.layer, v.kv_head): v for v in vectors}
+            record.provisional_pages = complete_pages
+            if stored and complete_pages == manifest.page_count:
+                logger.info(
+                    "PVD Prompt provisional final step: transfer_id=%s rank=%d "
+                    "first_page=%d pages=%d heads=%d seconds=%.6f",
+                    transfer_id, manifest.rank, first_page, complete_pages,
+                    len(built), time.perf_counter() - started,
+                )
+                return self._publish_provisional_locked(record, manifest)
+            logger.info(
+                "PVD Prompt provisional graph: transfer_id=%s rank=%d pages=%d first_page=%d "
+                "heads=%d outcome=%s seconds=%.6f",
+                transfer_id, manifest.rank, complete_pages, first_page, len(built),
+                "extended" if first_page else "built_prefix",
+                time.perf_counter() - started,
+            )
+            return "extended" if first_page else "built_prefix"
+
+    def _publish_provisional_locked(self, record: EntryIndex, manifest: Any) -> str:
+        if not record.gate.kv_readable or record.provisional_pages != manifest.page_count:
+            raise IndexSearchError("provisional graph cannot be published before complete KV")
+        count = (manifest.page_count - 1) * record.vectors[next(iter(record.vectors))].mapping.page_size + manifest.last_page_valid_tokens
+        for key, item in list(record.vectors.items()):
+            index = (
+                record.indexes[(key[0], -1)]
+                if self.group_heads == 2 else record.indexes[key]
+            )
+            if index.count != count * self.group_heads:
+                raise IndexSearchError("provisional graph is missing Prompt rows")
+            mapping = IdMapping(
+                version=record.id_mapping_version,
+                token_ids=tuple(range(count)),
+                page_size=item.mapping.page_size,
+            )
+            record.vectors[key] = PromptKVectors(
+                item.entry_transfer_id, item.layer, item.kv_head,
+                item.vectors, mapping, item.positional_encoding,
+                item.source_dtype,
+            )
+        if self.group_heads == 2 and record.group_boundaries[-1] != count:
+            raise IndexSearchError("grouped graph boundaries are incomplete")
+        record.gate.begin_build()
+        record.budget_owners = tuple(record.provisional_owners)
+        record.provisional_owners.clear()
+        record.gate.mark_ready(IndexDescriptor(
+            index_version=f"idx:{record.gate.entry_transfer_id}:{uuid.uuid4().hex[:12]}",
+            entry_transfer_id=record.gate.entry_transfer_id,
+            vector_space=self.vector_space,
+            id_mapping_version=record.id_mapping_version,
+            vector_count=sum(index.count for index in record.indexes.values()),
+            metric=self.metric,
+        ))
+        logger.info(
+            "PVD Prompt provisional graph READY: transfer_id=%s rank=%d pages=%d "
+            "heads=%d rows_per_head=%d",
+            record.gate.entry_transfer_id, manifest.rank, record.provisional_pages,
+            len(record.indexes), count,
+        )
+        return "ready"
 
     # -- building -----------------------------------------------------------
 
@@ -624,7 +886,11 @@ class PromptIndexManager:
                 entry_transfer_id=transfer_id,
             )
             item = record.vectors.get(key)
-            index = record.indexes.get(key)
+            group_index = record.indexes.get((identity.layer, -1))
+            grouped = self.group_heads == 2 and group_index is not None
+            index = group_index if grouped else record.indexes.get(key)
+            group_mean = record.group_means.get(key) if grouped else None
+            group_boundaries = tuple(record.group_boundaries) if grouped else ()
             if item is None or index is None:
                 raise IndexSearchError(
                     f"entry {transfer_id} has no index for layer "
@@ -655,6 +921,10 @@ class PromptIndexManager:
                     scratch_owner,
                     self.backend.search_footprint(
                         index.count, index.dim, int(queries.shape[0]), int(top_k)
+                    ) + (
+                        ((index.count + 31) // 32) * 4
+                        + int(queries.shape[0]) * int(top_k) * 24
+                        if grouped else 0
                     ),
                 )
             if timings is not None:
@@ -672,16 +942,24 @@ class PromptIndexManager:
                 placed_queries = queries.to(device=self.backend_device)
             if timings is not None:
                 timings["query_place"] = time.perf_counter() - stage_started
-            selection = select(
-                self.backend,
-                index,
-                placed_queries,
-                layer=identity.layer,
-                kv_head=identity.kv_head,
-                mapping=item.mapping,
-                top_k=top_k,
-                timings=timings,
-            )
+            if grouped:
+                selection = self._select_grouped(
+                    index, placed_queries, identity=identity,
+                    mapping=item.mapping, top_k=top_k,
+                    mean=group_mean, boundaries=group_boundaries,
+                    timings=timings,
+                )
+            else:
+                selection = select(
+                    self.backend,
+                    index,
+                    placed_queries,
+                    layer=identity.layer,
+                    kv_head=identity.kv_head,
+                    mapping=item.mapping,
+                    top_k=top_k,
+                    timings=timings,
+                )
         except BaseException as exc:
             failure = exc
             if isinstance(exc, IndexCompletionUnknown):
@@ -711,6 +989,53 @@ class PromptIndexManager:
             index_version=descriptor.index_version,
             id_mapping_version=descriptor.id_mapping_version,
             validated=validated,
+        )
+
+    def _select_grouped(
+        self, index, queries, *, identity, mapping, top_k, mean,
+        boundaries, timings,
+    ) -> Selection:
+        if mean is None or len(boundaries) < 2:
+            raise IndexSearchError("grouped CAGRA index lacks a head mean or mapping")
+        if top_k > len(mapping) or index.count != 2 * len(mapping):
+            raise IndexSearchError("grouped CAGRA row count or Top-K is invalid")
+        local_head = identity.kv_head % 2
+        words = [0] * ((index.count + 31) // 32)
+        sections = []
+        for begin, end in zip(boundaries[:-1], boundaries[1:]):
+            start = 2 * begin + local_head * (end - begin)
+            sections.append((begin, end, start))
+            for row in range(start, start + end - begin):
+                words[row // 32] |= 1 << (row % 32)
+        bitset = torch.tensor(
+            words, dtype=torch.uint32, device=queries.device,
+        )
+        rows, scores = self.backend.search(
+            index, queries, top_k=top_k, bitset=bitset,
+        )
+        global_rows = rows.to(dtype=torch.int64)
+        local_rows = torch.full_like(global_rows, -1)
+        valid = torch.zeros_like(global_rows, dtype=torch.bool)
+        for begin, end, start in sections:
+            in_section = (global_rows >= start) & (
+                global_rows < start + end - begin
+            )
+            local_rows = torch.where(
+                in_section, begin + global_rows - start, local_rows,
+            )
+            valid |= in_section
+        if not bool(torch.all(valid)):
+            raise IndexSearchError("filtered CAGRA returned an ID from another head")
+        original_scores = scores + (queries @ mean).unsqueeze(1)
+        head_index = BuiltIndex(
+            index.vector_space, index.metric, index.dim,
+            len(mapping), index.handle,
+        )
+        return select(
+            self.backend, head_index, queries,
+            layer=identity.layer, kv_head=identity.kv_head,
+            mapping=mapping, top_k=top_k, timings=timings,
+            backend_result=(local_rows, original_scores),
         )
 
     def search_many(
@@ -745,6 +1070,13 @@ class PromptIndexManager:
                 raise IndexSearchError("queries must have non-empty 2-D shape")
             if type(top_k) is not int or top_k <= 0:
                 raise IndexSearchError("top_k must be a positive integer")
+        if self.group_heads == 2:
+            if metadata is not None:
+                metadata["path"] = "grouped_cagra"
+            return tuple(
+                self.search(identity, queries=queries, top_k=top_k)
+                for identity, queries, top_k in requests
+            )
 
         prepared = []
         with self._lock:

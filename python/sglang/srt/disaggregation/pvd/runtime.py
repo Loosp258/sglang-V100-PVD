@@ -10,6 +10,7 @@ from typing import Any, Dict, FrozenSet, Mapping, Optional
 
 import torch
 from sglang.srt.disaggregation.pvd.client import PVDCoordinatorClient
+from sglang.srt.disaggregation.pvd.prompt_chunks import PromptChunkIdentity
 from sglang.srt.disaggregation.pvd.protocol import (
     FirstTokenMetadata,
     KVEntryKey,
@@ -79,6 +80,7 @@ class PVDPrefillRuntime:
         if upload_sync_attempts < 1:
             raise ValueError("upload_sync_attempts must be at least 1")
         self.upload_sync_attempts = upload_sync_attempts
+        self._unknown_chunk_sources = []
 
     @property
     def lifecycle_enabled(self) -> bool:
@@ -92,6 +94,7 @@ class PVDPrefillRuntime:
         layout: KVLayoutSignature,
         prompt_token_count: int,
         shards: Mapping[int, KVShardManifest],
+        upload_mode: str = "complete",
         uploader_epochs: Optional[Mapping[int, str]] = None,
         owned_shard_ranks: Optional[set[int]] = None,
     ) -> PVDEntryLease:
@@ -105,6 +108,7 @@ class PVDPrefillRuntime:
             layout=layout,
             prompt_token_count=prompt_token_count,
             shards=[shards[rank] for rank in range(layout.tp_size)],
+            upload_mode=upload_mode,
         )
         if not self.lifecycle_enabled and (
             uploader_epochs is not None or owned_shard_ranks is not None
@@ -358,6 +362,150 @@ class PVDPrefillRuntime:
             # request_release only: the adapter defers the real deregistration
             # until every transfer pin on this registration is gone.
             self.transfer_engine.release_memory(registration)
+
+    async def publish_chunk_tensor_shard(
+        self,
+        *,
+        lease: PVDEntryLease,
+        rank: int,
+        tensor: torch.Tensor,
+        first_page: int,
+        page_count: int,
+        first_token: Optional[FirstTokenMetadata] = None,
+        deadline: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Publish one proven page chunk; finalize the shard on its last one."""
+        if not self.lifecycle_enabled or lease.manifest.upload_mode != "chunked_cagra":
+            raise PVDDataPlaneError("chunked upload lifecycle is not enabled")
+        if rank not in lease.owned_shard_ranks:
+            raise PVDDataPlaneError("this P process does not own the chunk shard")
+        base = lease.upload_identities[rank]
+        if base.sender_epoch != self.worker_epoch:
+            raise PVDDataPlaneError("Prompt chunk sender epoch differs")
+        shard = lease.manifest.shard(rank)
+        expected = PromptChunkIdentity.issue(
+            base,
+            lease.manifest.layout,
+            shard,
+            first_page=first_page,
+            page_count=page_count,
+        )
+        if tensor.numel() * tensor.element_size() != expected.chunk_bytes:
+            raise PVDDataPlaneError("packed Prompt chunk byte count differs")
+        if first_token is not None and (rank != 0 or not expected.final):
+            raise PVDDataPlaneError("first token belongs to final rank-0 chunk")
+        response = await self.coordinator.begin_chunk(
+            lease.manifest.key, rank, first_page, page_count
+        )
+        chunk = expected
+        registration = None
+        record = None
+        handle = None
+        handle_attached = False
+        native_attempted = False
+        try:
+            chunk = PromptChunkIdentity.from_dict(
+                response,
+                layout=lease.manifest.layout,
+                shard=shard,
+                base=base,
+            )
+            if chunk != expected:
+                raise PVDDataPlaneError("V authorized another Prompt chunk")
+            registration = self.transfer_engine.register_memory(
+                tensor,
+                endpoint="pvd-prefill",
+                rank=rank,
+                rail=shard.rail,
+            )
+            record = self.upload_manager.open(
+                identity=chunk.write, coordinator=self.coordinator
+            )
+            slices = tuple(
+                MemorySlice(registration, span.local_offset, span.length)
+                for span in chunk.slices
+            )
+            submit_batch = getattr(self.transfer_engine, "submit_batch_put", None)
+            if not callable(submit_batch):
+                raise PVDDataPlaneError("native batch PUT is required for Prompt chunks")
+            self.upload_manager.claim_submission(record)
+            native_attempted = True
+            try:
+                handle = submit_batch(
+                    slices,
+                    lease.target_regions[rank],
+                    remote_offsets=tuple(span.remote_offset for span in chunk.slices),
+                )
+            except BaseException:
+                # A raised adapter may already have entered the native call.
+                # Without a handle there is no safe unregister proof.
+                self._unknown_chunk_sources.append((tensor, registration, chunk))
+                await self.upload_manager.progress_record(record)
+                raise
+            self.upload_manager.attach(
+                record, engine=self.transfer_engine, handle=handle
+            )
+            handle_attached = True
+            status = await self._drain_to_transport_terminal(handle, deadline=deadline)
+            acknowledged = await self._report_terminal(record, deadline=deadline)
+            if (
+                status != TransferStatus.SUCCESS
+                or handle.transport_state != TransportState.TERMINAL_SUCCESS
+                or not acknowledged
+            ):
+                raise PVDDataPlaneError("Prompt chunk PUT did not close successfully")
+            result = await self.coordinator.commit_chunk(
+                chunk.write, handle.transferred_bytes
+            )
+            if (
+                result.get("complete_pages") != first_page + page_count
+                or result.get("finished") is not expected.final
+            ):
+                raise PVDDataPlaneError("V committed a different Prompt prefix")
+            if not expected.final:
+                return result
+            aggregate = self.upload_manager.open(
+                identity=base, coordinator=self.coordinator
+            )
+            self.upload_manager.mark_aggregate_success(
+                aggregate, shard.expected_bytes
+            )
+            if not await self._report_terminal(aggregate, deadline=deadline):
+                raise PVDDataPlaneError("aggregate Prompt terminal was not acknowledged")
+            return await self.coordinator.commit_shard(
+                lease.manifest.key,
+                rank,
+                shard.expected_bytes,
+                first_token=first_token,
+            )
+        except BaseException:
+            if native_attempted and not handle_attached and handle is not None:
+                self._unknown_chunk_sources.append(
+                    (tensor, registration, chunk, handle)
+                )
+            if not native_attempted:
+                if record is not None:
+                    self.upload_manager.abandon(
+                        record.transfer_id, "Prompt chunk never submitted"
+                    )
+                    await self.upload_manager.progress_record(record)
+                else:
+                    try:
+                        await self.coordinator.sync_upload(
+                            chunk.write, TransportState.NOT_SUBMITTED, True
+                        )
+                    except Exception:
+                        pass  # V retains the child pin until a matching proof.
+            try:
+                await self.coordinator.cancel_entry(
+                    lease.manifest.key, "chunked Prompt upload failed"
+                )
+            except Exception:
+                pass  # The original failure remains the request's cause.
+            raise
+        finally:
+            if registration is not None and (handle_attached or not native_attempted):
+                self.transfer_engine.release_memory(registration)
 
 
 class PVDDecodeRuntime:

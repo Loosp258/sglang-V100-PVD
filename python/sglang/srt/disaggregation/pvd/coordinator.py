@@ -5,9 +5,10 @@ from __future__ import annotations
 import abc
 import asyncio
 import copy
+import logging
 import time
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Mapping, Optional
 
 from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
@@ -15,6 +16,7 @@ from sglang.srt.disaggregation.pvd.full_kv_fanin_plan import (
     RANK_PACKED_FULL_KV_FANIN_PROTOCOL,
 )
 from sglang.srt.disaggregation.pvd.metrics import PVDMetrics
+from sglang.srt.disaggregation.pvd.prompt_chunks import PromptChunkIdentity
 from sglang.srt.disaggregation.pvd.protocol import (
     PVD_GENERATION_METADATA_KEY,
     PVD_RECEIVER_EPOCH_METADATA_KEY,
@@ -50,6 +52,9 @@ class CoordinatorError(RuntimeError):
     pass
 
 
+logger = logging.getLogger(__name__)
+
+
 class ShardClient(abc.ABC):
     rank: int
 
@@ -67,6 +72,16 @@ class ShardClient(abc.ABC):
     async def sync_upload(
         self, identity: WriteIdentity, state: TransportState, closed: bool
     ) -> Mapping: ...
+
+    async def begin_chunk(
+        self, key: KVEntryKey, first_page: int, page_count: int
+    ) -> Mapping:
+        raise NotImplementedError("shard has no chunked Prompt upload")
+
+    async def commit_chunk(
+        self, identity: WriteIdentity, received_bytes: int
+    ) -> Mapping:
+        raise NotImplementedError("shard has no chunked Prompt upload")
 
     @abc.abstractmethod
     async def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> Mapping: ...
@@ -135,6 +150,32 @@ class LocalShardClient(ShardClient):
         ):
             raise ValueError("explicit HTTP(S) shard advertisement required")
         self.base_url = shard_url.rstrip("/") if shard_url is not None else None
+        self._index_tasks: set[asyncio.Task] = set()
+
+    def _kick_chunk_index(self) -> None:
+        # The one-process V group calls the store directly, bypassing the
+        # shard HTTP handlers that otherwise schedule this work.
+        if self.store.prompt_index is None or len(self._index_tasks) >= 32:
+            return
+        task = asyncio.create_task(
+            asyncio.to_thread(self.store.progress_prompt_indexes, wait_for_lock=True)
+        )
+        self._index_tasks.add(task)
+
+        def finished(done: asyncio.Task) -> None:
+            self._index_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception as exc:
+                logger.warning("V rank %d chunk index progress failed: %s", self.rank, exc)
+
+        task.add_done_callback(finished)
+
+    async def drain_index_tasks(self) -> None:
+        if self._index_tasks:
+            await asyncio.gather(*tuple(self._index_tasks), return_exceptions=True)
 
     async def create_entry(
         self, manifest: KVEntryManifest, *, uploader_epoch: Optional[str] = None
@@ -159,8 +200,28 @@ class LocalShardClient(ShardClient):
             )
         return await asyncio.to_thread(sync, identity, state, closed)
 
+    async def begin_chunk(
+        self, key: KVEntryKey, first_page: int, page_count: int
+    ) -> Mapping:
+        return await asyncio.to_thread(
+            self.store.begin_chunk, key, first_page, page_count
+        )
+
+    async def commit_chunk(
+        self, identity: WriteIdentity, received_bytes: int
+    ) -> Mapping:
+        result = await asyncio.to_thread(
+            self.store.commit_chunk, identity, received_bytes
+        )
+        if not result.get("finished"):
+            self._kick_chunk_index()
+        return result
+
     async def commit_p_write(self, key: KVEntryKey, received_bytes: int) -> Mapping:
-        return self.store.commit_p_write(key, received_bytes).to_dict()
+        entry = self.store.commit_p_write(key, received_bytes)
+        if entry.upload_mode == "chunked_cagra":
+            self._kick_chunk_index()
+        return entry.to_dict()
 
     async def reserve_delivery(
         self,
@@ -881,7 +942,12 @@ class VectorCoordinator:
                 raise CoordinatorError(
                     "entry has no lifecycle upload authorization for this shard"
                 )
-            if expected != identity:
+            is_chunk = (
+                entry.manifest.upload_mode == "chunked_cagra"
+                and identity.transfer_id.startswith(expected.transfer_id + ":pages:")
+                and replace(expected, transfer_id=identity.transfer_id) == identity
+            )
+            if expected != identity and not is_chunk:
                 raise CoordinatorError(
                     "upload write identity does not match this entry"
                 )
@@ -910,6 +976,67 @@ class VectorCoordinator:
                 if entry is not None:
                     entry.shard_states[rank] = EntryShardState(shard_state)
                     self._publish_entry_locked(entry)
+        return reply
+
+    async def begin_chunk(
+        self, key: KVEntryKey, rank: int, first_page: int, page_count: int
+    ) -> Mapping:
+        if rank not in self.shards:
+            raise CoordinatorError(f"unknown V shard rank {rank}")
+        async with self._lock:
+            entry = self.entries.get(key)
+            if entry is None or entry.manifest.upload_mode != "chunked_cagra":
+                raise CoordinatorError("Entry has no chunked Prompt upload")
+            base = entry.upload_identities.get(rank)
+            if base is None:
+                raise CoordinatorError("Entry has no shard upload identity")
+            manifest = entry.manifest
+        reply = await self.shards[rank].begin_chunk(key, first_page, page_count)
+        chunk = PromptChunkIdentity.from_dict(
+            reply,
+            layout=manifest.layout,
+            shard=manifest.shard(rank),
+            base=base,
+        )
+        if (chunk.first_page, chunk.page_count) != (first_page, page_count):
+            raise CoordinatorError("V returned another Prompt chunk range")
+        return chunk.to_dict()
+
+    async def commit_chunk(
+        self, identity: WriteIdentity, received_bytes: int
+    ) -> Mapping:
+        rank = identity.shard_rank
+        if rank not in self.shards:
+            raise CoordinatorError(f"unknown V shard rank {rank}")
+        async with self._lock:
+            entry = self.entries.get(identity.key)
+            if entry is None or entry.manifest.upload_mode != "chunked_cagra":
+                raise CoordinatorError("Entry has no chunked Prompt upload")
+            base = entry.upload_identities.get(rank)
+            if (
+                base is None
+                or not identity.transfer_id.startswith(base.transfer_id + ":pages:")
+                or replace(base, transfer_id=identity.transfer_id) != identity
+            ):
+                raise CoordinatorError("Prompt chunk identity differs from Entry")
+            manifest = entry.manifest
+        reply = await self.shards[rank].commit_chunk(identity, received_bytes)
+        try:
+            chunk = PromptChunkIdentity.from_dict(
+                reply["chunk"],
+                layout=manifest.layout,
+                shard=manifest.shard(rank),
+                base=base,
+            )
+            if (
+                chunk.write != identity
+                or received_bytes != chunk.chunk_bytes
+                or type(reply["complete_pages"]) is not int
+                or type(reply["finished"]) is not bool
+            ):
+                raise ValueError("chunk commit reply differs from submitted write")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CoordinatorError(f"invalid Prompt chunk commit reply: {exc}") from exc
         return reply
 
     def _publish_entry_locked(

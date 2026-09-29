@@ -423,8 +423,13 @@ class KVEntryManifest:
     layout: KVLayoutSignature
     prompt_token_count: int
     shards: List[KVShardManifest]
+    upload_mode: str = "complete"
 
     def __post_init__(self) -> None:
+        if type(self.upload_mode) is not str or self.upload_mode not in (
+            "complete", "chunked_cagra"
+        ):
+            raise ProtocolValidationError("unsupported Prompt upload mode")
         if self.prompt_token_count <= 0:
             raise ProtocolValidationError("prompt_token_count must be positive")
         if len(self.shards) != self.layout.tp_size:
@@ -453,13 +458,16 @@ class KVEntryManifest:
             ) from exc
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "key": self.key.to_dict(),
             "layout": self.layout.to_dict(),
             "layout_fingerprint": self.layout.fingerprint,
             "prompt_token_count": self.prompt_token_count,
             "shards": [shard.to_dict() for shard in self.shards],
         }
+        if self.upload_mode != "complete":
+            result["upload_mode"] = self.upload_mode
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "KVEntryManifest":
@@ -468,6 +476,7 @@ class KVEntryManifest:
             layout=KVLayoutSignature.from_dict(value["layout"]),
             prompt_token_count=int(value["prompt_token_count"]),
             shards=[KVShardManifest.from_dict(item) for item in value["shards"]],
+            upload_mode=value.get("upload_mode", "complete"),
         )
         supplied = value.get("layout_fingerprint")
         if supplied is not None and supplied != manifest.layout.fingerprint:

@@ -27,6 +27,7 @@ from sglang.srt.disaggregation.pvd.protocol import KVEntryKey, WriteIdentity
 from sglang.srt.disaggregation.pvd.transfer_engine import (
     TransferEngine,
     TransferHandle,
+    TransferStatus,
 )
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransportState
 
@@ -180,6 +181,27 @@ class PVDUploadManager:
                     f"upload {record.transfer_id} may no longer be submitted"
                 )
             record.submit_attempted = True
+
+    def mark_aggregate_success(self, record: UploadRecord, expected_bytes: int) -> None:
+        """Report a logical shard success after every child PUT was acked.
+
+        The aggregate itself never enters a native transport. V independently
+        verifies all child terminals and byte counts before accepting it.
+        """
+        if type(expected_bytes) is not int or expected_bytes <= 0:
+            raise ValueError("aggregate byte count must be positive")
+        with self._lock:
+            if self._records.get(record.transfer_id) is not record:
+                raise RuntimeError("aggregate upload record is not owned")
+            if record.submit_attempted or record.submission_forbidden:
+                raise RuntimeError("aggregate upload is already closed")
+            record.submit_attempted = True
+            record.handle = TransferHandle(
+                transfer_id=record.transfer_id,
+                status=TransferStatus.SUCCESS,
+                transferred_bytes=expected_bytes,
+                transport_state=TransportState.TERMINAL_SUCCESS,
+            )
 
     def abandon(self, transfer_id: str, reason: str) -> None:
         """Declare that P will make no further submission under this identity.

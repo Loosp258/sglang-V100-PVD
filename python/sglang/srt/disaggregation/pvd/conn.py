@@ -261,6 +261,14 @@ class PVDKVManager:
         self.capabilities = [PVD_TRANSFER_CAPABILITY]
         # Upload records outlive their senders, so the manager is owned here.
         self.upload_manager = PVDUploadManager()
+        self.chunked_cagra_upload = (
+            os.environ.get("SGLANG_PVD_CHUNKED_CAGRA_UPLOAD") == "1"
+            and scheduler.server_args.disaggregation_mode == "prefill"
+        )
+        if self.chunked_cagra_upload and not callable(
+            getattr(self.transfer_engine, "submit_batch_put", None)
+        ):
+            raise PVDConnectionError("chunked Prompt upload needs native batch PUT")
         self._upload_progress_future: Optional[concurrent.futures.Future] = None
         self.prefill_runtimes = {
             group_id: PVDPrefillRuntime(
@@ -892,6 +900,12 @@ class PVDKVSender:
         self._publish_future: Optional[concurrent.futures.Future] = None
         self._started_at: Optional[float] = None
         self._metric = KVTransferMetric()
+        self._chunked = bool(getattr(mgr, "chunked_cagra_upload", False))
+        if self._chunked:
+            self._metric.transfer_total_bytes = 0
+        self._next_page = 0
+        self._final_submitted = False
+        self._will_send_final = False
 
         if mgr.tp_size not in (1, 2):
             raise PVDConnectionError("PVD Prefill currently supports TP1 or TP2")
@@ -927,6 +941,7 @@ class PVDKVSender:
                 layout=storage_layout,
                 prompt_token_count=len(req.origin_input_ids),
                 shards=shards,
+                upload_mode="chunked_cagra" if self._chunked else "complete",
                 uploader_epochs=uploader_epochs,
                 owned_shard_ranks=owned_shard_ranks,
             )
@@ -944,8 +959,17 @@ class PVDKVSender:
         return 0
 
     def should_send_kv_chunk(self, num_pages: int, last_chunk: bool) -> bool:
-        # Entry is immutable and always contains the complete prompt KV.
-        return last_chunk
+        if not self._chunked:
+            return last_chunk
+        if num_pages <= 0 or self._final_submitted:
+            return False
+        if not last_chunk and (
+            self._next_page + num_pages >= self._expected_pages
+            or (self._publish_future is not None and not self._publish_future.done())
+        ):
+            return False
+        self._will_send_final = last_chunk
+        return True
 
     def _first_token(self) -> Optional[FirstTokenMetadata]:
         if self.kv_mgr.tp_rank != 0:
@@ -978,6 +1002,9 @@ class PVDKVSender:
     def _send(self, kv_indices, state_indices: Optional[List] = None):
         if state_indices and any(item is not None for item in state_indices):
             raise PVDConnectionError("PVD does not support auxiliary KV state")
+        if self._chunked:
+            self._send_chunk(kv_indices)
+            return
         if self._lease is None:
             self._lease = self._create_future.result()
         self._started_at = time.monotonic()
@@ -1033,6 +1060,64 @@ class PVDKVSender:
                 )
             )
 
+    def _send_chunk(self, kv_indices):
+        first_page = self._next_page
+        page_count = len(kv_indices)
+        final = self._will_send_final
+        self._will_send_final = False
+        if page_count <= 0 or first_page + page_count > self._expected_pages:
+            raise PVDConnectionError("Prompt chunk pages exceed the Entry")
+        if final != (first_page + page_count == self._expected_pages):
+            raise PVDConnectionError("final Prompt chunk range differs from Entry")
+        if self._started_at is None:
+            self._started_at = time.monotonic()
+        if self.kv_mgr.tp_size == 1:
+            storage_heads = self.kv_mgr.storage_layout().kv_heads_per_rank
+            packed_shards = [
+                pack_full_prompt_kv_head_shard(
+                    self.kv_mgr.kv_pool,
+                    kv_indices,
+                    page_size=self.kv_mgr.page_size,
+                    head_start=rank * storage_heads,
+                    head_count=storage_heads,
+                )
+                for rank in range(2)
+            ]
+            self._metric.transfer_total_bytes += sum(
+                packed.expected_bytes for packed in packed_shards
+            )
+        else:
+            packed = pack_full_prompt_kv(
+                self.kv_mgr.kv_pool, kv_indices, page_size=self.kv_mgr.page_size
+            )
+            packed_shards = [packed]
+            self._metric.transfer_total_bytes += packed.expected_bytes
+        final_token = self._first_token() if final else None
+        previous = self._publish_future
+
+        async def publish_sequence():
+            if previous is not None:
+                await asyncio.wrap_future(previous)
+            lease = await asyncio.wrap_future(self._create_future)
+            ranks = (0, 1) if self.kv_mgr.tp_size == 1 else (self.kv_mgr.tp_rank,)
+            return await asyncio.gather(
+                *(
+                    self.prefill_runtime.publish_chunk_tensor_shard(
+                        lease=lease,
+                        rank=rank,
+                        tensor=packed.tensor,
+                        first_page=first_page,
+                        page_count=page_count,
+                        first_token=final_token if rank == 0 else None,
+                    )
+                    for rank, packed in zip(ranks, packed_shards, strict=True)
+                )
+            )
+
+        self._publish_future = self.kv_mgr.control.submit(publish_sequence())
+        self._next_page += page_count
+        self._final_submitted = final
+
     def poll(self) -> int:
         # Progress is triggered here for live requests, but the manager owns
         # the records: a sender that is never polled again must not strand an
@@ -1051,6 +1136,8 @@ class PVDKVSender:
             if not self._publish_future.done():
                 return KVPoll.Transferring
             self._publish_future.result()
+            if self._chunked and not self._final_submitted:
+                return KVPoll.WaitingForInput
             if self._started_at is not None:
                 self._metric.transfer_latency_s = time.monotonic() - self._started_at
             self.conclude_state = KVPoll.Success
