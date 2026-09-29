@@ -71,6 +71,30 @@ Simply changing native CAGRA's build algorithm was not helpful on Case 40:
 `nn_descent` took 8.41/7.91 s to build on ranks 0/1, and
 `iterative_cagra_search` took 7.16/7.83 s, versus IVF-PQ's 4.31/4.31 s.
 
+### If all KV arrives before building
+
+The same Case 40 K/Q was also replayed with `PVD_CAGRA_GROUP_PREFIX=0`,
+`PVD_CAGRA_GROUP_CHUNK_ROWS=0`: all 2156 K rows per head were present before
+one build per graph, with no `extend`. These are again sums over 14 four-head
+graphs **per rank**, not production READY or D waiting times. In this arm the
+per-head mean is computed from the full K, as a complete-build serving path
+would do; the exact Top-10 oracle remains on the original full K.
+
+| Complete graph builder | Rank 0 build | Rank 1 build | Mean Top-10 recall, rank 0/1 | Worst head, rank 0/1 |
+| --- | ---: | ---: | ---: | ---: |
+| IVF-PQ, degree 8 | 4.250 s | 4.125 s | 1.000 / 1.000 | 1.00 / 1.00 |
+| Exact block, degree 16 | .362 s | .361 s | .9866 / .9902 | .80 / .90 |
+| Exact block, degree 32 | .380 s | .364 s | .9973 / .9964 | .90 / .90 |
+
+All complete-build arms returned zero invalid IDs. On this one Prompt, the
+complete degree-32 exact graph is faster to make after the last KV arrives,
+but loses some recall versus both the complete IVF-PQ graph and the
+degree-32 prefix-plus-extend arm. The latter reached mean recall
+1.000/.9982 with worst-head recall 1.00/.95. If D receives initial full KV
+directly, its first sparse search waits for V only when it reaches the search
+before V finishes; this probe does not measure that overlap or the time
+between final KV arrival and native build start.
+
 ## Limits and next integration step
 
 These are one Prompt per input style and two next-token Q rows per head, not

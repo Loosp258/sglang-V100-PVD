@@ -136,6 +136,10 @@ as the default until the streaming path passes the gates below.
   extend from 5.32/5.53 s to 1.44/1.32 s on ranks 0/1. Degree 32 gave
   1.80/1.77 s and higher recall in three sampled Prompt styles, at four
   times the degree-8 adjacency size. Degree 8 was fast but lost recall.
+  Waiting for all 2156 K rows and building once took 4.25/4.12 s with
+  IVF-PQ, or 0.380/0.364 s with exact degree 32 on the same Case 40 fixture;
+  the latter lost some recall relative to both complete IVF-PQ and the
+  degree-32 incremental arm.
   The production backend is unchanged. Graph-buffer ownership, memory,
   broader real-Q quality and online P/V/D timing are required before serving.
 
