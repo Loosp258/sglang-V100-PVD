@@ -1016,9 +1016,12 @@ class PVDKVSender:
             )
         )
         self._expected_pages = next(iter(shards.values())).page_count
-        self._predicted_prefix_rows = (
-            mgr.split_upload_policy.prefix_for(len(req.origin_input_ids))
+        split_plan = (
+            mgr.split_upload_policy.plan_for(len(req.origin_input_ids))
             if getattr(mgr, "split_upload_policy", None) is not None else None
+        )
+        self._predicted_prefix_rows = (
+            split_plan["selected_prefix"] if split_plan is not None else None
         )
         self._predicted_prefix_pages = (
             self._predicted_prefix_rows // mgr.page_size
@@ -1026,9 +1029,11 @@ class PVDKVSender:
         )
         if self._predicted_prefix_rows is not None:
             logger.info(
-                "PVD predicted Prompt split: transfer_id=%s tokens=%d prefix=%d",
+                "PVD predicted Prompt split: transfer_id=%s tokens=%d prefix=%d "
+                "best_prefix=%d predicted_gain_seconds=%s",
                 self.key.transfer_id, len(req.origin_input_ids),
-                self._predicted_prefix_rows,
+                self._predicted_prefix_rows, split_plan["best_prefix"],
+                split_plan.get("predicted_gain_seconds"),
             )
 
     def init(self, num_kv_indices: int, aux_index: Optional[int] = None):

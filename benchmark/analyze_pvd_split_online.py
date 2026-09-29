@@ -96,17 +96,51 @@ def calibration(full, split):
     return {"by_prompt": by_prompt, "arrival_definition": "V graph execution start, an upper bound on complete chunk arrival"}
 
 
+def merge_calibrations(parts):
+    """Keep the same full baseline and candidate-specific final arrival."""
+    merged = {"by_prompt": {}, "arrival_definition": parts[0]["arrival_definition"]}
+    for part in parts:
+        for n, trace in part["by_prompt"].items():
+            if n not in merged["by_prompt"]:
+                merged["by_prompt"][n] = {"ranks": [
+                    {
+                        "baseline_full_seconds": rank["baseline_full_seconds"],
+                        "split_full_seconds": {},
+                        "prefix_seconds": {},
+                        "online_graph_seconds": {"0": rank["online_graph_seconds"]["0"]},
+                    }
+                    for rank in trace["ranks"]
+                ]}
+            for target, rank in zip(merged["by_prompt"][n]["ranks"], trace["ranks"]):
+                if abs(target["baseline_full_seconds"] - rank["baseline_full_seconds"]) > 1e-9:
+                    raise ValueError("split candidates use different full baselines")
+                for prefix, arrival in rank["prefix_seconds"].items():
+                    if prefix in target["prefix_seconds"]:
+                        raise ValueError(f"duplicate split candidate {n}/{prefix}")
+                    target["prefix_seconds"][prefix] = arrival
+                    target["split_full_seconds"][prefix] = rank["split_full_seconds"]
+                    target["online_graph_seconds"][prefix] = rank["online_graph_seconds"][prefix]
+    return merged
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("events", type=Path)
     parser.add_argument("full", type=Path)
-    parser.add_argument("split", type=Path)
+    parser.add_argument("split", type=Path, nargs="+")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     entries = read_events(args.events)
     full = attach(read_probe(args.full), entries)
-    split = attach(read_probe(args.split), entries)
-    payload = {"calibration": calibration(full, split), "full": full, "split": split}
+    splits = {path.stem: attach(read_probe(path), entries) for path in args.split}
+    if len(splits) != len(args.split):
+        raise ValueError("split probe filenames must be distinct")
+    payload = {
+        "calibration": merge_calibrations([
+            calibration(full, split) for split in splits.values()
+        ]),
+        "full": full, "splits": splits,
+    }
     args.output.write_text(json.dumps(payload, indent=2) + "\n")
     print(json.dumps(payload["calibration"], indent=2))
 

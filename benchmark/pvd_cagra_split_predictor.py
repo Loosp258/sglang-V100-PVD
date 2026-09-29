@@ -110,7 +110,8 @@ def optimize_two_rank(
 
     Arrival timestamps use one common origin in seconds. For each rank:
     baseline_full_seconds is complete-KV arrival without splitting;
-    split_full_seconds is complete-KV arrival with split upload;
+    split_full_seconds is complete-KV arrival with split upload, either a
+    scalar for one candidate or a mapping from candidate prefix to seconds;
     prefix_seconds maps prefix length to that prefix's arrival at V.
     """
     if len(models) != 2 or len(arrivals) != 2:
@@ -162,7 +163,11 @@ def optimize_two_rank(
             continue
         for times, trace in zip(graph_times, arrivals):
             first_arrival = float(trace["prefix_seconds"][str(prefix)])
-            full_arrival = float(trace["split_full_seconds"])
+            split_arrival = trace["split_full_seconds"]
+            full_arrival = float(
+                split_arrival[str(prefix)]
+                if isinstance(split_arrival, dict) else split_arrival
+            )
             if first_arrival > full_arrival:
                 raise ValueError("prefix cannot arrive after complete KV")
             rank_ready.append(max(
@@ -239,6 +244,11 @@ def main() -> None:
     policy_parser.add_argument("arrivals", type=Path)
     policy_parser.add_argument("--output", type=Path, required=True)
     policy_parser.add_argument("--uncertainty-ms", type=float, default=125.0)
+    policy_parser.add_argument(
+        "--prefill-chunk-tokens", type=int,
+        help="Require online arrival and graph measurements for every reachable "
+             "single-split Prefill boundary.",
+    )
     args = parser.parse_args()
     if args.command == "fit":
         rows = []
@@ -278,9 +288,30 @@ def main() -> None:
     elif args.command == "compile-policy":
         model = json.loads(args.model.read_text())
         arrivals = json.loads(args.arrivals.read_text())
+        if args.prefill_chunk_tokens is not None and args.prefill_chunk_tokens <= 0:
+            raise ValueError("Prefill chunk tokens must be positive")
         choices = {}
+        coverage = {}
         for n_text, trace in arrivals["by_prompt"].items():
             n = int(n_text)
+            if args.prefill_chunk_tokens is not None:
+                required = []
+                for prefix in range(args.prefill_chunk_tokens, n, args.prefill_chunk_tokens):
+                    try:
+                        predict(model, n, prefix)
+                    except ValueError:
+                        continue
+                    required.append(prefix)
+                for rank, rank_trace in enumerate(trace["ranks"]):
+                    measured = set(rank_trace["prefix_seconds"]) & set(
+                        rank_trace.get("online_graph_seconds", {})
+                    )
+                    missing = sorted(set(map(str, required)) - measured)
+                    if missing:
+                        raise ValueError(
+                            f"Prompt {n} rank {rank} lacks online candidates: {missing}"
+                        )
+                coverage[str(n)] = required
             result = optimize_two_rank(
                 [model, model], n, trace["ranks"], args.uncertainty_ms
             )
@@ -296,6 +327,8 @@ def main() -> None:
             "model_sha256": hashlib.sha256(args.model.read_bytes()).hexdigest(),
             "arrivals_sha256": hashlib.sha256(args.arrivals.read_bytes()).hexdigest(),
             "uncertainty_ms": args.uncertainty_ms,
+            "prefill_chunk_tokens": args.prefill_chunk_tokens,
+            "candidate_prefixes": coverage,
             "choices": choices,
         }
         args.output.write_text(json.dumps(policy, indent=2) + "\n")

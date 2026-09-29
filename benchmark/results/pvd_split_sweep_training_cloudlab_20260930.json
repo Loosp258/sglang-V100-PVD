@@ -1,0 +1,867 @@
+{
+  "calibration": {
+    "by_prompt": {
+      "1509": {
+        "ranks": [
+          {
+            "baseline_full_seconds": 0.5077383518218994,
+            "split_full_seconds": {
+              "512": 1.1682963371276855,
+              "1024": 1.2416404485702515
+            },
+            "prefix_seconds": {
+              "512": 0.2192608118057251,
+              "1024": 0.3650364875793457
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.0440005,
+                "extend_seconds": 0.0
+              },
+              "512": {
+                "build_seconds": 0.947783,
+                "extend_seconds": 0.5312475
+              },
+              "1024": {
+                "build_seconds": 0.875451,
+                "extend_seconds": 0.261847
+              }
+            }
+          },
+          {
+            "baseline_full_seconds": 0.5255578756332397,
+            "split_full_seconds": {
+              "512": 1.3085533380508423,
+              "1024": 1.4402250051498413
+            },
+            "prefix_seconds": {
+              "512": 0.22618985176086426,
+              "1024": 0.37818706035614014
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.051181,
+                "extend_seconds": 0.0
+              },
+              "512": {
+                "build_seconds": 1.080854,
+                "extend_seconds": 0.6179905
+              },
+              "1024": {
+                "build_seconds": 1.0613005,
+                "extend_seconds": 0.2992625
+              }
+            }
+          }
+        ]
+      },
+      "2159": {
+        "ranks": [
+          {
+            "baseline_full_seconds": 0.8087913990020752,
+            "split_full_seconds": {
+              "512": 0.995402455329895,
+              "1024": 1.2790416479110718
+            },
+            "prefix_seconds": {
+              "512": 0.2137770652770996,
+              "1024": 0.37408626079559326
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.338647,
+                "extend_seconds": 0.0
+              },
+              "512": {
+                "build_seconds": 0.7811939999999999,
+                "extend_seconds": 1.0055684999999999
+              },
+              "1024": {
+                "build_seconds": 0.9045825000000001,
+                "extend_seconds": 0.390627
+              }
+            }
+          },
+          {
+            "baseline_full_seconds": 0.8365739583969116,
+            "split_full_seconds": {
+              "512": 1.0007355213165283,
+              "1024": 1.638646125793457
+            },
+            "prefix_seconds": {
+              "512": 0.22093462944030762,
+              "1024": 0.3869987726211548
+            },
+            "online_graph_seconds": {
+              "0": {
+                "build_seconds": 1.3438645,
+                "extend_seconds": 0.0
+              },
+              "512": {
+                "build_seconds": 0.7795365000000001,
+                "extend_seconds": 1.1457355
+              },
+              "1024": {
+                "build_seconds": 1.25167,
+                "extend_seconds": 0.4850225
+              }
+            }
+          }
+        ]
+      }
+    },
+    "arrival_definition": "V graph execution start, an upper bound on complete chunk arrival"
+  },
+  "full": [
+    {
+      "case": 95001,
+      "repetitions": 430,
+      "started_unix": 1790698109.8184044,
+      "status": 200,
+      "content_type": "text/event-stream",
+      "first_event_seconds": 2.402,
+      "wall_seconds": 4.026,
+      "events": 6,
+      "prompt_sha256": "174ce12db1ce88a28852328c797d4f79b017667a314514817b7aad5b1abc9f60",
+      "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163",
+      "completion_tokens": 6,
+      "error": null,
+      "tokens": 2159,
+      "transfer_id": "6182ef5a-34d1-428e-8b0f-686dfee23268",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698110.6499689,
+            "end_unix": 1790698112.014,
+            "seconds": 1.364031,
+            "start_seconds": 0.8315644264221191,
+            "end_seconds": 2.1955955028533936
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698110.674711,
+            "end_unix": 1790698112.047,
+            "seconds": 1.372289,
+            "start_seconds": 0.8563065528869629,
+            "end_seconds": 2.228595495223999
+          }
+        ]
+      }
+    },
+    {
+      "case": 95003,
+      "repetitions": 300,
+      "started_unix": 1790698113.9119291,
+      "status": 200,
+      "content_type": "text/event-stream",
+      "first_event_seconds": 1.713,
+      "wall_seconds": 2.907,
+      "events": 6,
+      "prompt_sha256": "29ce3aba6ac05736c1d23914a081a35deb582f036f7ccddb99357cb83677b095",
+      "final_text_sha256": "61272fd8ab6abb9954f55737306cb115d538dd6f3e7a24e9c9f5132a63e9ee06",
+      "completion_tokens": 6,
+      "error": null,
+      "tokens": 1509,
+      "transfer_id": "88379940-1bee-4eb8-af8c-0bce62e29d6c",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698114.421606,
+            "end_unix": 1790698115.453,
+            "seconds": 1.031394,
+            "start_seconds": 0.5096769332885742,
+            "end_seconds": 1.5410709381103516
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698114.439765,
+            "end_unix": 1790698115.477,
+            "seconds": 1.037235,
+            "start_seconds": 0.5278358459472656,
+            "end_seconds": 1.5650708675384521
+          }
+        ]
+      }
+    },
+    {
+      "case": 95004,
+      "repetitions": 300,
+      "started_unix": 1790698116.8895931,
+      "status": 200,
+      "content_type": "text/event-stream",
+      "first_event_seconds": 1.726,
+      "wall_seconds": 2.909,
+      "events": 6,
+      "prompt_sha256": "e3c626cdb23ccde11186a534fbcfddb0b24987762c8fc2b22ca8ed6abd4fe206",
+      "final_text_sha256": "754f9a9e7079797d0a278c7787ce1b6cd14dbdd5e9e5fcbd48cf20d93dc60ecd",
+      "completion_tokens": 6,
+      "error": null,
+      "tokens": 1509,
+      "transfer_id": "cf822891-d220-406b-a797-fa1c977525c2",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698117.395393,
+            "end_unix": 1790698118.452,
+            "seconds": 1.056607,
+            "start_seconds": 0.5057997703552246,
+            "end_seconds": 1.5624067783355713
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 1509,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698117.412873,
+            "end_unix": 1790698118.478,
+            "seconds": 1.065127,
+            "start_seconds": 0.5232799053192139,
+            "end_seconds": 1.5884068012237549
+          }
+        ]
+      }
+    },
+    {
+      "case": 95002,
+      "repetitions": 430,
+      "started_unix": 1790698119.8707187,
+      "status": 200,
+      "content_type": "text/event-stream",
+      "first_event_seconds": 2.3,
+      "wall_seconds": 3.912,
+      "events": 6,
+      "prompt_sha256": "db1087d1814ce2a2ea89b7d1649febdc8bfe76d04fef74859de115f52f7b2f47",
+      "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163",
+      "completion_tokens": 6,
+      "error": null,
+      "tokens": 2159,
+      "transfer_id": "3de26d2f-7378-4629-87a6-4d79e5bbf218",
+      "ranks": {
+        "0": [
+          {
+            "rank": 0,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698120.656737,
+            "end_unix": 1790698121.97,
+            "seconds": 1.313263,
+            "start_seconds": 0.7860183715820312,
+            "end_seconds": 2.0992813110351562
+          }
+        ],
+        "1": [
+          {
+            "rank": 1,
+            "kind": "final step",
+            "pages": 2159,
+            "prefix": 0,
+            "first_page": 0,
+            "start_unix": 1790698120.68756,
+            "end_unix": 1790698122.003,
+            "seconds": 1.31544,
+            "start_seconds": 0.8168413639068604,
+            "end_seconds": 2.1322813034057617
+          }
+        ]
+      }
+    }
+  ],
+  "splits": {
+    "sweep30_p512": [
+      {
+        "case": 95001,
+        "repetitions": 430,
+        "started_unix": 1790698224.1278234,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 2.434,
+        "wall_seconds": 4.048,
+        "events": 6,
+        "prompt_sha256": "174ce12db1ce88a28852328c797d4f79b017667a314514817b7aad5b1abc9f60",
+        "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 2159,
+        "transfer_id": "4bc1d0ff-6426-49fa-a800-5158d2ceab3e",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698224.3423731,
+              "end_unix": 1790698225.124,
+              "seconds": 0.781627,
+              "start_seconds": 0.21454977989196777,
+              "end_seconds": 0.9961767196655273
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698225.124603,
+              "end_unix": 1790698226.276,
+              "seconds": 1.151397,
+              "start_seconds": 0.9967796802520752,
+              "end_seconds": 2.148176670074463
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698224.3488972,
+              "end_unix": 1790698225.13,
+              "seconds": 0.781103,
+              "start_seconds": 0.22107386589050293,
+              "end_seconds": 1.0021767616271973
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698225.1305952,
+              "end_unix": 1790698226.39,
+              "seconds": 1.259405,
+              "start_seconds": 1.0027718544006348,
+              "end_seconds": 2.262176752090454
+            }
+          ]
+        }
+      },
+      {
+        "case": 95003,
+        "repetitions": 300,
+        "started_unix": 1790698228.2442222,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 2.275,
+        "wall_seconds": 3.486,
+        "events": 6,
+        "prompt_sha256": "29ce3aba6ac05736c1d23914a081a35deb582f036f7ccddb99357cb83677b095",
+        "final_text_sha256": "61272fd8ab6abb9954f55737306cb115d538dd6f3e7a24e9c9f5132a63e9ee06",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 1509,
+        "transfer_id": "a8f71705-63ef-4f1a-9021-a332fbeedd5a",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698228.461467,
+              "end_unix": 1790698229.592,
+              "seconds": 1.130533,
+              "start_seconds": 0.21724486351013184,
+              "end_seconds": 1.3477778434753418
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698229.593903,
+              "end_unix": 1790698230.142,
+              "seconds": 0.548097,
+              "start_seconds": 1.3496809005737305,
+              "end_seconds": 1.897777795791626
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698228.4685771,
+              "end_unix": 1790698229.769,
+              "seconds": 1.300423,
+              "start_seconds": 0.22435498237609863,
+              "end_seconds": 1.524777889251709
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698229.770369,
+              "end_unix": 1790698230.374,
+              "seconds": 0.603631,
+              "start_seconds": 1.5261468887329102,
+              "end_seconds": 2.1297779083251953
+            }
+          ]
+        }
+      },
+      {
+        "case": 95004,
+        "repetitions": 300,
+        "started_unix": 1790698231.7996902,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 1.862,
+        "wall_seconds": 3.065,
+        "events": 6,
+        "prompt_sha256": "e3c626cdb23ccde11186a534fbcfddb0b24987762c8fc2b22ca8ed6abd4fe206",
+        "final_text_sha256": "754f9a9e7079797d0a278c7787ce1b6cd14dbdd5e9e5fcbd48cf20d93dc60ecd",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 1509,
+        "transfer_id": "304bbd14-eb74-4a95-9e3c-28a5adbb6536",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698232.020967,
+              "end_unix": 1790698232.786,
+              "seconds": 0.765033,
+              "start_seconds": 0.22127676010131836,
+              "end_seconds": 0.9863097667694092
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698232.786602,
+              "end_unix": 1790698233.301,
+              "seconds": 0.514398,
+              "start_seconds": 0.9869117736816406,
+              "end_seconds": 1.501309871673584
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698232.027715,
+              "end_unix": 1790698232.889,
+              "seconds": 0.861285,
+              "start_seconds": 0.22802472114562988,
+              "end_seconds": 1.0893096923828125
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698232.89065,
+              "end_unix": 1790698233.523,
+              "seconds": 0.63235,
+              "start_seconds": 1.0909597873687744,
+              "end_seconds": 1.7233097553253174
+            }
+          ]
+        }
+      },
+      {
+        "case": 95002,
+        "repetitions": 430,
+        "started_unix": 1790698234.9372346,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 2.206,
+        "wall_seconds": 3.832,
+        "events": 6,
+        "prompt_sha256": "db1087d1814ce2a2ea89b7d1649febdc8bfe76d04fef74859de115f52f7b2f47",
+        "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 2159,
+        "transfer_id": "8a4af366-4552-4809-8dde-cb804bb6aaaf",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698235.150239,
+              "end_unix": 1790698235.931,
+              "seconds": 0.780761,
+              "start_seconds": 0.21300435066223145,
+              "end_seconds": 0.9937653541564941
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698235.9312599,
+              "end_unix": 1790698236.791,
+              "seconds": 0.85974,
+              "start_seconds": 0.9940252304077148,
+              "end_seconds": 1.8537652492523193
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 512,
+              "prefix": 512,
+              "first_page": 0,
+              "start_unix": 1790698235.15803,
+              "end_unix": 1790698235.936,
+              "seconds": 0.77797,
+              "start_seconds": 0.2207953929901123,
+              "end_seconds": 0.9987654685974121
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 512,
+              "start_unix": 1790698235.9359338,
+              "end_unix": 1790698236.968,
+              "seconds": 1.032066,
+              "start_seconds": 0.9986991882324219,
+              "end_seconds": 2.0307652950286865
+            }
+          ]
+        }
+      }
+    ],
+    "sweep30_p1024": [
+      {
+        "case": 95001,
+        "repetitions": 430,
+        "started_unix": 1790698346.4138885,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 2.345,
+        "wall_seconds": 3.972,
+        "events": 6,
+        "prompt_sha256": "174ce12db1ce88a28852328c797d4f79b017667a314514817b7aad5b1abc9f60",
+        "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 2159,
+        "transfer_id": "8cef1b32-d03c-4b45-8e44-d4f985e63d57",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698346.797565,
+              "end_unix": 1790698347.707,
+              "seconds": 0.909435,
+              "start_seconds": 0.38367652893066406,
+              "end_seconds": 1.2931115627288818
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698347.706878,
+              "end_unix": 1790698348.12,
+              "seconds": 0.413122,
+              "start_seconds": 1.2929894924163818,
+              "end_seconds": 1.7061114311218262
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698346.810018,
+              "end_unix": 1790698348.043,
+              "seconds": 1.232982,
+              "start_seconds": 0.3961296081542969,
+              "end_seconds": 1.6291115283966064
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698348.0427978,
+              "end_unix": 1790698348.59,
+              "seconds": 0.547202,
+              "start_seconds": 1.6289093494415283,
+              "end_seconds": 2.1761114597320557
+            }
+          ]
+        }
+      },
+      {
+        "case": 95003,
+        "repetitions": 300,
+        "started_unix": 1790698350.4475284,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 1.919,
+        "wall_seconds": 3.118,
+        "events": 6,
+        "prompt_sha256": "29ce3aba6ac05736c1d23914a081a35deb582f036f7ccddb99357cb83677b095",
+        "final_text_sha256": "61272fd8ab6abb9954f55737306cb115d538dd6f3e7a24e9c9f5132a63e9ee06",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 1509,
+        "transfer_id": "77674006-0e7c-4bc5-8423-ba74810929b5",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698350.813309,
+              "end_unix": 1790698351.692,
+              "seconds": 0.878691,
+              "start_seconds": 0.3657805919647217,
+              "end_seconds": 1.244471549987793
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698351.6933541,
+              "end_unix": 1790698351.973,
+              "seconds": 0.279646,
+              "start_seconds": 1.2458257675170898,
+              "end_seconds": 1.5254716873168945
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698350.8261611,
+              "end_unix": 1790698351.835,
+              "seconds": 1.008839,
+              "start_seconds": 0.3786327838897705,
+              "end_seconds": 1.3874716758728027
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698351.836081,
+              "end_unix": 1790698352.218,
+              "seconds": 0.381919,
+              "start_seconds": 1.3885526657104492,
+              "end_seconds": 1.7704715728759766
+            }
+          ]
+        }
+      },
+      {
+        "case": 95004,
+        "repetitions": 300,
+        "started_unix": 1790698353.6274967,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 1.846,
+        "wall_seconds": 3.063,
+        "events": 6,
+        "prompt_sha256": "e3c626cdb23ccde11186a534fbcfddb0b24987762c8fc2b22ca8ed6abd4fe206",
+        "final_text_sha256": "754f9a9e7079797d0a278c7787ce1b6cd14dbdd5e9e5fcbd48cf20d93dc60ecd",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 1509,
+        "transfer_id": "95b576f4-7ef8-4187-84b4-9dc3a7c6eb74",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698353.991789,
+              "end_unix": 1790698354.864,
+              "seconds": 0.872211,
+              "start_seconds": 0.3642923831939697,
+              "end_seconds": 1.2365033626556396
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698354.8649518,
+              "end_unix": 1790698355.109,
+              "seconds": 0.244048,
+              "start_seconds": 1.237455129623413,
+              "end_seconds": 1.4815032482147217
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698354.005238,
+              "end_unix": 1790698355.119,
+              "seconds": 1.113762,
+              "start_seconds": 0.37774133682250977,
+              "end_seconds": 1.4915032386779785
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 1509,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698355.119394,
+              "end_unix": 1790698355.336,
+              "seconds": 0.216606,
+              "start_seconds": 1.4918973445892334,
+              "end_seconds": 1.708503246307373
+            }
+          ]
+        }
+      },
+      {
+        "case": 95002,
+        "repetitions": 430,
+        "started_unix": 1790698356.752774,
+        "status": 200,
+        "content_type": "text/event-stream",
+        "first_event_seconds": 2.238,
+        "wall_seconds": 3.88,
+        "events": 6,
+        "prompt_sha256": "db1087d1814ce2a2ea89b7d1649febdc8bfe76d04fef74859de115f52f7b2f47",
+        "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163",
+        "completion_tokens": 6,
+        "error": null,
+        "tokens": 2159,
+        "transfer_id": "e5c2431d-a13a-40c6-905b-c4dda9702cef",
+        "ranks": {
+          "0": [
+            {
+              "rank": 0,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698357.11727,
+              "end_unix": 1790698358.017,
+              "seconds": 0.89973,
+              "start_seconds": 0.36449599266052246,
+              "end_seconds": 1.264225959777832
+            },
+            {
+              "rank": 0,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698358.0178678,
+              "end_unix": 1790698358.386,
+              "seconds": 0.368132,
+              "start_seconds": 1.2650938034057617,
+              "end_seconds": 1.633225917816162
+            }
+          ],
+          "1": [
+            {
+              "rank": 1,
+              "kind": "graph",
+              "pages": 1024,
+              "prefix": 1024,
+              "first_page": 0,
+              "start_unix": 1790698357.130642,
+              "end_unix": 1790698358.401,
+              "seconds": 1.270358,
+              "start_seconds": 0.3778679370880127,
+              "end_seconds": 1.648226022720337
+            },
+            {
+              "rank": 1,
+              "kind": "final step",
+              "pages": 2159,
+              "prefix": 0,
+              "first_page": 1024,
+              "start_unix": 1790698358.401157,
+              "end_unix": 1790698358.824,
+              "seconds": 0.422843,
+              "start_seconds": 1.6483829021453857,
+              "end_seconds": 2.071225881576538
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

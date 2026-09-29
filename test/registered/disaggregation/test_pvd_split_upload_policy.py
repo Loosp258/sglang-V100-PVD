@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from sglang.srt.disaggregation.pvd.conn import PVDKVSender
-from sglang.srt.disaggregation.pvd.split_upload_policy import SplitUploadPolicy
+from sglang.srt.disaggregation.pvd.split_upload_policy import (
+    SplitUploadPolicy,
+    plan_split,
+)
 
 
 def test_policy_uses_calibrated_prompt_and_full_fallback(tmp_path):
@@ -66,3 +69,47 @@ def test_zero_prefix_never_publishes_early():
     sender = _sender(0)
     assert not sender.should_send_kv_chunk(512, False)
     assert sender.should_send_kv_chunk(2156, True)
+
+
+def test_parametric_policy_decides_from_length_without_choice_rows(tmp_path):
+    profile = {
+        "schema": "pvd-exact16-parametric-v1",
+        "config": {"graph_degree": 16, "group_heads": 4,
+                   "prefill_chunk_tokens": 512, "page_size": 1},
+        "domain": {"min_prompt_tokens": 512, "max_prompt_tokens": 2048,
+                   "max_prefix_tokens": 1536, "min_tail_tokens": 64},
+        "ranks": [
+            {"arrival": [0, 0.1], "build": [0, 1, 0],
+             "extend": [0, 0, 1.5]}
+            for _ in range(2)
+        ],
+        "uncertainty_seconds": 0.1,
+    }
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(profile))
+    policy = SplitUploadPolicy(str(path), page_size=1)
+    assert policy.prefix_for(1024) == 512
+    assert policy.prefix_for(1536) == 1024
+    assert policy.prefix_for(3072) == 0
+    decision = plan_split(profile, 1536)
+    assert [item["prefix"] for item in decision["choices"]] == [1024, 512]
+
+
+def test_parametric_policy_rejects_wrong_page_size(tmp_path):
+    profile = {
+        "schema": "pvd-exact16-parametric-v1",
+        "config": {"graph_degree": 16, "group_heads": 4,
+                   "prefill_chunk_tokens": 512, "page_size": 1},
+        "domain": {"min_prompt_tokens": 512, "max_prompt_tokens": 2048,
+                   "max_prefix_tokens": 1536, "min_tail_tokens": 64},
+        "ranks": [
+            {"arrival": [0, 0.1], "build": [0, 1, 0],
+             "extend": [0, 0, 1.5]}
+            for _ in range(2)
+        ],
+        "uncertainty_seconds": 0.1,
+    }
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(profile))
+    with pytest.raises(ValueError, match="invalid exact-16 split timing profile"):
+        SplitUploadPolicy(str(path), page_size=2)
