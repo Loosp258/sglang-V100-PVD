@@ -71,6 +71,33 @@ Simply changing native CAGRA's build algorithm was not helpful on Case 40:
 `nn_descent` took 8.41/7.91 s to build on ranks 0/1, and
 `iterative_cagra_search` took 7.16/7.83 s, versus IVF-PQ's 4.31/4.31 s.
 
+### Independent heads versus four-head grouping
+
+An additional Case 40 degree-16 exact-seed replay compares 56 independent
+one-head indexes with 14 four-head indexes on each rank. It uses the same
+K/Q, 512-token first chunk, four native `extend` calls per index, and
+`itopk_size=2048`. Both orders were run to expose order effects. Times are
+the sums across all graphs on one rank, in seconds.
+
+| Run order | Rank | One-head build | One-head extend | One-head total | Four-head build | Four-head extend | Four-head total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| One-head then four-head | 0 | .116 | 2.304 | 2.420 | .091 | 1.164 | 1.255 |
+| One-head then four-head | 1 | .122 | 2.213 | 2.334 | .088 | 1.010 | 1.098 |
+| Four-head then one-head | 0 | .124 | 1.894 | 2.018 | .090 | 1.325 | 1.415 |
+| Four-head then one-head | 1 | .124 | 1.947 | 2.071 | .093 | 1.439 | 1.532 |
+
+One-head graphs reached mean and worst-head Top-10 recall 1.0 on both ranks
+in both runs; four-head graphs reached mean .9982/.9955 and worst-head
+.95/.90 on ranks 0/1. All invalid-ID counts were zero. Four-head grouping
+also incurred about .11–.12 s per rank of filter setup, excluded from the
+table; one-head indexes require no such filter. Most of the construction
+difference is native `extend`: 56 independent indexes receive 224 calls,
+versus 14 grouped indexes receiving 56 calls. The observed four-head
+build-plus-extend speedup is 1.35–2.13× depending on run order. These are
+offline index times, not production READY or client latency. Raw logs are
+`exact16-group1-4-case40-rank{0,1}-20260929.log` and
+`exact16-group4-1-case40-rank{0,1}-20260929.log` on node0.
+
 ### If all KV arrives before building
 
 The same Case 40 K/Q was also replayed with `PVD_CAGRA_GROUP_PREFIX=0`,
@@ -115,4 +142,3 @@ variable keeps the IVF-PQ reference. Raw logs are on node0 under
 cuVS API reference: https://docs.nvidia.com/cuvs/api-reference/python-api-neighbors-cagra
 
 cuVS indexing guide: https://docs.nvidia.com/cuvs/user-guide/api-guides/indexing-guide/cagra
-GPU, isolated cuVS 25.10.0 environment. Online Case 40 uses 2156 tokens
