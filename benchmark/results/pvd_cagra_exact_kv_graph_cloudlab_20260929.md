@@ -156,6 +156,43 @@ lower recall (.9866/.9902 mean and .80/.90 worst head) than this replay.
 The previously reported .264/.250 s final `extend` applies only to a
 five-chunk `512×4+108` replay, not to this coalesced arrival shape.
 
+### Choosing a later first-build prefix (degree 16)
+
+For one rank, let `t_p` be when a selected prefix is readable on V and
+`t_f` when all 2156 rows are readable. Ignoring equal scheduling costs, a
+prefix build followed by one final insertion completes at
+`max(t_f, t_p + B_p) + E_tail`; one full build completes at `t_f + B_full`.
+Here `B_full` measured .362/.361 s on ranks 0/1. The first graph is fully
+hidden behind arrival only when `t_f - t_p >= B_p`. All timings below are
+sums across 14 four-head graphs per rank on real Case 40 K/Q.
+
+| Prefix rows | Tail rows | Prefix build, rank 0/1 | Final extend, rank 0/1 | Best possible lead over full build, rank 0/1 | Mean/min Top-10 recall, rank 0/1 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1024 | 1132 | .131/.137 s | .484/.514 s | loses .122/.153 s | .9991/.95; 1.000/1.00 |
+| 1536 | 620 | .224/.216 s | .382/.399 s | loses .020/.038 s | .9911/.65; 1.000/1.00 |
+| 1792 | 364 | .278/.276 s | .352/.358 s | gains .010/.003 s | .9893/.85; .9982/.90 |
+| 1920 | 236 | .304/.292 s | .297/.312 s | gains .065/.049 s | .9929/.85; .9991/.95 |
+| 2048 | 108 | .336/.319 s | .242/.230 s | gains .120/.131 s | .9938/.85; 1.000/1.00 |
+
+To **beat** a full build, a 2048-row prefix needs to be readable on V at
+least .216/.188 s before the final KV on ranks 0/1; to finish its first
+graph **before** the final KV, it needs .336/.319 s of lead. A 1920-row
+prefix needs .239/.243 s to beat full build and .304/.292 s to hide its
+first build completely. The 1792-row option has only a few milliseconds of
+headroom. The 1024- and 1536-row tails are slower than the entire full
+build even with unlimited overlap.
+
+These are operation-level upper bounds, not measured D-wait savings. The
+observed Case 40 commit sequence is consistent with only 512- and 1024-row
+prefixes being available before the coalesced final commit. The 1792/1920
+options would require finer Prefill publication, while 2048 would require
+the sender to avoid coalescing it into
+the final upload. In `conn.py`, a nonfinal send is skipped while the previous
+publish future is unfinished. Extra upload work can also shift `t_f`, so an
+online paired P/V/D test is required before adopting a threshold. Degree-16
+late-prefix rank-0 worst-head recall was .85 in the 1792–2048 fixtures,
+versus .95 in the five-chunk 512-prefix replay; latency alone is insufficient.
+
 To isolate the role of four-head grouping in the **complete-KV, no-extend**
 case, the degree-16 exact-seed arm also ran both group sizes in both orders.
 Each row uses the same Case 40 K/Q and cuVS setup; seconds are sums across

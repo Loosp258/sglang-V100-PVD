@@ -146,6 +146,14 @@ as the default until the streaming path passes the gates below.
   With graph-gated V→D delivery and immediate progress, complete-build is
   projected to make the slower rank READY about 0.14 s earlier, but had worse
   sampled recall; this is not a live D-wait measurement.
+  A later-prefix sweep at exact degree 16 found that 1024/1536-row tails
+  still cost more than a complete build. If their first builds are fully
+  overlapped, 1920/2048-row prefixes can save at most about 0.05/0.12 s on
+  the slower rank. A 2048-row prefix must reach V roughly 0.32–0.34 s before
+  final KV to finish its build by then; the observed commit sequence is
+  consistent with coalescing this prefix into the final upload. The
+  late-prefix rank-0 worst-head recall was
+  0.85 in the sampled fixture. See the exact-kv-graph report for thresholds.
   The production backend is unchanged. Graph-buffer ownership, memory,
   broader real-Q quality and online P/V/D timing are required before serving.
 
