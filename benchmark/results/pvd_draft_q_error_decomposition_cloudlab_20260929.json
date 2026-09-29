@@ -1,0 +1,3508 @@
+{
+  "method": "greedy target and full-24-layer Draft trajectories; first-six-layer frozen Draft Q readout",
+  "target_model": "/proj/llm-course-PG0/Yizhzhu-node0-sglang-pvd/models/Qwen2.5-7B-Instruct",
+  "draft_model": "/proj/llm-course-PG0/Yizhzhu-node0-sglang-pvd/models/Qwen2.5-0.5B-Instruct",
+  "readout": "/proj/llm-course-PG0/Yizhzhu-node0-sglang-pvd/validation/draft-q-corpus-r896-20260929/readout.pt",
+  "prompt_k_only": true,
+  "records": 8,
+  "future_tokens_per_record": 8,
+  "token_agreement_fraction": 0.03125,
+  "mean_true_top10_recall": {
+    "target_tokens_target_q": 1.0,
+    "target_tokens_predicted_q": 0.5952268107244816,
+    "draft_tokens_target_q": 0.4617167635807739,
+    "draft_tokens_predicted_q": 0.46259567036803656
+  },
+  "seconds": 8.823486008972395,
+  "per_record": [
+    {
+      "name": "valid:AGENTS.md:0",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4894,
+        0
+      ],
+      "draft_future_token_ids": [
+        26992,
+        13,
+        1084,
+        1083,
+        87856,
+        198,
+        220,
+        429
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.5735012841510719,
+          "draft_tokens_target_q": 0.41170281237609,
+          "draft_tokens_predicted_q": 0.4190210525008223
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.655516591847266,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7169642963978861,
+            "draft_tokens_target_q": 0.6062500106636435,
+            "draft_tokens_predicted_q": 0.6075892952004713
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8415178728422948,
+            "draft_tokens_target_q": 0.6977678673741009,
+            "draft_tokens_predicted_q": 0.7084821527491191
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7834821561617511,
+            "draft_tokens_target_q": 0.560267864227561,
+            "draft_tokens_predicted_q": 0.5848214368202856
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7611607247963548,
+            "draft_tokens_target_q": 0.5089285793448133,
+            "draft_tokens_predicted_q": 0.5299107205521848
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.643303580914757,
+            "draft_tokens_target_q": 0.3870535783935338,
+            "draft_tokens_predicted_q": 0.4049107206519693
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6464285816598151,
+            "draft_tokens_target_q": 0.37633929108934744,
+            "draft_tokens_predicted_q": 0.3906250061866428
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7294642978480884,
+            "draft_tokens_target_q": 0.5526785784999707,
+            "draft_tokens_predicted_q": 0.54241072097128
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6870535818992981,
+            "draft_tokens_target_q": 0.47767857924502877,
+            "draft_tokens_predicted_q": 0.48928572154337807
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6138392915017903,
+            "draft_tokens_target_q": 0.4062500064859965,
+            "draft_tokens_predicted_q": 0.45000000757032205
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6107142940828842,
+            "draft_tokens_target_q": 0.36651786233830663,
+            "draft_tokens_predicted_q": 0.4267857214435935
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7031250111093479,
+            "draft_tokens_target_q": 0.46116072215539006,
+            "draft_tokens_predicted_q": 0.5008928661367723
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5714285780143525,
+            "draft_tokens_target_q": 0.33348214706139906,
+            "draft_tokens_predicted_q": 0.4035714351172958
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5562500086879092,
+            "draft_tokens_target_q": 0.31919643336108755,
+            "draft_tokens_predicted_q": 0.35267857771499883
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5790178644736963,
+            "draft_tokens_target_q": 0.30758928999836954,
+            "draft_tokens_predicted_q": 0.3589285770431161
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.43035714963584076,
+            "draft_tokens_target_q": 0.20401786151342094,
+            "draft_tokens_predicted_q": 0.22410714709466056
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6200892938234445,
+            "draft_tokens_target_q": 0.43660714853155824,
+            "draft_tokens_predicted_q": 0.473214291036129
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4165178641809949,
+            "draft_tokens_target_q": 0.2785714335207428,
+            "draft_tokens_predicted_q": 0.288392862870491
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4941964354698679,
+            "draft_tokens_target_q": 0.3040178624048297,
+            "draft_tokens_predicted_q": 0.33571429211380227
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6116071530351681,
+            "draft_tokens_target_q": 0.48883929369705065,
+            "draft_tokens_predicted_q": 0.5026785787194967
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.47276786498592366,
+            "draft_tokens_target_q": 0.36250000543493244,
+            "draft_tokens_predicted_q": 0.3544642916947071
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4258928633893707,
+            "draft_tokens_target_q": 0.37946429130222115,
+            "draft_tokens_predicted_q": 0.37767857828709694
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.42589286368872437,
+            "draft_tokens_target_q": 0.39241072056548937,
+            "draft_tokens_predicted_q": 0.3540178621187806
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.2995535759587905,
+            "draft_tokens_target_q": 0.29375000500918497,
+            "draft_tokens_predicted_q": 0.24642857546652003
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.45044643471815754,
+            "draft_tokens_target_q": 0.3446428625777896,
+            "draft_tokens_predicted_q": 0.3138392915217472
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4808035785598414,
+            "draft_tokens_target_q": 0.32857143519712345,
+            "draft_tokens_predicted_q": 0.29196429129556883
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5379464370198548,
+            "draft_tokens_target_q": 0.4410714346449822,
+            "draft_tokens_predicted_q": 0.39642857710298685
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.45133929333782624,
+            "draft_tokens_target_q": 0.3964285761384027,
+            "draft_tokens_predicted_q": 0.37321429227345754
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.49687500803598333,
+            "draft_tokens_target_q": 0.5156250057542431,
+            "draft_tokens_predicted_q": 0.44955357872614904
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6040178655114558,
+            "draft_tokens_target_q": 0.4218750055214124,
+            "draft_tokens_predicted_q": 0.4321428632496723
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5848214367537626,
+            "draft_tokens_target_q": 0.4352678651921451,
+            "draft_tokens_predicted_q": 0.43750000602033523
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6125000091602227,
+            "draft_tokens_target_q": 0.4258928635556783,
+            "draft_tokens_predicted_q": 0.43616072211547624
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6084821527557713,
+            "draft_tokens_target_q": 0.44062500573428615,
+            "draft_tokens_predicted_q": 0.44866072077171076
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6129464364411044,
+            "draft_tokens_target_q": 0.37321429257281125,
+            "draft_tokens_predicted_q": 0.39866072069188313
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5995535804291389,
+            "draft_tokens_target_q": 0.4781250074572329,
+            "draft_tokens_predicted_q": 0.48125000836859855
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6044642943888903,
+            "draft_tokens_target_q": 0.4107142913687442,
+            "draft_tokens_predicted_q": 0.4316964362016214
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5861607225545283,
+            "draft_tokens_target_q": 0.4406250068319163,
+            "draft_tokens_predicted_q": 0.4517857215500304
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.594642864141081,
+            "draft_tokens_target_q": 0.4504464356827417,
+            "draft_tokens_predicted_q": 0.44285714948949007
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5883928665425628,
+            "draft_tokens_target_q": 0.4174107189090656,
+            "draft_tokens_predicted_q": 0.4191964340861887
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5897321522768054,
+            "draft_tokens_target_q": 0.4258928625578327,
+            "draft_tokens_predicted_q": 0.4379464346316776
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5910714374788638,
+            "draft_tokens_target_q": 0.4285714339597949,
+            "draft_tokens_predicted_q": 0.44419643472480985
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5973214388691953,
+            "draft_tokens_target_q": 0.4116071493897055,
+            "draft_tokens_predicted_q": 0.42142857807422324
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5816964380709189,
+            "draft_tokens_target_q": 0.4035714344520654,
+            "draft_tokens_predicted_q": 0.4263392924996359
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5370535784667092,
+            "draft_tokens_target_q": 0.3821428640346442,
+            "draft_tokens_predicted_q": 0.3790178637219859
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5468750100117177,
+            "draft_tokens_target_q": 0.38348214933648705,
+            "draft_tokens_predicted_q": 0.37544643466493915
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5937500091136566,
+            "draft_tokens_target_q": 0.4437500073774053,
+            "draft_tokens_predicted_q": 0.4375000064859965
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5169642920871931,
+            "draft_tokens_target_q": 0.35357143453854534,
+            "draft_tokens_predicted_q": 0.3566964348844652
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5388392926459866,
+            "draft_tokens_target_q": 0.38928572002000045,
+            "draft_tokens_predicted_q": 0.38526786328293383
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.541071437964482,
+            "draft_tokens_target_q": 0.392857147979417,
+            "draft_tokens_predicted_q": 0.38839286246470045
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.563392864839573,
+            "draft_tokens_target_q": 0.4258928633893707,
+            "draft_tokens_predicted_q": 0.43258929146187647
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5964285813471568,
+            "draft_tokens_target_q": 0.4616071492367025,
+            "draft_tokens_predicted_q": 0.4678571499285421
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5508928642541703,
+            "draft_tokens_target_q": 0.383482148371903,
+            "draft_tokens_predicted_q": 0.3892857214169843
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5334821521703687,
+            "draft_tokens_target_q": 0.40044643443876077,
+            "draft_tokens_predicted_q": 0.4151785783137062
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4879464352769511,
+            "draft_tokens_target_q": 0.38080357763517114,
+            "draft_tokens_predicted_q": 0.38080357879932436
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5446428656245449,
+            "draft_tokens_target_q": 0.3875000069050917,
+            "draft_tokens_predicted_q": 0.40535714929657324
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.575892867420667,
+            "draft_tokens_target_q": 0.3794642915017903,
+            "draft_tokens_predicted_q": 0.39464286375524743
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5750000096325364,
+            "draft_tokens_target_q": 0.39955357857979834,
+            "draft_tokens_predicted_q": 0.4147321490703949
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.628954091812579,
+            "draft_tokens_target_q": 0.4742347008301591,
+            "draft_tokens_predicted_q": 0.477551027524228
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5790816411775138,
+            "draft_tokens_target_q": 0.4838010277789162,
+            "draft_tokens_predicted_q": 0.4859693951391596
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.564540824140137,
+            "draft_tokens_target_q": 0.4262755170692595,
+            "draft_tokens_predicted_q": 0.4230867415400488
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5525510285657887,
+            "draft_tokens_target_q": 0.4371173533002789,
+            "draft_tokens_predicted_q": 0.4147959248618964
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.545025518696223,
+            "draft_tokens_target_q": 0.41262755679840946,
+            "draft_tokens_predicted_q": 0.376785720261384
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5482142932941111,
+            "draft_tokens_target_q": 0.3411989851322557,
+            "draft_tokens_predicted_q": 0.39234694592388614
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6190051114927901,
+            "draft_tokens_target_q": 0.3761479648552379,
+            "draft_tokens_predicted_q": 0.43431123100905394
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5506377640294329,
+            "draft_tokens_target_q": 0.34221939324420325,
+            "draft_tokens_predicted_q": 0.34732143374692115
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:python/sglang/srt/disaggregation/pvd/runtime.py:0",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        0,
+        330,
+        0,
+        0,
+        0,
+        21462,
+        0,
+        0
+      ],
+      "draft_future_token_ids": [
+        330,
+        21462,
+        16342,
+        10040,
+        310,
+        1727,
+        286,
+        656
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.6242825348329332,
+          "draft_tokens_target_q": 0.3621332964762494,
+          "draft_tokens_predicted_q": 0.386256383682069
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.6738361075653562,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7348214405189667,
+            "draft_tokens_target_q": 0.5745535785598415,
+            "draft_tokens_predicted_q": 0.6129464382372264
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8129464406520128,
+            "draft_tokens_target_q": 0.6236607229137527,
+            "draft_tokens_predicted_q": 0.6308035808282771
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7477678693830967,
+            "draft_tokens_target_q": 0.447321435602914,
+            "draft_tokens_predicted_q": 0.44062500533514787
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7794643001896995,
+            "draft_tokens_target_q": 0.4937500062265566,
+            "draft_tokens_predicted_q": 0.4968750082355525
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6879464404524437,
+            "draft_tokens_target_q": 0.3700892909629537,
+            "draft_tokens_predicted_q": 0.39375000653256265
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6741071522036302,
+            "draft_tokens_target_q": 0.3410714336537889,
+            "draft_tokens_predicted_q": 0.32991071910198244
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.73258929626484,
+            "draft_tokens_target_q": 0.4522321514918336,
+            "draft_tokens_predicted_q": 0.4611607208249292
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6540178675204515,
+            "draft_tokens_target_q": 0.380803577369079,
+            "draft_tokens_predicted_q": 0.4031250056744154
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6495535793448133,
+            "draft_tokens_target_q": 0.3325892900715449,
+            "draft_tokens_predicted_q": 0.3696428616531193
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.545982150627034,
+            "draft_tokens_target_q": 0.3245535773291652,
+            "draft_tokens_predicted_q": 0.3575892911758274
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6669642950208592,
+            "draft_tokens_target_q": 0.3897321494961424,
+            "draft_tokens_predicted_q": 0.44642857778152184
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6549107236122447,
+            "draft_tokens_target_q": 0.2678571476135403,
+            "draft_tokens_predicted_q": 0.36250000570102464
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6392857231798449,
+            "draft_tokens_target_q": 0.30044643341430594,
+            "draft_tokens_predicted_q": 0.38839286336276146
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.604464297182858,
+            "draft_tokens_target_q": 0.3026785765042795,
+            "draft_tokens_predicted_q": 0.35758929124235045
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4415178634891553,
+            "draft_tokens_target_q": 0.20267857544656312,
+            "draft_tokens_predicted_q": 0.26071429076338454
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6174107230201896,
+            "draft_tokens_target_q": 0.288392862105476,
+            "draft_tokens_predicted_q": 0.3589285773424698
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.49419643447202233,
+            "draft_tokens_target_q": 0.21026786117415344,
+            "draft_tokens_predicted_q": 0.27544643374026884
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.587946437964482,
+            "draft_tokens_target_q": 0.2553571477931525,
+            "draft_tokens_predicted_q": 0.32991072079832
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6491071520306703,
+            "draft_tokens_target_q": 0.36830357688346077,
+            "draft_tokens_predicted_q": 0.4477678643473025
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5477678676002792,
+            "draft_tokens_target_q": 0.347321434312367,
+            "draft_tokens_predicted_q": 0.35580357762851883
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.645535723073408,
+            "draft_tokens_target_q": 0.35892857637788567,
+            "draft_tokens_predicted_q": 0.36830357771499883
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.527232150713514,
+            "draft_tokens_target_q": 0.3540178629503186,
+            "draft_tokens_predicted_q": 0.3258928624314389
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.42008929240650367,
+            "draft_tokens_target_q": 0.2955357193880315,
+            "draft_tokens_predicted_q": 0.2495535756128707
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5620535788392382,
+            "draft_tokens_target_q": 0.3553571493497917,
+            "draft_tokens_predicted_q": 0.3477678626908788
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5883928656445018,
+            "draft_tokens_target_q": 0.34776786289044787,
+            "draft_tokens_predicted_q": 0.33080357698989765
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6821428672410548,
+            "draft_tokens_target_q": 0.3991071488043027,
+            "draft_tokens_predicted_q": 0.3964285793315087
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5642857219292117,
+            "draft_tokens_target_q": 0.34017857546652003,
+            "draft_tokens_predicted_q": 0.32187500489609583
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5674107207451016,
+            "draft_tokens_target_q": 0.4151785771828145,
+            "draft_tokens_predicted_q": 0.3946428631232785
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6227678655580219,
+            "draft_tokens_target_q": 0.35625000447700067,
+            "draft_tokens_predicted_q": 0.39241071993352045
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6352678680393312,
+            "draft_tokens_target_q": 0.4084821475137557,
+            "draft_tokens_predicted_q": 0.434375007437276
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6098214370597687,
+            "draft_tokens_target_q": 0.3522321487045182,
+            "draft_tokens_predicted_q": 0.38348214893734883
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6486607221886516,
+            "draft_tokens_target_q": 0.41250000637955964,
+            "draft_tokens_predicted_q": 0.44642857731586055
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6120535808814955,
+            "draft_tokens_target_q": 0.33839286318314926,
+            "draft_tokens_predicted_q": 0.36517857760190964
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6214285809879324,
+            "draft_tokens_target_q": 0.3946428625910942,
+            "draft_tokens_predicted_q": 0.4120535786330168
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6241071517246642,
+            "draft_tokens_target_q": 0.38080357730255593,
+            "draft_tokens_predicted_q": 0.4107142914352672
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6513392959854433,
+            "draft_tokens_target_q": 0.3593750061866428,
+            "draft_tokens_predicted_q": 0.40892857775491265
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6308035800632622,
+            "draft_tokens_target_q": 0.3549107198071267,
+            "draft_tokens_predicted_q": 0.3758928625777896
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6593750084949923,
+            "draft_tokens_target_q": 0.34419643433232394,
+            "draft_tokens_predicted_q": 0.3861607201064804
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6607142956262189,
+            "draft_tokens_target_q": 0.3549107188758041,
+            "draft_tokens_predicted_q": 0.37901786299023243
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6267857230933649,
+            "draft_tokens_target_q": 0.36785714820559534,
+            "draft_tokens_predicted_q": 0.38482143570269856
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.64062500984541,
+            "draft_tokens_target_q": 0.3616071476468018,
+            "draft_tokens_predicted_q": 0.38571429189427625
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6178571531283004,
+            "draft_tokens_target_q": 0.3540178624181343,
+            "draft_tokens_predicted_q": 0.3794642914685288
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5700892934110016,
+            "draft_tokens_target_q": 0.34375000645273496,
+            "draft_tokens_predicted_q": 0.35625000527527717
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6053571531083435,
+            "draft_tokens_target_q": 0.38125000504909884,
+            "draft_tokens_predicted_q": 0.38883929177453475
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6437500084949923,
+            "draft_tokens_target_q": 0.3687500055280647,
+            "draft_tokens_predicted_q": 0.3883928626975311
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6058035798570407,
+            "draft_tokens_target_q": 0.3437500061866428,
+            "draft_tokens_predicted_q": 0.35758929164148867
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6241071521903255,
+            "draft_tokens_target_q": 0.3397321481523769,
+            "draft_tokens_predicted_q": 0.3647321498221053
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.616964294076232,
+            "draft_tokens_target_q": 0.3459821482787707,
+            "draft_tokens_predicted_q": 0.3700892908631691
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6383928661234677,
+            "draft_tokens_target_q": 0.368303577149553,
+            "draft_tokens_predicted_q": 0.39821429304512485
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6258928678331098,
+            "draft_tokens_target_q": 0.38392857781478335,
+            "draft_tokens_predicted_q": 0.39598214922339786
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6276785804490957,
+            "draft_tokens_target_q": 0.3419642910427813,
+            "draft_tokens_predicted_q": 0.36473214879099813
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6107142949144223,
+            "draft_tokens_target_q": 0.3491071480925062,
+            "draft_tokens_predicted_q": 0.3723214341194502
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5803571516381842,
+            "draft_tokens_target_q": 0.3419642919408424,
+            "draft_tokens_predicted_q": 0.36830357728259905
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.593303580934714,
+            "draft_tokens_target_q": 0.3486607202794403,
+            "draft_tokens_predicted_q": 0.36116071893567486
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.637053583582331,
+            "draft_tokens_target_q": 0.36741072072514463,
+            "draft_tokens_predicted_q": 0.3825892926792481
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6388392960320094,
+            "draft_tokens_target_q": 0.3750000070181808,
+            "draft_tokens_predicted_q": 0.401339293158214
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5889030703134379,
+            "draft_tokens_target_q": 0.43660715031342545,
+            "draft_tokens_predicted_q": 0.46479592619615856
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6757653178171996,
+            "draft_tokens_target_q": 0.4993622516643028,
+            "draft_tokens_predicted_q": 0.5052295993462357
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.64948980548248,
+            "draft_tokens_target_q": 0.46951531290969983,
+            "draft_tokens_predicted_q": 0.4834183748925523
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6340561315265237,
+            "draft_tokens_target_q": 0.4090561283258151,
+            "draft_tokens_predicted_q": 0.45535714939540745
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6209183756680209,
+            "draft_tokens_target_q": 0.3804847005545637,
+            "draft_tokens_predicted_q": 0.43686225158827646
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.668239806617173,
+            "draft_tokens_target_q": 0.2554846981597342,
+            "draft_tokens_predicted_q": 0.2720663311073975
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5869898045321509,
+            "draft_tokens_target_q": 0.24196429002307812,
+            "draft_tokens_predicted_q": 0.2500000042859845
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5698979667064791,
+            "draft_tokens_target_q": 0.20459183985937615,
+            "draft_tokens_predicted_q": 0.22232143264453935
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:online-case40",
+      "prompt_tokens": 1024,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        0,
+        711,
+        0,
+        468,
+        14884,
+        2378,
+        952,
+        0
+      ],
+      "draft_future_token_ids": [
+        711,
+        468,
+        14884,
+        2378,
+        952,
+        711,
+        468,
+        14884
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.6227519223442757,
+          "draft_tokens_target_q": 0.4921875070443149,
+          "draft_tokens_predicted_q": 0.5238361043442155
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.5820950342102299,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6901785827108792,
+            "draft_tokens_target_q": 0.5995535816930767,
+            "draft_tokens_predicted_q": 0.5986607236388538
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6879464390887213,
+            "draft_tokens_target_q": 0.561607150627034,
+            "draft_tokens_predicted_q": 0.5504464380709189
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6482142934110016,
+            "draft_tokens_target_q": 0.493750007590279,
+            "draft_tokens_predicted_q": 0.48348214966244996
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7125000102844622,
+            "draft_tokens_target_q": 0.5116071497821915,
+            "draft_tokens_predicted_q": 0.550892865584631
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7035714405854898,
+            "draft_tokens_target_q": 0.4955357200066958,
+            "draft_tokens_predicted_q": 0.5183035790853735
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7000000111958278,
+            "draft_tokens_target_q": 0.5040178646533084,
+            "draft_tokens_predicted_q": 0.5000000067520887
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.737500011222437,
+            "draft_tokens_target_q": 0.5799107228937957,
+            "draft_tokens_predicted_q": 0.6178571507999939
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7357142985066665,
+            "draft_tokens_target_q": 0.5834821491236133,
+            "draft_tokens_predicted_q": 0.6330357233860663
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6165178642342133,
+            "draft_tokens_target_q": 0.43928571993352045,
+            "draft_tokens_predicted_q": 0.5080357217562518
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.633035721323852,
+            "draft_tokens_target_q": 0.5464285795709917,
+            "draft_tokens_predicted_q": 0.5566964361018368
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6223214366140642,
+            "draft_tokens_target_q": 0.5183035792849425,
+            "draft_tokens_predicted_q": 0.5508928635889399
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.594642866436126,
+            "draft_tokens_target_q": 0.47991071994017276,
+            "draft_tokens_predicted_q": 0.5062500057475907
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4808035780941801,
+            "draft_tokens_target_q": 0.39910714767341104,
+            "draft_tokens_predicted_q": 0.458035721410332
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5348214365408889,
+            "draft_tokens_target_q": 0.47991072077171076,
+            "draft_tokens_predicted_q": 0.5080357209912368
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4281250065791288,
+            "draft_tokens_target_q": 0.3705357201730034,
+            "draft_tokens_predicted_q": 0.3437500057875046
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5995535779345248,
+            "draft_tokens_target_q": 0.41875000667226103,
+            "draft_tokens_predicted_q": 0.4906250064793442
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.44419643582244006,
+            "draft_tokens_target_q": 0.36383929113591357,
+            "draft_tokens_predicted_q": 0.34955357760190964
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.503125008029331,
+            "draft_tokens_target_q": 0.3424107198204313,
+            "draft_tokens_predicted_q": 0.4165178629503186
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5218750083087278,
+            "draft_tokens_target_q": 0.46250000655917184,
+            "draft_tokens_predicted_q": 0.4696428637752043
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5513392945618502,
+            "draft_tokens_target_q": 0.5308035786729306,
+            "draft_tokens_predicted_q": 0.4821428643938686
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6482142944753703,
+            "draft_tokens_target_q": 0.5705357214568981,
+            "draft_tokens_predicted_q": 0.5915178654914988
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6803571526626391,
+            "draft_tokens_target_q": 0.5883928673408393,
+            "draft_tokens_predicted_q": 0.6272321508731693
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6241071516581412,
+            "draft_tokens_target_q": 0.46875000765014974,
+            "draft_tokens_predicted_q": 0.5241071501347635
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6629464394479457,
+            "draft_tokens_target_q": 0.5312500067853502,
+            "draft_tokens_predicted_q": 0.577678580103176
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6758928684451219,
+            "draft_tokens_target_q": 0.5375000072110977,
+            "draft_tokens_predicted_q": 0.6022321511326092
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6549107221487377,
+            "draft_tokens_target_q": 0.4803571497156684,
+            "draft_tokens_predicted_q": 0.5450892920738885
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.697321438097528,
+            "draft_tokens_target_q": 0.4558035789855889,
+            "draft_tokens_predicted_q": 0.5526785804956619
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6473214372194239,
+            "draft_tokens_target_q": 0.4674107215167688,
+            "draft_tokens_predicted_q": 0.554017863768552
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6263392949144223,
+            "draft_tokens_target_q": 0.44776786328293383,
+            "draft_tokens_predicted_q": 0.486160720864843
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6633928667288274,
+            "draft_tokens_target_q": 0.5383928645668286,
+            "draft_tokens_predicted_q": 0.5660714357093509
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6116071538999677,
+            "draft_tokens_target_q": 0.49419643437223776,
+            "draft_tokens_predicted_q": 0.5267857215699873
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6767857232397156,
+            "draft_tokens_target_q": 0.525000007656802,
+            "draft_tokens_predicted_q": 0.5767857231465834
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6191964386629739,
+            "draft_tokens_target_q": 0.4933035780143525,
+            "draft_tokens_predicted_q": 0.5160714367936764
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6660714383303586,
+            "draft_tokens_target_q": 0.49151786469987463,
+            "draft_tokens_predicted_q": 0.5620535797040377
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6049107219691255,
+            "draft_tokens_target_q": 0.5031250071645316,
+            "draft_tokens_predicted_q": 0.5075892926459866
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6678571517778826,
+            "draft_tokens_target_q": 0.5388392947082009,
+            "draft_tokens_predicted_q": 0.5714285793780748
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6205357246633086,
+            "draft_tokens_target_q": 0.46473215048068334,
+            "draft_tokens_predicted_q": 0.5107142927258143
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.614285723838423,
+            "draft_tokens_target_q": 0.48258929224019603,
+            "draft_tokens_predicted_q": 0.5241071494362716
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6553571525229407,
+            "draft_tokens_target_q": 0.4866071499085852,
+            "draft_tokens_predicted_q": 0.5093750072576638
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5950892942491919,
+            "draft_tokens_target_q": 0.43303572033931104,
+            "draft_tokens_predicted_q": 0.46026786390159813
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6857142956328711,
+            "draft_tokens_target_q": 0.5406250088209552,
+            "draft_tokens_predicted_q": 0.5785714361284461
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6392857230467988,
+            "draft_tokens_target_q": 0.48526786284388174,
+            "draft_tokens_predicted_q": 0.5531250076102359
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.587946438031005,
+            "draft_tokens_target_q": 0.4660714340196656,
+            "draft_tokens_predicted_q": 0.5013392925195929
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6602678684118602,
+            "draft_tokens_target_q": 0.5339285795510348,
+            "draft_tokens_predicted_q": 0.564732151172523
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6125000079960695,
+            "draft_tokens_target_q": 0.5446428650923606,
+            "draft_tokens_predicted_q": 0.5308035790720689
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6245535812673292,
+            "draft_tokens_target_q": 0.5075892937103552,
+            "draft_tokens_predicted_q": 0.4941964363346675
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5794642935839615,
+            "draft_tokens_target_q": 0.46294643483789905,
+            "draft_tokens_predicted_q": 0.48883929366378914
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6111607234925032,
+            "draft_tokens_target_q": 0.4892857205122709,
+            "draft_tokens_predicted_q": 0.4950892917279686
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6375000093997057,
+            "draft_tokens_target_q": 0.47544643512394813,
+            "draft_tokens_predicted_q": 0.5290178657575909
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.628571436673935,
+            "draft_tokens_target_q": 0.5160714366273689,
+            "draft_tokens_predicted_q": 0.5446428655580219
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5834821523167193,
+            "draft_tokens_target_q": 0.4531250076168882,
+            "draft_tokens_predicted_q": 0.4955357197738652
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5794642932846078,
+            "draft_tokens_target_q": 0.48616072079832,
+            "draft_tokens_predicted_q": 0.5084821492034409
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.606696436214926,
+            "draft_tokens_target_q": 0.4977678639282073,
+            "draft_tokens_predicted_q": 0.5370535792982472
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5933035792383764,
+            "draft_tokens_target_q": 0.44642857848001377,
+            "draft_tokens_predicted_q": 0.5080357223882207
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5830357228405774,
+            "draft_tokens_target_q": 0.4620535783802292,
+            "draft_tokens_predicted_q": 0.488839293530743
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6026785794113364,
+            "draft_tokens_target_q": 0.5147321494628808,
+            "draft_tokens_predicted_q": 0.5316964347647237
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6220663352014155,
+            "draft_tokens_target_q": 0.5376275594498278,
+            "draft_tokens_predicted_q": 0.5413265384505598
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6364796010644308,
+            "draft_tokens_target_q": 0.48903061899983763,
+            "draft_tokens_predicted_q": 0.5131377619786226
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6243622536694973,
+            "draft_tokens_target_q": 0.5122449053356386,
+            "draft_tokens_predicted_q": 0.4849489865330409
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6299744994778719,
+            "draft_tokens_target_q": 0.48494898645701456,
+            "draft_tokens_predicted_q": 0.4943877622694233
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6501275608696195,
+            "draft_tokens_target_q": 0.48431123170659557,
+            "draft_tokens_predicted_q": 0.6024234776328109
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6266581722706253,
+            "draft_tokens_target_q": 0.4894132722758365,
+            "draft_tokens_predicted_q": 0.5815051099076411
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6229591923575772,
+            "draft_tokens_target_q": 0.4241071486161376,
+            "draft_tokens_predicted_q": 0.4813775584500815
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5693877638431684,
+            "draft_tokens_target_q": 0.5158163335136309,
+            "draft_tokens_predicted_q": 0.49158163953154366
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:random",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        0,
+        0,
+        0,
+        220,
+        0,
+        753,
+        753,
+        753
+      ],
+      "draft_future_token_ids": [
+        220,
+        16,
+        15,
+        15,
+        15,
+        15,
+        15,
+        15
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.6034757739600574,
+          "draft_tokens_target_q": 0.53622449751663,
+          "draft_tokens_predicted_q": 0.529655620535332
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.6256218209306766,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7468750132913036,
+            "draft_tokens_target_q": 0.5941964383237064,
+            "draft_tokens_predicted_q": 0.6040178667088705
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8174107290937432,
+            "draft_tokens_target_q": 0.5892857247298318,
+            "draft_tokens_predicted_q": 0.5772321534542633
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7598214431532792,
+            "draft_tokens_target_q": 0.5857142950075546,
+            "draft_tokens_predicted_q": 0.5821428666489997
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.689732151106,
+            "draft_tokens_target_q": 0.5558035790454596,
+            "draft_tokens_predicted_q": 0.5254464365009751
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6044642949210746,
+            "draft_tokens_target_q": 0.46205357897893656,
+            "draft_tokens_predicted_q": 0.4535714365275843
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5928571493963578,
+            "draft_tokens_target_q": 0.44642857781478335,
+            "draft_tokens_predicted_q": 0.43660714962918845
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.743750011681446,
+            "draft_tokens_target_q": 0.605357151412006,
+            "draft_tokens_predicted_q": 0.6308035798636931
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6290178645535239,
+            "draft_tokens_target_q": 0.5683035789323705,
+            "draft_tokens_predicted_q": 0.6000000091735274
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6191964359022677,
+            "draft_tokens_target_q": 0.4741071493897055,
+            "draft_tokens_predicted_q": 0.5352678652187544
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5986607218759933,
+            "draft_tokens_target_q": 0.414285720492314,
+            "draft_tokens_predicted_q": 0.4977678639614688
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6839285812872861,
+            "draft_tokens_target_q": 0.5714285802428744,
+            "draft_tokens_predicted_q": 0.6437500106237296
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5843750072443592,
+            "draft_tokens_target_q": 0.43169643447202233,
+            "draft_tokens_predicted_q": 0.5544642937768783
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.554910720492314,
+            "draft_tokens_target_q": 0.38258929221358684,
+            "draft_tokens_predicted_q": 0.5138392940363181
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.639285721782861,
+            "draft_tokens_target_q": 0.47723214930322555,
+            "draft_tokens_predicted_q": 0.5955357214635504
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4482142929919064,
+            "draft_tokens_target_q": 0.30401786263766034,
+            "draft_tokens_predicted_q": 0.3633928643872163
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5816964384367955,
+            "draft_tokens_target_q": 0.5093750093864011,
+            "draft_tokens_predicted_q": 0.5665178674805377
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.35267857731586055,
+            "draft_tokens_target_q": 0.4245535785199276,
+            "draft_tokens_predicted_q": 0.35937500568772
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.48839286395481657,
+            "draft_tokens_target_q": 0.416964291495138,
+            "draft_tokens_predicted_q": 0.4357142926393343
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6580357253218868,
+            "draft_tokens_target_q": 0.6267857228937957,
+            "draft_tokens_predicted_q": 0.6276785807484495
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5008928655380649,
+            "draft_tokens_target_q": 0.5312500077831958,
+            "draft_tokens_predicted_q": 0.45669643584239694
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.608035721782861,
+            "draft_tokens_target_q": 0.6129464363080582,
+            "draft_tokens_predicted_q": 0.598660721410332
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5906250088342598,
+            "draft_tokens_target_q": 0.6540178665558675,
+            "draft_tokens_predicted_q": 0.5665178673142302
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4696428645402193,
+            "draft_tokens_target_q": 0.5245535785465368,
+            "draft_tokens_predicted_q": 0.4129464357226555
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.533482150407508,
+            "draft_tokens_target_q": 0.5915178644603917,
+            "draft_tokens_predicted_q": 0.4875000081291156
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.597321437505473,
+            "draft_tokens_target_q": 0.6093750086147338,
+            "draft_tokens_predicted_q": 0.5513392948612038
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6723214359954,
+            "draft_tokens_target_q": 0.6870535788059767,
+            "draft_tokens_predicted_q": 0.6214285801231328
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5839285779012633,
+            "draft_tokens_target_q": 0.6517857233328479,
+            "draft_tokens_predicted_q": 0.5120535786928875
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5477678645734808,
+            "draft_tokens_target_q": 0.7116071507667324,
+            "draft_tokens_predicted_q": 0.520089294362281
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6598214386031032,
+            "draft_tokens_target_q": 0.592410723445937,
+            "draft_tokens_predicted_q": 0.5915178684850356
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6316964385498848,
+            "draft_tokens_target_q": 0.5598214365475412,
+            "draft_tokens_predicted_q": 0.5406250081557248
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6321428668286119,
+            "draft_tokens_target_q": 0.5669642935972661,
+            "draft_tokens_predicted_q": 0.5669642936637891
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6459821515849659,
+            "draft_tokens_target_q": 0.5861607231199741,
+            "draft_tokens_predicted_q": 0.5950892951139914
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6254464378913066,
+            "draft_tokens_target_q": 0.5669642937635737,
+            "draft_tokens_predicted_q": 0.5683035807284925
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6589285817130336,
+            "draft_tokens_target_q": 0.62232143870954,
+            "draft_tokens_predicted_q": 0.6098214384567525
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6299107217096857,
+            "draft_tokens_target_q": 0.5571428656112403,
+            "draft_tokens_predicted_q": 0.5495535802827882
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5790178652054497,
+            "draft_tokens_target_q": 0.5017857213305044,
+            "draft_tokens_predicted_q": 0.5035714359421816
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5504464368735041,
+            "draft_tokens_target_q": 0.5093750083885554,
+            "draft_tokens_predicted_q": 0.5178571503742465
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6111607222950884,
+            "draft_tokens_target_q": 0.5544642934110016,
+            "draft_tokens_predicted_q": 0.5553571524963316
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6142857207118401,
+            "draft_tokens_target_q": 0.5049107223083931,
+            "draft_tokens_predicted_q": 0.5107142950208592
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5745535798903022,
+            "draft_tokens_target_q": 0.47276786215869443,
+            "draft_tokens_predicted_q": 0.4745535793980317
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6000000070447901,
+            "draft_tokens_target_q": 0.5388392935440477,
+            "draft_tokens_predicted_q": 0.5459821519907564
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5986607244703919,
+            "draft_tokens_target_q": 0.4986607223150453,
+            "draft_tokens_predicted_q": 0.5196428657842002
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5691964354565633,
+            "draft_tokens_target_q": 0.5102678624846574,
+            "draft_tokens_predicted_q": 0.500446435363431
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6089285814003753,
+            "draft_tokens_target_q": 0.539285721190806,
+            "draft_tokens_predicted_q": 0.515178580036653
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.641071438490014,
+            "draft_tokens_target_q": 0.5816964362082737,
+            "draft_tokens_predicted_q": 0.5616071515583566
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5428571496491453,
+            "draft_tokens_target_q": 0.45401786440717323,
+            "draft_tokens_predicted_q": 0.4504464364144951
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5629464367271534,
+            "draft_tokens_target_q": 0.5084821512656552,
+            "draft_tokens_predicted_q": 0.495535722700879
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5433035783270108,
+            "draft_tokens_target_q": 0.4785714347381145,
+            "draft_tokens_predicted_q": 0.4700892924530698
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5857142934442631,
+            "draft_tokens_target_q": 0.5468750085149493,
+            "draft_tokens_predicted_q": 0.5169642937170076
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6406250107102096,
+            "draft_tokens_target_q": 0.5696428640679058,
+            "draft_tokens_predicted_q": 0.5633928647065269
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6084821514918336,
+            "draft_tokens_target_q": 0.52946429363718,
+            "draft_tokens_predicted_q": 0.5227678633028907
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5950892946815917,
+            "draft_tokens_target_q": 0.5477678651721882,
+            "draft_tokens_predicted_q": 0.5209821517512735
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5830357231066695,
+            "draft_tokens_target_q": 0.4977678647597453,
+            "draft_tokens_predicted_q": 0.4741071499218898
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5848214375187776,
+            "draft_tokens_target_q": 0.5491071498088006,
+            "draft_tokens_predicted_q": 0.5196428646533084
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.608035724144429,
+            "draft_tokens_target_q": 0.5227678650990129,
+            "draft_tokens_predicted_q": 0.5200892937303122
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6111607223616115,
+            "draft_tokens_target_q": 0.5459821508598647,
+            "draft_tokens_predicted_q": 0.5495535787860197
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6183673567138612,
+            "draft_tokens_target_q": 0.6165816416032612,
+            "draft_tokens_predicted_q": 0.6099489892509823
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6181122538899737,
+            "draft_tokens_target_q": 0.6022959275893411,
+            "draft_tokens_predicted_q": 0.5437500089482994
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6077806205792847,
+            "draft_tokens_target_q": 0.5526785794455482,
+            "draft_tokens_predicted_q": 0.5318877631988452
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5741071504141603,
+            "draft_tokens_target_q": 0.46045918970805955,
+            "draft_tokens_predicted_q": 0.4358418434003026
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6061224581255596,
+            "draft_tokens_target_q": 0.5061224559417032,
+            "draft_tokens_predicted_q": 0.49834184500635886
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5996173548949312,
+            "draft_tokens_target_q": 0.5121173546554483,
+            "draft_tokens_predicted_q": 0.5248724566392449
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6008928662299046,
+            "draft_tokens_target_q": 0.5177295995610101,
+            "draft_tokens_predicted_q": 0.5426020495479509
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6028061308327834,
+            "draft_tokens_target_q": 0.5218112316286686,
+            "draft_tokens_predicted_q": 0.5500000082906715
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:hotpot-last20:0",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        16,
+        267,
+        0,
+        7772,
+        0,
+        0,
+        0,
+        0
+      ],
+      "draft_future_token_ids": [
+        303,
+        7772,
+        9055,
+        29972,
+        1283,
+        8359,
+        10465,
+        330
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.58249363237493,
+          "draft_tokens_target_q": 0.47295919096344435,
+          "draft_tokens_predicted_q": 0.46139987974845786
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.6411830460015988,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7910714447165706,
+            "draft_tokens_target_q": 0.6915178690770907,
+            "draft_tokens_predicted_q": 0.7098214385498848
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8607143026643566,
+            "draft_tokens_target_q": 0.6919642968236336,
+            "draft_tokens_predicted_q": 0.7066964398005179
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7915178730285594,
+            "draft_tokens_target_q": 0.612500009692407,
+            "draft_tokens_predicted_q": 0.6133928651522312
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8031250146616783,
+            "draft_tokens_target_q": 0.6102678675670177,
+            "draft_tokens_predicted_q": 0.6107142963114062
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6598214398670409,
+            "draft_tokens_target_q": 0.4535714363945382,
+            "draft_tokens_predicted_q": 0.4723214347447668
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6924107236388538,
+            "draft_tokens_target_q": 0.4174107212706336,
+            "draft_tokens_predicted_q": 0.44464286509901285
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.768303584174386,
+            "draft_tokens_target_q": 0.5620535800033915,
+            "draft_tokens_predicted_q": 0.6040178657442864
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6941964412108064,
+            "draft_tokens_target_q": 0.5031250081623772,
+            "draft_tokens_predicted_q": 0.549107152835599
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6419642939165767,
+            "draft_tokens_target_q": 0.43482143418597324,
+            "draft_tokens_predicted_q": 0.4504464351838188
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5500000093597919,
+            "draft_tokens_target_q": 0.4540178627440972,
+            "draft_tokens_predicted_q": 0.43482143531686496
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6758928693099213,
+            "draft_tokens_target_q": 0.5156250070181808,
+            "draft_tokens_predicted_q": 0.5433035794579025
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5348214375719961,
+            "draft_tokens_target_q": 0.43437500707139926,
+            "draft_tokens_predicted_q": 0.44642857907872113
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.48482143559626173,
+            "draft_tokens_target_q": 0.40401786169968545,
+            "draft_tokens_predicted_q": 0.38928572088479996
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5218750088409122,
+            "draft_tokens_target_q": 0.4607142932779555,
+            "draft_tokens_predicted_q": 0.43526786422756103
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.3397321495826223,
+            "draft_tokens_target_q": 0.318750005315191,
+            "draft_tokens_predicted_q": 0.24866071958760066
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5700892945086318,
+            "draft_tokens_target_q": 0.48660715064033866,
+            "draft_tokens_predicted_q": 0.466071437046464
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.3709821487510843,
+            "draft_tokens_target_q": 0.3950892919009285,
+            "draft_tokens_predicted_q": 0.29866071830370594
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.45491072119745823,
+            "draft_tokens_target_q": 0.3821428627374449,
+            "draft_tokens_predicted_q": 0.3571428630966693
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6245535828971437,
+            "draft_tokens_target_q": 0.5241071521969778,
+            "draft_tokens_predicted_q": 0.5093750106170774
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4482142942891057,
+            "draft_tokens_target_q": 0.45133929416936425,
+            "draft_tokens_predicted_q": 0.39196429148848566
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5258928648462253,
+            "draft_tokens_target_q": 0.4946428638483797,
+            "draft_tokens_predicted_q": 0.45446429438223795
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.541964295586305,
+            "draft_tokens_target_q": 0.4915178644005209,
+            "draft_tokens_predicted_q": 0.4562500074971467
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.3892857208182769,
+            "draft_tokens_target_q": 0.35446429109599975,
+            "draft_tokens_predicted_q": 0.3169642901048064
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4544642937835306,
+            "draft_tokens_target_q": 0.4049107197871698,
+            "draft_tokens_predicted_q": 0.37589286231169744
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5388392956062619,
+            "draft_tokens_target_q": 0.3986607211908059,
+            "draft_tokens_predicted_q": 0.4107142917013594
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5700892919474947,
+            "draft_tokens_target_q": 0.45535714867790894,
+            "draft_tokens_predicted_q": 0.45089286336276146
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.48705357865297366,
+            "draft_tokens_target_q": 0.3946428621254329,
+            "draft_tokens_predicted_q": 0.36205357742229743
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5232142954732159,
+            "draft_tokens_target_q": 0.44464286390159813,
+            "draft_tokens_predicted_q": 0.4098214336471366
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6049107230667558,
+            "draft_tokens_target_q": 0.48080357782808797,
+            "draft_tokens_predicted_q": 0.4683035781740078
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6080357236122447,
+            "draft_tokens_target_q": 0.5031250074306237,
+            "draft_tokens_predicted_q": 0.5004464358290923
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.600892866961658,
+            "draft_tokens_target_q": 0.46919643725933774,
+            "draft_tokens_predicted_q": 0.46517857832701076
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6080357248761824,
+            "draft_tokens_target_q": 0.5049107212107629,
+            "draft_tokens_predicted_q": 0.5053571484251214
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5696428660303354,
+            "draft_tokens_target_q": 0.47098215034098495,
+            "draft_tokens_predicted_q": 0.45669643614175065
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6312500113355262,
+            "draft_tokens_target_q": 0.5120535798570407,
+            "draft_tokens_predicted_q": 0.5062500072443592
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5941964385897985,
+            "draft_tokens_target_q": 0.4875000082621617,
+            "draft_tokens_predicted_q": 0.4629464376651283
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.592857152988602,
+            "draft_tokens_target_q": 0.4857142924863313,
+            "draft_tokens_predicted_q": 0.4665178644936532
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5866071519641471,
+            "draft_tokens_target_q": 0.4647321488841304,
+            "draft_tokens_predicted_q": 0.4660714347846806
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.57901786740071,
+            "draft_tokens_target_q": 0.4933035791119827,
+            "draft_tokens_predicted_q": 0.4642857226676175
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6250000109097787,
+            "draft_tokens_target_q": 0.4834821497622345,
+            "draft_tokens_predicted_q": 0.4794642926925527
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5799107242242566,
+            "draft_tokens_target_q": 0.44821429206058383,
+            "draft_tokens_predicted_q": 0.45178572164981495
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6196428706669914,
+            "draft_tokens_target_q": 0.4937500074572329,
+            "draft_tokens_predicted_q": 0.48437500768341124
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5678571522501963,
+            "draft_tokens_target_q": 0.4477678637818566,
+            "draft_tokens_predicted_q": 0.4392857216631195
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5388392952736467,
+            "draft_tokens_target_q": 0.4424107230401465,
+            "draft_tokens_predicted_q": 0.43705357860640753
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5790178666356951,
+            "draft_tokens_target_q": 0.4656250063063843,
+            "draft_tokens_predicted_q": 0.437946436061923
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5982142956594804,
+            "draft_tokens_target_q": 0.49062500721109764,
+            "draft_tokens_predicted_q": 0.47946429242646055
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5642857225944421,
+            "draft_tokens_target_q": 0.4325892908964306,
+            "draft_tokens_predicted_q": 0.4116071502212435
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5843750102046344,
+            "draft_tokens_target_q": 0.4424107202794403,
+            "draft_tokens_predicted_q": 0.4482142909962152
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5343750083286848,
+            "draft_tokens_target_q": 0.44910714868456125,
+            "draft_tokens_predicted_q": 0.41785714828542303
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.603571437964482,
+            "draft_tokens_target_q": 0.49508929535347435,
+            "draft_tokens_predicted_q": 0.4803571530418204
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6089285824314824,
+            "draft_tokens_target_q": 0.5174107228605342,
+            "draft_tokens_predicted_q": 0.5089285794445979
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5517857234060232,
+            "draft_tokens_target_q": 0.45312500645273496,
+            "draft_tokens_predicted_q": 0.4397321489107396
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5625000103775945,
+            "draft_tokens_target_q": 0.4794642928255988,
+            "draft_tokens_predicted_q": 0.4504464365475412
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5223214386164078,
+            "draft_tokens_target_q": 0.4200892934708723,
+            "draft_tokens_predicted_q": 0.4187500082355525
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5303571538534015,
+            "draft_tokens_target_q": 0.4625000082887709,
+            "draft_tokens_predicted_q": 0.4397321513388306
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5625000095460564,
+            "draft_tokens_target_q": 0.44508929228010985,
+            "draft_tokens_predicted_q": 0.44553572135711356
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6008928667288274,
+            "draft_tokens_target_q": 0.501785723292934,
+            "draft_tokens_predicted_q": 0.4866071500416313
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6252551132585017,
+            "draft_tokens_target_q": 0.6978316430610662,
+            "draft_tokens_predicted_q": 0.6019132753396977
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6697704205479549,
+            "draft_tokens_target_q": 0.6494898059861545,
+            "draft_tokens_predicted_q": 0.6204081742111973
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5418367441648579,
+            "draft_tokens_target_q": 0.3743622507234769,
+            "draft_tokens_predicted_q": 0.3557398006491059
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6426020530717713,
+            "draft_tokens_target_q": 0.6158163360871223,
+            "draft_tokens_predicted_q": 0.5839285797876667
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5432398045739654,
+            "draft_tokens_target_q": 0.4721938846062641,
+            "draft_tokens_predicted_q": 0.4946428644185772
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5619898054235596,
+            "draft_tokens_target_q": 0.4239795978504176,
+            "draft_tokens_predicted_q": 0.4255102108688835
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5459183754722531,
+            "draft_tokens_target_q": 0.2918367395842714,
+            "draft_tokens_predicted_q": 0.31505102560646375
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5293367424865767,
+            "draft_tokens_target_q": 0.258163269808782,
+            "draft_tokens_predicted_q": 0.29400510710607075
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:hotpot-last20:1",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        16,
+        20,
+        0,
+        6882,
+        0,
+        323,
+        0,
+        0
+      ],
+      "draft_future_token_ids": [
+        16,
+        20,
+        701,
+        323,
+        29650,
+        444,
+        13,
+        472
+      ],
+      "same_token_at_position": [
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 2,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.5424585542000108,
+          "draft_tokens_target_q": 0.5692442651049291,
+          "draft_tokens_predicted_q": 0.45591518555397204
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.6023437583341491,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7388392961584032,
+            "draft_tokens_target_q": 0.7241071504873356,
+            "draft_tokens_predicted_q": 0.667410724363955
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.830357157625258,
+            "draft_tokens_target_q": 0.7129464341726687,
+            "draft_tokens_predicted_q": 0.708482153580657
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7553571553767792,
+            "draft_tokens_target_q": 0.6276785771229437,
+            "draft_tokens_predicted_q": 0.5709821513654398
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7531250139831432,
+            "draft_tokens_target_q": 0.6227678620988237,
+            "draft_tokens_predicted_q": 0.5825892946283732
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6455357231066695,
+            "draft_tokens_target_q": 0.5133928618327316,
+            "draft_tokens_predicted_q": 0.4491071488841304
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6607142953601267,
+            "draft_tokens_target_q": 0.5258928615200732,
+            "draft_tokens_predicted_q": 0.46026786460009006
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6959821536272232,
+            "draft_tokens_target_q": 0.6071428620988237,
+            "draft_tokens_predicted_q": 0.539285722853882
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5897321512124368,
+            "draft_tokens_target_q": 0.5125000042109085,
+            "draft_tokens_predicted_q": 0.43258929279233727
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5700892929120788,
+            "draft_tokens_target_q": 0.5160714332014322,
+            "draft_tokens_predicted_q": 0.4178571487843458
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5316964358623538,
+            "draft_tokens_target_q": 0.4611607182305306,
+            "draft_tokens_predicted_q": 0.37232143342095825
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6142857238716845,
+            "draft_tokens_target_q": 0.5330357179710907,
+            "draft_tokens_predicted_q": 0.47633929341100156
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5107142918277532,
+            "draft_tokens_target_q": 0.48303571762517095,
+            "draft_tokens_predicted_q": 0.39017857767508496
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5223214371861624,
+            "draft_tokens_target_q": 0.48526786064862143,
+            "draft_tokens_predicted_q": 0.37276786346254603
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5129464342524963,
+            "draft_tokens_target_q": 0.48080357569935067,
+            "draft_tokens_predicted_q": 0.3803571484251214
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.38080357826714006,
+            "draft_tokens_target_q": 0.46205357561952304,
+            "draft_tokens_predicted_q": 0.26964286232500206
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5241071512323937,
+            "draft_tokens_target_q": 0.5316964318709714,
+            "draft_tokens_predicted_q": 0.4325892917279686
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.3544642911957843,
+            "draft_tokens_target_q": 0.5156250041576901,
+            "draft_tokens_predicted_q": 0.32321429159492254
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.42812500707805157,
+            "draft_tokens_target_q": 0.5200892907035138,
+            "draft_tokens_predicted_q": 0.35937500738405753
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5419642951206437,
+            "draft_tokens_target_q": 0.6116071484450784,
+            "draft_tokens_predicted_q": 0.5004464354632157
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.3825892924464175,
+            "draft_tokens_target_q": 0.5825892913687442,
+            "draft_tokens_predicted_q": 0.39151786347585066
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4263392930318202,
+            "draft_tokens_target_q": 0.6428571485448629,
+            "draft_tokens_predicted_q": 0.47455357893237043
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.45312500721774995,
+            "draft_tokens_target_q": 0.63616071944125,
+            "draft_tokens_predicted_q": 0.46562500587398453
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.34732143401301335,
+            "draft_tokens_target_q": 0.5843750061134675,
+            "draft_tokens_predicted_q": 0.38526786268422647
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.42767857743560206,
+            "draft_tokens_target_q": 0.6191964336737458,
+            "draft_tokens_predicted_q": 0.43839286400803495
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5049107203127018,
+            "draft_tokens_target_q": 0.59151786179947,
+            "draft_tokens_predicted_q": 0.4821428623981774
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.513839293770226,
+            "draft_tokens_target_q": 0.5741071479860693,
+            "draft_tokens_predicted_q": 0.484375007284273
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5142857206187078,
+            "draft_tokens_target_q": 0.6437500061334244,
+            "draft_tokens_predicted_q": 0.4995535790388073
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4575892934974815,
+            "draft_tokens_target_q": 0.6174107201596988,
+            "draft_tokens_predicted_q": 0.43839286507240366
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5526785791319396,
+            "draft_tokens_target_q": 0.5875000054282802,
+            "draft_tokens_predicted_q": 0.4785714357359601
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5758928671545748,
+            "draft_tokens_target_q": 0.6196428626177034,
+            "draft_tokens_predicted_q": 0.5151785798703453
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5669642938633582,
+            "draft_tokens_target_q": 0.5741071482521615,
+            "draft_tokens_predicted_q": 0.47767857841349076
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.572767866742132,
+            "draft_tokens_target_q": 0.6017857191618532,
+            "draft_tokens_predicted_q": 0.500000007284273
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5366071495227516,
+            "draft_tokens_target_q": 0.5553571480392877,
+            "draft_tokens_predicted_q": 0.43750000638621195
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5736607232995864,
+            "draft_tokens_target_q": 0.6084821482322046,
+            "draft_tokens_predicted_q": 0.49419643653423656
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5700892930451248,
+            "draft_tokens_target_q": 0.5785714326692479,
+            "draft_tokens_predicted_q": 0.4736607217762087
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5544642943090626,
+            "draft_tokens_target_q": 0.5642857209313661,
+            "draft_tokens_predicted_q": 0.47098214980880065
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5776785803692681,
+            "draft_tokens_target_q": 0.579017860814929,
+            "draft_tokens_predicted_q": 0.4799107197406037
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5558035795111209,
+            "draft_tokens_target_q": 0.575892861732947,
+            "draft_tokens_predicted_q": 0.46339286361554904
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.584821436587455,
+            "draft_tokens_target_q": 0.5633928622119129,
+            "draft_tokens_predicted_q": 0.4767857209247138
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.563392865671111,
+            "draft_tokens_target_q": 0.5669642902045909,
+            "draft_tokens_predicted_q": 0.46696429214041146
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5772321507600802,
+            "draft_tokens_target_q": 0.5781250038915979,
+            "draft_tokens_predicted_q": 0.4843750071512269
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5504464381374419,
+            "draft_tokens_target_q": 0.5772321475669742,
+            "draft_tokens_predicted_q": 0.47767857974395156
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.501785723292934,
+            "draft_tokens_target_q": 0.5660714326160294,
+            "draft_tokens_predicted_q": 0.42946429211380227
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5571428670414856,
+            "draft_tokens_target_q": 0.5816964331814753,
+            "draft_tokens_predicted_q": 0.46696429383674903
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5165178647065269,
+            "draft_tokens_target_q": 0.549553575859006,
+            "draft_tokens_predicted_q": 0.4254464346782437
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4973214363812336,
+            "draft_tokens_target_q": 0.5419642912623074,
+            "draft_tokens_predicted_q": 0.3982142920140177
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5098214352037758,
+            "draft_tokens_target_q": 0.5616071474006665,
+            "draft_tokens_predicted_q": 0.4352678643273456
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.49955357840683845,
+            "draft_tokens_target_q": 0.572321433939838,
+            "draft_tokens_predicted_q": 0.41919643465163453
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5383928646666131,
+            "draft_tokens_target_q": 0.5660714330151677,
+            "draft_tokens_predicted_q": 0.4455357211908059
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5517857219425163,
+            "draft_tokens_target_q": 0.5580357196075576,
+            "draft_tokens_predicted_q": 0.4504464356494801
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5075892936438322,
+            "draft_tokens_target_q": 0.5321428616464671,
+            "draft_tokens_predicted_q": 0.4232142925195928
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5325892947148532,
+            "draft_tokens_target_q": 0.5553571478397187,
+            "draft_tokens_predicted_q": 0.44776786494600984
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.49419643856318934,
+            "draft_tokens_target_q": 0.5526785759720951,
+            "draft_tokens_predicted_q": 0.4236607217296426
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5254464358690062,
+            "draft_tokens_target_q": 0.5767857193880316,
+            "draft_tokens_predicted_q": 0.4437500065791288
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5276785800233483,
+            "draft_tokens_target_q": 0.5455357194878161,
+            "draft_tokens_predicted_q": 0.4276785786995398
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5165178650391421,
+            "draft_tokens_target_q": 0.548660719966782,
+            "draft_tokens_predicted_q": 0.4321428634492414
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4766581709762769,
+            "draft_tokens_target_q": 1.0,
+            "draft_tokens_predicted_q": 0.4766581709762769
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6485969487539663,
+            "draft_tokens_target_q": 1.0,
+            "draft_tokens_predicted_q": 0.6485969487539663
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5483418456183708,
+            "draft_tokens_target_q": 0.4109693939740561,
+            "draft_tokens_predicted_q": 0.40816327116015005
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5922193971215463,
+            "draft_tokens_target_q": 0.628571437719297,
+            "draft_tokens_predicted_q": 0.5420918443088173
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5252551097536877,
+            "draft_tokens_target_q": 0.3714285773339168,
+            "draft_tokens_predicted_q": 0.3920918430524821
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5826530696976245,
+            "draft_tokens_target_q": 0.3781887814592646,
+            "draft_tokens_predicted_q": 0.3818877607070822
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.49426021109506185,
+            "draft_tokens_target_q": 0.4127551084669421,
+            "draft_tokens_predicted_q": 0.4133928637970619
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4716836805835518,
+            "draft_tokens_target_q": 0.3520408218859562,
+            "draft_tokens_predicted_q": 0.38443878167593964
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:hotpot-last20:2",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        0,
+        362,
+        0,
+        0,
+        362,
+        0,
+        38692,
+        364
+      ],
+      "draft_future_token_ids": [
+        19820,
+        7221,
+        14605,
+        516,
+        364,
+        83516,
+        53656,
+        19021
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.6267219484862111,
+          "draft_tokens_target_q": 0.43354592534442604,
+          "draft_tokens_predicted_q": 0.43950893536651964
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.6026466933045802,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7357142975420824,
+            "draft_tokens_target_q": 0.6022321552237762,
+            "draft_tokens_predicted_q": 0.6111607250225332
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8580357309963021,
+            "draft_tokens_target_q": 0.6191964390288506,
+            "draft_tokens_predicted_q": 0.6183035793780748
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8084821569334183,
+            "draft_tokens_target_q": 0.57812500721775,
+            "draft_tokens_predicted_q": 0.577232149728973
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8174107288941741,
+            "draft_tokens_target_q": 0.548214293617223,
+            "draft_tokens_predicted_q": 0.5705357225877898
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6687500110960433,
+            "draft_tokens_target_q": 0.4491071505139449,
+            "draft_tokens_predicted_q": 0.45714286458678544
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7107142970032457,
+            "draft_tokens_target_q": 0.39955357698324534,
+            "draft_tokens_predicted_q": 0.412500006146729
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7415178671279656,
+            "draft_tokens_target_q": 0.4964285790255027,
+            "draft_tokens_predicted_q": 0.521875007809805
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6495535815733352,
+            "draft_tokens_target_q": 0.3870535776950419,
+            "draft_tokens_predicted_q": 0.4205357214502458
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6285714361084891,
+            "draft_tokens_target_q": 0.3803571500549359,
+            "draft_tokens_predicted_q": 0.40669643466493915
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5718750076900635,
+            "draft_tokens_target_q": 0.33392857730255593,
+            "draft_tokens_predicted_q": 0.3508928634026753
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6866071532879557,
+            "draft_tokens_target_q": 0.4629464362348829,
+            "draft_tokens_predicted_q": 0.5022321502412004
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6223214365475412,
+            "draft_tokens_target_q": 0.38660714911696104,
+            "draft_tokens_predicted_q": 0.4102678634891553
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5977678659172463,
+            "draft_tokens_target_q": 0.36607143382674884,
+            "draft_tokens_predicted_q": 0.3687500059604645
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6245535813338522,
+            "draft_tokens_target_q": 0.4290178633694138,
+            "draft_tokens_predicted_q": 0.3955357205122709
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.447767865145579,
+            "draft_tokens_target_q": 0.2924107201064804,
+            "draft_tokens_predicted_q": 0.2642857189888933
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.617410722986928,
+            "draft_tokens_target_q": 0.4531250086812569,
+            "draft_tokens_predicted_q": 0.4325892922268914
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.42857143662071656,
+            "draft_tokens_target_q": 0.3861607193414654,
+            "draft_tokens_predicted_q": 0.29776786151342094
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5361607228738389,
+            "draft_tokens_target_q": 0.4651785772959037,
+            "draft_tokens_predicted_q": 0.4008928645136101
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6129464352769511,
+            "draft_tokens_target_q": 0.5504464364411044,
+            "draft_tokens_predicted_q": 0.49464286494600984
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.45669643567608936,
+            "draft_tokens_target_q": 0.3861607210045414,
+            "draft_tokens_predicted_q": 0.34732143421258244
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6223214401730469,
+            "draft_tokens_target_q": 0.47589286393485963,
+            "draft_tokens_predicted_q": 0.5053571500216744
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5303571518577103,
+            "draft_tokens_target_q": 0.4232142934841769,
+            "draft_tokens_predicted_q": 0.4535714365608458
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5022321517379689,
+            "draft_tokens_target_q": 0.28794643389327185,
+            "draft_tokens_predicted_q": 0.3227678620855191
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5544642932446939,
+            "draft_tokens_target_q": 0.3687500059604645,
+            "draft_tokens_predicted_q": 0.428125006146729
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.624553581699729,
+            "draft_tokens_target_q": 0.39955357728259905,
+            "draft_tokens_predicted_q": 0.441071435975443
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6870535815334213,
+            "draft_tokens_target_q": 0.46964286434065017,
+            "draft_tokens_predicted_q": 0.5053571500549359
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6013392929453403,
+            "draft_tokens_target_q": 0.3513392913487873,
+            "draft_tokens_predicted_q": 0.37321429094299674
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6044642937901828,
+            "draft_tokens_target_q": 0.3906250073175345,
+            "draft_tokens_predicted_q": 0.4156250070913562
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6321428665625197,
+            "draft_tokens_target_q": 0.42142857800770017,
+            "draft_tokens_predicted_q": 0.4156250059604645
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6281250107567757,
+            "draft_tokens_target_q": 0.45758929409618887,
+            "draft_tokens_predicted_q": 0.4763392929453403
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6142857241377767,
+            "draft_tokens_target_q": 0.43883929338439237,
+            "draft_tokens_predicted_q": 0.4330357213371566
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.635714295586305,
+            "draft_tokens_target_q": 0.4504464355496956,
+            "draft_tokens_predicted_q": 0.47053572103115066
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6276785801497421,
+            "draft_tokens_target_q": 0.4107142931648663,
+            "draft_tokens_predicted_q": 0.43571429377022597
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6566964380576142,
+            "draft_tokens_target_q": 0.48392857967077624,
+            "draft_tokens_predicted_q": 0.4852678642076041
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6330357252487114,
+            "draft_tokens_target_q": 0.4526785789722843,
+            "draft_tokens_predicted_q": 0.46473214954936076
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5933035793714225,
+            "draft_tokens_target_q": 0.41919643538338797,
+            "draft_tokens_predicted_q": 0.440625007197793
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6428571522701532,
+            "draft_tokens_target_q": 0.4437500073441437,
+            "draft_tokens_predicted_q": 0.465625007437276
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6370535804890096,
+            "draft_tokens_target_q": 0.46875000598707367,
+            "draft_tokens_predicted_q": 0.4566964358756585
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6638392963712769,
+            "draft_tokens_target_q": 0.4607142915483564,
+            "draft_tokens_predicted_q": 0.4776785779478295
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6263392941161458,
+            "draft_tokens_target_q": 0.43660714926331173,
+            "draft_tokens_predicted_q": 0.4450892916814025
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5973214389024568,
+            "draft_tokens_target_q": 0.44687500685852555,
+            "draft_tokens_predicted_q": 0.43392857862636447
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6236607254416283,
+            "draft_tokens_target_q": 0.4066964353301695,
+            "draft_tokens_predicted_q": 0.4223214349642928
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6044642938899675,
+            "draft_tokens_target_q": 0.41428572102449834,
+            "draft_tokens_predicted_q": 0.4183035783935338
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6370535813870707,
+            "draft_tokens_target_q": 0.4209821498620191,
+            "draft_tokens_predicted_q": 0.43883929268590044
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6263392965442368,
+            "draft_tokens_target_q": 0.44910714951609926,
+            "draft_tokens_predicted_q": 0.4375000065525195
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5669642939964044,
+            "draft_tokens_target_q": 0.34776786408786264,
+            "draft_tokens_predicted_q": 0.369642862717488
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5982142943290195,
+            "draft_tokens_target_q": 0.4062500064859965,
+            "draft_tokens_predicted_q": 0.4000000061600336
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6093750087810414,
+            "draft_tokens_target_q": 0.3888392923732421,
+            "draft_tokens_predicted_q": 0.4040178644271301
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6343750102512006,
+            "draft_tokens_target_q": 0.444642864533567,
+            "draft_tokens_predicted_q": 0.45000000700487625
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6562500100117177,
+            "draft_tokens_target_q": 0.4575892923665898,
+            "draft_tokens_predicted_q": 0.45625000869456145
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6357142954199974,
+            "draft_tokens_target_q": 0.45446429321808474,
+            "draft_tokens_predicted_q": 0.45446429188762394
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6357142958191356,
+            "draft_tokens_target_q": 0.4343750063063843,
+            "draft_tokens_predicted_q": 0.443750007743282
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.609821438556537,
+            "draft_tokens_target_q": 0.4151785780143525,
+            "draft_tokens_predicted_q": 0.40223214885086883
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6392857252753207,
+            "draft_tokens_target_q": 0.4299107209579753,
+            "draft_tokens_predicted_q": 0.4330357208049723
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6263392942491919,
+            "draft_tokens_target_q": 0.42589286445373936,
+            "draft_tokens_predicted_q": 0.4276785772027714
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6562500116415322,
+            "draft_tokens_target_q": 0.4517857218826456,
+            "draft_tokens_predicted_q": 0.4473214346050684
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.645408173367305,
+            "draft_tokens_target_q": 0.5364796001825254,
+            "draft_tokens_predicted_q": 0.5241071509425433
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6358418466751369,
+            "draft_tokens_target_q": 0.5016581713868191,
+            "draft_tokens_predicted_q": 0.47729592582172886
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5848214379606806,
+            "draft_tokens_target_q": 0.4553571509349407,
+            "draft_tokens_predicted_q": 0.4359693939759567
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5827806208244696,
+            "draft_tokens_target_q": 0.4109693948958753,
+            "draft_tokens_predicted_q": 0.44247449675993045
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6266581725652273,
+            "draft_tokens_target_q": 0.4335459251507965,
+            "draft_tokens_predicted_q": 0.48290817009057013
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5711734773477122,
+            "draft_tokens_target_q": 0.41670918992093325,
+            "draft_tokens_predicted_q": 0.41772959846052893
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6489796025146332,
+            "draft_tokens_target_q": 0.36262755652851597,
+            "draft_tokens_predicted_q": 0.34005102634011786
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7181122566345243,
+            "draft_tokens_target_q": 0.3510204137550021,
+            "draft_tokens_predicted_q": 0.3955357205407808
+          }
+        }
+      }
+    },
+    {
+      "name": "valid:hotpot-last20:3",
+      "prompt_tokens": 512,
+      "future_tokens": 8,
+      "target_future_token_ids": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1752,
+        0,
+        0
+      ],
+      "draft_future_token_ids": [
+        369,
+        51383,
+        374,
+        537,
+        264,
+        58055,
+        315,
+        41492
+      ],
+      "same_token_at_position": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "first_token_divergence": 0,
+      "quality": {
+        "query_cases_per_arm": 6272,
+        "mean_true_top10_recall": {
+          "target_tokens_target_q": 1.0,
+          "target_tokens_predicted_q": 0.5861288354463629,
+          "draft_tokens_target_q": 0.4157366138201074,
+          "draft_tokens_predicted_q": 0.4851722012129042
+        },
+        "draft_branch_predicted_q_vs_its_own_target_q": 0.5813456719981184,
+        "by_layer": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7334821533212172,
+            "draft_tokens_target_q": 0.5482142957792219,
+            "draft_tokens_predicted_q": 0.5928571518577103
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.8370535881923777,
+            "draft_tokens_target_q": 0.6633928667288274,
+            "draft_tokens_predicted_q": 0.670535723379414
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7571428705539022,
+            "draft_tokens_target_q": 0.5450892945685025,
+            "draft_tokens_predicted_q": 0.5513392940629274
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7383928712723511,
+            "draft_tokens_target_q": 0.5250000067587409,
+            "draft_tokens_predicted_q": 0.5241071496025792
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6446428657509387,
+            "draft_tokens_target_q": 0.4299107193281608,
+            "draft_tokens_predicted_q": 0.4558035776883896
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6919642971229872,
+            "draft_tokens_target_q": 0.422321435296908,
+            "draft_tokens_predicted_q": 0.4718750075636698
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7446428651123175,
+            "draft_tokens_target_q": 0.5602678659904216,
+            "draft_tokens_predicted_q": 0.6062500083685985
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6750000089273921,
+            "draft_tokens_target_q": 0.47500000787632807,
+            "draft_tokens_predicted_q": 0.5232142938101398
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.7044642952470375,
+            "draft_tokens_target_q": 0.4803571501148066,
+            "draft_tokens_predicted_q": 0.5732142937901828
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5772321508598647,
+            "draft_tokens_target_q": 0.3906250057875046,
+            "draft_tokens_predicted_q": 0.4781250061932951
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6928571533145649,
+            "draft_tokens_target_q": 0.5093750071578792,
+            "draft_tokens_predicted_q": 0.6160714370198548
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6022321523632854,
+            "draft_tokens_target_q": 0.4156250074572329,
+            "draft_tokens_predicted_q": 0.5316964370930302
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5500000089606536,
+            "draft_tokens_target_q": 0.29866071983373593,
+            "draft_tokens_predicted_q": 0.45848215101952
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5995535792317241,
+            "draft_tokens_target_q": 0.3330357194479023,
+            "draft_tokens_predicted_q": 0.4839285788059767
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4250000063329935,
+            "draft_tokens_target_q": 0.23883929063699075,
+            "draft_tokens_predicted_q": 0.3357142912157412
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6361607247630933,
+            "draft_tokens_target_q": 0.43169643690011333,
+            "draft_tokens_predicted_q": 0.5428571508132986
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.42053572251461446,
+            "draft_tokens_target_q": 0.2705357194146408,
+            "draft_tokens_predicted_q": 0.35580357779482646
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5187500063329935,
+            "draft_tokens_target_q": 0.3022321482920753,
+            "draft_tokens_predicted_q": 0.41339286343593684
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6156250077100205,
+            "draft_tokens_target_q": 0.41250000574759077,
+            "draft_tokens_predicted_q": 0.5580357215699873
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4468750070913562,
+            "draft_tokens_target_q": 0.3642857201131327,
+            "draft_tokens_predicted_q": 0.39598214919013636
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5187500100250223,
+            "draft_tokens_target_q": 0.3714285772626421,
+            "draft_tokens_predicted_q": 0.4602678658307663
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4924107220556055,
+            "draft_tokens_target_q": 0.3790178626243557,
+            "draft_tokens_predicted_q": 0.45000000803598333
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.3348214340263179,
+            "draft_tokens_target_q": 0.29107143443876077,
+            "draft_tokens_predicted_q": 0.3187500057143292
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.47142857742229743,
+            "draft_tokens_target_q": 0.39642857810083243,
+            "draft_tokens_predicted_q": 0.461607150866517
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5008928643739117,
+            "draft_tokens_target_q": 0.36696429178118706,
+            "draft_tokens_predicted_q": 0.43303571990691125
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5616071502278958,
+            "draft_tokens_target_q": 0.45089286362885367,
+            "draft_tokens_predicted_q": 0.5102678629835802
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.4531250071512269,
+            "draft_tokens_target_q": 0.35803572118415367,
+            "draft_tokens_predicted_q": 0.3816964346250253
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.46696429224019603,
+            "draft_tokens_target_q": 0.4098214347115053,
+            "draft_tokens_predicted_q": 0.4299107217229903
+          }
+        },
+        "by_head": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6031250085216016,
+            "draft_tokens_target_q": 0.4058035781740078,
+            "draft_tokens_predicted_q": 0.4741071490570903
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6183035812739816,
+            "draft_tokens_target_q": 0.4366071494961424,
+            "draft_tokens_predicted_q": 0.5156250074173191
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5950892941161458,
+            "draft_tokens_target_q": 0.42366072232834995,
+            "draft_tokens_predicted_q": 0.489732150254505
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6174107238517276,
+            "draft_tokens_target_q": 0.4834821500283267,
+            "draft_tokens_predicted_q": 0.553125007809805
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5941964376252145,
+            "draft_tokens_target_q": 0.39776786430073635,
+            "draft_tokens_predicted_q": 0.4758928649327053
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6267857233261955,
+            "draft_tokens_target_q": 0.44910715064699097,
+            "draft_tokens_predicted_q": 0.5133928639614689
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6035714391951582,
+            "draft_tokens_target_q": 0.42410714904378566,
+            "draft_tokens_predicted_q": 0.489285722308393
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.598214294362281,
+            "draft_tokens_target_q": 0.38839286502583753,
+            "draft_tokens_predicted_q": 0.4888392938633582
+          },
+          "8": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6022321521637163,
+            "draft_tokens_target_q": 0.42901786376855205,
+            "draft_tokens_predicted_q": 0.5089285791785058
+          },
+          "9": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5928571523233716,
+            "draft_tokens_target_q": 0.4526785778746541,
+            "draft_tokens_predicted_q": 0.5138392926060728
+          },
+          "10": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6290178670148764,
+            "draft_tokens_target_q": 0.44955357792787254,
+            "draft_tokens_predicted_q": 0.5250000081557248
+          },
+          "11": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5642857219292117,
+            "draft_tokens_target_q": 0.4276785776684327,
+            "draft_tokens_predicted_q": 0.4848214350308159
+          },
+          "12": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.610267867966156,
+            "draft_tokens_target_q": 0.445535722022344,
+            "draft_tokens_predicted_q": 0.5250000083552939
+          },
+          "13": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5589285779278725,
+            "draft_tokens_target_q": 0.3991071487377797,
+            "draft_tokens_predicted_q": 0.4535714341660163
+          },
+          "14": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5464285796707762,
+            "draft_tokens_target_q": 0.39866072072514463,
+            "draft_tokens_predicted_q": 0.4468750058274184
+          },
+          "15": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5486607231931495,
+            "draft_tokens_target_q": 0.39107143313490916,
+            "draft_tokens_predicted_q": 0.43839286281062023
+          },
+          "16": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5839285798969546,
+            "draft_tokens_target_q": 0.4379464357625693,
+            "draft_tokens_predicted_q": 0.500892864074558
+          },
+          "17": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5348214365741504,
+            "draft_tokens_target_q": 0.3321428622252175,
+            "draft_tokens_predicted_q": 0.3986607207584062
+          },
+          "18": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5660714361750122,
+            "draft_tokens_target_q": 0.40133929116252276,
+            "draft_tokens_predicted_q": 0.45446429271916194
+          },
+          "19": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5379464375187776,
+            "draft_tokens_target_q": 0.3937500066988702,
+            "draft_tokens_predicted_q": 0.43660714919678867
+          },
+          "20": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6223214375786483,
+            "draft_tokens_target_q": 0.4468750069583101,
+            "draft_tokens_predicted_q": 0.5209821514851812
+          },
+          "21": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6165178665957812,
+            "draft_tokens_target_q": 0.45580357825383544,
+            "draft_tokens_predicted_q": 0.5227678649327052
+          },
+          "22": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5852678645668286,
+            "draft_tokens_target_q": 0.38258929264598657,
+            "draft_tokens_predicted_q": 0.49107143728594693
+          },
+          "23": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5888392964511046,
+            "draft_tokens_target_q": 0.4209821502278958,
+            "draft_tokens_predicted_q": 0.5062500083087278
+          },
+          "24": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5290178645269147,
+            "draft_tokens_target_q": 0.3388392926592912,
+            "draft_tokens_predicted_q": 0.4174107209712799
+          },
+          "25": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5549107232862818,
+            "draft_tokens_target_q": 0.41383929061703384,
+            "draft_tokens_predicted_q": 0.47589286469987463
+          },
+          "26": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.59375000874778,
+            "draft_tokens_target_q": 0.3892857210843691,
+            "draft_tokens_predicted_q": 0.46517857959094855
+          },
+          "27": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5888392961184893,
+            "draft_tokens_target_q": 0.4250000077632389,
+            "draft_tokens_predicted_q": 0.49821429420262575
+          }
+        },
+        "by_future_position": {
+          "0": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5739796006747958,
+            "draft_tokens_target_q": 0.4570153135502217,
+            "draft_tokens_predicted_q": 0.5392857218085199
+          },
+          "1": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6265306216189448,
+            "draft_tokens_target_q": 0.42474490532423465,
+            "draft_tokens_predicted_q": 0.4940051095826285
+          },
+          "2": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6192602126726082,
+            "draft_tokens_target_q": 0.4559949051151622,
+            "draft_tokens_predicted_q": 0.5063775587370809
+          },
+          "3": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5980867442617915,
+            "draft_tokens_target_q": 0.46619898667178894,
+            "draft_tokens_predicted_q": 0.5350765386710361
+          },
+          "4": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.6017857237376881,
+            "draft_tokens_target_q": 0.4036989849516932,
+            "draft_tokens_predicted_q": 0.49438776281111096
+          },
+          "5": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5119898038992317,
+            "draft_tokens_target_q": 0.3802295985574625,
+            "draft_tokens_predicted_q": 0.4434949047578385
+          },
+          "6": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.5850765398817555,
+            "draft_tokens_target_q": 0.37882653677037786,
+            "draft_tokens_predicted_q": 0.4635204150892642
+          },
+          "7": {
+            "target_tokens_target_q": 1.0,
+            "target_tokens_predicted_q": 0.572321436824087,
+            "draft_tokens_target_q": 0.35918367961991804,
+            "draft_tokens_predicted_q": 0.40522959824575455
+          }
+        }
+      }
+    }
+  ],
+  "note": "Offline exact Prompt-K retrieval; target-token/target-Q branch is the reference. Target Q on Draft tokens is recomputed by the real target model; no native CAGRA, Decode serving, or generated-output quality claim."
+}

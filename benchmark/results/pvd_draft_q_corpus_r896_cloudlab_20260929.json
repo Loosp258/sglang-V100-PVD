@@ -1,0 +1,317 @@
+{
+  "new_train_windows": 64,
+  "old_train_windows": 16,
+  "train_positions": 17920,
+  "natural_valid_windows": 4,
+  "steps": 2000,
+  "rank": 896,
+  "capture_seconds": 0.0,
+  "train_seconds": 34.91644333302975,
+  "snapshots": [
+    {
+      "step": 0,
+      "quality": {
+        "old": {
+          "mean_recall_at_10": 0.6321056644544967,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.6714813089865423,
+          "records": [
+            {
+              "name": "valid:AGENTS.md:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.6410714389794335,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6590285989285414
+            },
+            {
+              "name": "valid:python/sglang/srt/disaggregation/pvd/runtime.py:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.7038265416370134,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.7078775342895972
+            },
+            {
+              "name": "valid:online-case40",
+              "positions": 15,
+              "mean_recall_at_10": 0.6041666757093653,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6783852290619896
+            },
+            {
+              "name": "valid:random",
+              "positions": 7,
+              "mean_recall_at_10": 0.6112882743437528,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.6327436792941014
+            }
+          ]
+        },
+        "natural": {
+          "mean_recall_at_10": 0.631281897594335,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.6937904079096435,
+          "records": [
+            {
+              "name": "valid:hotpot-last20:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.6190688873365597,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7083593217724655
+            },
+            {
+              "name": "valid:hotpot-last20:1",
+              "positions": 7,
+              "mean_recall_at_10": 0.6686862346203047,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7042486643720399
+            },
+            {
+              "name": "valid:hotpot-last20:2",
+              "positions": 7,
+              "mean_recall_at_10": 0.6329719489155223,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6945114015739373
+            },
+            {
+              "name": "valid:hotpot-last20:3",
+              "positions": 7,
+              "mean_recall_at_10": 0.6044005195049531,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6680422439201312
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": 500,
+      "loss": 0.11609283834695816,
+      "quality": {
+        "old": {
+          "mean_recall_at_10": 0.642832351179557,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.6756406312877314,
+          "records": [
+            {
+              "name": "valid:AGENTS.md:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.653698990211765,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6645883432338822
+            },
+            {
+              "name": "valid:python/sglang/srt/disaggregation/pvd/runtime.py:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.713966847853545,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.7092003199148315
+            },
+            {
+              "name": "valid:online-case40",
+              "positions": 15,
+              "mean_recall_at_10": 0.6154761996718922,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6834150722075373
+            },
+            {
+              "name": "valid:random",
+              "positions": 7,
+              "mean_recall_at_10": 0.6194515401326424,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.6364737144577536
+            }
+          ]
+        },
+        "natural": {
+          "mean_recall_at_10": 0.6453125100708756,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.6997402790116815,
+          "records": [
+            {
+              "name": "valid:hotpot-last20:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.6341199080165172,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7132437610835226
+            },
+            {
+              "name": "valid:hotpot-last20:1",
+              "positions": 7,
+              "mean_recall_at_10": 0.6883928678378615,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7122711966132593
+            },
+            {
+              "name": "valid:hotpot-last20:2",
+              "positions": 7,
+              "mean_recall_at_10": 0.6473852142558566,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7006854878742086
+            },
+            {
+              "name": "valid:hotpot-last20:3",
+              "positions": 7,
+              "mean_recall_at_10": 0.6113520501732674,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6727606704757354
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": 1000,
+      "loss": 0.10586658865213394,
+      "quality": {
+        "old": {
+          "mean_recall_at_10": 0.6475322521975382,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.6780156382572329,
+          "records": [
+            {
+              "name": "valid:AGENTS.md:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.6615433780172345,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6683769456238001
+            },
+            {
+              "name": "valid:python/sglang/srt/disaggregation/pvd/runtime.py:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.7181760321646853,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.7108213153373146
+            },
+            {
+              "name": "valid:online-case40",
+              "positions": 15,
+              "mean_recall_at_10": 0.6190773903192687,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6853995691374057
+            },
+            {
+              "name": "valid:random",
+              "positions": 7,
+              "mean_recall_at_10": 0.6238520504355582,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.6390259447816418
+            }
+          ]
+        },
+        "natural": {
+          "mean_recall_at_10": 0.6542729694415264,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.7028981199338181,
+          "records": [
+            {
+              "name": "valid:hotpot-last20:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.638775520278521,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7146204461762177
+            },
+            {
+              "name": "valid:hotpot-last20:1",
+              "positions": 7,
+              "mean_recall_at_10": 0.7028699091027434,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7168803650693378
+            },
+            {
+              "name": "valid:hotpot-last20:2",
+              "positions": 7,
+              "mean_recall_at_10": 0.6568877653798506,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7035200305500457
+            },
+            {
+              "name": "valid:hotpot-last20:3",
+              "positions": 7,
+              "mean_recall_at_10": 0.6185586830049905,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6765716379396712
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": 2000,
+      "loss": 0.09396632015705109,
+      "quality": {
+        "old": {
+          "mean_recall_at_10": 0.6515873119166667,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.6792472946576636,
+          "records": [
+            {
+              "name": "valid:AGENTS.md:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.6735331746416965,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6713684453947911
+            },
+            {
+              "name": "valid:python/sglang/srt/disaggregation/pvd/runtime.py:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.7270408282816714,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.712969373887861
+            },
+            {
+              "name": "valid:online-case40",
+              "positions": 15,
+              "mean_recall_at_10": 0.6159523904922285,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6848444535848796
+            },
+            {
+              "name": "valid:random",
+              "positions": 7,
+              "mean_recall_at_10": 0.6305484787361431,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.6414101527034476
+            }
+          ]
+        },
+        "natural": {
+          "mean_recall_at_10": 0.6634088114678518,
+          "min_query_recall_at_10": 0.0,
+          "mean_attention_mass_at_10": 0.7060890001108902,
+          "records": [
+            {
+              "name": "valid:hotpot-last20:0",
+              "positions": 7,
+              "mean_recall_at_10": 0.6451530713844589,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7175823184464077
+            },
+            {
+              "name": "valid:hotpot-last20:1",
+              "positions": 7,
+              "mean_recall_at_10": 0.7089285831565836,
+              "min_query_recall_at_10": 0.10000000149011612,
+              "mean_attention_mass_at_10": 0.7184905476098385
+            },
+            {
+              "name": "valid:hotpot-last20:2",
+              "positions": 7,
+              "mean_recall_at_10": 0.6632015410221505,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.7054381305815138
+            },
+            {
+              "name": "valid:hotpot-last20:3",
+              "positions": 7,
+              "mean_recall_at_10": 0.6363520503082142,
+              "min_query_recall_at_10": 0.0,
+              "mean_attention_mass_at_10": 0.6828450038058004
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "gpu_peak_mib": 17808,
+  "note": "Frozen six-block student, diverse readout fine-tune only."
+}
