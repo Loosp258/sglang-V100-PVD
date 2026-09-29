@@ -1,0 +1,395 @@
+{
+  "gpu": "Tesla V100S-PCIE-32GB",
+  "records": 8,
+  "queries_per_layer_kv_head": 14,
+  "native_top_k_requested": 16,
+  "native_itopk_size": 256,
+  "graph_degree": 16,
+  "intermediate_degree": 32,
+  "builder": "cuvs CAGRA IVF-PQ, separately centered K per layer/KV head",
+  "overall_policies": {
+    "uniform4": {
+      "mean_true_top4_coverage_student_branch": 0.6470025510204082,
+      "mean_true_top4_coverage_target_branch": 0.5332429846938775,
+      "mean_fresh_kv_mib_per_request": 1.01507568359375,
+      "fraction_groups_over_128_cap": 0
+    },
+    "uniform8": {
+      "mean_true_top4_coverage_student_branch": 0.8085140306122449,
+      "mean_true_top4_coverage_target_branch": 0.682258450255102,
+      "mean_fresh_kv_mib_per_request": 1.90692138671875,
+      "fraction_groups_over_128_cap": 0
+    },
+    "adaptive": {
+      "mean_true_top4_coverage_student_branch": 0.7807118941326531,
+      "mean_true_top4_coverage_target_branch": 0.6568877551020409,
+      "mean_fresh_kv_mib_per_request": 2.05816650390625,
+      "fraction_groups_over_128_cap": 0
+    },
+    "uniform16": {
+      "mean_true_top4_coverage_student_branch": 0.8962651466836735,
+      "mean_true_top4_coverage_target_branch": 0.7895806760204082,
+      "mean_fresh_kv_mib_per_request": 3.45452880859375,
+      "fraction_groups_over_128_cap": 0
+    }
+  },
+  "native_true_q_student_branch_top4_recall": 0.9996213329081632,
+  "low_margin_fallback_requests": 2,
+  "low_margin_fallback_fraction": 0.25,
+  "adaptive_with_request_level_true_q_fallback_branch_recall": 0.8347616390306123,
+  "per_record": [
+    {
+      "name": "valid:AGENTS.md:0",
+      "prompt_tokens": 512,
+      "low_margin_fallback": false,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.4432397959183674,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6291454081632653,
+          "mean_true_top4_coverage_target_branch": 0.43447066326530615,
+          "mean_union_tokens_per_layer_kv_head": 23.160714285714285,
+          "max_union_tokens_per_layer_kv_head": 36,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.2666015625
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.7895408163265306,
+          "mean_true_top4_coverage_target_branch": 0.5658482142857143,
+          "mean_union_tokens_per_layer_kv_head": 42.94642857142857,
+          "max_union_tokens_per_layer_kv_head": 64,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.3486328125
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.7611607142857143,
+          "mean_true_top4_coverage_target_branch": 0.5435267857142857,
+          "mean_union_tokens_per_layer_kv_head": 46.526785714285715,
+          "max_union_tokens_per_layer_kv_head": 69,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.54443359375
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.8630420918367346,
+          "mean_true_top4_coverage_target_branch": 0.6785714285714286,
+          "mean_union_tokens_per_layer_kv_head": 76.52678571428571,
+          "max_union_tokens_per_layer_kv_head": 115,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 4.18505859375
+        }
+      },
+      "native_build_seconds": 21.381415589887183,
+      "native_pred_search_ms_median_per_graph": 1.7171950021293014,
+      "native_true_search_ms_median_per_graph": 1.2605109950527549
+    },
+    {
+      "name": "valid:python/sglang/srt/disaggregation/pvd/runtime.py:0",
+      "prompt_tokens": 512,
+      "low_margin_fallback": false,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.6229272959183674,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6691645408163265,
+          "mean_true_top4_coverage_target_branch": 0.6420599489795918,
+          "mean_union_tokens_per_layer_kv_head": 15.696428571428571,
+          "max_union_tokens_per_layer_kv_head": 30,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 0.8583984375
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.8330676020408163,
+          "mean_true_top4_coverage_target_branch": 0.8070790816326531,
+          "mean_union_tokens_per_layer_kv_head": 29.526785714285715,
+          "max_union_tokens_per_layer_kv_head": 50,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.61474609375
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.8046875,
+          "mean_true_top4_coverage_target_branch": 0.779655612244898,
+          "mean_union_tokens_per_layer_kv_head": 32.142857142857146,
+          "max_union_tokens_per_layer_kv_head": 51,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.7578125
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.9213966836734694,
+          "mean_true_top4_coverage_target_branch": 0.9048150510204082,
+          "mean_union_tokens_per_layer_kv_head": 53.089285714285715,
+          "max_union_tokens_per_layer_kv_head": 92,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.9033203125
+        }
+      },
+      "native_build_seconds": 21.482473983836826,
+      "native_pred_search_ms_median_per_graph": 1.7735465371515602,
+      "native_true_search_ms_median_per_graph": 1.3351209636311978
+    },
+    {
+      "name": "valid:online-case40",
+      "prompt_tokens": 1024,
+      "low_margin_fallback": false,
+      "native_true_q_student_branch_top4_recall": 0.9969706632653061,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.4872448979591837,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6691645408163265,
+          "mean_true_top4_coverage_target_branch": 0.5133928571428571,
+          "mean_union_tokens_per_layer_kv_head": 15.508928571428571,
+          "max_union_tokens_per_layer_kv_head": 32,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 0.84814453125
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.8360969387755102,
+          "mean_true_top4_coverage_target_branch": 0.6811224489795918,
+          "mean_union_tokens_per_layer_kv_head": 29.017857142857142,
+          "max_union_tokens_per_layer_kv_head": 51,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.5869140625
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.8053252551020408,
+          "mean_true_top4_coverage_target_branch": 0.6536989795918368,
+          "mean_union_tokens_per_layer_kv_head": 32.044642857142854,
+          "max_union_tokens_per_layer_kv_head": 60,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.75244140625
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.9285714285714286,
+          "mean_true_top4_coverage_target_branch": 0.8155293367346939,
+          "mean_union_tokens_per_layer_kv_head": 53.392857142857146,
+          "max_union_tokens_per_layer_kv_head": 88,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.919921875
+        }
+      },
+      "native_build_seconds": 21.95094455720391,
+      "native_pred_search_ms_median_per_graph": 1.7382900114171207,
+      "native_true_search_ms_median_per_graph": 1.3341045414563268
+    },
+    {
+      "name": "valid:random",
+      "prompt_tokens": 512,
+      "low_margin_fallback": false,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.6664540816326531,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6619897959183674,
+          "mean_true_top4_coverage_target_branch": 0.6157525510204082,
+          "mean_union_tokens_per_layer_kv_head": 17.044642857142858,
+          "max_union_tokens_per_layer_kv_head": 30,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 0.93212890625
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.821906887755102,
+          "mean_true_top4_coverage_target_branch": 0.7898596938775511,
+          "mean_union_tokens_per_layer_kv_head": 33.214285714285715,
+          "max_union_tokens_per_layer_kv_head": 56,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.81640625
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.7944834183673469,
+          "mean_true_top4_coverage_target_branch": 0.7582908163265306,
+          "mean_union_tokens_per_layer_kv_head": 35.36607142857143,
+          "max_union_tokens_per_layer_kv_head": 55,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.93408203125
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.8998724489795918,
+          "mean_true_top4_coverage_target_branch": 0.8909438775510204,
+          "mean_union_tokens_per_layer_kv_head": 60.99107142857143,
+          "max_union_tokens_per_layer_kv_head": 108,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 3.33544921875
+        }
+      },
+      "native_build_seconds": 22.66860585316317,
+      "native_pred_search_ms_median_per_graph": 1.8103405309375376,
+      "native_true_search_ms_median_per_graph": 1.3136010093148798
+    },
+    {
+      "name": "valid:hotpot-last20:0",
+      "prompt_tokens": 512,
+      "low_margin_fallback": true,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.7115752551020408,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6519451530612245,
+          "mean_true_top4_coverage_target_branch": 0.6981823979591837,
+          "mean_union_tokens_per_layer_kv_head": 17.330357142857142,
+          "max_union_tokens_per_layer_kv_head": 29,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 0.94775390625
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.8215880102040817,
+          "mean_true_top4_coverage_target_branch": 0.8678252551020408,
+          "mean_union_tokens_per_layer_kv_head": 31.901785714285715,
+          "max_union_tokens_per_layer_kv_head": 48,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.74462890625
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.7932079081632654,
+          "mean_true_top4_coverage_target_branch": 0.8352997448979592,
+          "mean_union_tokens_per_layer_kv_head": 34.205357142857146,
+          "max_union_tokens_per_layer_kv_head": 49,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.87060546875
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.9139030612244898,
+          "mean_true_top4_coverage_target_branch": 0.9480229591836735,
+          "mean_union_tokens_per_layer_kv_head": 57.339285714285715,
+          "max_union_tokens_per_layer_kv_head": 82,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 3.1357421875
+        }
+      },
+      "native_build_seconds": 21.09972089296207,
+      "native_pred_search_ms_median_per_graph": 1.8676079926081002,
+      "native_true_search_ms_median_per_graph": 1.386092510074377
+    },
+    {
+      "name": "valid:hotpot-last20:1",
+      "prompt_tokens": 512,
+      "low_margin_fallback": false,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.422672193877551,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6112882653061225,
+          "mean_true_top4_coverage_target_branch": 0.46269132653061223,
+          "mean_union_tokens_per_layer_kv_head": 17.258928571428573,
+          "max_union_tokens_per_layer_kv_head": 31,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 0.94384765625
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.7622767857142857,
+          "mean_true_top4_coverage_target_branch": 0.6015625,
+          "mean_union_tokens_per_layer_kv_head": 32.526785714285715,
+          "max_union_tokens_per_layer_kv_head": 54,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.77880859375
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.7420280612244898,
+          "mean_true_top4_coverage_target_branch": 0.5817920918367347,
+          "mean_union_tokens_per_layer_kv_head": 34.857142857142854,
+          "max_union_tokens_per_layer_kv_head": 57,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.90625
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.8614477040816326,
+          "mean_true_top4_coverage_target_branch": 0.7401147959183674,
+          "mean_union_tokens_per_layer_kv_head": 59.982142857142854,
+          "max_union_tokens_per_layer_kv_head": 90,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 3.2802734375
+        }
+      },
+      "native_build_seconds": 22.255395122920163,
+      "native_pred_search_ms_median_per_graph": 1.8360090034548193,
+      "native_true_search_ms_median_per_graph": 1.3663450081367046
+    },
+    {
+      "name": "valid:hotpot-last20:2",
+      "prompt_tokens": 512,
+      "low_margin_fallback": true,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.36192602040816324,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.639030612244898,
+          "mean_true_top4_coverage_target_branch": 0.39779974489795916,
+          "mean_union_tokens_per_layer_kv_head": 22.928571428571427,
+          "max_union_tokens_per_layer_kv_head": 35,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.25390625
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.8078762755102041,
+          "mean_true_top4_coverage_target_branch": 0.49888392857142855,
+          "mean_union_tokens_per_layer_kv_head": 43.30357142857143,
+          "max_union_tokens_per_layer_kv_head": 61,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.3681640625
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.7743941326530612,
+          "mean_true_top4_coverage_target_branch": 0.4823022959183674,
+          "mean_union_tokens_per_layer_kv_head": 45.74107142857143,
+          "max_union_tokens_per_layer_kv_head": 62,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.50146484375
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.9076849489795918,
+          "mean_true_top4_coverage_target_branch": 0.6004464285714286,
+          "mean_union_tokens_per_layer_kv_head": 75.65178571428571,
+          "max_union_tokens_per_layer_kv_head": 101,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 4.13720703125
+        }
+      },
+      "native_build_seconds": 21.17001939594047,
+      "native_pred_search_ms_median_per_graph": 1.7958134994842112,
+      "native_true_search_ms_median_per_graph": 1.3450800033751875
+    },
+    {
+      "name": "valid:hotpot-last20:3",
+      "prompt_tokens": 512,
+      "low_margin_fallback": false,
+      "native_true_q_student_branch_top4_recall": 1.0,
+      "native_true_q_student_vs_target_trajectory_top4_recall": 0.5058992346938775,
+      "policies": {
+        "uniform4": {
+          "mean_true_top4_coverage_student_branch": 0.6442920918367347,
+          "mean_true_top4_coverage_target_branch": 0.501594387755102,
+          "mean_union_tokens_per_layer_kv_head": 19.5625,
+          "max_union_tokens_per_layer_kv_head": 35,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.06982421875
+        },
+        "uniform8": {
+          "mean_true_top4_coverage_student_branch": 0.7957589285714286,
+          "mean_true_top4_coverage_target_branch": 0.6458864795918368,
+          "mean_union_tokens_per_layer_kv_head": 36.517857142857146,
+          "max_union_tokens_per_layer_kv_head": 61,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 1.9970703125
+        },
+        "adaptive": {
+          "mean_true_top4_coverage_student_branch": 0.7704081632653061,
+          "mean_true_top4_coverage_target_branch": 0.6205357142857143,
+          "mean_union_tokens_per_layer_kv_head": 40.19642857142857,
+          "max_union_tokens_per_layer_kv_head": 64,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 2.1982421875
+        },
+        "uniform16": {
+          "mean_true_top4_coverage_student_branch": 0.8742028061224489,
+          "mean_true_top4_coverage_target_branch": 0.7382015306122449,
+          "mean_union_tokens_per_layer_kv_head": 68.375,
+          "max_union_tokens_per_layer_kv_head": 111,
+          "fraction_over_128_union_cap": 0,
+          "estimated_fresh_kv_mib": 3.7392578125
+        }
+      },
+      "native_build_seconds": 21.144489010504913,
+      "native_pred_search_ms_median_per_graph": 1.8040439754258841,
+      "native_true_search_ms_median_per_graph": 1.359642978059128
+    }
+  ],
+  "note": "All policy arms consume the same native Top-16 search on each centered graph; search timing is common, candidate transfer bytes are estimated from unique IDs. True-Q fallback uses the target Q on Draft tokens and omits the cost of producing it. No online D latency or answer quality."
+}

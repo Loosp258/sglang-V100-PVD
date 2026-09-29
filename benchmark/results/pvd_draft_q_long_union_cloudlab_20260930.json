@@ -1,0 +1,79 @@
+{
+  "prompt_tokens": 2155,
+  "query_positions": 2,
+  "gqa_groups": 112,
+  "cap": 128,
+  "mode": "exact Prompt-K scores on post-training Draft trajectories; no native CAGRA or transfer timing",
+  "results": {
+    "case40_repeat": {
+      "prompt_tokens": 2155,
+      "future_tokens": [
+        0,
+        81,
+        1254,
+        1110,
+        6120,
+        61501,
+        26936,
+        2659
+      ],
+      "groups_reduced_from_k16": 0,
+      "heads_reduced_to_k8": 0,
+      "policies": {
+        "uniform8": {
+          "mean_true_top4_coverage": 0.8349808673469388,
+          "max_union_tokens": 56,
+          "fraction_over_128_cap": 0.0,
+          "estimated_fresh_kv_mib": 1.64404296875
+        },
+        "uniform16": {
+          "mean_true_top4_coverage": 0.9229910714285714,
+          "max_union_tokens": 91,
+          "fraction_over_128_cap": 0.0,
+          "estimated_fresh_kv_mib": 3.14208984375
+        },
+        "capped16": {
+          "mean_true_top4_coverage": 0.9229910714285714,
+          "max_union_tokens": 91,
+          "fraction_over_128_cap": 0.0,
+          "estimated_fresh_kv_mib": 3.14208984375
+        }
+      }
+    },
+    "hotpot_last20": {
+      "prompt_tokens": 2155,
+      "future_tokens": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        8039
+      ],
+      "groups_reduced_from_k16": 0,
+      "heads_reduced_to_k8": 0,
+      "policies": {
+        "uniform8": {
+          "mean_true_top4_coverage": 0.8153698979591837,
+          "max_union_tokens": 70,
+          "fraction_over_128_cap": 0.0,
+          "estimated_fresh_kv_mib": 2.0517578125
+        },
+        "uniform16": {
+          "mean_true_top4_coverage": 0.8926977040816327,
+          "max_union_tokens": 123,
+          "fraction_over_128_cap": 0.0,
+          "estimated_fresh_kv_mib": 3.98779296875
+        },
+        "capped16": {
+          "mean_true_top4_coverage": 0.8926977040816327,
+          "max_union_tokens": 123,
+          "fraction_over_128_cap": 0.0,
+          "estimated_fresh_kv_mib": 3.98779296875
+        }
+      }
+    }
+  }
+}
