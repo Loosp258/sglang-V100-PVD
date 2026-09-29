@@ -265,6 +265,22 @@ class PVDKVManager:
             os.environ.get("SGLANG_PVD_CHUNKED_CAGRA_UPLOAD") == "1"
             and scheduler.server_args.disaggregation_mode == "prefill"
         )
+        self.direct_pd_bootstrap = os.environ.get("SGLANG_PVD_DIRECT_PD_BOOTSTRAP") == "1"
+        if self.direct_pd_bootstrap and self.tp_size != 1:
+            raise PVDConnectionError("PVD direct initial KV currently requires TP1")
+        if self.direct_pd_bootstrap and scheduler.server_args.disaggregation_mode == "prefill" and not self.chunked_cagra_upload:
+            raise PVDConnectionError("PVD direct initial KV requires chunked P->V upload")
+        self.direct_tasks = {}
+        if self.direct_pd_bootstrap and scheduler.server_args.disaggregation_mode == "prefill":
+            from sglang.srt.disaggregation.pvd.direct_bootstrap import DirectBootstrapClient
+            self.direct_client = DirectBootstrapClient(
+                (
+                    os.environ.get("SGLANG_HOST_IP") or "127.0.0.1"
+                    if scheduler.server_args.host in ("0.0.0.0", "::")
+                    else scheduler.server_args.host
+                ),
+                scheduler.server_args.disaggregation_bootstrap_port,
+            )
         if self.chunked_cagra_upload and not callable(
             getattr(self.transfer_engine, "submit_batch_put", None)
         ):
@@ -578,7 +594,10 @@ class PVDKVManager:
         The selected Entry and group are captured before crossing threads.
         This does not allocate a D destination or admit a prediction request.
         """
-        from sglang.srt.disaggregation.pvd.client import PVDSelectedShardRoutes
+        from sglang.srt.disaggregation.pvd.client import (
+            PVDSelectedShardRoute,
+            PVDSelectedShardRoutes,
+        )
         from sglang.srt.disaggregation.pvd.multi_rail_receive import (
             RailMappedReceiveEngine,
         )
@@ -593,6 +612,39 @@ class PVDKVManager:
         engine = self.sparse_receive_engine
 
         completion = _RouteLookupCompletion()
+
+        if self.direct_pd_bootstrap:
+            session = self.decode_sessions.get(key)
+            entry = None if session is None else session._direct_entry
+            if entry is None:
+                completion.set_exception(PVDConnectionError("P direct route snapshot is absent"))
+                return completion
+            try:
+                manifest = KVEntryManifest.from_dict(entry["manifest"])
+                values = entry["initial_shard_routes"]
+                routes = tuple(PVDSelectedShardRoute(**value) for value in values)
+                if (
+                    manifest.key != key
+                    or len(routes) != 2
+                    or tuple(route.rank for route in routes) != (0, 1)
+                    or routes[0].url == routes[1].url
+                    or any(
+                        not route.url.startswith(("http://", "https://"))
+                        or not route.sender_epoch
+                        or route.rail != manifest.shard(route.rank).rail
+                        for route in routes
+                    )
+                ):
+                    raise ValueError("P direct V route snapshot is invalid")
+                selected = PVDSelectedShardRoutes(manifest, routes)
+                completion.set_result(
+                    PVDSelectedRouteBinding(
+                        self, req, rid, key, group_id, delivery_id, selected
+                    )
+                )
+            except Exception as exc:
+                completion.set_exception(exc)
+            return completion
 
         async def discover():
             try:
@@ -904,6 +956,7 @@ class PVDKVSender:
         if self._chunked:
             self._metric.transfer_total_bytes = 0
         self._next_page = 0
+        self._sent_page_indices = []
         self._final_submitted = False
         self._will_send_final = False
 
@@ -1115,6 +1168,46 @@ class PVDKVSender:
             )
 
         self._publish_future = self.kv_mgr.control.submit(publish_sequence())
+        self._sent_page_indices.extend(int(page) for page in kv_indices)
+        if final and self.kv_mgr.direct_pd_bootstrap:
+            if len(self._sent_page_indices) != self._expected_pages:
+                raise PVDConnectionError("direct Prompt KV page sequence is incomplete")
+            from sglang.srt.disaggregation.pvd.direct_bootstrap import publish_and_send_direct
+
+            direct_packed = pack_full_prompt_kv(
+                self.kv_mgr.kv_pool,
+                self._sent_page_indices,
+                page_size=self.kv_mgr.page_size,
+            )
+            first_token = self._first_token()
+
+            async def direct_initial():
+                lease = await asyncio.wrap_future(self._create_future)
+                await publish_and_send_direct(
+                    client=self.kv_mgr.direct_client,
+                    key=self.key,
+                    delivery_id=self.req.pvd_delivery_id,
+                    manifest=lease.manifest,
+                    first_token=first_token,
+                    packed=direct_packed.tensor,
+                    engine=self.kv_mgr.transfer_engine,
+                    sender_epoch=self.kv_mgr.worker_epoch,
+                    rail=self.kv_mgr.rail,
+                    initial_shard_routes=lease.initial_shard_routes,
+                )
+
+            direct_task = self.kv_mgr.control.submit(direct_initial())
+            self.kv_mgr.direct_tasks[self.key] = direct_task
+
+            def direct_done(future):
+                if self.kv_mgr.direct_tasks.get(self.key) is future:
+                    self.kv_mgr.direct_tasks.pop(self.key, None)
+                try:
+                    future.result()
+                except Exception:
+                    logger.exception("PVD direct initial KV failed: transfer_id=%s", self.key.transfer_id)
+
+            direct_task.add_done_callback(direct_done)
         self._next_page += page_count
         self._final_submitted = final
 
@@ -1218,6 +1311,8 @@ class PVDKVReceiver:
 
     def _validate_entry(self, record: Dict[str, Any]) -> KVEntryManifest:
         manifest = KVEntryManifest.from_dict(record["manifest"])
+        if manifest.key != self.key:
+            raise PVDConnectionError("PVD Entry belongs to a different request")
         try:
             validate_compute_layout(manifest.layout, self.kv_mgr.layout())
         except ValueError as exc:

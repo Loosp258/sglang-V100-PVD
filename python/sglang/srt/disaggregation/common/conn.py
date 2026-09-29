@@ -15,7 +15,6 @@ import requests
 import torch.distributed as dist
 import zmq
 from aiohttp import web
-
 from sglang.srt.disaggregation.base.conn import (
     BaseKVBootstrapServer,
     BaseKVManager,
@@ -47,6 +46,9 @@ from sglang.srt.utils.network import (
 )
 
 logger = logging.getLogger(__name__)
+
+_PVD_DIRECT_MAX_ENTRIES = 1024
+_PVD_DIRECT_FINISHED_TTL_SECONDS = 300
 
 
 @dataclasses.dataclass
@@ -1087,6 +1089,10 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
         self.port = port
         self.app = web.Application()
         self.store = dict()
+        # PVD's optional P->D initial transfer uses this independent P-side
+        # control process as a rendezvous. V's native graph build must never
+        # be on the path that publishes a D receive descriptor or PUT proof.
+        self.pvd_direct_entries = {}
         self.lock = asyncio.Lock()
         self._setup_routes()
         self.pp_size = None
@@ -1131,6 +1137,166 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
         self.app.router.add_post("/register_dp_rank", self._handle_register_dp_rank)
         self.app.router.add_post("/query_dp_ranks", self._handle_query_dp_ranks)
         self.app.router.add_get("/health", self._handle_health_check)
+        self.app.router.add_post("/pvd/direct/entry", self._handle_pvd_direct_entry)
+        self.app.router.add_get("/pvd/direct/entry", self._get_pvd_direct_entry)
+        self.app.router.add_post("/pvd/direct/destination", self._handle_pvd_direct_destination)
+        self.app.router.add_get("/pvd/direct/destination", self._get_pvd_direct_destination)
+        self.app.router.add_post("/pvd/direct/terminal", self._handle_pvd_direct_terminal)
+        self.app.router.add_get("/pvd/direct/terminal", self._get_pvd_direct_terminal)
+        self.app.router.add_post("/pvd/direct/ack", self._handle_pvd_direct_ack)
+
+    @staticmethod
+    def _pvd_direct_identity(value):
+        transfer_id = value.get("transfer_id")
+        delivery_id = value.get("delivery_id")
+        if (
+            not isinstance(transfer_id, str)
+            or not transfer_id
+            or not isinstance(delivery_id, str)
+            or not delivery_id
+        ):
+            raise ValueError("PVD direct bootstrap requires transfer and delivery IDs")
+        return transfer_id, delivery_id
+
+    def _prune_pvd_direct_entries(self):
+        now = time.monotonic()
+        for identity, record in tuple(self.pvd_direct_entries.items()):
+            # A published destination without terminal proof may still be a
+            # live native write. Never discard its rendezvous/fence record.
+            if (record["destination"] is None or record["ack"]) and (
+                now - record["timestamp"] > _PVD_DIRECT_FINISHED_TTL_SECONDS
+            ):
+                self.pvd_direct_entries.pop(identity, None)
+
+    async def _handle_pvd_direct_entry(self, request):
+        try:
+            body = await request.json()
+            identity = self._pvd_direct_identity(body)
+            if (
+                not isinstance(body.get("manifest"), dict)
+                or not isinstance(body.get("first_token"), dict)
+                or type(body.get("expected_bytes")) is not int
+                or body["expected_bytes"] <= 0
+                or not isinstance(body.get("sender_epoch"), str)
+                or not body["sender_epoch"]
+            ):
+                raise ValueError("incomplete PVD direct entry")
+            async with self.lock:
+                self._prune_pvd_direct_entries()
+                existing = self.pvd_direct_entries.get(identity)
+                if existing is not None and existing["entry"] != body:
+                    raise ValueError("PVD direct entry changed")
+                if existing is None:
+                    if len(self.pvd_direct_entries) >= _PVD_DIRECT_MAX_ENTRIES:
+                        raise ValueError("PVD direct rendezvous capacity exceeded")
+                    self.pvd_direct_entries[identity] = {
+                        "entry": body,
+                        "destination": None,
+                        "terminal": None,
+                        "ack": False,
+                        "timestamp": time.monotonic(),
+                    }
+        except (TypeError, ValueError, KeyError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response({"state": "published"})
+
+    async def _get_pvd_direct_entry(self, request):
+        try:
+            identity = self._pvd_direct_identity(request.query)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        async with self.lock:
+            record = self.pvd_direct_entries.get(identity)
+            entry = None if record is None else record["entry"]
+        return web.json_response(entry if entry is not None else {"state": "waiting"})
+
+    async def _handle_pvd_direct_destination(self, request):
+        try:
+            body = await request.json()
+            identity = self._pvd_direct_identity(body)
+            if (
+                not isinstance(body.get("destination"), dict)
+                or not isinstance(body.get("receiver_epoch"), str)
+                or not body["receiver_epoch"]
+                or not isinstance(body.get("generation"), str)
+                or not body["generation"]
+            ):
+                raise ValueError("incomplete PVD direct destination")
+            async with self.lock:
+                record = self.pvd_direct_entries.get(identity)
+                if record is None:
+                    raise ValueError("PVD direct entry is unavailable")
+                if record["destination"] is not None and record["destination"] != body:
+                    raise ValueError("PVD direct destination changed")
+                record["destination"] = body
+        except (TypeError, ValueError, KeyError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response({"state": "reserved"})
+
+    async def _get_pvd_direct_destination(self, request):
+        try:
+            identity = self._pvd_direct_identity(request.query)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        async with self.lock:
+            record = self.pvd_direct_entries.get(identity)
+            destination = None if record is None else record["destination"]
+        return web.json_response(destination if destination is not None else {"state": "waiting"})
+
+    async def _handle_pvd_direct_terminal(self, request):
+        try:
+            body = await request.json()
+            identity = self._pvd_direct_identity(body)
+            if body.get("state") not in ("terminal_success", "terminal_failed"):
+                raise ValueError("PVD direct terminal state is invalid")
+            async with self.lock:
+                record = self.pvd_direct_entries.get(identity)
+                if record is None or record["destination"] is None:
+                    raise ValueError("PVD direct destination was not reserved")
+                if (
+                    body.get("sender_epoch") != record["entry"]["sender_epoch"]
+                    or body.get("receiver_epoch")
+                    != record["destination"]["receiver_epoch"]
+                    or body.get("generation") != record["destination"]["generation"]
+                    or type(body.get("transferred_bytes")) is not int
+                    or not 0 <= body["transferred_bytes"] <= record["entry"]["expected_bytes"]
+                    or (
+                        body["state"] == "terminal_success"
+                        and body["transferred_bytes"] != record["entry"]["expected_bytes"]
+                    )
+                ):
+                    raise ValueError("PVD direct terminal proof identity or byte count differs")
+                if record["terminal"] is not None and record["terminal"] != body:
+                    raise ValueError("PVD direct terminal proof changed")
+                record["terminal"] = body
+                record["timestamp"] = time.monotonic()
+        except (TypeError, ValueError, KeyError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response({"state": "recorded"})
+
+    async def _get_pvd_direct_terminal(self, request):
+        try:
+            identity = self._pvd_direct_identity(request.query)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        async with self.lock:
+            record = self.pvd_direct_entries.get(identity)
+            terminal = None if record is None else record["terminal"]
+        return web.json_response(terminal if terminal is not None else {"state": "waiting"})
+
+    async def _handle_pvd_direct_ack(self, request):
+        try:
+            body = await request.json()
+            identity = self._pvd_direct_identity(body)
+            async with self.lock:
+                record = self.pvd_direct_entries.get(identity)
+                if record is None or record["terminal"] is None:
+                    raise ValueError("PVD direct transfer is not terminal")
+                record["ack"] = True
+                record["timestamp"] = time.monotonic()
+        except (TypeError, ValueError, KeyError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response({"state": "acknowledged"})
 
     async def _handle_health_check(self, request):
         return web.Response(text="OK", status=200)

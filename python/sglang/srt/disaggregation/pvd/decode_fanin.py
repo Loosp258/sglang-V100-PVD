@@ -247,6 +247,10 @@ class PVDDecodeFanInSession(PVDDecodeSession):
             self._fanin = None
 
     async def progress_close(self):
+        if getattr(self, "_direct_pending", False):
+            # Initial P->D PUT is fenced by P's independent bootstrap proof,
+            # never by V's fan-in records.
+            return await super().progress_close()
         async with self._fanin_lock:
             if not self._closed:
                 return False

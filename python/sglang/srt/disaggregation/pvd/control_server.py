@@ -1058,7 +1058,21 @@ def create_coordinator_app(coordinator: VectorCoordinator) -> web.Application:
             uploader_epoch=uploader_epoch,
             uploader_epochs=data.get("uploader_epochs"),
         )
-        return web.json_response(result.to_dict())
+        reply = result.to_dict()
+        # The P-selected Entry already owns both V shard incarnations. Carry
+        # this immutable route snapshot to D's direct bootstrap so initial
+        # admission need not call a V process busy with native graph builds.
+        if set(result.upload_identities) == {0, 1}:
+            reply["initial_shard_routes"] = [
+                {
+                    "rank": rank,
+                    "url": coordinator.shards[rank].base_url,
+                    "sender_epoch": result.upload_identities[rank].receiver_epoch,
+                    "rail": result.manifest.shard(rank).rail,
+                }
+                for rank in (0, 1)
+            ]
+        return web.json_response(reply)
 
     async def selected_shard_routes(request):
         data = await _payload(request)

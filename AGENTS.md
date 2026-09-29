@@ -115,6 +115,18 @@ as the default until the streaming path passes the gates below.
   and the live two-rank client timing are separate observations. Grouping
   remains opt-in; predictive D, grouped search under live load, memory peak,
   more prompts and failure races are still open.
+- The opt-in direct initial-KV path now lets P keep chunked P→V upload while
+  sending a separate complete Prompt KV buffer to D at final Prefill. D may
+  start Decode before V graph READY; its first sparse search uses the existing
+  bounded index-readiness retry. The TP1 CloudLab comparison in
+  `benchmark/results/pvd_direct_initial_kv_cloudlab_20260929.md` used four
+  matched, warmed, 2155-token predictive requests with six output tokens.
+  Median first streamed event improved from 9.987 to 1.751 seconds, while
+  median client completion improved from 11.596 to 10.974 seconds. The former
+  V→D fan-in can sometimes finish before graph READY, so do not attribute all
+  baseline waiting to an enforced graph barrier. Keep
+  `SGLANG_PVD_DIRECT_PD_BOOTSTRAP=1` default-off; TP2, cancellation races,
+  capacity pressure and broader Prompt shapes remain open.
 
 ## Implementation sequence
 

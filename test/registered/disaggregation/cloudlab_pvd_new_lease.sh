@@ -27,6 +27,7 @@ prefill_chunk_tokens="${PVD_PREFILL_CHUNK_TOKENS:-2048}"
 p_tp_size="${PVD_P_TP_SIZE:-1}"
 cagra_extend25="${PVD_CAGRA_EXTEND25:-0}"
 chunked_cagra_upload="${PVD_CHUNKED_CAGRA_UPLOAD:-0}"
+direct_pd_bootstrap="${PVD_DIRECT_PD_BOOTSTRAP:-0}"
 group_heads="${PVD_CAGRA_GROUP_HEADS:-1}"
 itopk_size="${PVD_CAGRA_ITOPK_SIZE:-64}"
 # Gateway groups P/D by model_path and loads that tokenizer on V. Each node's
@@ -42,11 +43,17 @@ if [[ ! "$tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
 fi
 if [[ ! "$cagra_extend25" =~ ^[01]$ ]] ||
    [[ ! "$chunked_cagra_upload" =~ ^[01]$ ]] ||
+   [[ ! "$direct_pd_bootstrap" =~ ^[01]$ ]] ||
    [[ ! "$group_heads" =~ ^[12]$ ]] ||
    [[ ! "$itopk_size" =~ ^(64|128|256|512|1024|2048)$ ]] ||
    [[ "$group_heads" == 2 && "$chunked_cagra_upload" != 1 ]] ||
    [[ "$chunked_cagra_upload" == 1 && "$cagra_extend25" != 1 ]]; then
   echo 'chunked CAGRA requires PVD_CAGRA_EXTEND25=1 and a 0/1 feature flag' >&2
+  exit 2
+fi
+if [[ "$direct_pd_bootstrap" == 1 ]] &&
+   { [[ "$chunked_cagra_upload" != 1 ]] || [[ "$p_tp_size" != 1 ]]; }; then
+  echo 'PVD direct P->D bootstrap currently requires chunked P->V and TP1' >&2
   exit 2
 fi
 if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
@@ -105,6 +112,7 @@ case "$role" in
     require_model "$model"
     export SGLANG_HOST_IP="$p_ip"
     export SGLANG_PVD_CHUNKED_CAGRA_UPLOAD="$chunked_cagra_upload"
+    export SGLANG_PVD_DIRECT_PD_BOOTSTRAP="$direct_pd_bootstrap"
     p_base_gpu_id=0
     p_rank_rails="$rail"
     p_ib_device="$rail"
@@ -239,6 +247,7 @@ case "$role" in
     export PVD_SEARCH_BACKGROUND_IO=1
     export PVD_CONTIGUOUS_SPARSE_BANK_COPY="${PVD_CONTIGUOUS_SPARSE_BANK_COPY:-0}"
     export SGLANG_HOST_IP="$d_ip"
+    export SGLANG_PVD_DIRECT_PD_BOOTSTRAP="$direct_pd_bootstrap"
     rank_packed_args=()
     if [[ "${PVD_RANK_PACKED_FANIN:-1}" == 1 ]]; then
       rank_packed_args+=(--pvd-full-kv-fanin-rank-packed)

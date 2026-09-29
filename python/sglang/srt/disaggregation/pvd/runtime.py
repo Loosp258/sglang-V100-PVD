@@ -44,6 +44,7 @@ class PVDEntryLease:
     # (non-lifecycle) entries; a lifecycle entry always has one per shard.
     upload_identities: Dict[int, WriteIdentity] = field(default_factory=dict)
     owned_shard_ranks: FrozenSet[int] = field(default_factory=frozenset)
+    initial_shard_routes: tuple = ()
 
 
 @dataclass
@@ -206,6 +207,7 @@ class PVDPrefillRuntime:
             target_regions=targets,
             upload_identities=identities,
             owned_shard_ranks=owned,
+            initial_shard_routes=tuple(result.get("initial_shard_routes") or ()),
         )
 
     async def publish_shard(

@@ -87,6 +87,9 @@ class PVDDecodeSession:
         self._fenced = False
         self._initial_receipt = None
         self._cuda_refresh_driver = None
+        self._direct_client = None
+        self._direct_entry = None
+        self._direct_pending = False
 
     def _complete_refresh(self):
         """Called ONLY at the final successful ACK/TP-agreement site below."""
@@ -156,6 +159,28 @@ class PVDDecodeSession:
         return receipt
 
     async def initialize(self, runtime):
+        if getattr(self.manager, "direct_pd_bootstrap", False):
+            from sglang.srt.disaggregation.pvd.direct_bootstrap import DirectBootstrapClient
+
+            self._direct_client = DirectBootstrapClient(
+                self.req.bootstrap_host, int(self.req.bootstrap_port)
+            )
+            self._direct_entry = await self._direct_client.wait(
+                "entry",
+                {
+                    "transfer_id": self.key.transfer_id,
+                    "delivery_id": self.req.pvd_delivery_id,
+                },
+            )
+            if self._closed:
+                raise RuntimeError("Decode session closed before P direct KV metadata")
+            # V's consumer lease is still needed for later sparse searches and
+            # refreshes, but obtaining it must not gate the direct initial KV.
+            if self.manager.tp_rank == 0:
+                self._lease_task = asyncio.create_task(
+                    self._acquire_lease_after_direct(runtime)
+                )
+            return self._direct_entry
         record = await self.manager.wait_for_stored_entry(self.key, runtime)
         if self._closed:
             raise RuntimeError("Decode session closed before KV_READY")
@@ -166,6 +191,20 @@ class PVDDecodeSession:
                 raise RuntimeError("Decode session closed during lease acquisition")
             self._lease_task = asyncio.create_task(self._keepalive(lease))
         return record
+
+    async def _acquire_lease_after_direct(self, runtime):
+        try:
+            await self.manager.wait_for_stored_entry(self.key, runtime)
+            if not self._closed:
+                lease = await self.client.renew_consumer(self.key, self.consumer_id)
+                if self._closed:
+                    await self.client.release_consumer(self.key, self.consumer_id)
+                else:
+                    await self._keepalive(lease)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.lease_error = str(exc)
 
     async def _keepalive(self, lease):
         try:
@@ -390,6 +429,30 @@ class PVDDecodeSession:
         delivery_id = self.clock.pending[0] if self.clock.pending else None
         if delivery_id is None:
             return False
+        if self._direct_pending:
+            try:
+                proof = await self._direct_client.get(
+                    "terminal",
+                    {
+                        "transfer_id": self.key.transfer_id,
+                        "delivery_id": self.req.pvd_delivery_id,
+                    },
+                )
+            except Exception:
+                return False
+            if proof.get("state") not in ("terminal_success", "terminal_failed"):
+                return False
+            if (
+                proof.get("receiver_epoch") != self.receiver_epoch
+                or proof.get("generation") != self.generation
+                or proof.get("sender_epoch") != self._direct_entry.get("sender_epoch")
+                or type(proof.get("transferred_bytes")) is not int
+                or proof["transferred_bytes"] > self._direct_entry.get("expected_bytes", -1)
+            ):
+                return False
+            self._direct_pending = False
+            self.release_refresh()
+            return True
         if not self.identities:
             # The descriptor was published but no authorization was adopted,
             # so recover V's saved identities before fencing. Being unable to
@@ -632,6 +695,22 @@ class PVDDecodeRefresher:
         Yield only for control-plane futures. Never run this generator (which
         performs TP collectives and GPU copies) on the control-loop thread.
         """
+        direct_errors = []
+        if getattr(self.manager, "direct_pd_bootstrap", False):
+            initial = [
+                req for req in reqs
+                if self.manager.decode_sessions[self.manager.key_for(req)].clock.round == 0
+            ]
+            if initial:
+                from sglang.srt.disaggregation.pvd.direct_bootstrap import direct_initial_steps
+
+                direct_errors = yield from direct_initial_steps(self, initial)
+                reqs = [req for req in reqs if req not in initial]
+                if not reqs:
+                    return direct_errors
+        return direct_errors + (yield from self._regular_refresh_steps(reqs))
+
+    def _regular_refresh_steps(self, reqs):
         if getattr(self.manager, "full_kv_fanin_max_slices", None) is not None:
             from sglang.srt.disaggregation.pvd.decode_fanin import refresh_fanin_steps
 
