@@ -122,6 +122,31 @@ directly, its first sparse search waits for V only when it reaches the search
 before V finishes; this probe does not measure that overlap or the time
 between final KV arrival and native build start.
 
+To isolate the role of four-head grouping in the **complete-KV, no-extend**
+case, the degree-16 exact-seed arm also ran both group sizes in both orders.
+Each row uses the same Case 40 K/Q and cuVS setup; seconds are sums across
+all 56 heads on one rank. `build` includes exact adjacency construction,
+`from_graph`, and GPU synchronization, but excludes data assembly and filter
+setup.
+
+| Run order | Rank | 56 one-head graphs: build | 14 four-head graphs: build | Difference |
+| --- | ---: | ---: | ---: | ---: |
+| One-head then four-head | 0 | .379 s | .351 s | .029 s |
+| One-head then four-head | 1 | .376 s | .350 s | .026 s |
+| Four-head then one-head | 0 | .380 s | .362 s | .019 s |
+| Four-head then one-head | 1 | .394 s | .376 s | .018 s |
+
+Thus grouping saves only .018–.029 s (about 5–8%) in this no-extend shape.
+Unlike the incremental case, there are no repeated native insertion calls
+for grouping to eliminate. Four-head search needs per-head bitset filters;
+their setup cost .103–.108 s per rank in this probe, excluded above. If
+filter preparation is on the readiness critical path, that extra work can
+outweigh the pure build saving. One-head mean recall was .9902/.9884 and
+worst-head .90/.90 on ranks 0/1. Four-head mean recall was .9866/.9902 and
+worst-head .80/.90. All arms had zero invalid IDs. Raw logs are
+`exact16-full-group1-4-case40-rank{0,1}-20260929.log` and
+`exact16-full-group4-1-case40-rank{0,1}-20260929.log` on node0.
+
 ## Limits and next integration step
 
 These are one Prompt per input style and two next-token Q rows per head, not
