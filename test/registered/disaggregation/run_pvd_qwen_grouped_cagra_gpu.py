@@ -203,7 +203,7 @@ def grouped_probe(sources, queries, *, prompt_count, prompt_mode, group_size):
 def full_shard_centered_probe(
     sources, queries, *, prompt_count, prompt_mode, q_heads_per_kv
 ):
-    """Compare native grouped graphs against centered per-head graphs."""
+    """Compare grouped graphs and optional exact KNN seeding on real K/Q."""
     import gc
 
     import cupy as cp
@@ -270,15 +270,60 @@ def full_shard_centered_probe(
     itopk_size = int(os.environ.get("PVD_CAGRA_GROUP_ITOPK", "128"))
     if itopk_size not in (64, 128, 256, 512, 1024, 2048):
         raise ValueError("PVD_CAGRA_GROUP_ITOPK must be 64, 128, 256, 512, 1024 or 2048")
-    params = cagra.IndexParams(
+    build_algo = os.environ.get("PVD_CAGRA_GROUP_BUILD_ALGO", "ivf_pq")
+    if build_algo not in (
+        "ivf_pq", "nn_descent", "iterative_cagra_search",
+        "exact_block_knn", "exact_global_knn",
+    ):
+        raise ValueError("unsupported CAGRA build algorithm")
+    exact_degree = int(os.environ.get("PVD_CAGRA_EXACT_GRAPH_DEGREE", "8"))
+    if exact_degree not in (8, 16, 32):
+        raise ValueError("exact CAGRA graph degree must be 8, 16 or 32")
+    params = None if build_algo.startswith("exact_") else cagra.IndexParams(
         metric="inner_product", graph_degree=8,
-        intermediate_graph_degree=16, build_algo="ivf_pq",
+        intermediate_graph_degree=16, build_algo=build_algo,
     )
+
+    def build_graph(dataset, group_size):
+        if params is not None:
+            return cagra.build(params, dataset), None
+        # For a 512-row KV-head prefix, exact candidate edges need only a
+        # small GEMM. Keep the CuPy graph alive with its CAGRA index.
+        if len(dataset) % group_size:
+            raise ValueError("each grouped KV head must have the same row count")
+        per_head = len(dataset) // group_size
+        if per_head <= exact_degree:
+            raise ValueError("exact graph degree must be below rows per KV head")
+        graph = cp.empty((len(dataset), exact_degree), dtype=cp.uint32)
+        blocks = (
+            [(0, len(dataset))]
+            if build_algo == "exact_global_knn" else
+            [(head * per_head, (head + 1) * per_head)
+             for head in range(group_size)]
+        )
+        for begin, end in blocks:
+            matrix = dataset[begin:end]
+            scores = matrix @ matrix.T
+            cp.fill_diagonal(scores, -cp.inf)
+            neighbors = cp.argpartition(
+                scores, -exact_degree, axis=1
+            )[:, -exact_degree:]
+            top_scores = cp.take_along_axis(scores, neighbors, axis=1)
+            neighbors = cp.take_along_axis(
+                neighbors, cp.argsort(-top_scores, axis=1), axis=1
+            )
+            graph[begin:end] = neighbors.astype(cp.uint32) + begin
+        return cagra.from_graph(
+            graph, dataset, metric="inner_product"
+        ), graph
+
     search_params = cagra.SearchParams(itopk_size=itopk_size)
-    warm = cagra.build(params, centered_k[0][:prefix] if prefix else centered_k[0])
+    warm, warm_graph = build_graph(
+        centered_k[0][:prefix] if prefix else centered_k[0], 1
+    )
     cagra.search(search_params, warm, head_queries[keys[0]], top_k)
     cp.cuda.get_current_stream().synchronize()
-    del warm
+    del warm, warm_graph
     gc.collect()
     requested_sizes = os.environ.get("PVD_CAGRA_GROUP_SIZES")
     group_sizes = (
@@ -304,7 +349,7 @@ def full_shard_centered_probe(
             cp.cuda.get_current_stream().synchronize()
             assembly_seconds += time.perf_counter() - started
             started = time.perf_counter()
-            index = cagra.build(params, dataset)
+            index, graph = build_graph(dataset, size)
             cp.cuda.get_current_stream().synchronize()
             build_seconds += time.perf_counter() - started
             tail_datasets = []
@@ -369,7 +414,7 @@ def full_shard_centered_probe(
                     "layer": key[0], "kv_head": key[1],
                     "recall_at_10": recall, "invalid_result_ids": head_invalid,
                 })
-            del index, dataset, tail_datasets
+            del index, graph, dataset, tail_datasets
             gc.collect()
             cp.cuda.get_current_stream().synchronize()
         results.append({
@@ -391,6 +436,8 @@ def full_shard_centered_probe(
         "prefix_rows": prefix,
         "chunk_boundaries": boundaries,
         "queries_per_head": 2, "itopk_size": itopk_size,
+        "build_algo": build_algo,
+        "exact_graph_degree": exact_degree if build_algo.startswith("exact_") else None,
         "centered_exact_top10_overlap_mean": sum(centered_exact_overlaps)
         / len(centered_exact_overlaps),
         "centered_exact_top10_overlap_min": min(centered_exact_overlaps),

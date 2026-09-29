@@ -127,6 +127,17 @@ as the default until the streaming path passes the gates below.
   baseline waiting to an enforced graph barrier. Keep
   `SGLANG_PVD_DIRECT_PD_BOOTSTRAP=1` default-off; TP2, cancellation races,
   capacity pressure and broader Prompt shapes remain open.
+- An offline algorithm probe in
+  `benchmark/results/pvd_cagra_exact_kv_graph_cloudlab_20260929.md` replaces
+  only the initial IVF-PQ graph builder with exact per-head KNN over each
+  512-row KV prefix, then imports that graph through cuVS `from_graph` and
+  continues with native `extend`. On Case 40, degree-16 graph seeds retained
+  or improved mean Top-10 recall while reducing measured 14-graph build plus
+  extend from 5.32/5.53 s to 1.44/1.32 s on ranks 0/1. Degree 32 gave
+  1.80/1.77 s and higher recall in three sampled Prompt styles, at four
+  times the degree-8 adjacency size. Degree 8 was fast but lost recall.
+  The production backend is unchanged. Graph-buffer ownership, memory,
+  broader real-Q quality and online P/V/D timing are required before serving.
 
 ## Implementation sequence
 
