@@ -159,7 +159,7 @@ def prepare(args):
                                       max(x["prompt_tokens"] for x in items)]}))
 
 
-def generate(url, item):
+def generate(url, item, *, retain_output_ids=False):
     payload = {"text": item["prompt"], "stream": True, "sampling_params": {
         "temperature": 0, "max_new_tokens": item["max_new_tokens"], "ignore_eos": False}}
     req = urllib.request.Request(url.rstrip("/") + "/generate",
@@ -180,7 +180,7 @@ def generate(url, item):
     text = final.get("text", "")
     answer = extract_final(text)
     gsm_value, gsm_method = gsm_answer(text) if item["benchmark"] == "gsm8k" else (None, None)
-    return {"id": item["id"], "benchmark": item["benchmark"],
+    row = {"id": item["id"], "benchmark": item["benchmark"],
             "started_unix": start_unix, "first_event_seconds": first,
             "wall_seconds": time.perf_counter() - start,
             "prompt_sha256": item["prompt_sha256"], "prompt_tokens": meta["prompt_tokens"],
@@ -191,6 +191,13 @@ def generate(url, item):
             "gsm_numeric_answer": gsm_value, "gsm_extraction": gsm_method,
             "truncated": meta.get("completion_tokens") == item["max_new_tokens"],
             "events": event_count}
+    if retain_output_ids:
+        ids = final.get("output_ids")
+        if (not isinstance(ids, list) or len(ids) != meta["completion_tokens"]
+                or any(not isinstance(token, int) or token < 0 for token in ids)):
+            raise ValueError("response lacks exact complete output token IDs")
+        row["output_ids"] = ids
+    return row
 
 
 def collect(args):
@@ -220,7 +227,7 @@ def collect(args):
                 return set(snapshot["entries"])
 
             before = [index_ids(rank) for rank in (0, 1)]
-            row = generate(args.url, item)
+            row = generate(args.url, item, retain_output_ids=getattr(args, "retain_output_ids", False))
             created = [index_ids(rank) - before[rank] for rank in (0, 1)]
             if created[0] != created[1] or len(created[0]) != 1:
                 raise ValueError("cannot identify this sequential request's V Entry")
@@ -334,6 +341,7 @@ def main():
     sample.add_argument("--vector-host", default="http://10.10.1.2")
     sample.add_argument("--coordinator", default="http://10.10.1.2:9100")
     sample.add_argument("--resume", action="store_true")
+    sample.add_argument("--retain-output-ids", action="store_true")
     sample.add_argument("--cleanup-wait-seconds", type=float, default=120)
     cmp = sub.add_parser("compare")
     cmp.add_argument("--folder", type=Path, required=True)

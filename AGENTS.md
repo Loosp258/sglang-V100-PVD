@@ -200,6 +200,22 @@ default and all existing gates. Reports:
 `benchmark/results/pvd_draft_q_decode_cloudlab_20260930.md` and
 `benchmark/results/pvd_output_quality_decode_cloudlab_20260930.md`.
 
+Next quality iteration starts from checkpoint75a0c48a (math8/16), retains
+six blocks and the existing Top16/128-token serving budget. Freeze the prior
+eight calibration questions and40 output questions. Collect exact output IDs
+on12 training-only requests through actual sparse D, with V graph-gated
+initial KV and no P→D KV; release every completed Entry and save serving logs.
+Do not infer token IDs by re-tokenizing returned text. On training questions
+only, capture longer EOS-bounded teacher continuations and full-attention
+teacher recovery labels on observed sparse-D prefixes. Original Prompt K is
+the retrieval dataset; observed Decode K is excluded. Match teacher serving
+repetition penalty1.05. Compare all-position versus Decode-only token CE
+on identical new captures/optimizer budgets, retaining Q and K-score losses.
+Choose with the frozen calibration protocol, then measure native retrieval,
+cached latency and the unchanged40-question full-path quality test. Preserve
+negative results and commit each completed stage. No serving-default change
+until output quality reaches the reference gate.
+
 1. **Prove the native incremental path.** In an isolated CloudLab dependency
    environment, select a cuVS Python version with CAGRA `extend` that runs on
    V100S. Benchmark `build(prefix) + extend(new rows)` against one complete
