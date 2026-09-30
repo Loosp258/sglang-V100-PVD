@@ -61,7 +61,7 @@ def prepare(args):
                                       zip(row['context']['title'], row['context']['sentences']))
                 user = ('Use the following passages to answer the question. Give a brief '
                         'explanation, then put only the short answer on its own line as '
-                        'FINAL: <answer>.\n\n' + context + '\n\nQuestion: ' + row['question'])
+                        'FINAL: <answer>.\n\nPassages:\n' + context + '\n\nQuestion: ' + row['question'])
                 source_id = row['id']
             prompt = tokenizer.apply_chat_template([
                 {'role': 'system', 'content': 'You are a helpful assistant.'},
@@ -127,7 +127,8 @@ def capture(target, student, items, target_device, student_device, tokenizer):
     for item in items:
         prompt = item['prompt_ids']
         generated = target.generate(torch.tensor(prompt, device=target_device)[None],
-                                    do_sample=False, max_new_tokens=192, use_cache=True,
+                                    do_sample=False, repetition_penalty=1.0,
+                                    max_new_tokens=192, use_cache=True,
                                     pad_token_id=tokenizer.eos_token_id)[0, len(prompt):].cpu().tolist()
         eos_ids = target.generation_config.eos_token_id
         eos_ids = {eos_ids} if isinstance(eos_ids, int) else set(eos_ids or [])
