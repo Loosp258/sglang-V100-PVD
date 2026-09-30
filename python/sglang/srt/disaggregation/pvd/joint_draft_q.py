@@ -196,10 +196,12 @@ def build_joint_startup(target_runner, *, checkpoint, draft_model_path,
     from sglang.srt.disaggregation.pvd.cuda_prediction_startup import CUDAPredictionStartup
 
     target = target_runner.model.config
+    rope_parameters = getattr(target, "rope_parameters", None) or {}
+    rope_theta = getattr(target, "rope_theta", rope_parameters.get("rope_theta"))
     if (type(target_runner.model).__name__ != "Qwen2ForCausalLM"
             or (target.num_hidden_layers, target.num_attention_heads,
                 target.num_key_value_heads, target.hidden_size) != (28, 28, 4, 3584)
-            or float(target.rope_theta) != 1_000_000
+            or rope_theta is None or float(rope_theta) != 1_000_000
             or max_prefix_tokens + predict_tokens > 2304):
         raise PredictionConfigError("joint checkpoint requires bounded Qwen2.5-7B TP1")
     if any(os.environ.get(name) == "1" for name in (
