@@ -1,0 +1,26 @@
+Skipping import of cpp extensions due to incompatible torch version. Please upgrade to torch >= 2.11.0 (found 2.9.1+cu128).
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:  86%|████████▌ | 248/290 [00:00<00:00, 2468.34it/s]Loading weights: 100%|██████████| 290/290 [00:00<00:00, 2549.69it/s]
+Loading weights:   0%|          | 0/339 [00:00<?, ?it/s]Loading weights:   0%|          | 1/339 [00:00<00:40,  8.28it/s]Loading weights:  23%|██▎       | 78/339 [00:00<00:00, 412.49it/s]Loading weights:  44%|████▎     | 148/339 [00:00<00:00, 536.19it/s]Loading weights:  65%|██████▍   | 220/339 [00:00<00:00, 600.11it/s]Loading weights:  87%|████████▋ | 294/339 [00:00<00:00, 646.64it/s]Loading weights: 100%|██████████| 339/339 [00:00<00:00, 585.92it/s]
+[transformers] The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Traceback (most recent call last):
+  File "/mnt/sglang-data/Yizhzhu-node0-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_train.py", line 401, in <module>
+    main()
+  File "/mnt/sglang-data/Yizhzhu-node0-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_train.py", line 397, in main
+    prepare(args) if args.command == 'prepare' else run(args)
+                                                    ^^^^^^^^^
+  File "/mnt/sglang-data/Yizhzhu-node0-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_train.py", line 362, in run
+    records = capture(target, student, dataset['items'], td, device, tokenizer)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node0-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/sglang-data/Yizhzhu-node0-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_train.py", line 161, in capture
+    branch, branch_keys = labels(target, prefix + future, len(prompt), len(prefix),
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node0-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/sglang-data/Yizhzhu-node0-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_train.py", line 98, in labels
+    keys = torch.stack([base.past_key_values[layer][0][0].transpose(0, 1).cpu().contiguous()
+                        ~~~~~~~~~~~~~~~~~~~~^^^^^^^
+TypeError: 'DynamicCache' object is not subscriptable

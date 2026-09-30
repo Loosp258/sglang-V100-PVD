@@ -1,0 +1,77 @@
+Skipping import of cpp extensions due to incompatible torch version. Please upgrade to torch >= 2.11.0 (found 2.9.1+cu128).
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:  92%|█████████▏| 267/290 [00:00<00:00, 2619.75it/s]Loading weights: 100%|██████████| 290/290 [00:00<00:00, 2719.68it/s]
+Loading weights:   0%|          | 0/339 [00:00<?, ?it/s]Loading weights:   0%|          | 1/339 [00:00<00:35,  9.52it/s]Loading weights:  22%|██▏       | 76/339 [00:00<00:00, 431.98it/s]Loading weights:  44%|████▍     | 149/339 [00:00<00:00, 561.12it/s]Loading weights:  68%|██████▊   | 230/339 [00:00<00:00, 646.61it/s]Loading weights:  90%|████████▉ | 304/339 [00:00<00:00, 667.50it/s]Loading weights: 100%|██████████| 339/339 [00:00<00:00, 611.45it/s]
+[transformers] The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+{"captured": "gsm8k:1876", "split": "calibration", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:6240", "split": "calibration", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:3059", "split": "calibration", "real_generated_tokens": 139, "boundaries": 5}
+{"captured": "gsm8k:3962", "split": "calibration", "real_generated_tokens": 74, "boundaries": 4}
+{"captured": "gsm8k:2832", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:3699", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:7015", "split": "train", "real_generated_tokens": 148, "boundaries": 5}
+{"captured": "gsm8k:638", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:5089", "split": "train", "real_generated_tokens": 106, "boundaries": 4}
+{"captured": "gsm8k:4434", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:4643", "split": "train", "real_generated_tokens": 77, "boundaries": 4}
+{"captured": "gsm8k:1587", "split": "train", "real_generated_tokens": 154, "boundaries": 5}
+{"captured": "gsm8k:7046", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:5419", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:3769", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:276", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:4760", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:2168", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:5582", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:6551", "split": "train", "real_generated_tokens": 134, "boundaries": 5}
+{"captured": "gsm8k:2372", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:7401", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:6914", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:3871", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:466", "split": "train", "real_generated_tokens": 183, "boundaries": 5}
+{"captured": "gsm8k:3408", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:1464", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:2973", "split": "train", "real_generated_tokens": 148, "boundaries": 5}
+{"captured": "gsm8k:3317", "split": "train", "real_generated_tokens": 133, "boundaries": 5}
+{"captured": "gsm8k:2499", "split": "train", "real_generated_tokens": 92, "boundaries": 4}
+{"captured": "gsm8k:5096", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:3853", "split": "train", "real_generated_tokens": 149, "boundaries": 5}
+{"captured": "gsm8k:355", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:7437", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "gsm8k:105", "split": "train", "real_generated_tokens": 110, "boundaries": 4}
+{"captured": "gsm8k:3486", "split": "train", "real_generated_tokens": 192, "boundaries": 5}
+{"captured": "hotpotqa:5a72224755429971e9dc92be", "split": "calibration", "real_generated_tokens": 5, "boundaries": 1}
+{"captured": "hotpotqa:5a7fb1e55542995d8a8ddef7", "split": "calibration", "real_generated_tokens": 9, "boundaries": 2}
+{"captured": "hotpotqa:5ae54c085542992663a4f1c4", "split": "calibration", "real_generated_tokens": 7, "boundaries": 2}
+{"captured": "hotpotqa:5a8d7f2b554299068b959d0c", "split": "calibration", "real_generated_tokens": 4, "boundaries": 1}
+{"captured": "hotpotqa:5a8d77525542994ba4e3dc90", "split": "train", "real_generated_tokens": 7, "boundaries": 2}
+{"captured": "hotpotqa:5abd0077554299700f9d7954", "split": "train", "real_generated_tokens": 7, "boundaries": 2}
+{"captured": "hotpotqa:5a8f5be9554299458435d5ed", "split": "train", "real_generated_tokens": 5, "boundaries": 1}
+{"captured": "hotpotqa:5ab816b05542990e739ec815", "split": "train", "real_generated_tokens": 3, "boundaries": 1}
+{"captured": "hotpotqa:5ae7a2e255429952e35ea99e", "split": "train", "real_generated_tokens": 4, "boundaries": 1}
+{"captured": "hotpotqa:5a7263e05542997f82783998", "split": "train", "real_generated_tokens": 5, "boundaries": 1}
+{"captured": "hotpotqa:5adfd01f55429925eb1afa9f", "split": "train", "real_generated_tokens": 12, "boundaries": 2}
+{"captured": "hotpotqa:5ab2659e554299340b5254b2", "split": "train", "real_generated_tokens": 11, "boundaries": 2}
+{"captured": "hotpotqa:5ae20c465542997283cd236a", "split": "train", "real_generated_tokens": 10, "boundaries": 2}
+{"captured": "hotpotqa:5a7d2afd5542995f4f402221", "split": "train", "real_generated_tokens": 12, "boundaries": 2}
+{"captured": "hotpotqa:5ab92e02554299753720f775", "split": "train", "real_generated_tokens": 6, "boundaries": 1}
+{"captured": "hotpotqa:5a7c7c225542996dd594b93f", "split": "train", "real_generated_tokens": 6, "boundaries": 1}
+{"captured": "hotpotqa:5a81b92a5542995ce29dcc52", "split": "train", "real_generated_tokens": 9, "boundaries": 2}
+{"captured": "hotpotqa:5a801f215542992bc0c4a6b2", "split": "train", "real_generated_tokens": 9, "boundaries": 2}
+{"captured": "hotpotqa:5ae306115542992decbdcdc4", "split": "train", "real_generated_tokens": 3, "boundaries": 1}
+{"captured": "hotpotqa:5a89d48c554299515336132e", "split": "train", "real_generated_tokens": 7, "boundaries": 2}
+{"baseline": {"target_tokens_target_q": 1.0, "target_tokens_predicted_q": 0.6542168055539546, "draft_tokens_target_q": 0.4451683178220106, "draft_tokens_predicted_q": 0.46059852417396463}, "token_agreement": 0.0}
+{"step": 1, "joint": false, "q_mse": 0.1346101611852646, "retrieval_loss": 3.777426242828369, "token_ce": 0.0, "seconds": 0.12785256502684206}
+{"step": 200, "joint": false, "q_mse": 0.13008388876914978, "retrieval_loss": 3.8115828037261963, "token_ce": 0.0, "seconds": 5.571227473032195}
+{"step": 400, "joint": false, "q_mse": 0.0660889595746994, "retrieval_loss": 3.5392661094665527, "token_ce": 0.0, "seconds": 11.295040348020848}
+{"step": 600, "joint": false, "q_mse": 0.10268089175224304, "retrieval_loss": 3.6144890785217285, "token_ce": 0.0, "seconds": 17.022136862040497}
+{"step": 800, "joint": false, "q_mse": 0.09443578869104385, "retrieval_loss": 3.787839889526367, "token_ce": 0.0, "seconds": 22.68708725500619}
+{"step": 1000, "joint": false, "q_mse": 0.09785626828670502, "retrieval_loss": 3.732250690460205, "token_ce": 0.0, "seconds": 28.25283825903898}
+{"step": 1200, "joint": false, "q_mse": 0.07865642011165619, "retrieval_loss": 3.8140015602111816, "token_ce": 0.0, "seconds": 33.80302528402535}
+{"arm_completed": "frozen", "recall": {"target_tokens_target_q": 1.0, "target_tokens_predicted_q": 0.6942387139019759, "draft_tokens_target_q": 0.4451683178220106, "draft_tokens_predicted_q": 0.4451835592803748}, "token_agreement": 0.0}
+{"step": 1, "joint": true, "q_mse": 0.1346101611852646, "retrieval_loss": 3.777426242828369, "token_ce": 12.463852882385254, "seconds": 0.10586864699143916}
+{"step": 200, "joint": true, "q_mse": 0.12910862267017365, "retrieval_loss": 3.8161075115203857, "token_ce": 2.790372133255005, "seconds": 16.847872418002225}
+{"step": 400, "joint": true, "q_mse": 0.07631085067987442, "retrieval_loss": 3.5841064453125, "token_ce": 0.3671283721923828, "seconds": 33.08624801400583}
+{"step": 600, "joint": true, "q_mse": 0.1103486493229866, "retrieval_loss": 3.6378204822540283, "token_ce": 0.3263213038444519, "seconds": 49.648770735017024}
+{"step": 800, "joint": true, "q_mse": 0.10298552364110947, "retrieval_loss": 3.8108229637145996, "token_ce": 0.7029789090156555, "seconds": 66.46408197301207}
+{"step": 1000, "joint": true, "q_mse": 0.10436896979808807, "retrieval_loss": 3.7446069717407227, "token_ce": 0.09914875775575638, "seconds": 82.86396468000021}
+{"step": 1200, "joint": true, "q_mse": 0.08239927142858505, "retrieval_loss": 3.8143470287323, "token_ce": 0.7411372661590576, "seconds": 99.07170297001721}
+{"arm_completed": "joint", "recall": {"target_tokens_target_q": 1.0, "target_tokens_predicted_q": 0.682471425636955, "draft_tokens_target_q": 0.5758727531394233, "draft_tokens_predicted_q": 0.5835992954671383}, "token_agreement": 0.14130434782608695}
