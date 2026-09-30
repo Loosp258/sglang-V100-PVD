@@ -71,7 +71,7 @@ def gsm_answer(text):
 def prepare(args):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
-    gsm = [json.loads(line) for line in args.gsm.read_text().splitlines() if line.strip()]
+    gsm = [json.loads(line) for line in args.gsm.read_text(encoding="utf-8").splitlines() if line.strip()]
     if args.hotpot.suffix == ".parquet":
         import pyarrow.parquet as pq
         hotpot = pq.read_table(args.hotpot).to_pylist()
@@ -79,9 +79,9 @@ def prepare(args):
             row["_id"] = row["id"]
             row["context"] = list(zip(row["context"]["title"], row["context"]["sentences"]))
     else:
-        hotpot = json.loads(args.hotpot.read_text())
+        hotpot = json.loads(args.hotpot.read_text(encoding="utf-8"))
     excluded = set()
-    for line in args.training_source.read_text().splitlines():
+    for line in args.training_source.read_text(encoding="utf-8").splitlines():
         for question in json.loads(line):
             excluded.add(question.removeprefix("Question: ").strip())
     rng = random.Random(20260930)
@@ -137,7 +137,7 @@ def prepare(args):
                            "hotpot_dev_sha256": digest(args.hotpot.read_bytes()),
                            "excluded_training_source_sha256": digest(args.training_source.read_bytes())},
                "items": items}
-    args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps({"count": len(items), "sha256": digest(args.output.read_bytes()),
                       "token_range": [min(x["prompt_tokens"] for x in items),
                                       max(x["prompt_tokens"] for x in items)]}))
@@ -178,12 +178,12 @@ def generate(url, item):
 
 
 def collect(args):
-    dataset = json.loads(args.dataset.read_text())
+    dataset = json.loads(args.dataset.read_text(encoding="utf-8"))
     previous = []
     if args.output.exists() and not args.resume:
         raise FileExistsError(args.output)
     if args.output.exists():
-        previous = [json.loads(line) for line in args.output.read_text().splitlines()]
+        previous = [json.loads(line) for line in args.output.read_text(encoding="utf-8").splitlines()]
         if len(previous) > len(dataset["items"]):
             raise ValueError("resume file has extra requests")
         for row, item in zip(previous, dataset["items"]):
@@ -244,7 +244,7 @@ def collect(args):
 def compare(args):
     arms = {}
     for arm in ("full", "target", "joint"):
-        rows = [json.loads(line) for line in (args.folder / f"{arm}.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in (args.folder / f"{arm}.jsonl").read_text(encoding="utf-8").splitlines()]
         if len(rows) != 40 or len({r["id"] for r in rows}) != 40 or any(r["arm"] != arm for r in rows):
             raise ValueError(f"incomplete or mislabeled {arm}")
         if any(not r.get("completed_entry_released")
@@ -291,7 +291,7 @@ def compare(args):
         "caveat": "Fixed 40-question subset, not full public benchmark; GSM8K FINAL then "
                   "last-number extraction, strict FINAL metric also reported; HotpotQA strict "
                   "FINAL extraction, missing FINAL scores zero; generated lengths can differ."}
-    args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(metrics, indent=2))
 
 

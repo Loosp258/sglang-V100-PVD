@@ -9,7 +9,7 @@ import re
 
 
 def log_text(path):
-    return gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
+    return gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text(encoding="utf-8")
 
 
 def attach(rows, paths, arm):
@@ -71,7 +71,7 @@ def main():
             raise ValueError(f"missing {arm} D logs")
         # Full pilot logs are deliberately not copied into this prefix. The
         # final full run and resumed last request have distinct Entry IDs.
-        rows = [json.loads(line) for line in (args.folder / f"{arm}.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in (args.folder / f"{arm}.jsonl").read_text(encoding="utf-8").splitlines()]
         arms[arm] = attach(rows, paths, arm)
         logs.extend(paths)
     payload = {"arms": arms, "summary": {
@@ -83,7 +83,7 @@ def main():
             "committed_refreshes": sum(row["refreshes"].count("committed") for row in subset),
         } for benchmark in ("gsm8k", "hotpotqa")} for arm, rows in arms.items()},
         "log_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in logs}}
-    args.output.write_text(json.dumps(payload, indent=2) + "\n")
+    args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(payload["summary"], indent=2))
 
 
