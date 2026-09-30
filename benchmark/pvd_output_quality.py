@@ -46,6 +46,22 @@ def extract_final(text):
     return matches[-1].strip().strip("* ") if matches else None
 
 
+def extract_qa_final_variant(text):
+    """Secondary format sensitivity check, without consulting the gold answer.
+
+    The frozen primary metric still requires FINAL: on one line. This accepts
+    the observed FINAL ANSWER: spelling, including an answer on the next line.
+    It does not guess an answer from unrestricted explanation text.
+    """
+    primary = extract_final(text)
+    if primary is not None:
+        return primary
+    matches = re.findall(
+        r"(?im)^[ \t]*(?:\*\*)?FINAL[ \t]+ANSWER(?:\*\*)?[ \t]*:[ \t]*"
+        r"(?:\r?\n[ \t]*)?([^\r\n]+)", text)
+    return matches[-1].strip().strip("* ") if matches else None
+
+
 def numeric(text):
     if text is None:
         return None
@@ -281,6 +297,13 @@ def compare(args):
                 "mean_output_tokens": statistics.mean(r["completion_tokens"] for r in subset),
                 "median_client_seconds": statistics.median(r["wall_seconds"] for r in subset),
             }
+            if benchmark == "hotpotqa":
+                tolerant = [answer_scores(extract_qa_final_variant(r["text"]) or "",
+                                          r["gold_answer"]) for r in subset]
+                metrics[arm][benchmark].update(
+                    final_variant_em=statistics.mean(s[0] for s in tolerant),
+                    final_variant_f1=statistics.mean(s[1] for s in tolerant),
+                    final_variant_correct=sum(s[0] for s in tolerant))
     payload = {"metrics": metrics, "paired_rows": [
         {"id": key, "benchmark": base["benchmark"], "gold": base["gold_answer"],
          "answers": {arm: (rows[key]["gsm_numeric_answer"] if base["benchmark"] == "gsm8k"
@@ -290,7 +313,8 @@ def compare(args):
         for key, base in arms["full"].items()],
         "caveat": "Fixed 40-question subset, not full public benchmark; GSM8K FINAL then "
                   "last-number extraction, strict FINAL metric also reported; HotpotQA strict "
-                  "FINAL extraction, missing FINAL scores zero; generated lengths can differ."}
+                  "FINAL extraction, missing FINAL scores zero; secondary FINAL ANSWER "
+                  "format sensitivity metric is explicitly post-hoc; generated lengths can differ."}
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(metrics, indent=2))
 
