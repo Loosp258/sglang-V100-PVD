@@ -61,7 +61,14 @@ def prepare(args):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
     gsm = [json.loads(line) for line in args.gsm.read_text().splitlines() if line.strip()]
-    hotpot = json.loads(args.hotpot.read_text())
+    if args.hotpot.suffix == ".parquet":
+        import pyarrow.parquet as pq
+        hotpot = pq.read_table(args.hotpot).to_pylist()
+        for row in hotpot:
+            row["_id"] = row["id"]
+            row["context"] = list(zip(row["context"]["title"], row["context"]["sentences"]))
+    else:
+        hotpot = json.loads(args.hotpot.read_text())
     excluded = set()
     for line in args.training_source.read_text().splitlines():
         for question in json.loads(line):
