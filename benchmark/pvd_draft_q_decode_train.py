@@ -89,7 +89,8 @@ def prepare(args):
 
 
 @torch.inference_mode()
-def labels(target, ids, original_prompt_length, start, horizon, device, label_positions):
+def labels(target, ids, original_prompt_length, start, horizon, device, label_positions,
+           repetition_penalty=1.0):
     # Prefill has one fixed shape for this question. Never derive Prompt K
     # again from a larger teacher-forced Decode sequence: FP16 GEMM shapes
     # can change its rounding and invalidate the shared retrieval dataset.
@@ -120,6 +121,12 @@ def labels(target, ids, original_prompt_length, start, horizon, device, label_po
         logits = target.lm_head(hidden[0, label_positions])
         if not torch.isfinite(logits).all():
             raise ValueError('nonfinite teacher next-token logits')
+        if repetition_penalty != 1.0:
+            from transformers.generation.logits_process import RepetitionPenaltyLogitsProcessor
+            processor = RepetitionPenaltyLogitsProcessor(repetition_penalty)
+            logits = torch.cat([processor(torch.tensor(ids[:position + 1], device=device)[None],
+                                          logits[i:i + 1].float())
+                                for i, position in enumerate(label_positions)])
         next_ids = logits.argmax(-1).cpu()
     finally:
         for hook in hooks:
