@@ -159,6 +159,31 @@ as the default until the streaming path passes the gates below.
 
 ## Implementation sequence
 
+### Target-specific pretrained EAGLE3 pair, 2026-10-01
+
+The user redirected quality work to a pretrained target-specific drafter and
+authorized one idle GPU first. Use Qwen2.5-7B-Instruct with Thoughtworks's
+Qwen2.5-7B EAGLE3 checkpoint pinned to ff17dda64a036cf5bd7bc56c0ab728325f1c0d0b.
+Do not continue custom six-layer training or launch all P/V/D GPUs for this step.
+
+1. Fingerprint the downloaded config and weights, pin the author inference
+   source, validate vocabulary mapping and every loaded tensor. The actual
+   checkpoint has seven draft KV heads, despite its card describing four.
+2. On one idle 32 GB V100S, load target and drafter together in FP16. Use the
+   published auxiliary target blocks {1,13,24}, whose post-block states are
+   HF hidden-state slots {2,14,25}. Validate finite outputs and shifted token
+   alignment; the root token supplied by the target must not count as a
+   successful draft prediction.
+3. Compare eight-token greedy lookahead against the existing six-layer weights
+   on identical calibration prefixes, EOS masks and repetition policies.
+   Report positional agreement and consecutive-prefix agreement separately.
+   Time target feature extraction, draft prefix processing and warm rollout
+   separately, and record peak GPU memory and the single visible GPU.
+4. Preserve raw results and commit the completed bounded step. These results
+   measure token prediction only; no all-layer target Q prediction, native
+   CAGRA recall or full P/V/D output-quality claim follows. Later integration
+   must account for initial target-feature delivery and sparse D feature drift.
+
 ### Draft-Q quality follow-up, 2026-09-30
 
 The joint six-layer Draft-Q output-quality experiment (`cf447f525`) lost
