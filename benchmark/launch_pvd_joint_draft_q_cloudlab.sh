@@ -23,7 +23,7 @@ case "$arm" in
   target) unset PVD_JOINT_DRAFT_Q_CHECKPOINT ;;
   joint)
     if [[ "$role" == d ]]; then
-      export PVD_JOINT_DRAFT_Q_CHECKPOINT="$SGLANG_PVD_ROOT/validation/joint-draft-q-checkpoint-20260930/trained.pt"
+      export PVD_JOINT_DRAFT_Q_CHECKPOINT="${PVD_JOINT_DRAFT_Q_CHECKPOINT:-$SGLANG_PVD_ROOT/validation/joint-draft-q-checkpoint-20260930/trained.pt}"
     fi
     ;;
   *) echo 'arm must be full, target or joint' >&2; exit 2 ;;

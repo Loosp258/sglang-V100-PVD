@@ -5,7 +5,7 @@ arm="${1:?full, target or joint required}"
 [[ "$arm" =~ ^(full|target|joint)$ ]] || exit 2
 source /users/Yizhzhu/.sglang-v100-pvd-env.sh
 checkout="$SGLANG_PVD_ROOT/validation/pvd-joint-draft-q-20260930"
-evidence="$SGLANG_PVD_ROOT/validation/output-quality-20260930"
+evidence="${PVD_QUALITY_EVIDENCE_DIR:-$SGLANG_PVD_ROOT/validation/output-quality-20260930}"
 resume_args=()
 if [[ "${2:-}" == resume ]]; then
   resume_args=(--resume)
