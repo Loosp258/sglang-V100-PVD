@@ -57,6 +57,16 @@ def numeric(text):
         return None
 
 
+def gsm_answer(text):
+    final = extract_final(text)
+    if numeric(final) is not None:
+        return str(numeric(final)), "FINAL"
+    # Match the project's GSM8K last-number convention, retaining decimals and
+    # signs. Keep format compliance separate from the numeric correctness score.
+    matches = re.findall(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
+    return (str(Decimal(matches[-1])), "last_number") if matches else (None, "missing")
+
+
 def prepare(args):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
@@ -79,7 +89,7 @@ def prepare(args):
     rng.shuffle(hotpot_indices)
     items = []
     for benchmark, source, indices, count, limit in (
-        ("gsm8k", gsm, gsm_indices, 16, 256),
+        ("gsm8k", gsm, gsm_indices, 16, 512),
         ("hotpotqa", hotpot, hotpot_indices, 24, 128),
     ):
         accepted = 0
@@ -150,6 +160,7 @@ def generate(url, item):
         raise ValueError(f"failed response or tokenization mismatch: {final}")
     text = final.get("text", "")
     answer = extract_final(text)
+    gsm_value, gsm_method = gsm_answer(text) if item["benchmark"] == "gsm8k" else (None, None)
     return {"id": item["id"], "benchmark": item["benchmark"],
             "started_unix": start_unix, "first_event_seconds": first,
             "wall_seconds": time.perf_counter() - start,
@@ -158,6 +169,7 @@ def generate(url, item):
             "completion_tokens": meta.get("completion_tokens"),
             "finish_reason": meta.get("finish_reason"), "request_id": meta.get("id"),
             "text": text, "final_answer": answer, "gold_answer": item["gold_answer"],
+            "gsm_numeric_answer": gsm_value, "gsm_extraction": gsm_method,
             "truncated": meta.get("completion_tokens") == item["max_new_tokens"],
             "events": event_count}
 
@@ -199,13 +211,16 @@ def compare(args):
         for benchmark in ("gsm8k", "hotpotqa"):
             subset = [row for row in rows.values() if row["benchmark"] == benchmark]
             scores = [answer_scores(r["final_answer"] or "", r["gold_answer"]) if benchmark == "hotpotqa"
-                      else (float(numeric(r["final_answer"]) is not None
-                                  and numeric(r["final_answer"]) == numeric(r["gold_answer"])), 0)
+                      else (float(numeric(r["gsm_numeric_answer"]) is not None
+                                  and numeric(r["gsm_numeric_answer"]) == numeric(r["gold_answer"])), 0)
                       for r in subset]
             metrics[arm][benchmark] = {
                 "n": len(subset), "answer_em": statistics.mean(s[0] for s in scores),
                 "answer_f1": statistics.mean(s[1] for s in scores) if benchmark == "hotpotqa" else None,
                 "correct": sum(s[0] for s in scores),
+                "strict_final_em": statistics.mean(float(numeric(r["final_answer"]) is not None
+                    and numeric(r["final_answer"]) == numeric(r["gold_answer"])) for r in subset)
+                    if benchmark == "gsm8k" else statistics.mean(s[0] for s in scores),
                 "missing_final": sum(r["final_answer"] is None for r in subset),
                 "truncated": sum(r["truncated"] for r in subset),
                 "mean_output_tokens": statistics.mean(r["completion_tokens"] for r in subset),
@@ -213,12 +228,14 @@ def compare(args):
             }
     payload = {"metrics": metrics, "paired_rows": [
         {"id": key, "benchmark": base["benchmark"], "gold": base["gold_answer"],
-         "answers": {arm: rows[key]["final_answer"] for arm, rows in arms.items()},
+         "answers": {arm: (rows[key]["gsm_numeric_answer"] if base["benchmark"] == "gsm8k"
+                           else rows[key]["final_answer"]) for arm, rows in arms.items()},
          "output_matches_full": {arm: rows[key]["text"] == base["text"]
                                  for arm, rows in arms.items()}}
         for key, base in arms["full"].items()],
-        "caveat": "Fixed 40-question subset, not full public benchmark; strict declared FINAL "
-                  "extraction, missing FINAL scores zero; generated lengths can differ."}
+        "caveat": "Fixed 40-question subset, not full public benchmark; GSM8K FINAL then "
+                  "last-number extraction, strict FINAL metric also reported; HotpotQA strict "
+                  "FINAL extraction, missing FINAL scores zero; generated lengths can differ."}
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(metrics, indent=2))
 
