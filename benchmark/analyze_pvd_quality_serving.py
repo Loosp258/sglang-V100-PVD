@@ -74,6 +74,20 @@ def main():
         rows = [json.loads(line) for line in (args.folder / f"{arm}.jsonl").read_text(encoding="utf-8").splitlines()]
         arms[arm] = attach(rows, paths, arm)
         logs.extend(paths)
+        p_paths = sorted(args.folder.glob(f"p-quality-{arm}*.log*"))
+        choices = {}
+        for path in p_paths:
+            for line in log_text(path).splitlines():
+                choice = re.search(r"predicted Prompt split: transfer_id=(\S+) "
+                                   r"tokens=(\d+) prefix=(\d+)", line)
+                if choice:
+                    choices[choice[1]] = (int(choice[2]), int(choice[3]))
+        for row, event in zip(rows, arms[arm]):
+            choice = choices.get(row["entry_transfer_id"])
+            if choice is None or choice[0] != row["prompt_tokens"]:
+                raise ValueError(f"missing matched graph split choice for {arm}/{row['id']}")
+            event["chosen_graph_prefix_tokens"] = choice[1]
+        logs.extend(p_paths)
     payload = {"arms": arms, "summary": {
         arm: {benchmark: {
             "requests": len(subset := [row for row in rows if row["benchmark"] == benchmark]),
@@ -81,6 +95,7 @@ def main():
             "installed_boundaries": sum(len(row["installed_boundaries"]) for row in subset),
             "predicted_refreshes": sum(row["refreshes"].count("predicted") for row in subset),
             "committed_refreshes": sum(row["refreshes"].count("committed") for row in subset),
+            "complete_build_choice": sum(row["chosen_graph_prefix_tokens"] == 0 for row in subset),
         } for benchmark in ("gsm8k", "hotpotqa")} for arm, rows in arms.items()},
         "log_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in logs}}
     args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
