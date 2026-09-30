@@ -16,6 +16,7 @@ import re
 import statistics
 import string
 import time
+import urllib.error
 import urllib.request
 
 
@@ -181,7 +182,45 @@ def collect(args):
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as handle:
         for item in dataset["items"]:
+            def index_ids(rank):
+                with urllib.request.urlopen(
+                    f"{args.vector_host}:{9300 + rank}/internal/v1/indexes", timeout=10
+                ) as response:
+                    snapshot = json.load(response)
+                if not snapshot.get("enabled") or snapshot.get("quarantined"):
+                    raise ValueError("V indexes unavailable or quarantined")
+                return set(snapshot["entries"])
+
+            before = [index_ids(rank) for rank in (0, 1)]
             row = generate(args.url, item)
+            created = [index_ids(rank) - before[rank] for rank in (0, 1)]
+            if created[0] != created[1] or len(created[0]) != 1:
+                raise ValueError("cannot identify this sequential request's V Entry")
+            transfer_id = created[0].pop()
+            payload = json.dumps({"key": {
+                "model_instance_id": "qwen25-7b-pvd", "req_id": transfer_id,
+                "transfer_id": transfer_id}}).encode()
+            # Release only this completed request, through the coordinator's
+            # consumer/delivery and native-owner gates. Never clear live leases.
+            cleanup_started = time.perf_counter()
+            while True:
+                try:
+                    request = urllib.request.Request(args.coordinator + "/v1/entries/release",
+                        data=payload, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(request, timeout=10) as response:
+                        released = json.load(response)
+                    if released.get("state") != "released":
+                        raise ValueError("V Entry release was not confirmed")
+                    break
+                except urllib.error.HTTPError as error:
+                    reason = error.read().decode()
+                    if (time.perf_counter() - cleanup_started >= 10
+                            or not ("active consumer leases" in reason or "active deliveries" in reason)):
+                        raise RuntimeError(f"completed Entry release refused: {reason}") from error
+                    time.sleep(0.1)
+            row.update(entry_transfer_id=transfer_id,
+                       completed_entry_released=True,
+                       cleanup_seconds=time.perf_counter() - cleanup_started)
             row.update(arm=args.arm, dataset_sha256=digest(args.dataset.read_bytes()))
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             handle.flush()
@@ -252,6 +291,8 @@ def main():
     sample.add_argument("--output", type=Path, required=True)
     sample.add_argument("--arm", choices=("full", "target", "joint"), required=True)
     sample.add_argument("--url", default="http://10.10.1.2:8001")
+    sample.add_argument("--vector-host", default="http://10.10.1.2")
+    sample.add_argument("--coordinator", default="http://10.10.1.2:9100")
     cmp = sub.add_parser("compare")
     cmp.add_argument("--folder", type=Path, required=True)
     cmp.add_argument("--output", type=Path, required=True)
