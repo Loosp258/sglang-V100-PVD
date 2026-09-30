@@ -1,0 +1,21 @@
+{
+  "schema": "pvd.eagle3_pair.evidence.v1",
+  "probe_sha256": "a0b9008b0736433395eb7d1a92c50d4209a5e2bfe7c618533d0ee1a8ca67aea1",
+  "gpu": "node0 physical GPU1, CUDA_VISIBLE_DEVICES=1",
+  "final_exit": 0,
+  "files_sha256": {
+    "alignment.json": "af0918c7823ac832e32d997e2363cd9ed9d3f559b950eb9fc731d8cf3497a0e8",
+    "checkpoint.json": "3f811fc26181dee413c93fe790a7daf7f4031e0a1397a77deeecae73fa5a5221",
+    "checkpoint/config.json": "f25f6fcb047006a3c005ea1321d3840d114578d865866844486f18da0c503c71",
+    "checkpoint/README.md": "fade31c0ed33b30b1e4300716493ec7a9008d6906f58fbc7cc5ac0e4052c73b3",
+    "latency-2155.json": "0ebc63594cd454fa537e6f23fc5023c96270d65d79a062c030ce1411e5239281",
+    "pilot-source.py": "770bda1eb025402cacf636eba7b531420031afc69481ef89e151d2330011109f",
+    "pilot.log": "96912cdc99c9ed6ec0bf5b55d7d1ad23dd5e848add0659b209e9c44b3243e9a3",
+    "report.json": "ac0944df5860f19a882b9310f0c92f07699f400c4618fb98dacffe92c642b44e",
+    "rope-compat-failed.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "rope-compat-failed.log": "08704c71547c56c1e038fff3d344e562b47d8f53e294e489ccfb9d7f2bc6bb99",
+    "rows.json": "a64d307ee30ef490737ec4d8995e5d16159c11bb4f7184cdcc112e864818c7ee",
+    "run.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "run.log": "5e9f33e7c1225f3d175e42cfbc0f1bf6c78593df00e06fd30986e7b9885dd76d"
+  }
+}

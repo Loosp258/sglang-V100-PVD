@@ -1,0 +1,522 @@
+{
+  "schema": "pvd.eagle3_pair.token_probe.v1",
+  "questions": 8,
+  "prefixes": 23,
+  "device_count": 1,
+  "gpu": "Tesla V100S-PCIE-32GB",
+  "cuda_visible_devices": "1",
+  "eagle": {
+    "predicted_positions": 161,
+    "correct": 52,
+    "agreement": 0.32298136645962733,
+    "consecutive_prefix_mean": 1.9565217391304348,
+    "positions": [
+      {
+        "position": 1,
+        "n": 23,
+        "correct": 17
+      },
+      {
+        "position": 2,
+        "n": 22,
+        "correct": 9
+      },
+      {
+        "position": 3,
+        "n": 22,
+        "correct": 10
+      },
+      {
+        "position": 4,
+        "n": 21,
+        "correct": 4
+      },
+      {
+        "position": 5,
+        "n": 20,
+        "correct": 7
+      },
+      {
+        "position": 6,
+        "n": 18,
+        "correct": 2
+      },
+      {
+        "position": 7,
+        "n": 18,
+        "correct": 2
+      },
+      {
+        "position": 8,
+        "n": 17,
+        "correct": 1
+      }
+    ],
+    "warm_median_ms": {
+      "prefix_ms": 2.818809007294476,
+      "rollout_ms": 15.478528977837414,
+      "total_ms": 18.230643996503204
+    }
+  },
+  "old": {
+    "predicted_positions": 161,
+    "correct": 32,
+    "agreement": 0.19875776397515527,
+    "consecutive_prefix_mean": 1.173913043478261,
+    "positions": [
+      {
+        "position": 1,
+        "n": 23,
+        "correct": 14
+      },
+      {
+        "position": 2,
+        "n": 22,
+        "correct": 5
+      },
+      {
+        "position": 3,
+        "n": 22,
+        "correct": 6
+      },
+      {
+        "position": 4,
+        "n": 21,
+        "correct": 2
+      },
+      {
+        "position": 5,
+        "n": 20,
+        "correct": 4
+      },
+      {
+        "position": 6,
+        "n": 18,
+        "correct": 0
+      },
+      {
+        "position": 7,
+        "n": 18,
+        "correct": 1
+      },
+      {
+        "position": 8,
+        "n": 17,
+        "correct": 0
+      }
+    ],
+    "warm_median_ms": {
+      "prefix_ms": 6.150213012006134,
+      "rollout_ms": 39.955086016561836,
+      "total_ms": 46.162254991941154
+    }
+  },
+  "by_task": {
+    "gsm8k": {
+      "eagle": {
+        "predicted_positions": 128,
+        "correct": 51,
+        "agreement": 0.3984375,
+        "consecutive_prefix_mean": 2.75,
+        "positions": [
+          {
+            "position": 1,
+            "n": 16,
+            "correct": 16
+          },
+          {
+            "position": 2,
+            "n": 16,
+            "correct": 9
+          },
+          {
+            "position": 3,
+            "n": 16,
+            "correct": 10
+          },
+          {
+            "position": 4,
+            "n": 16,
+            "correct": 4
+          },
+          {
+            "position": 5,
+            "n": 16,
+            "correct": 7
+          },
+          {
+            "position": 6,
+            "n": 16,
+            "correct": 2
+          },
+          {
+            "position": 7,
+            "n": 16,
+            "correct": 2
+          },
+          {
+            "position": 8,
+            "n": 16,
+            "correct": 1
+          }
+        ],
+        "warm_median_ms": {
+          "prefix_ms": 2.6419164787512273,
+          "rollout_ms": 15.425965510075912,
+          "total_ms": 18.10351447784342
+        }
+      },
+      "old": {
+        "predicted_positions": 128,
+        "correct": 28,
+        "agreement": 0.21875,
+        "consecutive_prefix_mean": 1.4375,
+        "positions": [
+          {
+            "position": 1,
+            "n": 16,
+            "correct": 10
+          },
+          {
+            "position": 2,
+            "n": 16,
+            "correct": 5
+          },
+          {
+            "position": 3,
+            "n": 16,
+            "correct": 6
+          },
+          {
+            "position": 4,
+            "n": 16,
+            "correct": 2
+          },
+          {
+            "position": 5,
+            "n": 16,
+            "correct": 4
+          },
+          {
+            "position": 6,
+            "n": 16,
+            "correct": 0
+          },
+          {
+            "position": 7,
+            "n": 16,
+            "correct": 1
+          },
+          {
+            "position": 8,
+            "n": 16,
+            "correct": 0
+          }
+        ],
+        "warm_median_ms": {
+          "prefix_ms": 6.097884004702792,
+          "rollout_ms": 39.83783000148833,
+          "total_ms": 45.9586970100645
+        }
+      }
+    },
+    "hotpotqa": {
+      "eagle": {
+        "predicted_positions": 33,
+        "correct": 1,
+        "agreement": 0.030303030303030304,
+        "consecutive_prefix_mean": 0.14285714285714285,
+        "positions": [
+          {
+            "position": 1,
+            "n": 7,
+            "correct": 1
+          },
+          {
+            "position": 2,
+            "n": 6,
+            "correct": 0
+          },
+          {
+            "position": 3,
+            "n": 6,
+            "correct": 0
+          },
+          {
+            "position": 4,
+            "n": 5,
+            "correct": 0
+          },
+          {
+            "position": 5,
+            "n": 4,
+            "correct": 0
+          },
+          {
+            "position": 6,
+            "n": 2,
+            "correct": 0
+          },
+          {
+            "position": 7,
+            "n": 2,
+            "correct": 0
+          },
+          {
+            "position": 8,
+            "n": 1,
+            "correct": 0
+          }
+        ],
+        "warm_median_ms": {
+          "prefix_ms": 11.62827096413821,
+          "rollout_ms": 15.652236004825681,
+          "total_ms": 27.323127957060933
+        }
+      },
+      "old": {
+        "predicted_positions": 33,
+        "correct": 4,
+        "agreement": 0.12121212121212122,
+        "consecutive_prefix_mean": 0.5714285714285714,
+        "positions": [
+          {
+            "position": 1,
+            "n": 7,
+            "correct": 4
+          },
+          {
+            "position": 2,
+            "n": 6,
+            "correct": 0
+          },
+          {
+            "position": 3,
+            "n": 6,
+            "correct": 0
+          },
+          {
+            "position": 4,
+            "n": 5,
+            "correct": 0
+          },
+          {
+            "position": 5,
+            "n": 4,
+            "correct": 0
+          },
+          {
+            "position": 6,
+            "n": 2,
+            "correct": 0
+          },
+          {
+            "position": 7,
+            "n": 2,
+            "correct": 0
+          },
+          {
+            "position": 8,
+            "n": 1,
+            "correct": 0
+          }
+        ],
+        "warm_median_ms": {
+          "prefix_ms": 31.76075901137665,
+          "rollout_ms": 40.1827129535377,
+          "total_ms": 71.8899920466356
+        }
+      }
+    }
+  },
+  "peak_allocated_mib": 18369.7802734375,
+  "peak_reserved_mib": 19324.0,
+  "shared_repetition_penalty": 1.05,
+  "known_root_counted": false,
+  "eos": [
+    151643,
+    151645
+  ],
+  "auxiliary_post_block_ids": [
+    1,
+    13,
+    24
+  ],
+  "hf_hidden_state_slots": [
+    2,
+    14,
+    25
+  ],
+  "mapping": "offset + draft_index",
+  "eagle_source_commit": "cb7e0841fe0c206c6ed74a197ad5e2a1f13f5a2b",
+  "torch": "2.9.1+cu128",
+  "probe_sha256": "a0b9008b0736433395eb7d1a92c50d4209a5e2bfe7c618533d0ee1a8ca67aea1",
+  "latency_2155": {
+    "prompt_tokens": 2155,
+    "known_root_tokens": 1,
+    "predicted_tokens": 8,
+    "fixture": "Synthetic Case 40 / repeated EEFTRITON; same as previous latency probe",
+    "target_preparation": {
+      "target_prefill_ms": 737.3782420181669,
+      "feature_fusion_ms": 0.5946379969827831
+    },
+    "samples": {
+      "eagle": [
+        {
+          "prefix_ms": 21.617900987621397,
+          "rollout_ms": 15.832073986530304,
+          "total_ms": 37.4499749741517
+        },
+        {
+          "prefix_ms": 21.26951701939106,
+          "rollout_ms": 15.474923013243824,
+          "total_ms": 36.744440032634884
+        },
+        {
+          "prefix_ms": 21.275767998304218,
+          "rollout_ms": 15.616940043400973,
+          "total_ms": 36.89270804170519
+        },
+        {
+          "prefix_ms": 26.22439101105556,
+          "rollout_ms": 15.863553970120847,
+          "total_ms": 42.087944981176406
+        },
+        {
+          "prefix_ms": 20.999700005631894,
+          "rollout_ms": 15.665130049455911,
+          "total_ms": 36.664830055087805
+        }
+      ],
+      "old": [
+        {
+          "prefix_ms": 57.79802001779899,
+          "rollout_ms": 39.92927598301321,
+          "total_ms": 97.7272960008122
+        },
+        {
+          "prefix_ms": 55.56265701306984,
+          "rollout_ms": 39.90204498404637,
+          "total_ms": 95.46470199711621
+        },
+        {
+          "prefix_ms": 54.70909195719287,
+          "rollout_ms": 39.989560027606785,
+          "total_ms": 94.69865198479965
+        },
+        {
+          "prefix_ms": 57.03377298777923,
+          "rollout_ms": 40.06434098118916,
+          "total_ms": 97.09811396896839
+        },
+        {
+          "prefix_ms": 56.0734270256944,
+          "rollout_ms": 40.20652797771618,
+          "total_ms": 96.27995500341058
+        }
+      ]
+    },
+    "warm_median_ms": {
+      "eagle": {
+        "prefix_ms": 21.275767998304218,
+        "rollout_ms": 15.665130049455911,
+        "total_ms": 36.89270804170519
+      },
+      "old": {
+        "prefix_ms": 56.0734270256944,
+        "rollout_ms": 39.989560027606785,
+        "total_ms": 96.27995500341058
+      }
+    }
+  },
+  "questions_sha256": "f2547066bf57e930d8b558488f7359a72ece3b7e5dba07ad08543382066b3c27",
+  "old_checkpoint_sha256": "75a0c48a95d80ef8ccf6025e4c92e2ea2a028d9cf394e327fb69bec1da007efe",
+  "checkpoint": {
+    "repository": "thoughtworks/Qwen2.5-7B-Instruct-Eagle3",
+    "revision": "ff17dda64a036cf5bd7bc56c0ab728325f1c0d0b",
+    "weights_sha256": "f77665495c620c17d05d6672444094844866e2a27e545d6837e8b107465ddfd8",
+    "bytes": 717798344,
+    "config": {
+      "architectures": [
+        "LlamaForCausalLM"
+      ],
+      "model_type": "llama",
+      "hidden_size": 3584,
+      "intermediate_size": 14336,
+      "num_hidden_layers": 1,
+      "num_attention_heads": 28,
+      "num_key_value_heads": 7,
+      "head_dim": 128,
+      "vocab_size": 152064,
+      "draft_vocab_size": 32000,
+      "rope_theta": 1000000.0,
+      "rms_norm_eps": 1e-06,
+      "torch_dtype": "bfloat16",
+      "tie_word_embeddings": false
+    },
+    "tensor_shapes": {
+      "d2t": [
+        32000
+      ],
+      "fc.weight": [
+        3584,
+        10752
+      ],
+      "lm_head.weight": [
+        32000,
+        3584
+      ],
+      "midlayer.hidden_norm.weight": [
+        3584
+      ],
+      "midlayer.input_layernorm.weight": [
+        3584
+      ],
+      "midlayer.mlp.down_proj.weight": [
+        3584,
+        14336
+      ],
+      "midlayer.mlp.gate_proj.weight": [
+        14336,
+        3584
+      ],
+      "midlayer.mlp.up_proj.weight": [
+        14336,
+        3584
+      ],
+      "midlayer.post_attention_layernorm.weight": [
+        3584
+      ],
+      "midlayer.self_attn.k_proj.weight": [
+        896,
+        7168
+      ],
+      "midlayer.self_attn.o_proj.weight": [
+        3584,
+        3584
+      ],
+      "midlayer.self_attn.q_proj.weight": [
+        3584,
+        7168
+      ],
+      "midlayer.self_attn.v_proj.weight": [
+        896,
+        7168
+      ],
+      "norm.weight": [
+        3584
+      ],
+      "t2d": [
+        152064
+      ]
+    },
+    "eagle_commit": "cb7e0841fe0c206c6ed74a197ad5e2a1f13f5a2b"
+  },
+  "notes": [
+    "Target full-attention features supplied offline; serving sparse-D drift is untested.",
+    "Author EAGLE eager inference unchanged; no native serving kernel timing.",
+    "Old six-layer token trunk FP32 matches deployed trunk; Q readout excluded.",
+    "Neither arm performs token verification or emits target Q.",
+    "Only genuine predicted positions through the first target EOS are scored."
+  ]
+}

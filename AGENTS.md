@@ -184,6 +184,18 @@ Do not continue custom six-layer training or launch all P/V/D GPUs for this step
    CAGRA recall or full P/V/D output-quality claim follows. Later integration
    must account for initial target-feature delivery and sparse D feature drift.
 
+The one-GPU probe completed on node0 GPU1. FP16 loading and the author's
+eight-step width-one tree alignment pass. On eight calibration questions and
+23 prefixes, position-weighted token agreement improves 19.88% to32.30%, but
+math improves21.88% to39.84% while reading regresses12.12% to3.03%. Conditional
+2155+root+8 Draft time is36.89ms versus96.28ms for the old token trunk, excluding
+Q readout and feature acquisition. Producing target features with a fresh
+full Prefill costs737.38ms; reuse and initial feature handoff are required.
+Peak allocated inference memory is17.94GiB. Do not promote on aggregate token
+agreement; resolve the reading regression and measure real target-Q retrieval
+and full-path quality first. Report:
+`benchmark/results/pvd_eagle3_pair_cloudlab_20261001.md`.
+
 ### Draft-Q quality follow-up, 2026-09-30
 
 The joint six-layer Draft-Q output-quality experiment (`cf447f525`) lost

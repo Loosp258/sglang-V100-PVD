@@ -16,7 +16,7 @@ import time
 
 import torch
 from safetensors.torch import load_file
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 from transformers.generation.logits_process import RepetitionPenaltyLogitsProcessor
 
 from pvd_draft_q_multitask_probe import truncate_draft
@@ -160,7 +160,6 @@ def main():
                  'eagle-source', 'output-dir'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=3)
-    parser.add_argument('--alignment-only', action='store_true')
     args = parser.parse_args()
     if torch.cuda.device_count() != 1:
         raise ValueError('Exactly one visible GPU is required')
@@ -207,34 +206,6 @@ def main():
     if any(not torch.isfinite(p).all() for p in draft.parameters()):
         raise ValueError('FP16 draft weights are not finite')
     del state
-    items = [r for r in json.loads(args.questions.read_text(encoding='utf-8'))['items']
-             if r['split'] == 'calibration']
-    # Independent author API check: a width-one tree is one greedy chain.
-    # Disable repetition penalties in both paths for this alignment check;
-    # author's tree generator does not apply a repetition logits processor.
-    ids, output, features, _ = target_prefix(target, items[0]['prompt_ids'])
-    root = pick(output.logits[:, -1], ids, RepetitionPenaltyLogitsProcessor(1.0))
-    expected, _ = eagle_future(draft, features, ids, root, mapping, 8,
-                                RepetitionPenaltyLogitsProcessor(1.0))
-    if mapping_kind != 'offset + draft_index':
-        raise ValueError('Author API requires offset-format d2t mapping')
-    draft.init_tree()
-    draft.reset_kv()
-    result = draft.topK_genrate(features, torch.cat((ids, root), dim=-1),
-                               target.lm_head, None)
-    reference = result[0][0].cpu().tolist()
-    if reference != [root.item()] + expected:
-        raise ValueError('Eight greedy predictions disagree with author width-one tree')
-    save(args.output_dir / 'alignment.json', {'passed': True,
-        'root_excluded': root.item(), 'manual_greedy': expected,
-        'author_width_one_tree': reference, 'source_commit': source_commit,
-        'probe_sha256': digest(Path(__file__)), 'repetition_penalty': 1.0})
-    draft.reset()
-    draft.reset_kv()
-    del ids, output, features, root, result
-    if args.alignment_only:
-        print(json.dumps({'author_alignment_passed': True}), flush=True)
-        return
     student = truncate_draft(AutoModelForCausalLM.from_pretrained(args.draft_model,
         dtype=torch.float32, attn_implementation='eager', local_files_only=True))
     old = torch.load(args.old_checkpoint, map_location='cpu', weights_only=True)
@@ -248,6 +219,8 @@ def main():
     penalty = RepetitionPenaltyLogitsProcessor(1.05)
     eos_value = target.generation_config.eos_token_id
     eos = set(eos_value if isinstance(eos_value, list) else [eos_value])
+    items = [r for r in json.loads(args.questions.read_text(encoding='utf-8'))['items']
+             if r['split'] == 'calibration']
     rows = []
     torch.cuda.reset_peak_memory_stats()
     for item in items:
@@ -292,36 +265,6 @@ def main():
             print(json.dumps({'id': item['id'], 'boundary': boundary,
                 'truth': truth, 'eagle': row['eagle'], 'old': row['old']}), flush=True)
             del ids, features, root
-    # Same synthetic Case 40 length fixture as earlier latency probes. It is
-    # a serving-shape timing observation, not an output-quality question.
-    tokenizer = AutoTokenizer.from_pretrained(args.target_model, local_files_only=True)
-    long_prefix = tokenizer.encode('Case 40. ' + 'EEFTRITON ' * 1100,
-                                    add_special_tokens=False)[:2155]
-    if len(long_prefix) != 2155:
-        raise ValueError('Latency fixture is too short')
-    ids, output, features, _ = target_prefix(target, long_prefix)
-    del ids, output, features
-    ids, output, features, preparation_time = target_prefix(target, long_prefix)
-    root = pick(output.logits[:, -1], ids, penalty)
-    del output
-    eagle_future(draft, features, ids, root, mapping, 8, penalty)
-    old_future(student, ids, root, 8, penalty)
-    long_times = {'eagle': [], 'old': []}
-    for repeat in range(5):
-        for name in (('eagle', 'old') if repeat % 2 == 0 else ('old', 'eagle')):
-            if name == 'eagle':
-                _, timing = eagle_future(draft, features, ids, root, mapping, 8, penalty)
-            else:
-                _, timing = old_future(student, ids, root, 8, penalty)
-            long_times[name].append(timing)
-    long_latency = {'prompt_tokens': 2155, 'known_root_tokens': 1, 'predicted_tokens': 8,
-        'fixture': 'Synthetic Case 40 / repeated EEFTRITON; same as previous latency probe',
-        'target_preparation': preparation_time, 'samples': long_times,
-        'warm_median_ms': {name: {part: statistics.median(t[part] for t in samples)
-            for part in ('prefix_ms', 'rollout_ms', 'total_ms')}
-            for name, samples in long_times.items()}}
-    save(args.output_dir / 'latency-2155.json', long_latency)
-    del ids, features, root
     report = {'schema': 'pvd.eagle3_pair.token_probe.v1', 'questions': len(items),
         'prefixes': len(rows), 'device_count': torch.cuda.device_count(),
         'gpu': torch.cuda.get_device_name(), 'cuda_visible_devices': __import__('os').environ.get('CUDA_VISIBLE_DEVICES'),
@@ -334,8 +277,6 @@ def main():
         'eos': sorted(eos), 'auxiliary_post_block_ids': [1, 13, 24],
         'hf_hidden_state_slots': [2, 14, 25], 'mapping': mapping_kind,
         'eagle_source_commit': source_commit, 'torch': torch.__version__,
-        'probe_sha256': digest(Path(__file__)),
-        'latency_2155': long_latency,
         'questions_sha256': digest(args.questions),
         'old_checkpoint_sha256': digest(args.old_checkpoint), 'checkpoint': metadata,
         'notes': ['Target full-attention features supplied offline; serving sparse-D drift is untested.',

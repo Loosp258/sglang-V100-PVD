@@ -1,0 +1,78 @@
+{
+  "prompt_tokens": 2155,
+  "known_root_tokens": 1,
+  "predicted_tokens": 8,
+  "fixture": "Synthetic Case 40 / repeated EEFTRITON; same as previous latency probe",
+  "target_preparation": {
+    "target_prefill_ms": 737.3782420181669,
+    "feature_fusion_ms": 0.5946379969827831
+  },
+  "samples": {
+    "eagle": [
+      {
+        "prefix_ms": 21.617900987621397,
+        "rollout_ms": 15.832073986530304,
+        "total_ms": 37.4499749741517
+      },
+      {
+        "prefix_ms": 21.26951701939106,
+        "rollout_ms": 15.474923013243824,
+        "total_ms": 36.744440032634884
+      },
+      {
+        "prefix_ms": 21.275767998304218,
+        "rollout_ms": 15.616940043400973,
+        "total_ms": 36.89270804170519
+      },
+      {
+        "prefix_ms": 26.22439101105556,
+        "rollout_ms": 15.863553970120847,
+        "total_ms": 42.087944981176406
+      },
+      {
+        "prefix_ms": 20.999700005631894,
+        "rollout_ms": 15.665130049455911,
+        "total_ms": 36.664830055087805
+      }
+    ],
+    "old": [
+      {
+        "prefix_ms": 57.79802001779899,
+        "rollout_ms": 39.92927598301321,
+        "total_ms": 97.7272960008122
+      },
+      {
+        "prefix_ms": 55.56265701306984,
+        "rollout_ms": 39.90204498404637,
+        "total_ms": 95.46470199711621
+      },
+      {
+        "prefix_ms": 54.70909195719287,
+        "rollout_ms": 39.989560027606785,
+        "total_ms": 94.69865198479965
+      },
+      {
+        "prefix_ms": 57.03377298777923,
+        "rollout_ms": 40.06434098118916,
+        "total_ms": 97.09811396896839
+      },
+      {
+        "prefix_ms": 56.0734270256944,
+        "rollout_ms": 40.20652797771618,
+        "total_ms": 96.27995500341058
+      }
+    ]
+  },
+  "warm_median_ms": {
+    "eagle": {
+      "prefix_ms": 21.275767998304218,
+      "rollout_ms": 15.665130049455911,
+      "total_ms": 36.89270804170519
+    },
+    "old": {
+      "prefix_ms": 56.0734270256944,
+      "rollout_ms": 39.989560027606785,
+      "total_ms": 96.27995500341058
+    }
+  }
+}

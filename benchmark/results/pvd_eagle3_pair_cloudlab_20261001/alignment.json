@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "root_excluded": 5338,
+  "manual_greedy": [
+    11,
+    1077,
+    594,
+    1477,
+    700,
+    1246,
+    1657,
+    803
+  ],
+  "author_width_one_tree": [
+    5338,
+    11,
+    1077,
+    594,
+    1477,
+    700,
+    1246,
+    1657,
+    803
+  ],
+  "source_commit": "cb7e0841fe0c206c6ed74a197ad5e2a1f13f5a2b",
+  "probe_sha256": "a0b9008b0736433395eb7d1a92c50d4209a5e2bfe7c618533d0ee1a8ca67aea1",
+  "repetition_penalty": 1.0
+}
