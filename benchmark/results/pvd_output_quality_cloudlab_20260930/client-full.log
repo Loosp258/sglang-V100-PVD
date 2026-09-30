@@ -1,0 +1,73 @@
+{"case": "warmup", "started_unix": 1790750344.0619245, "status": 200, "first_event_seconds": 2.7083960339659825, "wall_seconds": 3.112107952008955, "prompt_sha256": "19f59670df470cef36ff9c603b9f51870b841c9221c06a212c4477ce89bfe642", "prompt_tokens": 2157, "completion_tokens": 6, "output_text": "1. EEFTRIT", "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163", "request_id": "bdef190b6c6c4b77a26509c3802a10cd", "error": null, "events": 6, "arm": "target"}
+{"arm": "full", "id": "hotpotqa:5a7efd2f5542994959419a9c", "completion_tokens": 5, "wall_seconds": 1.3827288019820116, "final_answer": "Blue Peter", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ab2e3c45542991669774126", "completion_tokens": 4, "wall_seconds": 1.7038874040008523, "final_answer": "yes", "truncated": false}
+{"arm": "full", "id": "gsm8k:288", "completion_tokens": 139, "wall_seconds": 7.093580910994206, "final_answer": "3", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a8089dc5542992bc0c4a765", "completion_tokens": 13, "wall_seconds": 2.652155101997778, "final_answer": "1994-1995", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a83de04554299334474609f", "completion_tokens": 11, "wall_seconds": 2.0609078859561123, "final_answer": "a sound as loud and dirty as possible", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ae37d265542994393b9e6e7", "completion_tokens": 8, "wall_seconds": 1.9982140369829722, "final_answer": "Tamara Ecclestone", "truncated": false}
+{"arm": "full", "id": "gsm8k:137", "completion_tokens": 261, "wall_seconds": 13.086340678972192, "final_answer": "29", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ab53ad6554299488d4d9917", "completion_tokens": 12, "wall_seconds": 2.0684574560145847, "final_answer": "Shep Meyers", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a73aeb855429908901be311", "completion_tokens": 8, "wall_seconds": 2.389021569979377, "final_answer": "YouTube celebrity PewDiePie", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5abc0ac455429959677d6a01", "completion_tokens": 4, "wall_seconds": 1.5889910229598172, "final_answer": "London", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ab2b7c1554299166977406a", "completion_tokens": 8, "wall_seconds": 1.959356986975763, "final_answer": "John M. Dowd", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5adec4695542992fa25da83a", "completion_tokens": 8, "wall_seconds": 2.080695508979261, "final_answer": "Dziga Vertov", "truncated": false}
+{"arm": "full", "id": "gsm8k:591", "completion_tokens": 214, "wall_seconds": 10.905270913965069, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a75140b5542996c70cfae87", "completion_tokens": 6, "wall_seconds": 1.8411137909861282, "final_answer": "Alexander Gorsky", "truncated": false}
+{"arm": "full", "id": "gsm8k:1179", "completion_tokens": 285, "wall_seconds": 14.152544959972147, "final_answer": "50", "truncated": false}
+{"arm": "full", "id": "gsm8k:86", "completion_tokens": 204, "wall_seconds": 10.522683575982228, "final_answer": "22", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ae27f22554299495565da8d", "completion_tokens": 8, "wall_seconds": 2.044841051043477, "final_answer": "1926", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ade1f0555429975fa854e74", "completion_tokens": 5, "wall_seconds": 2.1162791989627294, "final_answer": "Danny Glover", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a7a0e1e5542990783324e1a", "completion_tokens": 6, "wall_seconds": 2.1258692590054125, "final_answer": "Scotch Collie", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ae64b015542992ae0d162bc", "completion_tokens": 5, "wall_seconds": 2.098876702017151, "final_answer": "United Kingdom", "truncated": false}
+{"arm": "full", "id": "gsm8k:1193", "completion_tokens": 267, "wall_seconds": 14.042082999018021, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "gsm8k:186", "completion_tokens": 345, "wall_seconds": 17.803546116978396, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ac3a0db554299391541383a", "completion_tokens": 5, "wall_seconds": 2.146743178018369, "final_answer": "Minnesota Capitol", "truncated": false}
+{"arm": "full", "id": "gsm8k:1009", "completion_tokens": 336, "wall_seconds": 17.16980789898662, "final_answer": "1875", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a82301155429926c1cdae4a", "completion_tokens": 6, "wall_seconds": 2.1123210429796018, "final_answer": "$1 million", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a794119554299029c4b5f3c", "completion_tokens": 13, "wall_seconds": 2.4367915129987523, "final_answer": "Baz Luhrmann", "truncated": false}
+{"arm": "full", "id": "gsm8k:405", "completion_tokens": 418, "wall_seconds": 21.42690139997285, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "gsm8k:364", "completion_tokens": 114, "wall_seconds": 6.228371687990148, "final_answer": "49", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a8a521d5542992d82986f15", "completion_tokens": 12, "wall_seconds": 2.2196027720347047, "final_answer": "S\u00f8nderjyskE Ishockey", "truncated": false}
+{"arm": "full", "id": "gsm8k:406", "completion_tokens": 201, "wall_seconds": 10.326555954990909, "final_answer": "140", "truncated": false}
+{"arm": "full", "id": "gsm8k:1213", "completion_tokens": 207, "wall_seconds": 11.095293785969261, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "gsm8k:1289", "completion_tokens": 280, "wall_seconds": 14.260271865990944, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a76d15e55429966f1a36bfa", "completion_tokens": 10, "wall_seconds": 2.129852684040088, "final_answer": "Gillian Anderson", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a8ce55f554299441c6b9f62", "completion_tokens": 4, "wall_seconds": 2.228308086981997, "final_answer": "Tulsa", "truncated": false}
+{"arm": "full", "id": "gsm8k:606", "completion_tokens": 394, "wall_seconds": 19.581418863963336, "final_answer": null, "truncated": false}
+{"arm": "full", "id": "gsm8k:442", "completion_tokens": 235, "wall_seconds": 12.451028126000892, "final_answer": "49", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5ac3e80b554299076e296ccd", "completion_tokens": 4, "wall_seconds": 1.6956134479842149, "final_answer": "swimming", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a7f392b55429934daa2fd26", "completion_tokens": 8, "wall_seconds": 2.1347492749919184, "final_answer": "Jordi Cruyff", "truncated": false}
+{"arm": "full", "id": "hotpotqa:5a87a7235542996e4f3088a8", "completion_tokens": 5, "wall_seconds": 2.02622755500488, "final_answer": "Rated R", "truncated": false}
+Traceback (most recent call last):
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_output_quality.py", line 210, in collect
+    with urllib.request.urlopen(request, timeout=10) as response:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/urllib/request.py", line 215, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/urllib/request.py", line 521, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/urllib/request.py", line 630, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/urllib/request.py", line 559, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/urllib/request.py", line 492, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/urllib/request.py", line 639, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 409: Conflict
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_output_quality.py", line 304, in <module>
+    main()
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_output_quality.py", line 300, in main
+    {"prepare": prepare, "collect": collect, "compare": compare}[args.command](args)
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_output_quality.py", line 219, in collect
+    raise RuntimeError(f"completed Entry release refused: {reason}") from error
+RuntimeError: completed Entry release refused: {"error": "entry has active consumer leases"}

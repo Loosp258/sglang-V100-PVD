@@ -1,0 +1,375 @@
+{
+  "paired_em_transitions": {
+    "full_to_target": {
+      "gsm8k": {
+        "primary": {
+          "retained_correct": [
+            "gsm8k:288",
+            "gsm8k:137",
+            "gsm8k:591",
+            "gsm8k:1179",
+            "gsm8k:86",
+            "gsm8k:1193",
+            "gsm8k:186",
+            "gsm8k:1009",
+            "gsm8k:405",
+            "gsm8k:364",
+            "gsm8k:1213",
+            "gsm8k:1289",
+            "gsm8k:606",
+            "gsm8k:442",
+            "gsm8k:449"
+          ],
+          "lost_correct": [],
+          "gained_correct": [],
+          "both_wrong": [
+            "gsm8k:406"
+          ]
+        },
+        "final_variant": {
+          "retained_correct": [
+            "gsm8k:288",
+            "gsm8k:137",
+            "gsm8k:591",
+            "gsm8k:1179",
+            "gsm8k:86",
+            "gsm8k:1193",
+            "gsm8k:186",
+            "gsm8k:1009",
+            "gsm8k:405",
+            "gsm8k:364",
+            "gsm8k:1213",
+            "gsm8k:1289",
+            "gsm8k:606",
+            "gsm8k:442",
+            "gsm8k:449"
+          ],
+          "lost_correct": [],
+          "gained_correct": [],
+          "both_wrong": [
+            "gsm8k:406"
+          ]
+        }
+      },
+      "hotpotqa": {
+        "primary": {
+          "retained_correct": [
+            "hotpotqa:5a7efd2f5542994959419a9c",
+            "hotpotqa:5ab2e3c45542991669774126",
+            "hotpotqa:5ae37d265542994393b9e6e7",
+            "hotpotqa:5ab53ad6554299488d4d9917",
+            "hotpotqa:5abc0ac455429959677d6a01",
+            "hotpotqa:5ab2b7c1554299166977406a",
+            "hotpotqa:5adec4695542992fa25da83a",
+            "hotpotqa:5a75140b5542996c70cfae87",
+            "hotpotqa:5ae27f22554299495565da8d",
+            "hotpotqa:5ade1f0555429975fa854e74",
+            "hotpotqa:5a7a0e1e5542990783324e1a",
+            "hotpotqa:5ae64b015542992ae0d162bc",
+            "hotpotqa:5a8ce55f554299441c6b9f62",
+            "hotpotqa:5ac3e80b554299076e296ccd",
+            "hotpotqa:5a87a7235542996e4f3088a8"
+          ],
+          "lost_correct": [
+            "hotpotqa:5a794119554299029c4b5f3c",
+            "hotpotqa:5a76d15e55429966f1a36bfa"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "hotpotqa:5a8089dc5542992bc0c4a765",
+            "hotpotqa:5a83de04554299334474609f",
+            "hotpotqa:5a73aeb855429908901be311",
+            "hotpotqa:5ac3a0db554299391541383a",
+            "hotpotqa:5a82301155429926c1cdae4a",
+            "hotpotqa:5a8a521d5542992d82986f15",
+            "hotpotqa:5a7f392b55429934daa2fd26"
+          ]
+        },
+        "final_variant": {
+          "retained_correct": [
+            "hotpotqa:5a7efd2f5542994959419a9c",
+            "hotpotqa:5ab2e3c45542991669774126",
+            "hotpotqa:5ae37d265542994393b9e6e7",
+            "hotpotqa:5ab53ad6554299488d4d9917",
+            "hotpotqa:5abc0ac455429959677d6a01",
+            "hotpotqa:5ab2b7c1554299166977406a",
+            "hotpotqa:5adec4695542992fa25da83a",
+            "hotpotqa:5a75140b5542996c70cfae87",
+            "hotpotqa:5ae27f22554299495565da8d",
+            "hotpotqa:5ade1f0555429975fa854e74",
+            "hotpotqa:5a7a0e1e5542990783324e1a",
+            "hotpotqa:5ae64b015542992ae0d162bc",
+            "hotpotqa:5a794119554299029c4b5f3c",
+            "hotpotqa:5a76d15e55429966f1a36bfa",
+            "hotpotqa:5a8ce55f554299441c6b9f62",
+            "hotpotqa:5ac3e80b554299076e296ccd",
+            "hotpotqa:5a87a7235542996e4f3088a8"
+          ],
+          "lost_correct": [],
+          "gained_correct": [],
+          "both_wrong": [
+            "hotpotqa:5a8089dc5542992bc0c4a765",
+            "hotpotqa:5a83de04554299334474609f",
+            "hotpotqa:5a73aeb855429908901be311",
+            "hotpotqa:5ac3a0db554299391541383a",
+            "hotpotqa:5a82301155429926c1cdae4a",
+            "hotpotqa:5a8a521d5542992d82986f15",
+            "hotpotqa:5a7f392b55429934daa2fd26"
+          ]
+        }
+      }
+    },
+    "full_to_joint": {
+      "gsm8k": {
+        "primary": {
+          "retained_correct": [
+            "gsm8k:1179",
+            "gsm8k:86",
+            "gsm8k:442"
+          ],
+          "lost_correct": [
+            "gsm8k:288",
+            "gsm8k:137",
+            "gsm8k:591",
+            "gsm8k:1193",
+            "gsm8k:186",
+            "gsm8k:1009",
+            "gsm8k:405",
+            "gsm8k:364",
+            "gsm8k:1213",
+            "gsm8k:1289",
+            "gsm8k:606",
+            "gsm8k:449"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "gsm8k:406"
+          ]
+        },
+        "final_variant": {
+          "retained_correct": [
+            "gsm8k:1179",
+            "gsm8k:86",
+            "gsm8k:442"
+          ],
+          "lost_correct": [
+            "gsm8k:288",
+            "gsm8k:137",
+            "gsm8k:591",
+            "gsm8k:1193",
+            "gsm8k:186",
+            "gsm8k:1009",
+            "gsm8k:405",
+            "gsm8k:364",
+            "gsm8k:1213",
+            "gsm8k:1289",
+            "gsm8k:606",
+            "gsm8k:449"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "gsm8k:406"
+          ]
+        }
+      },
+      "hotpotqa": {
+        "primary": {
+          "retained_correct": [
+            "hotpotqa:5a7efd2f5542994959419a9c",
+            "hotpotqa:5ab2e3c45542991669774126",
+            "hotpotqa:5ae37d265542994393b9e6e7",
+            "hotpotqa:5abc0ac455429959677d6a01",
+            "hotpotqa:5adec4695542992fa25da83a",
+            "hotpotqa:5a75140b5542996c70cfae87",
+            "hotpotqa:5ade1f0555429975fa854e74",
+            "hotpotqa:5a7a0e1e5542990783324e1a",
+            "hotpotqa:5ae64b015542992ae0d162bc",
+            "hotpotqa:5a76d15e55429966f1a36bfa",
+            "hotpotqa:5a8ce55f554299441c6b9f62",
+            "hotpotqa:5ac3e80b554299076e296ccd",
+            "hotpotqa:5a87a7235542996e4f3088a8"
+          ],
+          "lost_correct": [
+            "hotpotqa:5ab53ad6554299488d4d9917",
+            "hotpotqa:5ab2b7c1554299166977406a",
+            "hotpotqa:5ae27f22554299495565da8d",
+            "hotpotqa:5a794119554299029c4b5f3c"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "hotpotqa:5a8089dc5542992bc0c4a765",
+            "hotpotqa:5a83de04554299334474609f",
+            "hotpotqa:5a73aeb855429908901be311",
+            "hotpotqa:5ac3a0db554299391541383a",
+            "hotpotqa:5a82301155429926c1cdae4a",
+            "hotpotqa:5a8a521d5542992d82986f15",
+            "hotpotqa:5a7f392b55429934daa2fd26"
+          ]
+        },
+        "final_variant": {
+          "retained_correct": [
+            "hotpotqa:5a7efd2f5542994959419a9c",
+            "hotpotqa:5ab2e3c45542991669774126",
+            "hotpotqa:5ae37d265542994393b9e6e7",
+            "hotpotqa:5ab53ad6554299488d4d9917",
+            "hotpotqa:5abc0ac455429959677d6a01",
+            "hotpotqa:5adec4695542992fa25da83a",
+            "hotpotqa:5a75140b5542996c70cfae87",
+            "hotpotqa:5ade1f0555429975fa854e74",
+            "hotpotqa:5a7a0e1e5542990783324e1a",
+            "hotpotqa:5ae64b015542992ae0d162bc",
+            "hotpotqa:5a794119554299029c4b5f3c",
+            "hotpotqa:5a76d15e55429966f1a36bfa",
+            "hotpotqa:5a8ce55f554299441c6b9f62",
+            "hotpotqa:5ac3e80b554299076e296ccd",
+            "hotpotqa:5a87a7235542996e4f3088a8"
+          ],
+          "lost_correct": [
+            "hotpotqa:5ab2b7c1554299166977406a",
+            "hotpotqa:5ae27f22554299495565da8d"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "hotpotqa:5a8089dc5542992bc0c4a765",
+            "hotpotqa:5a83de04554299334474609f",
+            "hotpotqa:5a73aeb855429908901be311",
+            "hotpotqa:5ac3a0db554299391541383a",
+            "hotpotqa:5a82301155429926c1cdae4a",
+            "hotpotqa:5a8a521d5542992d82986f15",
+            "hotpotqa:5a7f392b55429934daa2fd26"
+          ]
+        }
+      }
+    },
+    "target_to_joint": {
+      "gsm8k": {
+        "primary": {
+          "retained_correct": [
+            "gsm8k:1179",
+            "gsm8k:86",
+            "gsm8k:442"
+          ],
+          "lost_correct": [
+            "gsm8k:288",
+            "gsm8k:137",
+            "gsm8k:591",
+            "gsm8k:1193",
+            "gsm8k:186",
+            "gsm8k:1009",
+            "gsm8k:405",
+            "gsm8k:364",
+            "gsm8k:1213",
+            "gsm8k:1289",
+            "gsm8k:606",
+            "gsm8k:449"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "gsm8k:406"
+          ]
+        },
+        "final_variant": {
+          "retained_correct": [
+            "gsm8k:1179",
+            "gsm8k:86",
+            "gsm8k:442"
+          ],
+          "lost_correct": [
+            "gsm8k:288",
+            "gsm8k:137",
+            "gsm8k:591",
+            "gsm8k:1193",
+            "gsm8k:186",
+            "gsm8k:1009",
+            "gsm8k:405",
+            "gsm8k:364",
+            "gsm8k:1213",
+            "gsm8k:1289",
+            "gsm8k:606",
+            "gsm8k:449"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "gsm8k:406"
+          ]
+        }
+      },
+      "hotpotqa": {
+        "primary": {
+          "retained_correct": [
+            "hotpotqa:5a7efd2f5542994959419a9c",
+            "hotpotqa:5ab2e3c45542991669774126",
+            "hotpotqa:5ae37d265542994393b9e6e7",
+            "hotpotqa:5abc0ac455429959677d6a01",
+            "hotpotqa:5adec4695542992fa25da83a",
+            "hotpotqa:5a75140b5542996c70cfae87",
+            "hotpotqa:5ade1f0555429975fa854e74",
+            "hotpotqa:5a7a0e1e5542990783324e1a",
+            "hotpotqa:5ae64b015542992ae0d162bc",
+            "hotpotqa:5a8ce55f554299441c6b9f62",
+            "hotpotqa:5ac3e80b554299076e296ccd",
+            "hotpotqa:5a87a7235542996e4f3088a8"
+          ],
+          "lost_correct": [
+            "hotpotqa:5ab53ad6554299488d4d9917",
+            "hotpotqa:5ab2b7c1554299166977406a",
+            "hotpotqa:5ae27f22554299495565da8d"
+          ],
+          "gained_correct": [
+            "hotpotqa:5a76d15e55429966f1a36bfa"
+          ],
+          "both_wrong": [
+            "hotpotqa:5a8089dc5542992bc0c4a765",
+            "hotpotqa:5a83de04554299334474609f",
+            "hotpotqa:5a73aeb855429908901be311",
+            "hotpotqa:5ac3a0db554299391541383a",
+            "hotpotqa:5a82301155429926c1cdae4a",
+            "hotpotqa:5a794119554299029c4b5f3c",
+            "hotpotqa:5a8a521d5542992d82986f15",
+            "hotpotqa:5a7f392b55429934daa2fd26"
+          ]
+        },
+        "final_variant": {
+          "retained_correct": [
+            "hotpotqa:5a7efd2f5542994959419a9c",
+            "hotpotqa:5ab2e3c45542991669774126",
+            "hotpotqa:5ae37d265542994393b9e6e7",
+            "hotpotqa:5ab53ad6554299488d4d9917",
+            "hotpotqa:5abc0ac455429959677d6a01",
+            "hotpotqa:5adec4695542992fa25da83a",
+            "hotpotqa:5a75140b5542996c70cfae87",
+            "hotpotqa:5ade1f0555429975fa854e74",
+            "hotpotqa:5a7a0e1e5542990783324e1a",
+            "hotpotqa:5ae64b015542992ae0d162bc",
+            "hotpotqa:5a794119554299029c4b5f3c",
+            "hotpotqa:5a76d15e55429966f1a36bfa",
+            "hotpotqa:5a8ce55f554299441c6b9f62",
+            "hotpotqa:5ac3e80b554299076e296ccd",
+            "hotpotqa:5a87a7235542996e4f3088a8"
+          ],
+          "lost_correct": [
+            "hotpotqa:5ab2b7c1554299166977406a",
+            "hotpotqa:5ae27f22554299495565da8d"
+          ],
+          "gained_correct": [],
+          "both_wrong": [
+            "hotpotqa:5a8089dc5542992bc0c4a765",
+            "hotpotqa:5a83de04554299334474609f",
+            "hotpotqa:5a73aeb855429908901be311",
+            "hotpotqa:5ac3a0db554299391541383a",
+            "hotpotqa:5a82301155429926c1cdae4a",
+            "hotpotqa:5a8a521d5542992d82986f15",
+            "hotpotqa:5a7f392b55429934daa2fd26"
+          ]
+        }
+      }
+    }
+  },
+  "formal_requests": 120,
+  "generation_failures_in_formal_rows": 0,
+  "completed_entry_release_confirmed": {
+    "full": 40,
+    "target": 40,
+    "joint": 40
+  }
+}

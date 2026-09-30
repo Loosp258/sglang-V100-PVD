@@ -1,0 +1,688 @@
+{
+  "metrics": {
+    "full": {
+      "gsm8k": {
+        "n": 16,
+        "answer_em": 0.9375,
+        "answer_f1": null,
+        "correct": 15.0,
+        "strict_final_em": 0.4375,
+        "missing_final": 8,
+        "truncated": 0,
+        "mean_output_tokens": 258,
+        "median_client_seconds": 12.768684402486542
+      },
+      "hotpotqa": {
+        "n": 24,
+        "answer_em": 0.7083333333333334,
+        "answer_f1": 0.8009615384615385,
+        "correct": 17.0,
+        "strict_final_em": 0.7083333333333334,
+        "missing_final": 0,
+        "truncated": 0,
+        "mean_output_tokens": 7.416666666666667,
+        "median_client_seconds": 2.089786105498206,
+        "final_variant_em": 0.7083333333333334,
+        "final_variant_f1": 0.8009615384615385,
+        "final_variant_correct": 17.0
+      }
+    },
+    "target": {
+      "gsm8k": {
+        "n": 16,
+        "answer_em": 0.9375,
+        "answer_f1": null,
+        "correct": 15.0,
+        "strict_final_em": 0.1875,
+        "missing_final": 13,
+        "truncated": 0,
+        "mean_output_tokens": 255.6875,
+        "median_client_seconds": 55.591155462519964
+      },
+      "hotpotqa": {
+        "n": 24,
+        "answer_em": 0.625,
+        "answer_f1": 0.7106837606837607,
+        "correct": 15.0,
+        "strict_final_em": 0.625,
+        "missing_final": 2,
+        "truncated": 0,
+        "mean_output_tokens": 8.083333333333334,
+        "median_client_seconds": 3.817279373994097,
+        "final_variant_em": 0.7083333333333334,
+        "final_variant_f1": 0.794017094017094,
+        "final_variant_correct": 17.0
+      }
+    },
+    "joint": {
+      "gsm8k": {
+        "n": 16,
+        "answer_em": 0.1875,
+        "answer_f1": null,
+        "correct": 3.0,
+        "strict_final_em": 0.0,
+        "missing_final": 9,
+        "truncated": 2,
+        "mean_output_tokens": 313.3125,
+        "median_client_seconds": 56.21900390353403
+      },
+      "hotpotqa": {
+        "n": 24,
+        "answer_em": 0.5416666666666666,
+        "answer_f1": 0.6630050505050505,
+        "correct": 13.0,
+        "strict_final_em": 0.5416666666666666,
+        "missing_final": 2,
+        "truncated": 0,
+        "mean_output_tokens": 7.625,
+        "median_client_seconds": 2.897150581498863,
+        "final_variant_em": 0.625,
+        "final_variant_f1": 0.7463383838383838,
+        "final_variant_correct": 15.0
+      }
+    }
+  },
+  "paired_rows": [
+    {
+      "id": "hotpotqa:5a7efd2f5542994959419a9c",
+      "benchmark": "hotpotqa",
+      "gold": "Blue Peter",
+      "answers": {
+        "full": "Blue Peter",
+        "target": "Blue Peter",
+        "joint": "Blue Peter"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5ab2e3c45542991669774126",
+      "benchmark": "hotpotqa",
+      "gold": "yes",
+      "answers": {
+        "full": "yes",
+        "target": "yes",
+        "joint": "yes"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:288",
+      "benchmark": "gsm8k",
+      "gold": "3",
+      "answers": {
+        "full": "3",
+        "target": "3",
+        "joint": "1"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a8089dc5542992bc0c4a765",
+      "benchmark": "hotpotqa",
+      "gold": "1994–95 NBA season",
+      "answers": {
+        "full": "1994-1995",
+        "target": "1994-1995",
+        "joint": "1989-1990 season"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a83de04554299334474609f",
+      "benchmark": "hotpotqa",
+      "gold": "as loud and dirty as possible",
+      "answers": {
+        "full": "a sound as loud and dirty as possible",
+        "target": "a sound as loud and dirty as possible",
+        "joint": "a sound as bad as possible"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5ae37d265542994393b9e6e7",
+      "benchmark": "hotpotqa",
+      "gold": "Tamara Ecclestone",
+      "answers": {
+        "full": "Tamara Ecclestone",
+        "target": "Tamara Ecclestone",
+        "joint": "Tamara Ecclestone"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:137",
+      "benchmark": "gsm8k",
+      "gold": "29",
+      "answers": {
+        "full": "29",
+        "target": "29",
+        "joint": "28.40"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5ab53ad6554299488d4d9917",
+      "benchmark": "hotpotqa",
+      "gold": "Shep Meyers",
+      "answers": {
+        "full": "Shep Meyers",
+        "target": "Shep Meyers",
+        "joint": null
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a73aeb855429908901be311",
+      "benchmark": "hotpotqa",
+      "gold": "PewDiePie",
+      "answers": {
+        "full": "YouTube celebrity PewDiePie",
+        "target": "YouTube celebrity PewDiePie played himself",
+        "joint": "YouTube celebrity PewDiePie"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5abc0ac455429959677d6a01",
+      "benchmark": "hotpotqa",
+      "gold": "London",
+      "answers": {
+        "full": "London",
+        "target": "London",
+        "joint": "London"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5ab2b7c1554299166977406a",
+      "benchmark": "hotpotqa",
+      "gold": "John M. Dowd",
+      "answers": {
+        "full": "John M. Dowd",
+        "target": "John M. Dowd",
+        "joint": "John M. Lukaszewicz"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5adec4695542992fa25da83a",
+      "benchmark": "hotpotqa",
+      "gold": "Dziga Vertov",
+      "answers": {
+        "full": "Dziga Vertov",
+        "target": "Dziga Vertov",
+        "joint": "Dziga Vertov"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:591",
+      "benchmark": "gsm8k",
+      "gold": "220",
+      "answers": {
+        "full": "220",
+        "target": "220",
+        "joint": "200"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a75140b5542996c70cfae87",
+      "benchmark": "hotpotqa",
+      "gold": "Alexander Gorsky",
+      "answers": {
+        "full": "Alexander Gorsky",
+        "target": "Alexander Gorsky",
+        "joint": "Alexander Gorsky"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:1179",
+      "benchmark": "gsm8k",
+      "gold": "50",
+      "answers": {
+        "full": "50",
+        "target": "50",
+        "joint": "50"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:86",
+      "benchmark": "gsm8k",
+      "gold": "22",
+      "answers": {
+        "full": "22",
+        "target": "22",
+        "joint": "22"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5ae27f22554299495565da8d",
+      "benchmark": "hotpotqa",
+      "gold": "1926",
+      "answers": {
+        "full": "1926",
+        "target": "1926",
+        "joint": "1915"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5ade1f0555429975fa854e74",
+      "benchmark": "hotpotqa",
+      "gold": "Danny Glover",
+      "answers": {
+        "full": "Danny Glover",
+        "target": "Danny Glover",
+        "joint": "Danny Glover"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5a7a0e1e5542990783324e1a",
+      "benchmark": "hotpotqa",
+      "gold": "Scotch Collie",
+      "answers": {
+        "full": "Scotch Collie",
+        "target": "Scotch Collie",
+        "joint": "Scotch Collie"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5ae64b015542992ae0d162bc",
+      "benchmark": "hotpotqa",
+      "gold": "United Kingdom",
+      "answers": {
+        "full": "United Kingdom",
+        "target": "United Kingdom",
+        "joint": "United Kingdom"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:1193",
+      "benchmark": "gsm8k",
+      "gold": "9",
+      "answers": {
+        "full": "9.00",
+        "target": "9.00",
+        "joint": "12.00"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:186",
+      "benchmark": "gsm8k",
+      "gold": "5",
+      "answers": {
+        "full": "5",
+        "target": "5",
+        "joint": "10"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5ac3a0db554299391541383a",
+      "benchmark": "hotpotqa",
+      "gold": "Saint Paul",
+      "answers": {
+        "full": "Minnesota Capitol",
+        "target": "Minnesota Capitol",
+        "joint": "Minnesota Capitol"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:1009",
+      "benchmark": "gsm8k",
+      "gold": "1,875",
+      "answers": {
+        "full": "1875",
+        "target": "1875",
+        "joint": "75"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a82301155429926c1cdae4a",
+      "benchmark": "hotpotqa",
+      "gold": "over $1 million",
+      "answers": {
+        "full": "$1 million",
+        "target": "$1 million",
+        "joint": "$1 million"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5a794119554299029c4b5f3c",
+      "benchmark": "hotpotqa",
+      "gold": "\"Baz\" Luhrmann",
+      "answers": {
+        "full": "Baz Luhrmann",
+        "target": null,
+        "joint": null
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:405",
+      "benchmark": "gsm8k",
+      "gold": "50",
+      "answers": {
+        "full": "50",
+        "target": "50",
+        "joint": "66"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:364",
+      "benchmark": "gsm8k",
+      "gold": "49",
+      "answers": {
+        "full": "49",
+        "target": "49",
+        "joint": "43"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a8a521d5542992d82986f15",
+      "benchmark": "hotpotqa",
+      "gold": "Denmark men's national ice hockey",
+      "answers": {
+        "full": "SønderjyskE Ishockey",
+        "target": "SønderjyskE Ishockey",
+        "joint": "SønderjyskE Ishøj"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:406",
+      "benchmark": "gsm8k",
+      "gold": "200",
+      "answers": {
+        "full": "140",
+        "target": "140",
+        "joint": "240"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:1213",
+      "benchmark": "gsm8k",
+      "gold": "31",
+      "answers": {
+        "full": "31",
+        "target": "31",
+        "joint": "6.82"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:1289",
+      "benchmark": "gsm8k",
+      "gold": "101",
+      "answers": {
+        "full": "101",
+        "target": "101",
+        "joint": "75"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5a76d15e55429966f1a36bfa",
+      "benchmark": "hotpotqa",
+      "gold": "Gillian Anderson",
+      "answers": {
+        "full": "Gillian Anderson",
+        "target": null,
+        "joint": "Gillian Anderson"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5a8ce55f554299441c6b9f62",
+      "benchmark": "hotpotqa",
+      "gold": "Tulsa",
+      "answers": {
+        "full": "Tulsa",
+        "target": "Tulsa",
+        "joint": "Tulsa"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:606",
+      "benchmark": "gsm8k",
+      "gold": "6",
+      "answers": {
+        "full": "6",
+        "target": "6",
+        "joint": "16.67"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "gsm8k:442",
+      "benchmark": "gsm8k",
+      "gold": "49",
+      "answers": {
+        "full": "49",
+        "target": "49",
+        "joint": "49"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    },
+    {
+      "id": "hotpotqa:5ac3e80b554299076e296ccd",
+      "benchmark": "hotpotqa",
+      "gold": "swimming",
+      "answers": {
+        "full": "swimming",
+        "target": "swimming",
+        "joint": "swimming"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5a7f392b55429934daa2fd26",
+      "benchmark": "hotpotqa",
+      "gold": "Tel Aviv",
+      "answers": {
+        "full": "Jordi Cruyff",
+        "target": "Jordi Cruyff",
+        "joint": "Jordi Cruyff"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": true
+      }
+    },
+    {
+      "id": "hotpotqa:5a87a7235542996e4f3088a8",
+      "benchmark": "hotpotqa",
+      "gold": "Rated R",
+      "answers": {
+        "full": "Rated R",
+        "target": "Rated R",
+        "joint": "Rated R"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": true,
+        "joint": true
+      }
+    },
+    {
+      "id": "gsm8k:449",
+      "benchmark": "gsm8k",
+      "gold": "112",
+      "answers": {
+        "full": "112",
+        "target": "112",
+        "joint": "160"
+      },
+      "output_matches_full": {
+        "full": true,
+        "target": false,
+        "joint": false
+      }
+    }
+  ],
+  "caveat": "Fixed 40-question subset, not full public benchmark; GSM8K FINAL then last-number extraction, strict FINAL metric also reported; HotpotQA strict FINAL extraction, missing FINAL scores zero; secondary FINAL ANSWER format sensitivity metric is explicitly post-hoc; generated lengths can differ."
+}
