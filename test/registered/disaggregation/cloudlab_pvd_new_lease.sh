@@ -112,6 +112,10 @@ fi
 export MC_DISABLE_METACACHE=1
 export PYTHONPATH="$checkout/python${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$log_dir"
+radix_args=()
+if [[ "${PVD_DISABLE_RADIX_CACHE:-0}" == 1 ]]; then
+  radix_args=(--disable-radix-cache)
+fi
 
 require_free_port() {
   local port="$1"
@@ -163,6 +167,7 @@ case "$role" in
       --max-total-tokens "$context_tokens" --max-running-requests 4 \
       --max-prefill-tokens "$context_tokens" \
       --chunked-prefill-size "$prefill_chunk_tokens" --disable-cuda-graph \
+      "${radix_args[@]}" \
       --disable-overlap-schedule --log-level info \
       >"$log_dir/p-$tag.log" 2>&1 </dev/null &
     ;;
