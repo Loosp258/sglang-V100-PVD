@@ -85,9 +85,10 @@ def native(args):
                             ids, _ = backend.search(index, query[layer, first:first + 7].contiguous(),
                                                     top_k=16, bitset=bitset)
                             timings[arm].append(time.perf_counter() - start)
+                            ids = ids.to(torch.int64)
                             if not ((ids >= offset * n) & (ids < (offset + 1) * n)).all():
                                 raise ValueError('native filtered search returned a foreign head ID')
-                            found = (ids.to(torch.int64) - offset * n).cpu().tolist()
+                            found = (ids - offset * n).cpu().tolist()
                             unions[arm].append(len(set(x for row in found for x in row)))
                             values[arm].extend({'layer': layer, 'head': first + head,
                                                'top10_recall': len(set(row[:10]) & set(gold)) / 10,
