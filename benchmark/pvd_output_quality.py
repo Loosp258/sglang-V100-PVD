@@ -177,11 +177,21 @@ def generate(url, item):
 
 def collect(args):
     dataset = json.loads(args.dataset.read_text())
-    if args.output.exists():
+    previous = []
+    if args.output.exists() and not args.resume:
         raise FileExistsError(args.output)
+    if args.output.exists():
+        previous = [json.loads(line) for line in args.output.read_text().splitlines()]
+        if len(previous) > len(dataset["items"]):
+            raise ValueError("resume file has extra requests")
+        for row, item in zip(previous, dataset["items"]):
+            if (row["id"] != item["id"] or row["arm"] != args.arm
+                    or row["dataset_sha256"] != digest(args.dataset.read_bytes())
+                    or not row.get("completed_entry_released")):
+                raise ValueError("resume file is not a confirmed prefix of this arm")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("x", encoding="utf-8") as handle:
-        for item in dataset["items"]:
+    with args.output.open("a" if args.resume else "x", encoding="utf-8") as handle:
+        for item in dataset["items"][len(previous):]:
             def index_ids(rank):
                 with urllib.request.urlopen(
                     f"{args.vector_host}:{9300 + rank}/internal/v1/indexes", timeout=10
@@ -214,7 +224,7 @@ def collect(args):
                     break
                 except urllib.error.HTTPError as error:
                     reason = error.read().decode()
-                    if (time.perf_counter() - cleanup_started >= 10
+                    if (time.perf_counter() - cleanup_started >= args.cleanup_wait_seconds
                             or not ("active consumer leases" in reason or "active deliveries" in reason)):
                         raise RuntimeError(f"completed Entry release refused: {reason}") from error
                     time.sleep(0.1)
@@ -293,6 +303,8 @@ def main():
     sample.add_argument("--url", default="http://10.10.1.2:8001")
     sample.add_argument("--vector-host", default="http://10.10.1.2")
     sample.add_argument("--coordinator", default="http://10.10.1.2:9100")
+    sample.add_argument("--resume", action="store_true")
+    sample.add_argument("--cleanup-wait-seconds", type=float, default=120)
     cmp = sub.add_parser("compare")
     cmp.add_argument("--folder", type=Path, required=True)
     cmp.add_argument("--output", type=Path, required=True)
