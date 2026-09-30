@@ -1,9 +1,11 @@
 """Compare old/new six-layer checkpoints on the same frozen output requests."""
 
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
+import re
 import statistics
 
 from pvd_output_quality import answer_scores, extract_qa_final_variant, numeric
@@ -65,7 +67,27 @@ def main():
                             else 'gains' if b else 'losses')
                 changes[category].append(old['id'])
             paired[task]['variant' if variant else 'primary'] = changes
+    paths = list(args.folder.glob('d-quality-joint-decode-*.log.gz'))
+    timing = None
+    if paths:
+        if len(paths) != 1:
+            raise ValueError('ambiguous new checkpoint D log')
+        ids = {r['request_id'] for r in arms['new_joint']}
+        text = gzip.decompress(paths[0].read_bytes()).decode('utf-8')
+        pattern = (r'PVD joint Draft-Q: request=(\S+) prefix_tokens=(\d+) horizon=(\d+) '
+                   r'prefill_seconds=([\d.]+) rollout_q_seconds=([\d.]+) target_forward_count=(\d+)')
+        samples = [m for m in re.finditer(pattern, text) if m[1] in ids]
+        if not samples or any(int(m[6]) != 0 or int(m[3]) != 8 for m in samples):
+            raise ValueError('unexpected prediction path or horizon')
+        timing = {'predictions': len(samples),
+                  'prefix_tokens_min': min(int(m[2]) for m in samples),
+                  'prefix_tokens_max': max(int(m[2]) for m in samples),
+                  'prefill_rollout_median_ms': statistics.median(
+                      (float(m[4]) + float(m[5])) * 1000 for m in samples),
+                  'log_sha256': hashlib.sha256(paths[0].read_bytes()).hexdigest(),
+                  'excluded': 'native search, delivery and graph readiness; varying prefixes, not a paired latency trial'}
     payload = {'dataset_sha256': expected_hash, 'metrics': metrics, 'paired_changes': paired,
+               'new_serving_prediction_timing': timing,
                'source_sha256': {filename: hashlib.sha256((args.folder / filename).read_bytes()).hexdigest()
                                  for filename in names.values()},
                'note': 'Fixed 40-question subset; references are from the earlier run. Primary metrics and the already declared format sensitivity rule are unchanged. These are output quality scores, not repeated-request latency estimates.'}
