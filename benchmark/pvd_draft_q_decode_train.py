@@ -90,22 +90,32 @@ def prepare(args):
 
 @torch.inference_mode()
 def labels(target, ids, original_prompt_length, start, horizon, device, label_positions):
-    qs, ks, hooks = [None] * 28, [None] * 28, []
+    # Prefill has one fixed shape for this question. Never derive Prompt K
+    # again from a larger teacher-forced Decode sequence: FP16 GEMM shapes
+    # can change its rounding and invalidate the shared retrieval dataset.
+    base = target.model(input_ids=torch.tensor(ids[:original_prompt_length], device=device)[None],
+                        use_cache=True)
+    keys = torch.stack([base.past_key_values[layer][0][0].transpose(0, 1).cpu().contiguous()
+                        for layer in range(28)])
+    qs, hooks = [None] * 28, []
     def capture(attn, inputs, kwargs, layer):
         hidden = inputs[0] if inputs else kwargs['hidden_states']
         shape = (1, hidden.shape[1], -1, 128)
         q = attn.q_proj(hidden).view(shape).transpose(1, 2)
-        k = attn.k_proj(hidden).view(shape).transpose(1, 2)
-        q, k = apply_rotary_pos_emb(q, k, *kwargs['position_embeddings'])
-        qs[layer] = q[0, :, start:start + horizon].transpose(0, 1).cpu().contiguous()
-        ks[layer] = k[0, :, :original_prompt_length].transpose(0, 1).cpu().contiguous()
+        # apply_rotary_pos_emb accepts different Q/K head counts; its dummy
+        # K operand is discarded and cannot modify the cache.
+        q, _ = apply_rotary_pos_emb(q, q, *kwargs['position_embeddings'])
+        local_start = start - original_prompt_length
+        qs[layer] = q[0, :, local_start:local_start + horizon].transpose(0, 1).cpu().contiguous()
     for layer, block in enumerate(target.model.layers):
         hooks.append(block.self_attn.register_forward_pre_hook(
             lambda module, inputs, kwargs, layer=layer: capture(module, inputs, kwargs, layer),
             with_kwargs=True))
     try:
-        result = target.model(input_ids=torch.tensor(ids, device=device)[None], use_cache=False)
-        logits = target.lm_head(result.last_hidden_state[0, label_positions])
+        result = target.model(input_ids=torch.tensor(ids[original_prompt_length:], device=device)[None],
+                              past_key_values=base.past_key_values, use_cache=True)
+        hidden = torch.cat((base.last_hidden_state, result.last_hidden_state), dim=1)
+        logits = target.lm_head(hidden[0, label_positions])
         if not torch.isfinite(logits).all():
             raise ValueError('nonfinite teacher next-token logits')
         next_ids = logits.argmax(-1).cpu()
@@ -115,7 +125,6 @@ def labels(target, ids, original_prompt_length, start, horizon, device, label_po
     post = torch.stack(qs).permute(1, 0, 2, 3).contiguous()
     pre = target_rope(post.float(), 1e6, inverse=True,
                       positions=torch.arange(start, start + horizon)).half()
-    keys = torch.stack(ks)
     if not torch.isfinite(post).all() or not torch.isfinite(keys).all():
         raise ValueError('nonfinite target Q/K')
     return {'post_q': post, 'pre_q': pre, 'next_ids': next_ids}, keys
