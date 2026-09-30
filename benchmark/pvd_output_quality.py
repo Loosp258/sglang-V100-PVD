@@ -157,7 +157,9 @@ def generate(url, item):
                 final = json.loads(line[5:].strip())
                 event_count += 1
     meta = final.get("meta_info", {})
-    if final.get("error") or meta.get("prompt_tokens") != item["prompt_tokens"]:
+    if (final.get("error") or meta.get("prompt_tokens") != item["prompt_tokens"]
+            or not 0 < meta.get("completion_tokens", 0) <= item["max_new_tokens"]
+            or meta.get("finish_reason", {}).get("type") not in ("stop", "length")):
         raise ValueError(f"failed response or tokenization mismatch: {final}")
     text = final.get("text", "")
     answer = extract_final(text)
@@ -245,6 +247,10 @@ def compare(args):
         rows = [json.loads(line) for line in (args.folder / f"{arm}.jsonl").read_text().splitlines()]
         if len(rows) != 40 or len({r["id"] for r in rows}) != 40 or any(r["arm"] != arm for r in rows):
             raise ValueError(f"incomplete or mislabeled {arm}")
+        if any(not r.get("completed_entry_released")
+               or r["finish_reason"].get("type") not in ("stop", "length")
+               or not 0 < r["completion_tokens"] <= r["max_new_tokens"] for r in rows):
+            raise ValueError(f"failed generation or unconfirmed cleanup in {arm}")
         arms[arm] = {r["id"]: r for r in rows}
     for arm in ("target", "joint"):
         if list(arms[arm]) != list(arms["full"]):
