@@ -192,6 +192,8 @@ def install_cuda_predictive_serving(scheduler, limits) -> CUDAPredictiveServing:
     )
     prediction = target = sidecar = prediction_worker = None
     try:
+        if os.environ.get("PVD_JOINT_DRAFT_Q_CHECKPOINT") and limits.probe_sidecar is not None:
+            raise LifecycleError("joint Draft-Q currently requires in-process prediction")
         prediction = build_cuda_prediction_startup(
             runner,
             draft_model_path=args.pvd_draft_model_path,

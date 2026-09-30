@@ -213,6 +213,22 @@ def build_cuda_prediction_startup(
     if max(vocabulary.allowed_ids) >= target_runner.model.config.vocab_size:
         raise PredictionConfigError("target embedding does not cover tokenizer IDs")
 
+    joint_checkpoint = os.environ.get("PVD_JOINT_DRAFT_Q_CHECKPOINT")
+    if joint_checkpoint:
+        if concurrent_prediction:
+            raise PredictionConfigError("joint Draft-Q requires serialized prediction")
+        from sglang.srt.disaggregation.pvd.joint_draft_q import build_joint_startup
+
+        return build_joint_startup(
+            target_runner, checkpoint=joint_checkpoint, draft_model_path=draft_model_path,
+            target_model_id=target_model_id, placement=placement,
+            execution_lock=execution_lock, vocabulary=vocabulary,
+            max_prefix_tokens=max_prefix_tokens, predict_tokens=predict_tokens,
+            target_scratch_budget=target_scratch_budget,
+            probe_transient_bytes_bound=probe_transient_bytes_bound,
+            prefix_budget=prefix_budget,
+        )
+
     source_args = copy.deepcopy(target_args)
     source_args.pvd_draft_model_path = draft_model_path
     source_args.pvd_draft_revision = draft_revision
