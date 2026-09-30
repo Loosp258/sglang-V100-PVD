@@ -95,8 +95,10 @@ def labels(target, ids, original_prompt_length, start, horizon, device, label_po
     # can change its rounding and invalidate the shared retrieval dataset.
     base = target.model(input_ids=torch.tensor(ids[:original_prompt_length], device=device)[None],
                         use_cache=True)
-    keys = torch.stack([base.past_key_values[layer][0][0].transpose(0, 1).cpu().contiguous()
+    keys = torch.stack([base.past_key_values.layers[layer].keys[0].transpose(0, 1).cpu().contiguous()
                         for layer in range(28)])
+    if keys.shape != (28, original_prompt_length, 4, 128):
+        raise ValueError('teacher Prompt cache has an unexpected layout')
     qs, hooks = [None] * 28, []
     def capture(attn, inputs, kwargs, layer):
         hidden = inputs[0] if inputs else kwargs['hidden_states']
