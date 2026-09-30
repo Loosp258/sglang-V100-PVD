@@ -1,0 +1,15 @@
+SGLang Router starting...
+Host: 10.10.1.2:8001
+Mode: PVD Disaggregated
+Policy: cache_aware
+Prefill nodes: [("http://10.10.1.1:30002", None)]
+Decode nodes: ["http://10.10.1.3:30003"]
+Vector groups: [PvdVectorGroupConfig { id: "default", coordinator_url: "http://10.10.1.2:9100" }]
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg::server[0m[2m:[0m [2msrc/server.rs[0m[2m:[0m[2m792:[0m Starting router on 10.10.1.2:8001 | mode: PrefillDecode { prefill_urls: [("http://10.10.1.1:30002", None)], decode_urls: ["http://10.10.1.3:30003"], prefill_policy: None, decode_policy: None } | policy: CacheAware { cache_threshold: 0.3, balance_abs_threshold: 64, balance_rel_threshold: 1.5, eviction_interval_secs: 120, max_tree_size: 67108864 } | max_payload: 512MB
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg_mcp::manager[0m[2m:[0m [2m/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smg-mcp-1.0.0/src/manager.rs[0m[2m:[0m[2m97:[0m No static MCP servers connected
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg::server[0m[2m:[0m [2msrc/server.rs[0m[2m:[0m[2m867:[0m Initializing workers for routing mode: PrefillDecode { prefill_urls: [("http://10.10.1.1:30002", None)], decode_urls: ["http://10.10.1.3:30003"], prefill_policy: None, decode_policy: None }
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg::server[0m[2m:[0m [2msrc/server.rs[0m[2m:[0m[2m885:[0m Worker initialization job submitted (will complete in background)
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg::server[0m[2m:[0m [2msrc/server.rs[0m[2m:[0m[2m897:[0m No MCP config provided, skipping MCP server initialization
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg::server[0m[2m:[0m [2msrc/server.rs[0m[2m:[0m[2m909:[0m Workers initialized: 0 total, 0 healthy
+[2m2026-09-30 11:27:30[0m [32m INFO[0m [2msmg::routers::router_manager[0m[2m:[0m [2msrc/routers/router_manager.rs[0m[2m:[0m[2m169:[0m Initializing RouterManager in single-router mode
+Error: "PVD vector group default failed validation: PVD vector coordinator health check failed: error sending request for url (http://10.10.1.2:9100/health)"

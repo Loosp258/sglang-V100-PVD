@@ -187,6 +187,19 @@ checkpoint and serving retrieval budget unchanged while testing improvements.
    target-Q probe as default unless output quality passes. Commit each completed
    step and preserve failures and negative results.
 
+Completed one causal adaptation round on disjoint48 training/8 calibration
+questions. New joint weights improve combined exact Top10 from0.4606 to0.5836
+on25 calibration prefixes, native serving-shaped Top10 from0.4043 to0.5692
+on8 early fixtures, and native Top4 coverage@16 from0.6104 to0.7817. Frozen
+token-trunk/readout-only control does not improve the generated-token path.
+New2155+8 cached inference takes107.7ms median on an idle V100S. The unchanged
+40-question full-path benchmark improves math3/16 to8/16 and reading strict
+EM13/24 to14/24, with no P→D KV, all predicted refreshes and zero target-Q
+forwards. Math still trails the real target-Q reference15/16; preserve the
+default and all existing gates. Reports:
+`benchmark/results/pvd_draft_q_decode_cloudlab_20260930.md` and
+`benchmark/results/pvd_output_quality_decode_cloudlab_20260930.md`.
+
 1. **Prove the native incremental path.** In an isolated CloudLab dependency
    environment, select a cuVS Python version with CAGRA `extend` that runs on
    V100S. Benchmark `build(prefix) + extend(new rows)` against one complete

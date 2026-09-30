@@ -1,0 +1,23 @@
+{
+  "schema": "pvd.draft_q.causal_adaptation.evidence.v1",
+  "checkpoint_sha256": "75a0c48a95d80ef8ccf6025e4c92e2ea2a028d9cf394e327fb69bec1da007efe",
+  "question_dataset_sha256": "f2547066bf57e930d8b558488f7359a72ece3b7e5dba07ad08543382066b3c27",
+  "native_fixture_sha256": "169d6381f34e26296dbb6044f5aa948377716e7bb5310c21bece7893ca0d0973",
+  "training_runtime_commit": "99449165e",
+  "native_runtime_commit": "3df89fb6e",
+  "native_rank_layout_execution": "sequential on one idle V100S",
+  "sha256": {
+    "capture-cache-api-failure.log": "c750f4ada236570186065e344d3a04a783667b9e3029319988ffc6c59c097b63",
+    "capture-prefill-shape-failure.log": "b170391b4a02105aa0f756e4990992bace8e0f7f63a44521f7ac779966328107",
+    "latency.json": "c42696a39f6884816c3e46e085e71c7950f14d7bc5ea72892fc271b63730a36c",
+    "native-uint32-failure.log": "5614ca54fe67e17066d27d17e076c767a1155875e46c986e15924ff554910e44",
+    "native.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "native.json": "092340514ab746bbf1d0323c01dec490ca3fea4ca53b6f859a5bc89a2955e489",
+    "native.log": "151a481838f4dea484eb01ca25be91ad8f26a449927067ba1330e4eed3519766",
+    "questions.json": "f2547066bf57e930d8b558488f7359a72ece3b7e5dba07ad08543382066b3c27",
+    "report.json": "6eb958765381924dc4762a64cf55d34790b97146aec703fb0d1652a21d5c3140",
+    "run-validated-cache.log": "48c98ef3c09402a4345369a21fc3b0022532b64323630ee4456562eb2598119b",
+    "run.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "samples.jsonl": "bc88f5700d435d3865c3ae44cb654fd9021d669e48cba8799b72f8eba4f67ea9"
+  }
+}

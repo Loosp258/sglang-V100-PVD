@@ -159,8 +159,11 @@ embedding storage. `latency.json` contains all timing samples and metadata.
 
 ## Full-path output validation
 
-The selected checkpoint is being checked on the unchanged 40-question
-output test; its full-path results are reported separately after completion.
+The selected checkpoint completed the unchanged40-question output test.
+Math correct answers improved3/16 to8/16, reading strict EM13/24 to14/24,
+and reading variant EM15/24 to16/24. It remains below real-target-Q math15/16;
+keep the existing probe default. Full results and matched sparse-path evidence
+are in `pvd_output_quality_decode_cloudlab_20260930.md`.
 
 ## Artifacts and reproduction
 

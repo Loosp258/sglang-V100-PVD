@@ -1,0 +1,203 @@
+{
+  "dataset_sha256": "5591e964da8fd457f0e113d82330c84c94e6074b1ad80d1ee414dca751d893c3",
+  "metrics": {
+    "gsm8k": {
+      "old_joint": {
+        "n": 16,
+        "correct": 3.0,
+        "answer_em": 0.1875,
+        "answer_f1": null,
+        "variant_correct": 3.0,
+        "variant_em": 0.1875,
+        "variant_f1": null,
+        "missing_final": 9,
+        "truncated_ids": [
+          "gsm8k:591",
+          "gsm8k:186"
+        ],
+        "completion_tokens": 5013,
+        "median_client_seconds": 56.21900390353403
+      },
+      "new_joint": {
+        "n": 16,
+        "correct": 8.0,
+        "answer_em": 0.5,
+        "answer_f1": null,
+        "variant_correct": 8.0,
+        "variant_em": 0.5,
+        "variant_f1": null,
+        "missing_final": 13,
+        "truncated_ids": [
+          "gsm8k:1193",
+          "gsm8k:186"
+        ],
+        "completion_tokens": 4910,
+        "median_client_seconds": 51.407610869035125
+      }
+    },
+    "hotpotqa": {
+      "old_joint": {
+        "n": 24,
+        "correct": 13.0,
+        "answer_em": 0.5416666666666666,
+        "answer_f1": 0.6630050505050505,
+        "variant_correct": 15.0,
+        "variant_em": 0.625,
+        "variant_f1": 0.7463383838383838,
+        "missing_final": 2,
+        "truncated_ids": [],
+        "completion_tokens": 183,
+        "median_client_seconds": 2.897150581498863
+      },
+      "new_joint": {
+        "n": 24,
+        "correct": 14.0,
+        "answer_em": 0.5833333333333334,
+        "answer_f1": 0.6728535353535353,
+        "variant_correct": 16.0,
+        "variant_em": 0.6666666666666666,
+        "variant_f1": 0.7561868686868687,
+        "missing_final": 2,
+        "truncated_ids": [],
+        "completion_tokens": 178,
+        "median_client_seconds": 2.7907657329633366
+      }
+    }
+  },
+  "paired_changes": {
+    "gsm8k": {
+      "primary": {
+        "gains": [
+          "gsm8k:288",
+          "gsm8k:1009",
+          "gsm8k:1213",
+          "gsm8k:1289",
+          "gsm8k:449"
+        ],
+        "losses": [],
+        "both_correct": [
+          "gsm8k:1179",
+          "gsm8k:86",
+          "gsm8k:442"
+        ],
+        "both_wrong": [
+          "gsm8k:137",
+          "gsm8k:591",
+          "gsm8k:1193",
+          "gsm8k:186",
+          "gsm8k:405",
+          "gsm8k:364",
+          "gsm8k:406",
+          "gsm8k:606"
+        ]
+      },
+      "variant": {
+        "gains": [
+          "gsm8k:288",
+          "gsm8k:1009",
+          "gsm8k:1213",
+          "gsm8k:1289",
+          "gsm8k:449"
+        ],
+        "losses": [],
+        "both_correct": [
+          "gsm8k:1179",
+          "gsm8k:86",
+          "gsm8k:442"
+        ],
+        "both_wrong": [
+          "gsm8k:137",
+          "gsm8k:591",
+          "gsm8k:1193",
+          "gsm8k:186",
+          "gsm8k:405",
+          "gsm8k:364",
+          "gsm8k:406",
+          "gsm8k:606"
+        ]
+      }
+    },
+    "hotpotqa": {
+      "primary": {
+        "gains": [
+          "hotpotqa:5ae27f22554299495565da8d",
+          "hotpotqa:5a794119554299029c4b5f3c"
+        ],
+        "losses": [
+          "hotpotqa:5a76d15e55429966f1a36bfa"
+        ],
+        "both_correct": [
+          "hotpotqa:5a7efd2f5542994959419a9c",
+          "hotpotqa:5ab2e3c45542991669774126",
+          "hotpotqa:5ae37d265542994393b9e6e7",
+          "hotpotqa:5abc0ac455429959677d6a01",
+          "hotpotqa:5adec4695542992fa25da83a",
+          "hotpotqa:5a75140b5542996c70cfae87",
+          "hotpotqa:5ade1f0555429975fa854e74",
+          "hotpotqa:5a7a0e1e5542990783324e1a",
+          "hotpotqa:5ae64b015542992ae0d162bc",
+          "hotpotqa:5a8ce55f554299441c6b9f62",
+          "hotpotqa:5ac3e80b554299076e296ccd",
+          "hotpotqa:5a87a7235542996e4f3088a8"
+        ],
+        "both_wrong": [
+          "hotpotqa:5a8089dc5542992bc0c4a765",
+          "hotpotqa:5a83de04554299334474609f",
+          "hotpotqa:5ab53ad6554299488d4d9917",
+          "hotpotqa:5a73aeb855429908901be311",
+          "hotpotqa:5ab2b7c1554299166977406a",
+          "hotpotqa:5ac3a0db554299391541383a",
+          "hotpotqa:5a82301155429926c1cdae4a",
+          "hotpotqa:5a8a521d5542992d82986f15",
+          "hotpotqa:5a7f392b55429934daa2fd26"
+        ]
+      },
+      "variant": {
+        "gains": [
+          "hotpotqa:5ae27f22554299495565da8d"
+        ],
+        "losses": [],
+        "both_correct": [
+          "hotpotqa:5a7efd2f5542994959419a9c",
+          "hotpotqa:5ab2e3c45542991669774126",
+          "hotpotqa:5ae37d265542994393b9e6e7",
+          "hotpotqa:5ab53ad6554299488d4d9917",
+          "hotpotqa:5abc0ac455429959677d6a01",
+          "hotpotqa:5adec4695542992fa25da83a",
+          "hotpotqa:5a75140b5542996c70cfae87",
+          "hotpotqa:5ade1f0555429975fa854e74",
+          "hotpotqa:5a7a0e1e5542990783324e1a",
+          "hotpotqa:5ae64b015542992ae0d162bc",
+          "hotpotqa:5a794119554299029c4b5f3c",
+          "hotpotqa:5a76d15e55429966f1a36bfa",
+          "hotpotqa:5a8ce55f554299441c6b9f62",
+          "hotpotqa:5ac3e80b554299076e296ccd",
+          "hotpotqa:5a87a7235542996e4f3088a8"
+        ],
+        "both_wrong": [
+          "hotpotqa:5a8089dc5542992bc0c4a765",
+          "hotpotqa:5a83de04554299334474609f",
+          "hotpotqa:5a73aeb855429908901be311",
+          "hotpotqa:5ab2b7c1554299166977406a",
+          "hotpotqa:5ac3a0db554299391541383a",
+          "hotpotqa:5a82301155429926c1cdae4a",
+          "hotpotqa:5a8a521d5542992d82986f15",
+          "hotpotqa:5a7f392b55429934daa2fd26"
+        ]
+      }
+    }
+  },
+  "new_serving_prediction_timing": {
+    "predictions": 1259,
+    "prefix_tokens_min": 87,
+    "prefix_tokens_max": 2053,
+    "prefill_rollout_median_ms": 59.927,
+    "log_sha256": "bffe334341921d21d8d525fbeb62afa7a61a1cbb90b941a7e83650870dacfbd0",
+    "excluded": "native search, delivery and graph readiness; varying prefixes, not a paired latency trial"
+  },
+  "source_sha256": {
+    "old-joint.jsonl": "17948d043b48de9fa5f5182715d17b16378f03c40b273d499928ae8cf6b22e78",
+    "joint.jsonl": "bfce5cc4734a5de6518803c534f9aea013ce20475eeeb8ee74fbfa8092821576"
+  },
+  "note": "Fixed 40-question subset; references are from the earlier run. Primary metrics and the already declared format sensitivity rule are unchanged. These are output quality scores, not repeated-request latency estimates."
+}
