@@ -111,7 +111,10 @@ def train(student, readout, records, device, steps, decode_only):
             logits = student.lm_head(hidden[[positions[i] for i in selected]])
         # Match the student's actual serving repetition processor while keeping
         # gradients through the processed logits. Teacher labels use target1.05.
-        logits = torch.cat([processor(torch.tensor(ids[:positions[i] + 1], device=device)[None],
+        # Repeated input IDs give identical forward values but ambiguous scatter
+        # gradients. A unique seen-token set preserves the serving processor's
+        # forward result and applies each logit's gradient once.
+        logits = torch.cat([processor(torch.unique(torch.tensor(ids[:positions[i] + 1], device=device))[None],
                                      logits[j:j + 1].float()) for j, i in enumerate(selected)])
         expected = branch['pre_q'].float().to(device).reshape(r['horizon'], 28, -1)
         q_loss = ((predicted.float() - expected) / scales[None, :, None]).square().mean()
