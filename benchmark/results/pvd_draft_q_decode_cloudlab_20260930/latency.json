@@ -1,0 +1,200 @@
+{
+  "gpu": "Tesla V100S-PCIE-32GB",
+  "torch": "2.9.1+cu128",
+  "checkpoint": "/proj/llm-course-PG0/Yizhzhu-node0-sglang-pvd/validation/draft-q-decode-20260930/joint.pt",
+  "checkpoint_sha256": "75a0c48a95d80ef8ccf6025e4c92e2ea2a028d9cf394e327fb69bec1da007efe",
+  "student_dtype": "fp32",
+  "readout": "FP32 parameters, FP16 autocast",
+  "layers": 6,
+  "readout_rank": 896,
+  "repetition_penalty": 1.1,
+  "target_q_shape_per_position": [
+    28,
+    28,
+    128
+  ],
+  "warmup": 1,
+  "repeats": 5,
+  "method": "single idle V100S, HF eager, trained CE+Q+score-KL0.1 checkpoint; synchronized wall-clock time",
+  "excluded": "model load, tokenizer, teacher, graph construction/readiness, native CAGRA, KV transport and SGLang serving contention",
+  "results": [
+    {
+      "prompt_tokens": 512,
+      "prediction_tokens": 8,
+      "timings": {
+        "cached_emit": {
+          "prefill_ms": {
+            "median_ms": 11.664076009765267,
+            "p90_ms": 13.433481974061579,
+            "samples_ms": [
+              13.433481974061579,
+              12.94252899242565,
+              11.664076009765267,
+              11.627186031546444,
+              11.433331994339824
+            ]
+          },
+          "rollout_ms": {
+            "median_ms": 51.65986798238009,
+            "p90_ms": 52.1493079722859,
+            "samples_ms": [
+              52.04098502872512,
+              51.65986798238009,
+              52.1493079722859,
+              51.61946301814169,
+              51.36943300021812
+            ]
+          },
+          "total_ms": {
+            "median_ms": 63.813383982051164,
+            "p90_ms": 65.4744670027867,
+            "samples_ms": [
+              65.4744670027867,
+              64.60239697480574,
+              63.813383982051164,
+              63.24664904968813,
+              62.80276499455795
+            ]
+          }
+        },
+        "existing_evaluator": {
+          "generate_ms": {
+            "median_ms": 53.8344060187228,
+            "p90_ms": 54.50355401262641,
+            "samples_ms": [
+              53.94187802448869,
+              53.8344060187228,
+              53.78887098049745,
+              53.80426999181509,
+              54.50355401262641
+            ]
+          },
+          "replay_q_ms": {
+            "median_ms": 24.89456598414108,
+            "p90_ms": 25.191143970005214,
+            "samples_ms": [
+              25.191143970005214,
+              24.789698945824057,
+              24.925082980189472,
+              24.89456598414108,
+              24.816559976898134
+            ]
+          },
+          "total_ms": {
+            "median_ms": 78.71395396068692,
+            "p90_ms": 79.32011398952454,
+            "samples_ms": [
+              79.1330219944939,
+              78.62410496454686,
+              78.71395396068692,
+              78.69883597595617,
+              79.32011398952454
+            ]
+          }
+        }
+      },
+      "cached_vs_replay_min_q_cosine": 0.9999998807907104,
+      "greedy_future_tokens": [
+        102766,
+        47,
+        659,
+        66,
+        5855,
+        198,
+        118228,
+        99883
+      ],
+      "prefill_keeps_only_last_logit": true,
+      "gpu_peak_allocated_mib": 2442.884765625
+    },
+    {
+      "prompt_tokens": 2155,
+      "prediction_tokens": 8,
+      "timings": {
+        "cached_emit": {
+          "prefill_ms": {
+            "median_ms": 56.30247597582638,
+            "p90_ms": 56.98313598986715,
+            "samples_ms": [
+              56.98313598986715,
+              55.22149399621412,
+              56.30247597582638,
+              56.43832095665857,
+              54.78037497960031
+            ]
+          },
+          "rollout_ms": {
+            "median_ms": 51.35026603238657,
+            "p90_ms": 51.47878802381456,
+            "samples_ms": [
+              51.35026603238657,
+              51.46724602673203,
+              51.47878802381456,
+              51.26105900853872,
+              51.178674038965255
+            ]
+          },
+          "total_ms": {
+            "median_ms": 107.6993799651973,
+            "p90_ms": 108.33340202225372,
+            "samples_ms": [
+              108.33340202225372,
+              106.68874002294615,
+              107.78126399964094,
+              107.6993799651973,
+              105.95904901856557
+            ]
+          }
+        },
+        "existing_evaluator": {
+          "generate_ms": {
+            "median_ms": 97.98362600849941,
+            "p90_ms": 98.38728496106341,
+            "samples_ms": [
+              97.28219796670601,
+              98.27724797651172,
+              98.38728496106341,
+              97.88728499552235,
+              97.98362600849941
+            ]
+          },
+          "replay_q_ms": {
+            "median_ms": 132.91463896166533,
+            "p90_ms": 133.43390502268448,
+            "samples_ms": [
+              132.05289898905903,
+              130.9948600246571,
+              132.93448701733723,
+              132.91463896166533,
+              133.43390502268448
+            ]
+          },
+          "total_ms": {
+            "median_ms": 230.80192395718768,
+            "p90_ms": 231.4175310311839,
+            "samples_ms": [
+              229.33509695576504,
+              229.27210800116882,
+              231.32177197840065,
+              230.80192395718768,
+              231.4175310311839
+            ]
+          }
+        }
+      },
+      "cached_vs_replay_min_q_cosine": 0.9999999403953552,
+      "greedy_future_tokens": [
+        271,
+        118228,
+        99883,
+        0,
+        334,
+        279,
+        0,
+        330
+      ],
+      "prefill_keeps_only_last_logit": true,
+      "gpu_peak_allocated_mib": 6252.0634765625
+    }
+  ]
+}

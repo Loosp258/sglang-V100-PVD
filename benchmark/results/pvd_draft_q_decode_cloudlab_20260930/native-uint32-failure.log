@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_native.py", line 139, in <module>
+    main()
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_native.py", line 135, in main
+    export(args) if args.command == 'export' else native(args)
+                                                  ^^^^^^^^^^^^
+  File "/mnt/sglang-data/Yizhzhu-node1-sglang-pvd/validation/pvd-joint-draft-q-20260930/benchmark/pvd_draft_q_decode_native.py", line 88, in native
+    if not ((ids >= offset * n) & (ids < (offset + 1) * n)).all():
+             ^^^^^^^^^^^^^^^^^
+NotImplementedError: "compare_cuda" not implemented for 'UInt32'

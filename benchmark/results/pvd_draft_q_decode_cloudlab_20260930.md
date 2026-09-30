@@ -108,10 +108,59 @@ serving adapter. The records are one capture/adaptation round; they are not
 iterative on-policy retraining, and teacher-committed prefixes do not cover
 every erroneous sparse-D trajectory.
 
-## Native and serving validation
+## Native CAGRA validation
 
-Native retrieval, cached inference timing and the unchanged 40-question
-output test are recorded after completion in the follow-up evidence.
+Eight calibration fixtures retain each question's original Prompt K and
+the selected future position 2. Each arm independently emits eight cached
+Draft tokens. The fixtures prefer committed boundary 4 when available;
+short reading responses use boundary 0. They are a smaller, differently
+weighted sample than the 25-prefix exact-score table above.
+
+Both actual V rank layouts use centered four-head graphs (two layers by two
+local KV heads), complete exact-degree-16 construction, cuVS 25.10,
+`itopk_size=2048`, head bitsets and Top16 per query head. Reference, old and
+new Q search **the same graph**. All returned IDs passed their head-range
+check, every seven-query union stayed within 128 tokens, and explicit
+disposal left zero accounted native graph bytes. The two rank layouts run
+sequentially on one idle V100S; this is not concurrent serving latency.
+
+| Query method | Native Top-10 recall against true Q/K | True Top-4 coverage in native Top16 |
+|---|---:|---:|
+| True future tokens + real target Q | 0.9825 | 0.9606 |
+| Previous joint checkpoint | 0.4043 | 0.6104 |
+| New joint causal adaptation | **0.5692** | **0.7817** |
+
+New coverage improves on all eight fixtures. The math mean coverage is
+higher than the reading mean; per-question and per-head values are retained
+in `native.json`. Even the real-Q reference loses some native coverage on
+reading fixtures. Improvement does not imply complete relevant-K coverage.
+The first native attempt stopped at a PyTorch unsupported CUDA UInt32
+comparison. The validator now casts returned IDs to Int64 before bounds
+checking; graph/search results and parameters are unchanged. The rejected
+attempt is retained in `native-uint32-failure.log`.
+
+## Cached inference timing
+
+On an idle V100S, with one warmup and five timed repetitions, the new
+six-block FP32 student and FP16-autocast readout take:
+
+| Prefix + prediction | Cached total median | Prefix prefill median | Eight-token rollout median |
+|---|---:|---:|---:|
+| 512 + 8 | 63.81 ms | 11.66 ms | 51.66 ms |
+| 2155 + 8 | **107.70 ms** | 56.30 ms | 51.35 ms |
+
+Component medians need not sum to the total median. The emitted greedy
+tokens match the generate-and-replay control; minimum Q cosine is above
+0.9999998. Timing excludes model loading, target teacher, graph readiness,
+retrieval, KV transport and serving contention. It is not client latency.
+The architecture and resident parameter count remain unchanged; checkpoint
+serialization is larger because copied CPU state tensors no longer share
+embedding storage. `latency.json` contains all timing samples and metadata.
+
+## Full-path output validation
+
+The selected checkpoint is being checked on the unchanged 40-question
+output test; its full-path results are reported separately after completion.
 
 ## Artifacts and reproduction
 
