@@ -18,6 +18,7 @@ tag="${PVD_RUN_TAG:-acceptance}"
 log_dir="$root/validation/logs"
 context_tokens="${PVD_CONTEXT_TOKENS:-2304}"
 fanin_max_slices="${PVD_FANIN_MAX_SLICES:-262144}"
+fanin_max_records="${PVD_FANIN_MAX_RECORDS:-1024}"
 d_staging_bytes="${PVD_D_STAGING_BYTES:-268435456}"
 v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
 probe_scratch_bytes="${PVD_PROBE_SCRATCH_BYTES:-536870912}"
@@ -84,6 +85,8 @@ if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
    (( context_tokens < 2304 || context_tokens > 20480 )) ||
    [[ ! "$fanin_max_slices" =~ ^[1-9][0-9]{5,7}$ ]] ||
    (( fanin_max_slices < 262144 || fanin_max_slices > 2097152 )) ||
+   [[ ! "$fanin_max_records" =~ ^[1-9][0-9]{3,4}$ ]] ||
+   (( fanin_max_records < 1024 || fanin_max_records > 16384 )) ||
    [[ ! "$d_staging_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
    (( d_staging_bytes < 268435456 || d_staging_bytes > 4294967296 )) ||
    [[ ! "$v_total_pages" =~ ^[1-9][0-9]{3,4}$ ]] ||
@@ -241,7 +244,7 @@ case "$role" in
       --experimental-cuda-sparse-packing "${pack_args[@]}" \
       --full-kv-fanin-max-slices "$fanin_max_slices" \
       --full-kv-fanin-max-inflight 2 \
-      --full-kv-fanin-max-records 1024 \
+      --full-kv-fanin-max-records "$fanin_max_records" \
       --full-kv-fanin-native-batch \
       >"$log_dir/v-$tag.log" 2>&1 </dev/null &
     ;;
