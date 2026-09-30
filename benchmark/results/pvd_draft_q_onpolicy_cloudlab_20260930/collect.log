@@ -1,0 +1,14 @@
+{"prepared_training_requests": 12, "dataset_sha256": "77e00e3f77a215e44c26ba4acce9a62a2765b0f0677fd71bb44fe14e796d0f7f"}
+{"case": "warmup", "started_unix": 1790771598.081742, "status": 200, "first_event_seconds": 2.894346500048414, "wall_seconds": 4.723928407009225, "prompt_sha256": "19f59670df470cef36ff9c603b9f51870b841c9221c06a212c4477ce89bfe642", "prompt_tokens": 2157, "completion_tokens": 6, "output_text": "1. EEFTRIT", "final_text_sha256": "830e2a677cfa44f600c0789666cd640f55855691f42a8c135fea63af485c3163", "request_id": "4cb71aef2ed543e8a8634e95e552034b", "error": null, "events": 6, "arm": "joint"}
+{"arm": "joint", "id": "gsm8k:2832", "completion_tokens": 251, "wall_seconds": 42.780521791020874, "final_answer": null, "truncated": false}
+{"arm": "joint", "id": "gsm8k:3699", "completion_tokens": 363, "wall_seconds": 66.35035702795722, "final_answer": null, "truncated": false}
+{"arm": "joint", "id": "gsm8k:7015", "completion_tokens": 185, "wall_seconds": 33.17838641896378, "final_answer": null, "truncated": false}
+{"arm": "joint", "id": "gsm8k:638", "completion_tokens": 384, "wall_seconds": 73.70352857501712, "final_answer": null, "truncated": true}
+{"arm": "joint", "id": "gsm8k:5089", "completion_tokens": 110, "wall_seconds": 20.351495514973067, "final_answer": "32", "truncated": false}
+{"arm": "joint", "id": "gsm8k:4434", "completion_tokens": 253, "wall_seconds": 45.24498755001696, "final_answer": "105", "truncated": false}
+{"arm": "joint", "id": "gsm8k:4643", "completion_tokens": 78, "wall_seconds": 14.384743245027494, "final_answer": "110", "truncated": false}
+{"arm": "joint", "id": "gsm8k:1587", "completion_tokens": 158, "wall_seconds": 28.33130019600503, "final_answer": null, "truncated": false}
+{"arm": "joint", "id": "hotpotqa:5a8d77525542994ba4e3dc90", "completion_tokens": 8, "wall_seconds": 2.5266936990083195, "final_answer": "1176", "truncated": false}
+{"arm": "joint", "id": "hotpotqa:5abd0077554299700f9d7954", "completion_tokens": 8, "wall_seconds": 2.9474918529740535, "final_answer": "United States House of Representatives", "truncated": false}
+{"arm": "joint", "id": "hotpotqa:5a8f5be9554299458435d5ed", "completion_tokens": 6, "wall_seconds": 2.3273711780202575, "final_answer": "Killing Joke", "truncated": false}
+{"arm": "joint", "id": "hotpotqa:5ab816b05542990e739ec815", "completion_tokens": 4, "wall_seconds": 1.8319643180002458, "final_answer": "Minneapolis", "truncated": false}

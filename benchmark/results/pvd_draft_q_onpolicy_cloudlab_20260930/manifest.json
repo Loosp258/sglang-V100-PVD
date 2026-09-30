@@ -1,0 +1,16 @@
+{
+  "schema": "pvd.draft_q.observed_sparse_d.evidence.v1",
+  "runtime_commit": "e7d02fc7c",
+  "source_questions_sha256": "f2547066bf57e930d8b558488f7359a72ece3b7e5dba07ad08543382066b3c27",
+  "sha256": {
+    "collect.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "collect.log": "4ccfc1dc0d060ed5fda99aa2845ad9ec359c3af36e85ff383bca553a1dd3ad7d",
+    "d-onpolicy-capture-20260930.log.gz": "609b3f482b9a215af827145cd90cf7395df5a63695c2b6b88dc110048f0b8e33",
+    "dataset.json": "77e00e3f77a215e44c26ba4acce9a62a2765b0f0677fd71bb44fe14e796d0f7f",
+    "p-onpolicy-capture-20260930.log.gz": "b7e65708abc440efc2269d40493e64aa6db34e2edfa68e25d25d64804d4016c8",
+    "serving-proof.json": "e5a1e9d583d848586ac638121a253d5cf08c183dfcd2272991aaf17ca0fee964",
+    "trajectories.jsonl": "5edb761bc763105260bcafb57ee39fa19eb482b059a127aec32c216547f49232",
+    "v-onpolicy-capture-20260930.log.gz": "836354babc2f8a96eab5315d3e10526c2d596cc11d4c5049c7fecf337e6793f1",
+    "warmup.jsonl": "671521e6565554a7baf806f3f33c75683c36a192e876467bad509dffff3c07e7"
+  }
+}
