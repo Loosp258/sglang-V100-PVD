@@ -159,6 +159,34 @@ as the default until the streaming path passes the gates below.
 
 ## Implementation sequence
 
+### Draft-Q quality follow-up, 2026-09-30
+
+The joint six-layer Draft-Q output-quality experiment (`cf447f525`) lost
+12 correct GSM8K answers and two HotpotQA answers versus the real target-Q
+probe after format normalization. Keep the six-layer architecture, baseline
+checkpoint and serving retrieval budget unchanged while testing improvements.
+
+1. Freeze a new train/calibration split from official GSM8K train and separate
+   HotpotQA questions. Exclude every question in the fixed 40-question output
+   benchmark and the known repository ReAct source. Save source hashes and
+   exact chat prompts before capture. Do not train on benchmark answers.
+2. Capture real teacher Decode trajectories at early and later committed
+   boundaries. The search dataset is the original Prompt K only; generated
+   committed tokens belong to the causal model prefix, not to that dataset.
+   Label both true-token and current trained Draft-token branches. Stop real
+   trajectories at EOS and never treat post-EOS padding as generated answers.
+3. From identical baseline weights and captures, compare a frozen six-layer
+   token trunk with trainable Q readout against joint token/readout updates.
+   Supervise target Q and its scores on true Prompt K; keep candidate budgets
+   fixed. Report true-token Q error, token-branch error, combined Top-10 recall,
+   selected-position Top4 coverage at K16, worst-layer quality and token agreement.
+4. Choose checkpoints using only the new calibration split. Measure cached
+   eight-token inference and native retrieval for any recall improvement, then
+   repeat the frozen 40-question full P/V/D output benchmark at identical
+   generation/retrieval settings, P→D bootstrap KV disabled. Keep the existing
+   target-Q probe as default unless output quality passes. Commit each completed
+   step and preserve failures and negative results.
+
 1. **Prove the native incremental path.** In an isolated CloudLab dependency
    environment, select a cuVS Python version with CAGRA `extend` that runs on
    V100S. Benchmark `build(prefix) + extend(new rows)` against one complete
