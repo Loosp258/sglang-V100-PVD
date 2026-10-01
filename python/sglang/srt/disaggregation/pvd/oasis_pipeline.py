@@ -40,12 +40,16 @@ def select_resident(candidates, resident, *, capacity, max_new):
     if any(type(t) is not int or t < 0 for t in (*resident, *candidates)):
         raise ValueError("nonnegative integer token IDs required")
     old = set(resident)
+    # Reserve room for every predicted/resident intersection before admitting
+    # new IDs. Ranked misses must not evict a later ranked resident hit.
+    hits = set(candidates) & old
+    new_budget = min(max_new, capacity - len(hits))
     chosen, seen, admitted = [], set(), 0
     for token in candidates:
         if token in seen:
             continue
         if token not in old:
-            if admitted == max_new:
+            if admitted == new_budget:
                 continue
             admitted += 1
         chosen.append(token)

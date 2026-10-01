@@ -74,6 +74,8 @@ class OasisPipelineTest(unittest.TestCase):
             capacity=3, max_new=1), (7, 2, 3))
         self.assertEqual(oasis.select_resident([7, 8], [2, 3, 4],
             capacity=3, max_new=0), (2, 3, 4))
+        self.assertEqual(oasis.select_resident([7, 8, 2, 3, 4], [2, 3, 4],
+            capacity=3, max_new=3), (2, 3, 4))
 
 
 if __name__ == "__main__":
