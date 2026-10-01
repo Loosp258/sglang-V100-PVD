@@ -157,6 +157,44 @@ as the default until the streaming path passes the gates below.
   The production backend is unchanged. Graph-buffer ownership, memory,
   broader real-Q quality and online P/V/D timing are required before serving.
 
+## OasisKV experiment branch (2026-10-01)
+
+Work only on `codex/pvd-oasiskv` in its isolated worktree. Commit each completed
+stage. This branch first provides an explicit experimental P/V/D runner; it does
+not enable the existing Scheduler automatically. Existing whole-forward bank
+leases cannot provide per-layer replacement without a separate ownership design.
+
+1. Pin the already validated Qwen2.5-7B/EAGLE3 pair. P prepares immutable Prompt
+   KV, target auxiliary features and a known root token. D receives its initial
+   sparse KV from V, never directly from P. Account separately for feature seed
+   bytes and startup; do not hide full-KV admission in D's bootstrap.
+2. Implement a bounded step/layer prefetch state machine. Publish target-space
+   predicted Q immediately after that layer's RoPE projection. Associate every
+   operation with request, incarnation, next Decode step and layer. Accept only
+   one future token, reject replay/stale replies, and drain transfers on close.
+   Keep the current resident intersection and cap newly admitted rows per head.
+3. Implement a TP1 Qwen paired forward. Current and predicted tokens share target
+   projections/MLP and the current layer's resident sparse Prompt KV. The predicted
+   row may attend to current actual K/V and its own private K/V; actual attention
+   must never see future K/V. Commit only actual Decode K/V and actual tokens.
+   EAGLE uses committed target features, not features from its rejected branch.
+4. Keep V's centered four-head exact-seeded CAGRA, with native filtered search;
+   this is an OasisKV pipeline adaptation, not the paper's D-side Quest-summary
+   selector. Return only missing layer/head KV; maintain a bounded D CPU cache and
+   transfer only its misses. Include query serialization, network, V search,
+   selection, CPU cache hits, H2D and per-layer consumer waiting in the trace.
+5. Test causal isolation, request/step/layer identity, delayed replies, bounded
+   admission, cache reuse and failure drainage. Run one idle GPU first. Compare
+   serial versus overlapped paired forwarding on identical model, Prompt, token
+   trajectory, budget, graph, query schedule and warmed resources, in reversed
+   order. Separately report free-running outputs and a full-KV reference; do not
+   equate approximate paired Q with exact full-attention Q.
+6. Preserve raw timing/output/traffic evidence and negative outcomes. The first
+   bounded cross-node runner uses an explicit experiment protocol, not Mooncake;
+   its CPU-serialized transport overhead must not be advertised as production
+   RDMA timing. Full Scheduler admission, TP2, concurrent requests, cancellation
+   races and graph-not-ready startup remain later serving gates.
+
 ## Implementation sequence
 
 ### Target-specific pretrained EAGLE3 pair, 2026-10-01
