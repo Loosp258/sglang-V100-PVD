@@ -373,8 +373,17 @@ class LayerTransport:
         @torch.inference_mode()
         def run(ticket):
             session = self.session()
-            event.synchronize()
-            q = query.cpu().numpy()
+            query_start = time.perf_counter()
+            host_query = torch.empty(query.shape, dtype=query.dtype, device='cpu', pin_memory=True)
+            with torch.cuda.stream(self.local.stream):
+                self.local.stream.wait_event(event)
+                host_query.copy_(query, non_blocking=True)
+                query.record_stream(self.local.stream)
+                query_complete = torch.cuda.Event()
+                query_complete.record()
+            query_complete.synchronize()
+            q = host_query.numpy()
+            query_ready = time.perf_counter()
             layer_cache = self.cache[ticket.layer]
             body = pack({'ticket': asdict(ticket), 'resident': bank.ids if bank else [[], [], [], []],
                 'cached': [list(c) for c in layer_cache], 'capacity': self.capacity,
@@ -438,6 +447,7 @@ class LayerTransport:
                 'network_kv_bytes': offset * 2 * 128 * 2,
                 'h2d_rows': new_gpu_rows, 'h2d_kv_bytes': new_gpu_rows * 2 * 128 * 2,
                 'cpu_cache_hit_rows': new_gpu_rows - offset,
+                'query_d2h_ms': (query_ready - query_start) * 1000,
                 'rpc_ms': (received - started) * 1000,
                 'h2d_bank_ms': (ended - copy_start) * 1000,
                 **{k: v for k, v in meta.items() if k.startswith('v_')}}
