@@ -165,6 +165,7 @@ class VectorExperiment:
         self.indexes = []
         self.session = None
         self.expected = []
+        self.recorded = {}
 
     def activate(self, name):
         if Path(name).name != name or not name.endswith('.pt'):
@@ -194,6 +195,7 @@ class VectorExperiment:
             torch.cuda.synchronize()
             self.build_seconds = time.perf_counter() - start
             self.session = None
+            self.recorded.clear()
             return {'fixture_sha256': self.identity, 'build_seconds': self.build_seconds,
                 'prompt_tokens': rows, 'layers': layers, 'graphs': layers,
                 'native_retained_bytes': self.backend.runtime.global_allocated_bytes()}
@@ -204,11 +206,15 @@ class VectorExperiment:
                 raise ValueError('fixture identity mismatch')
             self.session = (meta['request_id'], meta['incarnation'])
             self.expected = [0] * 28
+            self.selection_mode = meta.get('selection_mode', 'live')
+            if self.selection_mode not in ('live', 'record', 'replay'):
+                raise ValueError('explicit live/record/replay selection required')
             fixture = self.fixture
             data = {'features': fixture['features'], 'prompt_ids': fixture['prompt_ids'],
                 'root': fixture['root'], 'teacher_tokens': fixture['teacher_tokens'],
                 'prompt_tokens': len(fixture['prompt_ids']), 'fixture_id': fixture['id'],
                 'teacher_text': fixture['teacher_text'], 'repetition_penalty': fixture['repetition_penalty'],
+                'eos_token_id': fixture['target_config']['eos_token_id'],
                 'seed_q': fixture['teacher_q'][0]}
             stream = io.BytesIO()
             torch.save(data, stream)
@@ -229,6 +235,7 @@ class VectorExperiment:
             if not 1 <= capacity <= 2048 or not 0 <= max_new <= capacity:
                 raise ValueError('bounded resident capacity required')
             query = np.frombuffer(query_data, dtype=np.float16).reshape(28, 128).copy()
+            query_sha = hashlib.sha256(query.tobytes()).hexdigest()
             query = torch.from_numpy(query).cuda().float().contiguous()
             if not torch.isfinite(query).all():
                 raise ValueError('nonfinite predicted Q')
@@ -249,6 +256,19 @@ class VectorExperiment:
                 chosen.append(selected)
                 missing.append([t for t in selected if t not in cached])
                 candidates.append(ranked)
+            # Native search can choose different equal-score IDs even on the
+            # same query. A timing replay still executes every native search,
+            # then uses the first arm's selection/traffic and verifies exact Q.
+            key = (step, layer)
+            if self.selection_mode == 'record':
+                self.recorded[key] = (query_sha, tuple(chosen))
+            elif self.selection_mode == 'replay':
+                recorded_sha, recorded_ids = self.recorded[key]
+                if query_sha != recorded_sha:
+                    raise ValueError(f'fixed-selection replay Q changed at {key}')
+                chosen = recorded_ids
+                missing = [[t for t in chosen[head] if t not in set(meta['cached'][head])]
+                           for head in range(4)]
             search_end = time.perf_counter()
             payload = []
             for head in range(4):
@@ -475,15 +495,19 @@ def draft_one(draft, mapping, features, inputs, cache, seen, penalty):
 
 
 @torch.inference_mode()
-def run_trial(args, target, draft, mapping, seed, session, fixture_sha, mode, trajectory, steps):
+def run_trial(args, target, draft, mapping, seed, session, fixture_sha, mode, trajectory, steps,
+              selection_mode='live'):
     request_id, incarnation = str(uuid.uuid4()), str(uuid.uuid4())
-    body = pack({'request_id': request_id, 'incarnation': incarnation, 'fixture_sha256': fixture_sha})
+    body = pack({'request_id': request_id, 'incarnation': incarnation,
+        'fixture_sha256': fixture_sha, 'selection_mode': selection_mode})
     started = time.perf_counter()
     response = session.post(args.v_url + '/seed', data=body, timeout=60)
     response.raise_for_status()
     seed = torch.load(io.BytesIO(response.content), weights_only=True)
     feature_seed = seed['features'].cuda()
     ids, root, penalty = seed['prompt_ids'], seed['root'], seed['repetition_penalty']
+    eos = seed['eos_token_id']
+    eos = set(eos if isinstance(eos, list) else [eos])
     seen = list(ids) + [root]
     shifted = torch.tensor([seen[1:]], device='cuda')
     predicted, cache = draft_one(draft, mapping, feature_seed, shifted, None, seen, penalty)
@@ -553,12 +577,15 @@ def run_trial(args, target, draft, mapping, seed, session, fixture_sha, mode, tr
                         banks[layer] = pipeline.consume(step, layer)
             step_trace.append({'step': step, 'wall_ms': (time.perf_counter() - step_start) * 1000,
                 'draft_one_ms': (draft_end - draft_start) * 1000})
+            if trajectory == 'free' and actual in eos:
+                break
         torch.cuda.synchronize()
-        elapsed = time.perf_counter() - run_start
     finally:
         pending_errors = pipeline.close()
         if pending_errors:
             raise RuntimeError(f'prefetch close encountered errors: {pending_errors}')
+    elapsed = time.perf_counter() - run_start
+    actual_steps = len(sampled_next)
     # Nothing below participates in Decode timing.
     quality = post_json(session, args.v_url, '/quality',
         {'fixture_sha256': fixture_sha, 'banks': layer_banks}) if trajectory == 'teacher' else None
@@ -566,14 +593,16 @@ def run_trial(args, target, draft, mapping, seed, session, fixture_sha, mode, tr
     tokenizer = AutoTokenizer.from_pretrained(args.target_model, local_files_only=True)
     trace = transport.trace
     measured = [r for r in trace if r['ticket']['step'] > 0]
-    return {'mode': mode, 'trajectory': trajectory, 'steps': steps,
-        'decode_seconds': elapsed, 'ms_per_step': elapsed * 1000 / steps,
+    bank_sha = hashlib.sha256(json.dumps(layer_banks, separators=(',', ':')).encode()).hexdigest()
+    return {'mode': mode, 'trajectory': trajectory, 'steps': actual_steps,
+        'selection_mode': selection_mode, 'banks_sha256': bank_sha,
+        'decode_seconds': elapsed, 'ms_per_step': elapsed * 1000 / actual_steps,
         'bootstrap_seconds': bootstrap_seconds, 'feature_seed_bytes': feature_seed.numel() * 2,
         'seed_response_bytes': len(response.content), 'actual_tokens': actual_tokens,
         'sampled_next': sampled_next, 'predicted_tokens': predictions,
-        'draft_first_token_agreement': sum(a == b for a, b in zip(predictions, actual_tokens[1:])) / steps,
+        'draft_first_token_agreement': sum(a == b for a, b in zip(predictions, actual_tokens[1:])) / actual_steps,
         'teacher_next_argmax_agreement': sum(a == b for a, b in zip(sampled_next,
-            seed['teacher_tokens'][1:])) / steps if trajectory == 'teacher' else None,
+            seed['teacher_tokens'][1:])) / actual_steps if trajectory == 'teacher' else None,
         'output_text': tokenizer.decode(actual_tokens, skip_special_tokens=True),
         'true_q_quality': quality,
         'consumer_wait_ms': sum(r['consumer_wait_seconds'] for r in pipeline.trace) * 1000,
@@ -599,6 +628,8 @@ def decode(args):
         'resources': 'one V100S for V, one V100S for D; P prepare runs separately',
         'capacity_per_kv_head': args.capacity, 'max_new_per_head_step': args.max_new,
         'top_k_per_q_head': args.top_k, 'workers': args.workers, 'fixtures': [],
+        'timing_comparison': 'first arm records selections; later arms replay identical IDs/bytes after native searches and require bitwise identical Q',
+        'teacher_timing_eos': 'fixed-length forced trajectory may continue beyond EOS; free generation stops at EOS',
         'code_sha256': digest(__file__)}
     for name in args.fixture:
         activation = post_json(session, args.v_url, '/activate', {'fixture': name})
@@ -610,7 +641,8 @@ def decode(args):
         order = ['serial', 'overlap', 'overlap', 'serial']
         for index, mode in enumerate(order):
             trial = run_trial(args, target, draft, mapping, None, session,
-                activation['fixture_sha256'], mode, 'teacher', args.steps)
+                activation['fixture_sha256'], mode, 'teacher', args.steps,
+                'record' if index == 0 else 'replay')
             filename = f'{Path(name).stem}-{index}-{mode}.json'
             save_json(output / filename, trial)
             trials.append({k: v for k, v in trial.items() if k not in (
@@ -619,7 +651,7 @@ def decode(args):
                 'ms_per_step': trial['ms_per_step'], 'consumer_wait_ms': trial['consumer_wait_ms'],
                 'network_kv_bytes': trial['network_kv_bytes'], 'quality': trial['true_q_quality']}), flush=True)
         # Same trajectory/banks/outputs must hold independently of schedule.
-        for key in ('actual_tokens', 'sampled_next', 'predicted_tokens'):
+        for key in ('actual_tokens', 'sampled_next', 'predicted_tokens', 'banks_sha256'):
             if any(trial[key] != trials[0][key] for trial in trials):
                 raise ValueError(f'paired scheduling changed {key}')
         free = run_trial(args, target, draft, mapping, None, session, activation['fixture_sha256'],
