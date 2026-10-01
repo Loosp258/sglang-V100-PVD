@@ -1,0 +1,79 @@
+{
+  "timed_commit": "d0f83e1d8",
+  "prepare_commit": "b9fbf6193",
+  "default_copy_commit": "c5f2e8e05",
+  "native_module_commit": "e86d6d441",
+  "eagle_weights_sha256": "f77665495c620c17d05d6672444094844866e2a27e545d6837e8b107465ddfd8",
+  "eagle_source_commit": "cb7e0841fe0c206c6ed74a197ad5e2a1f13f5a2b",
+  "verification": {
+    "passed": true,
+    "matched_fixtures_per_run": 3,
+    "matched_runs": 2,
+    "trials_per_fixture": 4,
+    "initial_failure_preserved": true,
+    "native_selection_changes": 11,
+    "admission_bound_rows_per_step_layer": 64
+  },
+  "files": {
+    ".gitattributes": {
+      "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+      "bytes": 8
+    },
+    "default-copy-runtime.py": {
+      "sha256": "2b245ba83e2f1dff212ddf8f093eb1a85e8ff07bd4323fdcffae33d1a5648aca",
+      "bytes": 36897
+    },
+    "fixed-default-copy.tar.gz": {
+      "sha256": "395d2b9a66078c75c7b8a5e0255e9cd6a73ced4f037c8a81daf0fcb10caf3a72",
+      "bytes": 5564065
+    },
+    "fixed-independent-copy.tar.gz": {
+      "sha256": "8fc3cd6d447455c553ae867b4bc498f95711111fd2c191fed572e0e18d83efdc",
+      "bytes": 5629703
+    },
+    "initial-native.tar.gz": {
+      "sha256": "9d883647cdcca5c810b16552119b9d26ffaf3ba432f2c7d283406e0720852f64",
+      "bytes": 5436470
+    },
+    "prepare-runtime.py": {
+      "sha256": "7b157f3b3b9e4ea2f48eb2ac2b59b2857d5f8ae0e57f436d3112e829bd84ac37",
+      "bytes": 35536
+    },
+    "prepare.json": {
+      "sha256": "67e879fb17e8e72ca493f6cba10a92645379b79886add8ca948b6aad023ac980",
+      "bytes": 1952
+    },
+    "prepare.log.gz": {
+      "sha256": "7c102ac1131f7ac7acc3ded36e9c711161a020bf370b465d9b3f4ed28b3eacf4",
+      "bytes": 821
+    },
+    "report.json": {
+      "sha256": "65e8d2cf1caef34b5d2787cf4b34bd3a18ffaaf39583fabdc1c785ff56cee012",
+      "bytes": 28938
+    },
+    "seed-check.json": {
+      "sha256": "e158c08bba382e9fc4bf6f22999546709ebf0ba5833c5740ac4216f196cc63a7",
+      "bytes": 290
+    },
+    "stability.json": {
+      "sha256": "208ba23663daffaad477d33efa5f05e422700d34c19047b64deb7d34d9c2393a",
+      "bytes": 178954
+    },
+    "summary.json": {
+      "sha256": "2eca90dde0e0eda15c96e33532d53fef21b7958207f0826bdc6d0bf7317c937e",
+      "bytes": 7064
+    },
+    "timed-pipeline.py": {
+      "sha256": "4b97938508284bc04af79e59061e19031f2cab8ed81348f579d8363880bfbbbf",
+      "bytes": 6002
+    },
+    "timed-qwen.py": {
+      "sha256": "fb10f6f6dcc577b00cb19ff24f591b70851a1ae520ea8571ed4d7fd6bfe79cf2",
+      "bytes": 5103
+    },
+    "timed-runtime.py": {
+      "sha256": "44f7fd432822f66101a0bd0476605910888aa505ce8207dbf9ebf463ccabdfac",
+      "bytes": 37478
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "fixtures": [
+    {
+      "id": "gsm8k:1876",
+      "task": "gsm8k",
+      "prompt_tokens": 141,
+      "sha256": "eabde07b992b204b0a5f2f6452766fff77ec4b626c12c508760e04261c690d1d",
+      "paired_validation": {
+        "actual_logit_max_abs_error": 0.025390625,
+        "actual_feature_max_abs_error": 0.125,
+        "argmax_equal": true,
+        "candidate_isolation_bitwise": true,
+        "committed_rows_per_step_per_layer": 1
+      },
+      "prefill_seconds": 0.3884114440297708,
+      "teacher_text": "First, we calculate the total number of people Carl expects to visit his shop. This includes"
+    },
+    {
+      "id": "hotpotqa:5a72224755429971e9dc92be",
+      "task": "hotpotqa",
+      "prompt_tokens": 1372,
+      "sha256": "b4e1bfb3d50368709d6be806d578e5443ed142eaeb1226f3efce871afaca4d05",
+      "paired_validation": {
+        "actual_logit_max_abs_error": 0.03125,
+        "actual_feature_max_abs_error": 0.125,
+        "argmax_equal": true,
+        "candidate_isolation_bitwise": true,
+        "committed_rows_per_step_per_layer": 1
+      },
+      "prefill_seconds": 0.3900490009691566,
+      "teacher_text": "FINAL: Berenberg Bank\nuser\nUse the following passages to answer the question"
+    },
+    {
+      "id": "case40-2155",
+      "task": "synthetic",
+      "prompt_tokens": 2155,
+      "sha256": "8582694d5627001a266252a7109a8dc911eecb8991c3124fb64894ca85385fd9",
+      "paired_validation": {
+        "actual_logit_max_abs_error": 0.0234375,
+        "actual_feature_max_abs_error": 0.125,
+        "argmax_equal": true,
+        "candidate_isolation_bitwise": true,
+        "committed_rows_per_step_per_layer": 1
+      },
+      "prefill_seconds": 0.7306303440127522,
+      "teacher_text": "EFTRITON EEFTRITON EEFTRITON EEFTRIT"
+    }
+  ],
+  "steps": 16,
+  "questions_sha256": "050bea94b21c97edb85c04f4ec6cb713ed103f343b8f3ab6df1007c3b29858c3",
+  "code_sha256": "7b157f3b3b9e4ea2f48eb2ac2b59b2857d5f8ae0e57f436d3112e829bd84ac37"
+}

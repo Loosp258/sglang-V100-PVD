@@ -195,6 +195,25 @@ leases cannot provide per-layer replacement without a separate ownership design.
    RDMA timing. Full Scheduler admission, TP2, concurrent requests, cancellation
    races and graph-not-ready startup remain later serving gates.
 
+### OasisKV first bounded result (2026-10-02)
+
+The explicit P/V/D experiment is implemented in `benchmark/pvd_oasis_experiment.py`
+with role launchers, matched trace analysis and a live native stability probe.
+On one V GPU and one D GPU, fixed-selection comparisons over 16 teacher-forced
+steps reduced median per-step time by 15.01%, 11.95% and 11.13% on 141/1372/2155
+tokens. Native searches still execute and Q hashes, banks and KV bytes match.
+This is relative to serialized paired forwarding, not existing serving. Before
+EOS, working-set true-Q Top10 coverage was 0.99094/0.92439/0.90645; worst query
+coverage reached zero. One completed reading output matched the full-KV reference;
+math was truncated. Native identical-Q selection jitter is preserved, including
+the initial failed fairness gate. Four ownership/selection CPU checks and actual
+target paired-row isolation passed. The seed serializer now excludes future-Q
+backing storage and excludes future teacher tokens from free generation, with
+a CPU fixture check. Report: `benchmark/results/pvd_oasis_cloudlab_20261002.md`.
+Keep this as an explicit isolated entrypoint. Scheduler bank ownership, Mooncake,
+two V ranks, bootstrap before graph READY and the 40-question quality gate remain
+unvalidated. The experiment's serving and staging processes were stopped.
+
 ## Implementation sequence
 
 ### Target-specific pretrained EAGLE3 pair, 2026-10-01

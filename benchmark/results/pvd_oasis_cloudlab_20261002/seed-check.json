@@ -1,0 +1,1 @@
+{"fixture": "case40-2155.pt", "passed": true, "future_q_storage_excluded": true, "free_future_tokens_excluded": true, "sizes": [{"teacher_trajectory": false, "wire_bytes": 46550245, "tensor_bytes": 46541824}, {"teacher_trajectory": true, "wire_bytes": 46550309, "tensor_bytes": 46541824}]}

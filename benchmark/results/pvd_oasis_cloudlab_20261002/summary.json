@@ -1,0 +1,184 @@
+{
+  "fixtures": [
+    {
+      "fixture": "gsm8k_1876.pt",
+      "prompt_tokens": 141,
+      "fixture_sha256": "eabde07b992b204b0a5f2f6452766fff77ec4b626c12c508760e04261c690d1d",
+      "graph_build_seconds": 0.805513922998216,
+      "timing_steps": 16,
+      "before_eos_steps": 16,
+      "serial": {
+        "ms_per_step_runs": [
+          162.53416668769205,
+          174.1102276246238
+        ],
+        "median_ms_per_step": 168.32219715615793,
+        "median_consumer_wait_ms_per_step": 132.8585363789898,
+        "ready_layer_fraction": 0.0035714285714285718,
+        "mean_layer_stage_ms": {
+          "query_d2h_ms": 0.13205495211184912,
+          "rpc_ms": 7.958881960630173,
+          "v_search_ms": 4.329143994116402,
+          "v_queue_ms": 1.6003760997028578,
+          "h2d_bank_ms": 1.674309935160203
+        },
+        "mean_draft_one_ms": 2.883934367370481
+      },
+      "overlap": {
+        "ms_per_step_runs": [
+          136.28761650033994,
+          149.8172749998048
+        ],
+        "median_ms_per_step": 143.05244575007237,
+        "median_consumer_wait_ms_per_step": 89.16176481579896,
+        "ready_layer_fraction": 0.09880952380952382,
+        "mean_layer_stage_ms": {
+          "query_d2h_ms": 0.16800704872280003,
+          "rpc_ms": 8.50683572484524,
+          "v_search_ms": 4.578443438194448,
+          "v_queue_ms": 1.7415297677784802,
+          "h2d_bank_ms": 1.9612207003298128
+        },
+        "mean_draft_one_ms": 4.811952806388338
+      },
+      "decode_time_reduction_fraction": 0.15012726683125455,
+      "saved_seconds_over_16_steps": 0.404316022497369,
+      "bootstrap_median_seconds": 0.23272485748748295,
+      "feature_seed_bytes": 3032064,
+      "decode_network_kv_bytes": 3602944,
+      "decode_h2d_kv_bytes": 3603456,
+      "working_set_quality_before_eos": {
+        "true_full_q_top10_working_set_coverage": 0.9909359056122449,
+        "worst_query_coverage": 0.3,
+        "query_count": 12544
+      },
+      "teacher_argmax_agreement_16_steps": 1.0,
+      "draft_token_agreement_before_eos": 0.625,
+      "free_output_text": "First, we calculate the total number of people Carl expects to visit his shop. This",
+      "free_steps": 16,
+      "free_native_selection": true,
+      "schedule_identity_passed": true
+    },
+    {
+      "fixture": "hotpotqa_5a72224755429971e9dc92be.pt",
+      "prompt_tokens": 1372,
+      "fixture_sha256": "b4e1bfb3d50368709d6be806d578e5443ed142eaeb1226f3efce871afaca4d05",
+      "graph_build_seconds": 1.2430183189571835,
+      "timing_steps": 16,
+      "before_eos_steps": 5,
+      "serial": {
+        "ms_per_step_runs": [
+          215.67792831046972,
+          244.88983243645635
+        ],
+        "median_ms_per_step": 230.28388037346303,
+        "median_consumer_wait_ms_per_step": 193.9999239766621,
+        "ready_layer_fraction": 0.004761904761904762,
+        "mean_layer_stage_ms": {
+          "query_d2h_ms": 0.1373260393544721,
+          "rpc_ms": 12.429864955664103,
+          "v_search_ms": 6.393908886058766,
+          "v_queue_ms": 3.672649988549806,
+          "h2d_bank_ms": 1.726028281319443
+        },
+        "mean_draft_one_ms": 3.0045512365177274
+      },
+      "overlap": {
+        "ms_per_step_runs": [
+          200.79291237561847,
+          204.7585512518708
+        ],
+        "median_ms_per_step": 202.77573181374464,
+        "median_consumer_wait_ms_per_step": 150.41159653264913,
+        "ready_layer_fraction": 0.03571428571428571,
+        "mean_layer_stage_ms": {
+          "query_d2h_ms": 0.1863831126857327,
+          "rpc_ms": 13.235712868446994,
+          "v_search_ms": 6.845274401781526,
+          "v_queue_ms": 4.023364596443051,
+          "h2d_bank_ms": 1.7283708765587238
+        },
+        "mean_draft_one_ms": 3.544815332861617
+      },
+      "decode_time_reduction_fraction": 0.11945320929587877,
+      "saved_seconds_over_16_steps": 0.4401303769554943,
+      "bootstrap_median_seconds": 0.40667839749949053,
+      "feature_seed_bytes": 29503488,
+      "decode_network_kv_bytes": 6459392,
+      "decode_h2d_kv_bytes": 6724096,
+      "working_set_quality_before_eos": {
+        "true_full_q_top10_working_set_coverage": 0.9243877551020409,
+        "worst_query_coverage": 0.0,
+        "query_count": 3920
+      },
+      "teacher_argmax_agreement_16_steps": 1.0,
+      "draft_token_agreement_before_eos": 0.0,
+      "free_output_text": "FINAL: Berenberg Bank",
+      "free_steps": 5,
+      "free_native_selection": true,
+      "schedule_identity_passed": true
+    },
+    {
+      "fixture": "case40-2155.pt",
+      "prompt_tokens": 2155,
+      "fixture_sha256": "8582694d5627001a266252a7109a8dc911eecb8991c3124fb64894ca85385fd9",
+      "graph_build_seconds": 1.6511501140194014,
+      "timing_steps": 16,
+      "before_eos_steps": 16,
+      "serial": {
+        "ms_per_step_runs": [
+          213.1284113129368,
+          239.80845349797164
+        ],
+        "median_ms_per_step": 226.46843240545422,
+        "median_consumer_wait_ms_per_step": 190.6575534849253,
+        "ready_layer_fraction": 0.013095238095238094,
+        "mean_layer_stage_ms": {
+          "query_d2h_ms": 0.1378765740636958,
+          "rpc_ms": 12.15271228221744,
+          "v_search_ms": 6.101187346835753,
+          "v_queue_ms": 3.2129026241212464,
+          "h2d_bank_ms": 1.760992984608969
+        },
+        "mean_draft_one_ms": 2.5396451257014028
+      },
+      "overlap": {
+        "ms_per_step_runs": [
+          201.33615881422884,
+          201.1736985623429
+        ],
+        "median_ms_per_step": 201.25492868828587,
+        "median_consumer_wait_ms_per_step": 149.37649525927554,
+        "ready_layer_fraction": 0.020238095238095236,
+        "mean_layer_stage_ms": {
+          "query_d2h_ms": 0.18676171235884317,
+          "rpc_ms": 13.07123683481699,
+          "v_search_ms": 6.618967815787376,
+          "v_queue_ms": 3.541081524980698,
+          "h2d_bank_ms": 1.764161977085418
+        },
+        "mean_draft_one_ms": 3.057333634933457
+      },
+      "decode_time_reduction_fraction": 0.11133341388625739,
+      "saved_seconds_over_16_steps": 0.4034160594746936,
+      "bootstrap_median_seconds": 0.47989729599794373,
+      "feature_seed_bytes": 46341120,
+      "decode_network_kv_bytes": 8464384,
+      "decode_h2d_kv_bytes": 9437696,
+      "working_set_quality_before_eos": {
+        "true_full_q_top10_working_set_coverage": 0.9064492984693877,
+        "worst_query_coverage": 0.0,
+        "query_count": 12544
+      },
+      "teacher_argmax_agreement_16_steps": 1.0,
+      "draft_token_agreement_before_eos": 0.1875,
+      "free_output_text": "EFTRITON EEFTRITON EEFTRITON EEFTR",
+      "free_steps": 16,
+      "free_native_selection": true,
+      "schedule_identity_passed": true
+    }
+  ],
+  "timed_code_sha256": "44f7fd432822f66101a0bd0476605910888aa505ce8207dbf9ebf463ccabdfac",
+  "comparison": "first arm records selections; later arms replay identical IDs/bytes after native searches and require bitwise identical Q",
+  "quality_note": "working-set coverage of full-attention teacher Q Top10; not ANN recall or answer accuracy"
+}
