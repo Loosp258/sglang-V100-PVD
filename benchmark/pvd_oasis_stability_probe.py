@@ -3,7 +3,6 @@ import argparse
 import hashlib
 import io
 import json
-from pathlib import Path
 import uuid
 
 import requests

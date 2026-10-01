@@ -211,11 +211,14 @@ class VectorExperiment:
                 raise ValueError('explicit live/record/replay selection required')
             fixture = self.fixture
             data = {'features': fixture['features'], 'prompt_ids': fixture['prompt_ids'],
-                'root': fixture['root'], 'teacher_tokens': fixture['teacher_tokens'],
+                'root': fixture['root'], 'teacher_tokens': fixture['teacher_tokens']
+                    if meta.get('teacher_trajectory', False) else None,
                 'prompt_tokens': len(fixture['prompt_ids']), 'fixture_id': fixture['id'],
-                'teacher_text': fixture['teacher_text'], 'repetition_penalty': fixture['repetition_penalty'],
+                'repetition_penalty': fixture['repetition_penalty'],
                 'eos_token_id': fixture['target_config']['eos_token_id'],
-                'seed_q': fixture['teacher_q'][0]}
+                # torch.save preserves a view's entire backing storage. Clone
+                # only the known root Q, excluding all future teacher-Q labels.
+                'seed_q': fixture['teacher_q'][0].clone()}
             stream = io.BytesIO()
             torch.save(data, stream)
             return stream.getvalue()
@@ -509,7 +512,8 @@ def run_trial(args, target, draft, mapping, seed, session, fixture_sha, mode, tr
               selection_mode='live'):
     request_id, incarnation = str(uuid.uuid4()), str(uuid.uuid4())
     body = pack({'request_id': request_id, 'incarnation': incarnation,
-        'fixture_sha256': fixture_sha, 'selection_mode': selection_mode})
+        'fixture_sha256': fixture_sha, 'selection_mode': selection_mode,
+        'teacher_trajectory': trajectory == 'teacher'})
     started = time.perf_counter()
     response = session.post(args.v_url + '/seed', data=body, timeout=60)
     response.raise_for_status()
@@ -708,6 +712,10 @@ def main():
         raise ValueError('one visible GPU per experiment process required')
     if hasattr(args, 'steps') and not 2 <= args.steps <= 64:
         raise ValueError('bounded 2..64 Decode steps required')
+    if args.role == 'decode' and (not 1 <= args.capacity <= 2048 or
+        not 0 <= args.max_new <= args.capacity or not 1 <= args.top_k <= 64 or
+        not 1 <= args.workers <= 8):
+        raise ValueError('bounded resident, admission, TopK and worker counts required')
     if args.role == 'serve':
         serve(args)
     elif args.role == 'prepare':
