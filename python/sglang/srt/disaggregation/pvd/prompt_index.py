@@ -186,6 +186,7 @@ class PromptIndexManager:
         profile_chunk_stages: bool = False,
         batched_group_search: bool = False,
         partial_group_search: bool = False,
+        host_candidate_processing: bool = False,
     ) -> None:
         if not isinstance(vector_space, str) or not vector_space.strip():
             raise ValueError("vector_space must be a non-empty string")
@@ -229,6 +230,10 @@ class PromptIndexManager:
         if partial_group_search and not batched_group_search:
             raise ValueError("partial group search requires batched group search")
         self.partial_group_search = partial_group_search
+        if type(host_candidate_processing) is not bool or (
+                host_candidate_processing and not batched_group_search):
+            raise ValueError("host candidate processing requires batched group search")
+        self.host_candidate_processing = host_candidate_processing
         self._group_search_lock = threading.RLock()
 
         # Where this manager's copies live: the backend's declared device, so
@@ -1560,6 +1565,7 @@ class PromptIndexManager:
         boundaries,
         timings,
         raw_result=None,
+        host_result=False,
     ) -> Selection:
         if mean is None or len(boundaries) < 2:
             raise IndexSearchError("grouped CAGRA index lacks a head mean or mapping")
@@ -1580,23 +1586,37 @@ class PromptIndexManager:
         else:
             rows, scores = raw_result
         started = time.perf_counter() if timings is not None else 0.0
-        global_rows = rows.to(dtype=torch.int64)
-        local_rows = torch.full_like(global_rows, -1)
-        valid = torch.zeros_like(global_rows, dtype=torch.bool)
-        for begin, end, start in sections:
-            in_section = (global_rows >= start) & (global_rows < start + end - begin)
-            local_rows = torch.where(
-                in_section,
-                begin + global_rows - start,
-                local_rows,
-            )
-            valid |= in_section
-        if not bool(torch.all(valid)):
-            raise IndexSearchError("filtered CAGRA returned an ID from another head")
+        if host_result:
+            mapped = []
+            for query_rows in rows.tolist():
+                local = []
+                for native_row in query_rows:
+                    for begin, end, start in sections:
+                        if start <= native_row < start + end - begin:
+                            local.append(begin + native_row - start)
+                            break
+                    else:
+                        raise IndexSearchError("filtered CAGRA returned an ID from another head")
+                mapped.append(local)
+            local_rows = torch.tensor(mapped, dtype=torch.int64)
+        else:
+            global_rows = rows.to(dtype=torch.int64)
+            local_rows = torch.full_like(global_rows, -1)
+            valid = torch.zeros_like(global_rows, dtype=torch.bool)
+            for begin, end, start in sections:
+                in_section = (global_rows >= start) & (global_rows < start + end - begin)
+                local_rows = torch.where(
+                    in_section,
+                    begin + global_rows - start,
+                    local_rows,
+                )
+                valid |= in_section
+            if not bool(torch.all(valid)):
+                raise IndexSearchError("filtered CAGRA returned an ID from another head")
         if timings is not None:
             timings['candidate_mapping'] = time.perf_counter() - started
             started = time.perf_counter()
-        original_scores = scores + (queries @ mean).unsqueeze(1)
+        original_scores = scores if host_result else scores + (queries @ mean).unsqueeze(1)
         if timings is not None:
             timings['score_restore'] = time.perf_counter() - started
         head_index = BuiltIndex(
@@ -1616,6 +1636,7 @@ class PromptIndexManager:
             top_k=top_k,
             timings=timings,
             backend_result=(local_rows, original_scores),
+            host_result=host_result,
         )
 
     def _search_grouped_many(self, requests, *, metadata=None):
@@ -1748,13 +1769,29 @@ class PromptIndexManager:
                     if timings is not None:
                         for name, elapsed in stages.items():
                             timings[name] = timings.get(name, 0.0) + elapsed
+                    if self.host_candidate_processing:
+                        started = time.perf_counter() if timings is not None else 0.0
+                        restored = []
+                        for query_position, row in enumerate(rows):
+                            restored.append(scores[row[0]] + (q[query_position] @ row[8]).unsqueeze(1))
+                            placed.append(restored[-1])
+                        joined_scores = torch.stack(restored)
+                        placed.append(joined_scores)
+                        # Only the bounded candidate buffers cross back. Native
+                        # head slots not submitted in this call are never used.
+                        host_rows = native_rows.cpu()
+                        host_scores = joined_scores.cpu()
+                        if timings is not None:
+                            timings['candidate_download'] = timings.get('candidate_download', 0.0) + time.perf_counter() - started
                     for query_position, row in enumerate(rows):
                         head, position, identity, _, head_top_k, descriptor, validated, item, mean = row
                         stages = {} if timings is not None else None
                         selection = self._select_grouped(index, q[query_position], identity=identity,
                             mapping=item.mapping, top_k=head_top_k, mean=mean,
                             boundaries=boundaries, timings=stages,
-                            raw_result=(native_rows[head], scores[head]))
+                            raw_result=((host_rows[head], host_scores[query_position])
+                                if self.host_candidate_processing else (native_rows[head], scores[head])),
+                            host_result=self.host_candidate_processing)
                         if timings is not None:
                             for name, elapsed in stages.items():
                                 timings[name] = timings.get(name, 0.0) + elapsed
@@ -1766,6 +1803,8 @@ class PromptIndexManager:
                     metadata["path"] = ("grouped_cagra_partial_batched"
                         if any(len(rows) < 4 for _, rows in prepared.values())
                         else "grouped_cagra_batched")
+                    if self.host_candidate_processing:
+                        metadata['path'] += '_host'
                 return tuple(results)
             except BaseException as exc:
                 failure = exc

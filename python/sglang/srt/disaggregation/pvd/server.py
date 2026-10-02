@@ -319,6 +319,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Opt in to cached searches for already-arrived head subsets; requires batched group search.",
     )
     parser.add_argument(
+        "--prompt-index-host-candidate-processing", action="store_true",
+        help="Opt in to bounded host candidate mapping after cached native CAGRA; requires batched group search.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-native-pool", action="store_true",
+        help="Opt in to a zero-initial-size RMM pool within the reserved global native cap.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-native-bytes",
         type=_positive_int,
         default=None,
@@ -756,6 +764,8 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
             native_kwargs["exact_head_groups"] = 4
         if shared_native is not None:
             native_kwargs["global_native_cap_bytes"] = shared_native
+        if getattr(args, 'prompt_index_cagra_native_pool', False):
+            native_kwargs['native_pool'] = True
         if getattr(args, "prompt_index_cagra_kv_edge_update", False):
             from sglang.srt.disaggregation.pvd.cagra_kv_update import (
                 CagraKVUpdateBackend,
@@ -808,6 +818,7 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
         profile_chunk_stages=getattr(args, "prompt_index_profile_chunk_stages", False),
         batched_group_search=getattr(args, "prompt_index_batched_group_search", False),
         partial_group_search=getattr(args, "prompt_index_partial_group_search", False),
+        host_candidate_processing=getattr(args, "prompt_index_host_candidate_processing", False),
     )
 
 

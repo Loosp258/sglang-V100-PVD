@@ -86,6 +86,17 @@ def build(b, metric="ip"):
     )
 
 
+@pytest.mark.parametrize('cap', [None, 4097])
+def test_pool_rejects_missing_or_unaligned_cap_before_runtime_import(cap):
+    with pytest.raises(ValueError, match='aligned global native cap'):
+        backend(native_pool=True, global_native_cap_bytes=cap)
+
+
+def test_pool_runtime_must_prove_configured_pool():
+    with pytest.raises(ValueError, match='configured bounded pool'):
+        backend(native_pool=True, global_native_cap_bytes=8192)
+
+
 @pytest.mark.parametrize("metric,score", [("ip", 25), ("l2", -5)])
 def test_score_contract_and_lifetime(metric, score):
     b = backend()
@@ -286,7 +297,8 @@ def native_runtime_double(monkeypatch):
         torch.cuda, "current_stream", lambda _: SimpleNamespace(cuda_stream=1234)
     )
     runtime.synchronize = lambda: events.append("sync")
-    runtime.Resources = lambda **kwargs: events.append(kwargs) or object()
+    runtime.Resources = lambda **kwargs: events.append(kwargs) or SimpleNamespace(get_c_obj=lambda: 7)
+    runtime.stream_set = lambda handle, stream: events.append(('stream_set', handle, stream)) or 1
     runtime._verify_allocator_bridge = lambda owner: events.append("bridge")
     runtime.cp = SimpleNamespace(from_dlpack=lambda tensor: tensor)
     runtime.cagra = SimpleNamespace(
@@ -327,7 +339,7 @@ def test_native_call_arguments_outputs_stream_and_resource_scope(monkeypatch):
     runtime.cagra.build = native_build
     runtime.cagra.search = native_search
     runtime.build(owner, vectors, metric="ip", graph_degree=1, intermediate_degree=2)
-    assert events[:2] == [{"stream": 1234}, "bridge"]
+    assert events[:3] == [{}, ('stream_set', 7, 1234), "bridge"]
     assert runtime.mr.current == "original"
     rows, scores = runtime.search(owner, torch.ones((1, 3)), top_k=2, itopk_size=4)
     assert rows.tolist() == [[1, 1]] and scores.tolist() == [[9, 9]]

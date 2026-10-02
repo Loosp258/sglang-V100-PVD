@@ -650,6 +650,7 @@ def select(
     kv_head: Optional[int] = None,
     timings: Optional[Dict[str, float]] = None,
     backend_result: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    host_result: bool = False,
 ) -> Selection:
     """Search one layer and return the choice in Prompt terms, not addresses."""
     if isinstance(layer, bool) or not isinstance(layer, int) or layer < 0:
@@ -705,7 +706,9 @@ def select(
         raise IndexSearchError("backend rows must have integer dtype, not bool/float")
     if not scores.dtype.is_floating_point:
         raise IndexSearchError("backend scores must have floating dtype")
-    if any(not same_device(t.device, backend.device) for t in (rows, scores)):
+    if host_result and (backend_result is None or any(t.device.type != 'cpu' for t in (rows, scores))):
+        raise IndexSearchError("host result requires materialized CPU rows and scores")
+    if not host_result and any(not same_device(t.device, backend.device) for t in (rows, scores)):
         raise IndexSearchError("backend result device differs from declared device")
     # Materialize only the bounded result, as logical selection already does.
     # Validate on the host without another CUDA sort/mask or reshape allocation.

@@ -178,6 +178,11 @@ gain from isolated kernel timings or reduce recall/budgets to manufacture one.
    preserving float32 score restoration, head/chunk mapping and tie policies.
    Retain all input/output/index owners and budget until completion; preserve
    quarantine on an unknown fence. Avoid extra queries or delayed layer batches.
+   Also measure a bounded per-rank RMM pool underneath the existing global and
+   per-index limiters: native CAGRA currently allocates/frees CUDA scratch on
+   every search. The pool's physical maximum must fit the already-reserved
+   global native cap, start at zero, retain its resource through every owner,
+   and never change search parameters or replace CAGRA with exact search.
 3. Validate fixed candidate semantics (invalid/cross-head/duplicate/nonfinite
    outputs, ties, mappings, reversed subsets), stale versions, cache replacement,
    close/search races and unknown completion. Run same-graph real-Q native recall

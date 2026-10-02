@@ -8,8 +8,13 @@ import tarfile
 parser = argparse.ArgumentParser()
 parser.add_argument('--focus-layer', type=int)
 parser.add_argument('--repeats', type=int, default=3)
+parser.add_argument('--native-pool', action='store_true')
+parser.add_argument('--comparison', choices=('partial', 'host'), default='partial')
+parser.add_argument('--probe-tag', default=None)
 args = parser.parse_args()
-probe_tag = 'native' if args.focus_layer is None else 'focus'
+probe_tag = args.probe_tag or ('native' if args.focus_layer is None else 'focus')
+if not __import__('re').fullmatch(r'[a-z0-9_]+', probe_tag):
+    parser.error('filename-safe probe tag required')
 
 root = Path(__file__).resolve().parents[1]
 remote = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/pvd-oasis-v-search-20261002'
@@ -18,7 +23,7 @@ ssh = ['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15
     '-o', 'HostKeyAlias=clgpu021.clemson.cloudlab.us', '-i', '/home/loosp/.ssh/cloudlab_pub_wsl',
     'Yizhzhu@130.127.134.35']
 names = ['python/sglang/srt/disaggregation/pvd/' + n for n in
-    ('prompt_index.py', 'server.py', 'cagra_search_batch.py', 'control_server.py')]
+    ('prompt_index.py', 'server.py', 'cagra_search_batch.py', 'control_server.py', 'cagra_backend.py', 'index_search.py')]
 names += ['test/registered/disaggregation/' + n for n in
     ('test_pvd_cagra_search_batch.py', 'test_pvd_grouped_search_cache.py', 'test_pvd_cagra_kv_update.py')]
 names += ['benchmark/pvd_oasis_partial_search_probe.py', 'benchmark/pvd_cagra_joint_manager_probe.py']
@@ -40,6 +45,7 @@ command = ('source /users/Yizhzhu/.sglang-v100-pvd-env.sh; '
     'cd ' + remote + '; "$CONDA_PREFIX/bin/python" benchmark/pvd_oasis_partial_search_probe.py '
     '--fixtures /tmp/pvd_extend_real_direct_rank0.pt /tmp/pvd_extend_real_direct_rank1.pt '
     '--repeats ' + str(args.repeats) + (' --focus-layer ' + str(args.focus_layer) if args.focus_layer is not None else '') +
+    ' --comparison ' + args.comparison + (' --native-pool' if args.native_pool else '') +
     ' --output /tmp/oasis-partial-search-' + probe_tag + '.json > /tmp/oasis-partial-search-' + probe_tag + '.log 2>&1; '
     'task_probe_status=$?; cat /tmp/oasis-partial-search-' + probe_tag + '.log; exit "$task_probe_status"')
 subprocess.run(ssh + ['bash -c ' + __import__('shlex').quote(command)], check=True)

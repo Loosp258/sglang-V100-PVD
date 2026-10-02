@@ -47,7 +47,7 @@ for arm, requests in summary['requests'].items():
         offset += 56 + expected
         assert len(steady) == expected, (arm, request['case'], len(steady), expected)
         assert all(row[1:3] == (2, 14) for row in steady)
-        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison == 'v-search' else (
+        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency') else (
             'overlap' if arm.startswith('overlap') else 'serial')
         mode_rows.setdefault(mode, []).extend(steady)
         selected.append(dict(case=request['case'], batches=len(steady),

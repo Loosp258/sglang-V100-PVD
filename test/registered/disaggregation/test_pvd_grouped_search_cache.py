@@ -20,6 +20,7 @@ class NativeDouble(Runtime):
         self.submits = 0
         self.on_submit = None
         self.fail_sync = False
+        self.corrupt = None
 
     def scope(self, owner):
         return nullcontext()
@@ -36,6 +37,14 @@ class NativeDouble(Runtime):
         ids, scores = self.search(native.owner, q, top_k=k, itopk_size=params['itopk_size'], bitset=filter)
         neighbors.copy_(ids)
         distances.copy_(scores)
+        if self.corrupt == 'cross_head':
+            neighbors.view(torch.int32)[0, 0] = 127
+        elif self.corrupt == 'sentinel':
+            neighbors.view(torch.int32)[0, 0] = -1
+        elif self.corrupt == 'duplicate':
+            neighbors.view(torch.int32)[0, 1] = neighbors.view(torch.int32)[0, 0]
+        elif self.corrupt == 'nonfinite':
+            distances[0, 0] = float('nan')
 
     def synchronize(self):
         if self.fail_sync:
@@ -43,14 +52,15 @@ class NativeDouble(Runtime):
         super().synchronize()
 
 
-def setup(rank=0, *, partial=False):
+def setup(rank=0, *, partial=False, host=False):
     rt = NativeDouble()
     b = CagraKVUpdateBackend(device='cpu', native_bytes_per_index=1 << 20,
         graph_degree=16, intermediate_degree=16, itopk_size=32, exact_head_groups=4,
         routing_edges=2, _runtime=rt)
     budget = TransferBudget(128 << 20, 1)
     manager = PromptIndexManager(vector_space='test', backend=b, budget=budget,
-        group_heads=4, batched_group_search=True, partial_group_search=partial)
+        group_heads=4, batched_group_search=True, partial_group_search=partial,
+        host_candidate_processing=host)
     k = torch.randn(2, 32, 2, 8, generator=torch.Generator().manual_seed(13)).half()
     packed = torch.cat((k.flatten(), torch.zeros_like(k).flatten())).view(torch.uint8)
     layout = KVLayoutSignature(model_id='test', model_revision='rev', kv_dtype='float16',
@@ -72,8 +82,9 @@ def setup(rank=0, *, partial=False):
 
 
 @pytest.mark.parametrize('rank', [0, 1])
-def test_matches_baseline_reuses_workspace_and_refunds(rank):
-    m, rt, requests = setup(rank)
+@pytest.mark.parametrize('host', [False, True])
+def test_matches_baseline_reuses_workspace_and_refunds(rank, host):
+    m, rt, requests = setup(rank, host=host)
     m.batched_group_search = False
     baseline = m.search_many(requests)
     before = m.budget.snapshot()['used_staging_bytes']
@@ -81,7 +92,7 @@ def test_matches_baseline_reuses_workspace_and_refunds(rank):
     meta = {}
     result = m.search_many(requests[::-1], metadata=meta)
     assert tuple(r.selection for r in result[::-1]) == tuple(r.selection for r in baseline)
-    assert meta['path'] == 'grouped_cagra_batched' and rt.submits == 4
+    assert meta['path'] == 'grouped_cagra_batched' + ('_host' if host else '') and rt.submits == 4
     charged = m.budget.snapshot()['used_staging_bytes']
     ws = next(iter(m._entries['entry'].search_workspaces.values()))[0]
     assert charged - before == ws.retained_bytes
@@ -148,16 +159,48 @@ def test_unknown_completion_keeps_reader_buffers_budget_and_index():
     assert m.budget.snapshot()['used_staging_bytes'] == before
 
 
+@pytest.mark.parametrize('corrupt', ['cross_head', 'sentinel', 'duplicate', 'nonfinite'])
+def test_host_candidates_reject_bad_native_output_and_drain(corrupt):
+    m, rt, req = setup(partial=True, host=True)
+    rt.corrupt = corrupt
+    with pytest.raises(IndexSearchError):
+        m.search_many(req[:2])
+    record = m._entries['entry']
+    assert record.users == 0 and not m.quarantined
+    m.close('entry')
+    assert not m.backend._owners
+    assert m.budget.snapshot()['used_staging_bytes'] == m.shared_native_budget_bytes
+
+
+def test_host_processing_retains_download_owners_on_unknown_manager_fence():
+    m, rt, req = setup(partial=True, host=True)
+    original = m._fence
+    def unknown(*args, **kw):
+        rt.fail_sync = True
+        return original(*args, **kw)
+    m._fence = unknown
+    with pytest.raises(IndexCompletionUnknown):
+        m.search_many(req[:2])
+    record = m._entries['entry']
+    assert m.quarantined and record.users == 1
+    assert m._retained_operations
+    used = m.budget.snapshot()['used_staging_bytes']
+    m.close('entry')
+    assert m.backend._owners and record.search_workspaces
+    assert m.budget.snapshot()['used_staging_bytes'] == used
+
+
 @pytest.mark.parametrize('rank', [0, 1])
-def test_partial_layers_share_cache_and_preserve_reversed_head_mapping(rank):
-    m, rt, req = setup(rank, partial=True)
+@pytest.mark.parametrize('host', [False, True])
+def test_partial_layers_share_cache_and_preserve_reversed_head_mapping(rank, host):
+    m, rt, req = setup(rank, partial=True, host=host)
     m.batched_group_search = False
     expected = m.search_many(req)
     m.batched_group_search = True
     meta = {}
     first = m.search_many(req[:2][::-1], metadata=meta)
     assert tuple(r.selection for r in first[::-1]) == tuple(r.selection for r in expected[:2])
-    assert meta['path'] == 'grouped_cagra_partial_batched' and rt.submits == 2
+    assert meta['path'] == 'grouped_cagra_partial_batched' + ('_host' if host else '') and rt.submits == 2
     ws = next(iter(m._entries['entry'].search_workspaces.values()))[0]
     charged = m.budget.snapshot()['used_staging_bytes']
     second = m.search_many(req[2:][::-1], metadata=meta)

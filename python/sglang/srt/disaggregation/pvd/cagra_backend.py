@@ -53,6 +53,7 @@ class CagraNativeRuntime:
         global_native_cap_bytes=None,
         extend_concurrency=1,
         nogil_extend=False,
+        native_pool=False,
     ):
         self.device = torch.device(device)
         if self.device.type != "cuda" or self.device.index is None:
@@ -61,6 +62,10 @@ class CagraNativeRuntime:
             type(global_native_cap_bytes) is not int or global_native_cap_bytes <= 0
         ):
             raise ValueError("global CAGRA native cap must be a positive integer")
+        if type(native_pool) is not bool or (native_pool and (
+            global_native_cap_bytes is None or global_native_cap_bytes % 256
+        )):
+            raise ValueError("native pool requires a 256-byte aligned global native cap")
         self.cuvs = importlib.import_module("cuvs")
         self.cagra = importlib.import_module("cuvs.neighbors.cagra")
         self.cp = importlib.import_module("cupy")
@@ -148,10 +153,17 @@ class CagraNativeRuntime:
         # native allocator capability, not a complete admission policy.
         self.global_native_cap_bytes = global_native_cap_bytes
         self.global_limit = None
+        self.native_pool = native_pool
+        self.pool = None
         if global_native_cap_bytes is not None:
             with self.lock, torch.cuda.device(self.device):
+                upstream = self.mr.CudaMemoryResource()
+                if native_pool:
+                    self.pool = self.mr.PoolMemoryResource(upstream,
+                        initial_pool_size=0, maximum_pool_size=global_native_cap_bytes)
+                    upstream = self.pool
                 self.global_limit = self.mr.LimitingResourceAdaptor(
-                    self.mr.CudaMemoryResource(), global_native_cap_bytes
+                    upstream, global_native_cap_bytes
                 )
 
     def synchronize(self):
@@ -565,6 +577,7 @@ class CagraIndexBackend(IndexBackend):
         exact_head_groups=0,
         extend_concurrency=1,
         nogil_extend=False,
+        native_pool=False,
         _runtime=None,
     ):
         self._device = torch.device(device)
@@ -587,6 +600,10 @@ class CagraIndexBackend(IndexBackend):
             raise ValueError("shared native cap must cover one full per-index cap")
         if self._device.type != "cuda" and _runtime is None:
             raise ValueError("native CAGRA requires CUDA")
+        if type(native_pool) is not bool or (native_pool and (
+            global_native_cap_bytes is None or global_native_cap_bytes % 256
+        )):
+            raise ValueError("native pool requires a 256-byte aligned global native cap")
         self.cap = native_bytes_per_index
         self.graph_degree, self.intermediate_degree = graph_degree, intermediate_degree
         if exact_head_groups not in (0, 4):
@@ -614,8 +631,12 @@ class CagraIndexBackend(IndexBackend):
                     else {}
                 ),
                 **({"nogil_extend": True} if nogil_extend else {}),
+                **({"native_pool": True} if native_pool else {}),
             )
         )
+        if native_pool and (not getattr(self.runtime, 'native_pool', False)
+                or getattr(self.runtime, 'pool', None) is None):
+            raise ValueError("CAGRA runtime lacks the configured bounded pool")
         if torch.device(self.runtime.device) != self._device:
             raise ValueError("CAGRA runtime device mismatch")
         runtime_cap = getattr(self.runtime, "global_native_cap_bytes", None)

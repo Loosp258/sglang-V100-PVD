@@ -15,6 +15,8 @@ p.add_argument('--fixtures', type=Path, nargs=2, required=True)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--repeats', type=int, default=3)
 p.add_argument('--focus-layer', type=int)
+p.add_argument('--native-pool', action='store_true')
+p.add_argument('--comparison', choices=('partial', 'host'), default='partial')
 a = p.parse_args()
 if a.focus_layer is not None and not 0 <= a.focus_layer < 28:
     p.error('focus layer must be in 0..27')
@@ -35,7 +37,8 @@ for rank, path in enumerate(a.fixtures):
         global_native_cap_bytes=671088640, graph_degree=16, intermediate_degree=16,
         itopk_size=2048, exact_head_groups=4, nogil_extend=True, routing_edges=2,
         small_tail_max_rows=512, fused_prepare=True, prepared_tail=True,
-        fixed_native_views=True, ahead_capture=True, reuse_scores=True)
+        fixed_native_views=True, ahead_capture=True, reuse_scores=True,
+        native_pool=a.native_pool)
     m = PromptIndexManager(vector_space='qwen25-7b-pvd', backend=b,
         group_heads=4, batched_k_extraction=True, fused_k_centering=True,
         prepared_tail=True, budget=TransferBudget(2147483648, 1),
@@ -66,10 +69,37 @@ for rank, path in enumerate(a.fixtures):
         exact.append(labels)
     batch = next(iter(b._owners.values())).auxiliary[0]
     graph_hash = hashlib.sha256(batch.native_graph[:, :4 * batch.count].cpu().numpy().tobytes()).hexdigest()
+    # Compare postprocessing on the *same* native candidates, independently
+    # of CAGRA's approximate candidate jitter between separate searches.
+    same_candidates = True
+    m.partial_group_search = True
+    for requests in batches:
+        m.search_many(requests)
+        group = m._group_key(requests[0][0].layer)
+        record = m._entries[entry]
+        index = record.indexes[group]
+        workspace = record.search_workspaces[group][0]
+        queries = torch.stack([r[1] for r in requests]).to(rank).contiguous()
+        heads = tuple(r[0].layer % 2 * 2 + r[0].kv_head % 2 for r in requests)
+        native_rows, native_scores = workspace.search(queries, heads=heads)
+        cpu_rows = native_rows.cpu()
+        for position, (identity, _, top_k) in enumerate(requests):
+            key = identity.layer, identity.kv_head
+            mean, mapping = record.group_means[key], record.vectors[key].mapping
+            arguments = dict(identity=identity, mapping=mapping, top_k=top_k,
+                mean=mean, boundaries=tuple(record.group_boundaries), timings=None)
+            baseline_selection = m._select_grouped(index, queries[position],
+                raw_result=(native_rows[heads[position]], native_scores[heads[position]]), **arguments)
+            restored = (native_scores[heads[position]] + (queries[position] @ mean).unsqueeze(1)).cpu()
+            host_selection = m._select_grouped(index, queries[position],
+                raw_result=(cpu_rows[heads[position]], restored), host_result=True, **arguments)
+            same_candidates = same_candidates and baseline_selection == host_selection
+    assert same_candidates, 'candidate mapping, float32 scores or union policy changed'
     trials = []
     for repetition in range(a.repeats + 2):
         for mode in ('baseline', 'optimized', 'optimized', 'baseline'):
-            m.partial_group_search = mode == 'optimized'
+            m.partial_group_search = a.comparison == 'host' or mode == 'optimized'
+            m.host_candidate_processing = a.comparison == 'host' and mode == 'optimized'
             rows = []
             for layer, requests in enumerate(batches):
                 if a.focus_layer is not None and layer != a.focus_layer:
@@ -99,6 +129,7 @@ for rank, path in enumerate(a.fixtures):
             for row in trial['rows']:
                 by_layer.setdefault(row['layer'], set()).add(json.dumps(row['ids']))
     cached_bytes = sum(ws.retained_bytes for ws, owner in m._entries[entry].search_workspaces.values())
+    pool_bytes = b.runtime.pool.pool_size() if b.runtime.pool is not None else 0
     m.close(entry)
     assert not b._owners and m.budget.snapshot()['used_staging_bytes'] == m.shared_native_budget_bytes
     output['ranks'].append(dict(rank=rank, fixture_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -106,6 +137,9 @@ for rank, path in enumerate(a.fixtures):
         original_query_shape=original_query_shape,
         focus_layer=a.focus_layer,
         query_sha256=hashlib.sha256(q.numpy().tobytes()).hexdigest(),
+        comparison=a.comparison, native_pool=a.native_pool, pool_bytes=pool_bytes,
+        same_native_candidates_semantics_identical=same_candidates,
+        native_live_after_close=b.runtime.global_allocated_bytes(),
         cached_bytes=cached_bytes, stats=stats, trials=trials))
     a.output.write_text(json.dumps(output, indent=2))
     print(json.dumps({k: v for k, v in output['ranks'][-1].items() if k != 'trials'}), flush=True)
