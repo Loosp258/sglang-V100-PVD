@@ -531,7 +531,9 @@ def create_shard_app(
             WriteIdentity.from_dict(data["identity"]),
             int(data["received_bytes"]),
         )
-        if not result.get("finished"):
+        if not result.get("finished") or getattr(
+            store.prompt_index, "early_final_update", False
+        ):
             kick_chunk_index()
         return web.json_response(result)
 

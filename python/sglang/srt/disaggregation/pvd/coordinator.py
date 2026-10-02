@@ -213,7 +213,9 @@ class LocalShardClient(ShardClient):
         result = await asyncio.to_thread(
             self.store.commit_chunk, identity, received_bytes
         )
-        if not result.get("finished"):
+        if not result.get("finished") or getattr(
+            self.store.prompt_index, "early_final_update", False
+        ):
             self._kick_chunk_index()
         return result
 

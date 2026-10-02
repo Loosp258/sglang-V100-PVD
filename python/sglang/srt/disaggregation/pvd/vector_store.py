@@ -769,6 +769,17 @@ class VectorKVStore:
             entry.chunk_last_completed = chunk
             entry.chunk_authorization = None
             entry.chunk_terminal = None
+            if getattr(self.prompt_index, "profile_chunk_stages", False):
+                logger.info(
+                    "PVD Prompt commit precision: transfer_id=%s rank=%d finished=%s "
+                    "complete_pages=%d monotonic_ns=%d unix_ns=%d",
+                    entry.key.transfer_id,
+                    self.rank,
+                    progress.finished,
+                    progress.complete_pages,
+                    time.perf_counter_ns(),
+                    time.time_ns(),
+                )
             return {
                 "chunk": chunk.to_dict(),
                 "complete_pages": progress.complete_pages,
@@ -781,6 +792,14 @@ class VectorKVStore:
         entry.state = transition(entry.state, EntryShardState.STORED)
         entry.received_bytes = received_bytes
         entry.stored_at = time.monotonic()
+        if getattr(self.prompt_index, "profile_chunk_stages", False):
+            logger.info(
+                "PVD Prompt STORED precision: transfer_id=%s rank=%d monotonic_ns=%d unix_ns=%d",
+                entry.key.transfer_id,
+                self.rank,
+                time.perf_counter_ns(),
+                time.time_ns(),
+            )
         entry.expires_at = entry.stored_at + self.entry_ttl_secs
         for delivery in entry.deliveries.values():
             if delivery.state == DeliveryState.WAITING_SOURCE:

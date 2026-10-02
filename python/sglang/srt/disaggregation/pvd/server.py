@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import List
 
 from aiohttp import web
+
 from sglang.srt.disaggregation.pvd.control_server import (
     HttpShardClient,
     create_coordinator_app,
@@ -303,8 +304,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Experimental P-to-V chunk PUT and provisional native CAGRA build; requires a cuVS extend binding.",
     )
     parser.add_argument(
-        "--prompt-index-group-heads", type=int, choices=(1, 2, 4), default=1,
+        "--prompt-index-group-heads",
+        type=int,
+        choices=(1, 2, 4),
+        default=1,
         help="Experimental KV-head grouping for chunked native CAGRA; four heads span two adjacent layers.",
+    )
+    parser.add_argument(
+        "--prompt-index-batched-group-search", action="store_true",
+        help="Experimental Entry-owned cached four-head searches on KV edge graphs.",
     )
     parser.add_argument(
         "--prompt-index-cagra-native-bytes",
@@ -322,7 +330,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt-index-cagra-graph-degree", type=_positive_int, default=64
     )
     parser.add_argument(
-        "--prompt-index-cagra-exact-head-seed", action="store_true",
+        "--prompt-index-cagra-exact-head-seed",
+        action="store_true",
         help="Experimental exact per-head degree-16 KNN seed for four-head CAGRA.",
     )
     parser.add_argument(
@@ -338,6 +347,92 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--prompt-index-cagra-itopk-size", type=_positive_int, default=512
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-extend-concurrency",
+        type=int,
+        choices=(1, 2, 4),
+        default=1,
+        help="Opt-in independent-graph CUDA stream concurrency for native extend.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-nogil-extend",
+        action="store_true",
+        help="Opt-in cuVS 25.10 C API extend without the Python GIL; requires an ABI-checked handle adapter.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-kv-edge-update",
+        action="store_true",
+        help="Experimental preallocated batched exact KNN edge maintenance instead of native cagra.extend; requires the cuVS view adapter.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-kv-routing-edges",
+        type=int,
+        choices=(0, 2),
+        default=0,
+        help="Experimental degree-16 KV graph: replace the last two exact edges with token-ring routing edges.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-small-tail-max-rows",
+        type=int,
+        choices=(0, 128, 256, 512),
+        default=0,
+        help="Opt-in fused CUDA edge maintenance for tails up to this many tokens per KV head; zero disables it.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-fused-prepare",
+        action="store_true",
+        help="Opt-in batched finite checks and CUDA K/ID preparation for adjacent four-head group views.",
+    )
+    parser.add_argument(
+        "--prompt-index-batched-k-extraction",
+        action="store_true",
+        help="Opt in to one-launch K extraction and fewer centering copies for CUDA four-head KV graphs.",
+    )
+    parser.add_argument(
+        "--prompt-index-fused-k-centering",
+        action="store_true",
+        help="Opt in to fused tail K extraction/centering and cached four-head group preparation; requires batched K extraction.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-planned-tail",
+        action="store_true",
+        help="Opt in to preallocated final-tail copies, fixed native capacity views, and early CUDA graph capture; requires fused K centering.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-reuse-scores",
+        action="store_true",
+        help="Opt in to reuse transposed new-old similarities for exact small-tail updates.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-profile-gpu",
+        action="store_true",
+        help="Measure graph computation and input/update stream intervals with CUDA events.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-fused-edge-write",
+        action="store_true",
+        help="Fuse exact old-row merging and selective adjacency writes; requires reused small-tail scores.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-new-top16",
+        action="store_true",
+        help="Exact tiled new-node Top-16 with fused self masking; requires reused small-tail scores.",
+    )
+    parser.add_argument(
+        "--prompt-index-cagra-stream-completion",
+        action="store_true",
+        help="Wait for the update stream event instead of the device; requires planned fixed native views.",
+    )
+    parser.add_argument(
+        "--prompt-index-early-final-update",
+        action="store_true",
+        help="Start the proven final-chunk graph update while aggregate Entry submission completes; publish only after STORED.",
+    )
+    parser.add_argument(
+        "--prompt-index-profile-chunk-stages",
+        action="store_true",
+        help="Log asynchronous host wall times for final Prompt index stages.",
     )
     parser.add_argument(
         "--full-kv-fanin-max-slices",
@@ -398,12 +493,69 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _validate_args(args: argparse.Namespace) -> List[str]:
     index_mode = getattr(args, "prompt_index_backend", "exact")
+    if getattr(args, "prompt_index_early_final_update", False) and not getattr(
+        args, "chunked_cagra_upload", False
+    ):
+        raise ValueError("early final update requires chunked upload")
+    for option in (
+        "planned_tail",
+        "reuse_scores",
+        "profile_gpu",
+        "fused_edge_write",
+        "new_top16",
+        "stream_completion",
+    ):
+        if getattr(args, "prompt_index_cagra_" + option, False) and not getattr(
+            args, "prompt_index_cagra_kv_edge_update", False
+        ):
+            raise ValueError(option + " requires the experimental KV edge update")
+    if getattr(args, "prompt_index_cagra_stream_completion", False) and not getattr(
+        args, "prompt_index_cagra_planned_tail", False
+    ):
+        raise ValueError("stream completion requires planned tail with fixed views")
+    if getattr(args, "prompt_index_cagra_planned_tail", False) and not getattr(
+        args, "prompt_index_fused_k_centering", False
+    ):
+        raise ValueError("planned tail requires fused K centering")
+    if getattr(args, "prompt_index_cagra_small_tail_max_rows", 0) and not getattr(
+        args, "prompt_index_cagra_kv_edge_update", False
+    ):
+        raise ValueError("small-tail kernels require the experimental KV edge update")
+    if getattr(args, "prompt_index_cagra_fused_prepare", False) and not getattr(
+        args, "prompt_index_cagra_kv_edge_update", False
+    ):
+        raise ValueError("fused preparation requires the experimental KV edge update")
+    if getattr(args, "prompt_index_cagra_kv_routing_edges", 0) and not getattr(
+        args, "prompt_index_cagra_kv_edge_update", False
+    ):
+        raise ValueError("KV routing edges require the experimental KV edge update")
+    if getattr(args, "prompt_index_cagra_kv_edge_update", False) and (
+        index_mode != "cagra"
+        or not getattr(args, "prompt_index_cagra_exact_head_seed", False)
+        or getattr(args, "prompt_index_group_heads", 1) != 4
+        or not getattr(args, "chunked_cagra_upload", False)
+        or args.prompt_index_metric != "ip"
+        or args.prompt_index_cagra_graph_degree != 16
+    ):
+        raise ValueError(
+            "KV edge update requires chunked exact four-head degree-16 IP CAGRA"
+        )
+    if getattr(args, "prompt_index_cagra_nogil_extend", False) and (
+        index_mode != "cagra" or not getattr(args, "chunked_cagra_upload", False)
+    ):
+        raise ValueError("GIL-free extend requires chunked native CAGRA")
+    if getattr(args, "prompt_index_cagra_extend_concurrency", 1) > 1 and (
+        index_mode != "cagra" or not getattr(args, "chunked_cagra_upload", False)
+    ):
+        raise ValueError("concurrent extend requires chunked native CAGRA")
     if getattr(args, "chunked_cagra_upload", False) and (
         index_mode != "cagra"
         or args.transfer_backend != "mooncake"
         or args.allow_cpu_for_tests
     ):
-        raise ValueError("chunked CAGRA upload requires native CAGRA and Mooncake on CUDA")
+        raise ValueError(
+            "chunked CAGRA upload requires native CAGRA and Mooncake on CUDA"
+        )
     if getattr(args, "prompt_index_group_heads", 1) > 1 and not getattr(
         args, "chunked_cagra_upload", False
     ):
@@ -415,7 +567,9 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         or args.prompt_index_metric != "ip"
         or not args.chunked_cagra_upload
     ):
-        raise ValueError("exact head seed requires chunked four-head degree-16 IP CAGRA")
+        raise ValueError(
+            "exact head seed requires chunked four-head degree-16 IP CAGRA"
+        )
     shared_native = getattr(args, "prompt_index_cagra_global_native_bytes", None)
     exact_max_rows = getattr(args, "prompt_index_exact_max_rows", None)
     if exact_max_rows is not None and (
@@ -589,11 +743,44 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
             intermediate_degree=args.prompt_index_cagra_intermediate_degree,
             itopk_size=args.prompt_index_cagra_itopk_size,
         )
+        concurrency = getattr(args, "prompt_index_cagra_extend_concurrency", 1)
+        if concurrency > 1:
+            native_kwargs["extend_concurrency"] = concurrency
+        if getattr(args, "prompt_index_cagra_nogil_extend", False):
+            native_kwargs["nogil_extend"] = True
         if getattr(args, "prompt_index_cagra_exact_head_seed", False):
             native_kwargs["exact_head_groups"] = 4
         if shared_native is not None:
             native_kwargs["global_native_cap_bytes"] = shared_native
-        native = CagraIndexBackend(**native_kwargs)
+        if getattr(args, "prompt_index_cagra_kv_edge_update", False):
+            from sglang.srt.disaggregation.pvd.cagra_kv_update import (
+                CagraKVUpdateBackend,
+            )
+
+            native = CagraKVUpdateBackend(
+                routing_edges=getattr(args, "prompt_index_cagra_kv_routing_edges", 0),
+                small_tail_max_rows=getattr(
+                    args, "prompt_index_cagra_small_tail_max_rows", 0
+                ),
+                fused_prepare=getattr(args, "prompt_index_cagra_fused_prepare", False),
+                prepared_tail=getattr(args, "prompt_index_cagra_planned_tail", False),
+                fixed_native_views=getattr(
+                    args, "prompt_index_cagra_planned_tail", False
+                ),
+                ahead_capture=getattr(args, "prompt_index_cagra_planned_tail", False),
+                reuse_scores=getattr(args, "prompt_index_cagra_reuse_scores", False),
+                fused_edge_write=getattr(
+                    args, "prompt_index_cagra_fused_edge_write", False
+                ),
+                new_top16=getattr(args, "prompt_index_cagra_new_top16", False),
+                stream_completion=getattr(
+                    args, "prompt_index_cagra_stream_completion", False
+                ),
+                profile_gpu=getattr(args, "prompt_index_cagra_profile_gpu", False),
+                **native_kwargs,
+            )
+        else:
+            native = CagraIndexBackend(**native_kwargs)
         backend = (
             CagraAutoIndexBackend(
                 native,
@@ -610,6 +797,12 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
         budget=budget,
         backend=backend,
         group_heads=getattr(args, "prompt_index_group_heads", 1),
+        batched_k_extraction=getattr(args, "prompt_index_batched_k_extraction", False),
+        fused_k_centering=getattr(args, "prompt_index_fused_k_centering", False),
+        prepared_tail=getattr(args, "prompt_index_cagra_planned_tail", False),
+        early_final_update=getattr(args, "prompt_index_early_final_update", False),
+        profile_chunk_stages=getattr(args, "prompt_index_profile_chunk_stages", False),
+        batched_group_search=getattr(args, "prompt_index_batched_group_search", False),
     )
 
 

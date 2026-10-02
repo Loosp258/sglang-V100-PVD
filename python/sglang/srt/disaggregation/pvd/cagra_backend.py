@@ -6,13 +6,16 @@ No GPU compatibility or recall claim follows from importing this module.
 """
 
 import ctypes
+import hashlib
 import importlib
 import threading
 import traceback
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
+
 from sglang.srt.disaggregation.pvd.index_search import (
     BruteForceIndexBackend,
     BuiltIndex,
@@ -35,12 +38,22 @@ class _NativeIndex:
     rows: int = 0
     disposed: bool = False
     probe_allocations: list = field(default_factory=list)
+    pending_extends: list = field(default_factory=list)
+    stream: object = None
+    auxiliary: object = None
 
 
 class CagraNativeRuntime:
     """Actual cuVS calls; import only when a CUDA backend is explicitly chosen."""
 
-    def __init__(self, device, *, global_native_cap_bytes=None):
+    def __init__(
+        self,
+        device,
+        *,
+        global_native_cap_bytes=None,
+        extend_concurrency=1,
+        nogil_extend=False,
+    ):
         self.device = torch.device(device)
         if self.device.type != "cuda" or self.device.index is None:
             raise ValueError("CAGRA requires an explicit CUDA device index")
@@ -77,8 +90,57 @@ class CagraNativeRuntime:
         self.free = self.library.cuvsRMMFree
         self.free.argtypes = [ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
         self.free.restype = ctypes.c_int
+        self.stream_set = self.library.cuvsStreamSet
+        self.stream_set.argtypes = [ctypes.c_size_t, ctypes.c_void_p]
+        self.stream_set.restype = ctypes.c_int
+        self.nogil_extend = nogil_extend
+        if nogil_extend:
+            if not self.supports_extend:
+                raise ValueError("GIL-free CAGRA extend requires validated cuVS 25.10")
+            adapter = importlib.import_module("pvd_cagra_index_handle")
+            pxd = Path(extension.__file__).with_name("cagra.pxd")
+            if (
+                adapter.CUVS_VERSION != str(self.cuvs.__version__)
+                or adapter.INDEX_PXD_SHA256
+                != hashlib.sha256(pxd.read_bytes()).hexdigest()
+            ):
+                raise ValueError(
+                    "CAGRA handle adapter does not match the installed cuVS ABI"
+                )
+            self.index_address = adapter.index_address
+            self.params_create = self.library.cuvsCagraExtendParamsCreate
+            self.params_create.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            self.params_create.restype = ctypes.c_int
+            self.params_destroy = self.library.cuvsCagraExtendParamsDestroy
+            self.params_destroy.argtypes = [ctypes.c_void_p]
+            self.params_destroy.restype = ctypes.c_int
+            self.native_extend = self.library.cuvsCagraExtend
+            self.native_extend.argtypes = [
+                ctypes.c_size_t,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            ]
+            self.native_extend.restype = ctypes.c_int
+            self.capsule_pointer = ctypes.pythonapi.PyCapsule_GetPointer
+            self.capsule_pointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+            self.capsule_pointer.restype = ctypes.c_void_p
+            self.last_error = self.library.cuvsGetLastErrorText
+            self.last_error.argtypes = []
+            self.last_error.restype = ctypes.c_char_p
         with _LOCKS_LOCK:
             self.lock = _LOCKS.setdefault(self.device.index, threading.RLock())
+        # Keep each graph on one persistent Resources/stream pair.
+        with torch.cuda.device(self.device):
+            self.extend_streams = (
+                [
+                    torch.cuda.Stream(device=self.device)
+                    for _ in range(extend_concurrency)
+                ]
+                if extend_concurrency > 1
+                else []
+            )
+        self._next_extend_stream = 0
         # An optional parent limiter covers the sum of all child indexes,
         # including transient build/search allocations. Child limits still
         # enforce the per-index cap. The serving budget must reserve this
@@ -115,7 +177,14 @@ class CagraNativeRuntime:
             previous = self.mr.get_current_device_resource()
             self.mr.set_current_device_resource(owner.limit)
             try:
-                yield
+                with ExitStack() as contexts:
+                    if owner.stream is not None:
+                        owner.stream.wait_stream(torch.cuda.current_stream(self.device))
+                        contexts.enter_context(torch.cuda.stream(owner.stream))
+                        contexts.enter_context(
+                            self.cp.cuda.ExternalStream(owner.stream.cuda_stream)
+                        )
+                    yield
             finally:
                 self.mr.set_current_device_resource(previous)
 
@@ -127,12 +196,19 @@ class CagraNativeRuntime:
             ):
                 raise ValueError("per-index CAGRA cap exceeds shared native cap")
             limit = self.mr.LimitingResourceAdaptor(
-                self.global_limit
-                if self.global_limit is not None
-                else self.mr.CudaMemoryResource(),
+                (
+                    self.global_limit
+                    if self.global_limit is not None
+                    else self.mr.CudaMemoryResource()
+                ),
                 byte_cap,
             )
-        return _NativeIndex(limit)
+            streams = getattr(self, "extend_streams", [])
+            stream = None
+            if streams:
+                stream = streams[self._next_extend_stream % len(streams)]
+                self._next_extend_stream += 1
+        return _NativeIndex(limit, stream=stream)
 
     def global_allocated_bytes(self):
         if self.global_limit is None:
@@ -171,33 +247,56 @@ class CagraNativeRuntime:
         if owner.limit.get_allocated_bytes() != 0:
             raise IndexCompletionUnknown("cuVS cap probe left allocations alive")
 
-    def build(self, owner, vectors, *, metric, graph_degree, intermediate_degree,
-              exact_head_groups=0):
+    def build(
+        self,
+        owner,
+        vectors,
+        *,
+        metric,
+        graph_degree,
+        intermediate_degree,
+        exact_head_groups=0,
+    ):
         with self.scope(owner):
-            owner.resources = self.Resources(
-                stream=torch.cuda.current_stream(self.device).cuda_stream
-            )
+            # The installed 25.10 Cython Resources(stream=...) casts a Python
+            # object to cudaStream_t incorrectly for nonzero handles. Use the
+            # C API with an explicit pointer signature instead.
+            owner.resources = self.Resources()
+            if (
+                self.stream_set(
+                    owner.resources.get_c_obj(),
+                    torch.cuda.current_stream(self.device).cuda_stream,
+                )
+                != 1
+            ):
+                raise IndexCompletionUnknown("cuVS could not bind the CUDA stream")
             self._verify_allocator_bridge(owner)
             owner.vectors = vectors  # Already an owned, budgeted extraction copy.
             if exact_head_groups:
                 if metric != "ip" or len(vectors) % exact_head_groups:
-                    raise IndexSearchError("exact grouped CAGRA needs inner product and equal heads")
+                    raise IndexSearchError(
+                        "exact grouped CAGRA needs inner product and equal heads"
+                    )
                 per_head = len(vectors) // exact_head_groups
                 if per_head <= graph_degree:
-                    raise IndexSearchError("exact head has fewer rows than graph degree")
+                    raise IndexSearchError(
+                        "exact head has fewer rows than graph degree"
+                    )
                 from rmm.allocators.cupy import rmm_cupy_allocator
 
                 with self.cp.cuda.using_allocator(rmm_cupy_allocator):
                     dataset = self.cp.from_dlpack(vectors)
-                    graph = self.cp.empty((len(vectors), graph_degree), dtype=self.cp.uint32)
+                    graph = self.cp.empty(
+                        (len(vectors), graph_degree), dtype=self.cp.uint32
+                    )
                     for head in range(exact_head_groups):
                         begin, end = head * per_head, (head + 1) * per_head
                         matrix = dataset[begin:end]
                         scores = matrix @ matrix.T
                         self.cp.fill_diagonal(scores, -self.cp.inf)
-                        neighbors = self.cp.argpartition(
-                            scores, -graph_degree, axis=1
-                        )[:, -graph_degree:]
+                        neighbors = self.cp.argpartition(scores, -graph_degree, axis=1)[
+                            :, -graph_degree:
+                        ]
                         values = self.cp.take_along_axis(scores, neighbors, axis=1)
                         neighbors = self.cp.take_along_axis(
                             neighbors, self.cp.argsort(-values, axis=1), axis=1
@@ -205,7 +304,10 @@ class CagraNativeRuntime:
                         graph[begin:end] = neighbors.astype(self.cp.uint32) + begin
                         del scores, neighbors, values
                     owner.native = self.cagra.from_graph(
-                        graph, dataset, metric="inner_product", resources=owner.resources
+                        graph,
+                        dataset,
+                        metric="inner_product",
+                        resources=owner.resources,
                     )
                     owner.graph = graph
             else:
@@ -228,29 +330,52 @@ class CagraNativeRuntime:
         if not self.supports_extend:
             raise IndexSearchError("this cuVS Python CAGRA has no extend binding")
         with self.scope(owner):
-            self.cagra.extend(
-                self.cagra.ExtendParams(),
-                owner.native,
-                self.cp.from_dlpack(additional_vectors),
-                resources=owner.resources,
+            # Retain the input before submission: even a raised native call may
+            # have queued work whose completion cannot yet be proved.
+            old = owner.vectors
+            owner.vectors = (
+                (*old, additional_vectors)
+                if isinstance(old, tuple)
+                else (old, additional_vectors)
             )
+            self._call_extend(owner, additional_vectors, owner.resources)
             self.synchronize()
             if (
                 owner.native.trained is not True
                 or owner.native.dim != additional_vectors.shape[1]
             ):
                 raise IndexCompletionUnknown("CAGRA extend returned an invalid index")
-            # The native graph may still refer to its source dataset. Keep
-            # every supplied tensor through index disposal, with no new copy.
-            old = owner.vectors
-            owner.vectors = (
-                (*old, additional_vectors)
-                if isinstance(old, tuple)
-                else (
-                    old,
-                    additional_vectors,
-                )
+
+    def _call_extend(self, owner, vectors, resources):
+        if not getattr(self, "nogil_extend", False):
+            self.cagra.extend(
+                self.cagra.ExtendParams(),
+                owner.native,
+                self.cp.from_dlpack(vectors),
+                resources=resources,
             )
+            return
+        # CDLL releases the GIL around this exact native call. Device allocator
+        # and index locks remain held, allowing the other V GPU to progress.
+        # The ABI-checked Cython adapter exposes the opaque handle; no guessed
+        # object offsets or algorithm changes are involved.
+        capsule = torch.utils.dlpack.to_dlpack(vectors)
+        pointer = self.capsule_pointer(capsule, b"dltensor")
+        params = ctypes.c_void_p()
+        if self.params_create(ctypes.byref(params)) != 1 or not params.value:
+            raise IndexCompletionUnknown("could not create native CAGRA extend params")
+        try:
+            status = self.native_extend(
+                resources.get_c_obj(), params, pointer, self.index_address(owner.native)
+            )
+            if status != 1:
+                error = self.last_error()
+                raise IndexCompletionUnknown(f"native CAGRA extend failed: {error!r}")
+        finally:
+            if self.params_destroy(params) != 1:
+                raise IndexCompletionUnknown(
+                    "could not destroy native CAGRA extend params"
+                )
 
     def search(self, owner, queries, *, top_k, itopk_size, bitset=None):
         with self.scope(owner):
@@ -279,11 +404,76 @@ class CagraNativeRuntime:
             self.synchronize()
             return rows, scores
 
+    def extend_many(self, items, *, concurrency):
+        """Submit independent indexes on bounded streams, then drain each wave.
+
+        Host submissions remain serialized under the device RMM lock. CUDA
+        streams may overlap work if the native call returns asynchronously;
+        cuVS 25.10's extend currently blocks in the measured shapes.
+        Changing the current allocator from competing threads
+        would invalidate the per-index allocation contract. Keep temporary
+        resources, streams and inputs on their owners until completion proof.
+        """
+        if not self.supports_extend:
+            raise IndexSearchError("this cuVS Python CAGRA has no extend binding")
+        with self.lock, torch.cuda.device(self.device):
+            for offset in range(0, len(items), concurrency):
+                wave = items[offset : offset + concurrency]
+                failure = None
+                submitted = []
+                try:
+                    for owner, additional in wave:
+                        if owner.stream is None:
+                            raise IndexSearchError(
+                                "concurrent extend needs a stream assigned before build"
+                            )
+                        with self.scope(owner):
+                            resources, stream = owner.resources, owner.stream
+                            owner.pending_extends.append(
+                                (resources, stream, additional)
+                            )
+                            submitted.append(owner)
+                            old = owner.vectors
+                            owner.vectors = (
+                                (*old, additional)
+                                if isinstance(old, tuple)
+                                else (old, additional)
+                            )
+                            self._call_extend(owner, additional, resources)
+                except BaseException as exc:
+                    failure = exc
+                # Drain every submitted stream, including a call that raised.
+                # An unknown completion must retain all of that call's owners.
+                for owner in submitted:
+                    try:
+                        for resources, stream, _ in owner.pending_extends:
+                            resources.sync()
+                            stream.synchronize()
+                        owner.pending_extends.clear()
+                    except BaseException as exc:
+                        failure = failure or exc
+                if failure is not None:
+                    raise IndexCompletionUnknown(
+                        f"CAGRA batch extend completion/state is unknown: {failure}"
+                    ) from failure
+                for owner, additional in wave:
+                    if (
+                        owner.native.trained is not True
+                        or owner.native.dim != additional.shape[1]
+                    ):
+                        raise IndexCompletionUnknown(
+                            "CAGRA batch extend returned an invalid index"
+                        )
+
     def dispose(self, owner):
         if owner.disposed:
             return
         with self.scope(owner):
             self.synchronize()
+            for resources, stream, _ in owner.pending_extends:
+                resources.sync()
+                stream.synchronize()
+            owner.pending_extends.clear()
             if owner.probe_allocations:
                 # A C API failure may have returned a pointer without a reliable
                 # ownership outcome. Do not guess whether it is safe to free it
@@ -300,7 +490,64 @@ class CagraNativeRuntime:
                     "CAGRA disposal left native allocations alive"
                 )
             owner.vectors = None
+            owner.auxiliary = None
             owner.disposed = True
+
+    def import_owned_graph(self, owner, vectors, graph):
+        """Import caller-owned, budgeted buffers without building their edges."""
+        with self.scope(owner):
+            owner.resources = self.Resources()
+            if (
+                self.stream_set(
+                    owner.resources.get_c_obj(),
+                    torch.cuda.current_stream(self.device).cuda_stream,
+                )
+                != 1
+            ):
+                raise IndexCompletionUnknown("cuVS could not bind the CUDA stream")
+            self._verify_allocator_bridge(owner)
+            owner.vectors, owner.graph = vectors, graph
+            owner.native = self.cagra.from_graph(
+                self.cp.from_dlpack(graph).view(self.cp.uint32),
+                self.cp.from_dlpack(vectors),
+                metric="inner_product",
+                resources=owner.resources,
+            )
+
+    def replace_owned_graph_views(self, owner, vectors, graph):
+        """Resize the public C++ index views, retaining the same native index."""
+        with self.scope(owner):
+            self._replace_graph_views(
+                owner.native,
+                owner.resources.get_c_obj(),
+                vectors.data_ptr(),
+                graph.data_ptr(),
+                len(vectors),
+                vectors.shape[1],
+                graph.shape[1],
+            )
+
+    def require_graph_view_adapter(self):
+        """Check the compiled adapter before accepting an experimental upload."""
+        if not self.supports_extend:
+            raise ValueError("KV graph views require validated cuVS 25.10")
+        adapter = importlib.import_module("pvd_cagra_index_handle")
+        extension = importlib.import_module(self.cagra.Index.__module__)
+        pxd = Path(extension.__file__).with_name("cagra.pxd")
+        header = (
+            Path(extension.__file__).parents[3]
+            / "libcuvs/include/cuvs/neighbors/cagra.hpp"
+        )
+        if (
+            getattr(adapter, "CUVS_VERSION", None) != str(self.cuvs.__version__)
+            or getattr(adapter, "INDEX_PXD_SHA256", None)
+            != hashlib.sha256(pxd.read_bytes()).hexdigest()
+            or getattr(adapter, "CAGRA_HPP_SHA256", None)
+            != hashlib.sha256(header.read_bytes()).hexdigest()
+            or not callable(getattr(adapter, "replace_views", None))
+        ):
+            raise ValueError("CAGRA view adapter does not match installed cuVS headers")
+        self._replace_graph_views = adapter.replace_views
 
 
 class CagraIndexBackend(IndexBackend):
@@ -316,6 +563,8 @@ class CagraIndexBackend(IndexBackend):
         itopk_size,
         global_native_cap_bytes=None,
         exact_head_groups=0,
+        extend_concurrency=1,
+        nogil_extend=False,
         _runtime=None,
     ):
         self._device = torch.device(device)
@@ -345,6 +594,9 @@ class CagraIndexBackend(IndexBackend):
         if exact_head_groups and graph_degree != 16:
             raise ValueError("calibrated exact CAGRA seed requires degree 16")
         self.exact_head_groups = exact_head_groups
+        if type(extend_concurrency) is not int or extend_concurrency not in (1, 2, 4):
+            raise ValueError("CAGRA extend concurrency must be 1, 2 or 4")
+        self.extend_concurrency = extend_concurrency
         self.itopk_size = itopk_size
         self.runtime = (
             _runtime
@@ -356,6 +608,12 @@ class CagraIndexBackend(IndexBackend):
                     if global_native_cap_bytes is not None
                     else {}
                 ),
+                **(
+                    {"extend_concurrency": extend_concurrency}
+                    if extend_concurrency > 1
+                    else {}
+                ),
+                **({"nogil_extend": True} if nogil_extend else {}),
             )
         )
         if torch.device(self.runtime.device) != self._device:
@@ -425,7 +683,7 @@ class CagraIndexBackend(IndexBackend):
             raise IndexSearchError("CAGRA query/top-k exceeds configured bounds")
         return num_queries * top_k * 9 + num_queries * dim * 8 + 64
 
-    def _matrix(self, tensor):
+    def _matrix(self, tensor, *, check_finite=True):
         if (
             not isinstance(tensor, torch.Tensor)
             or tensor.ndim != 2
@@ -436,7 +694,7 @@ class CagraIndexBackend(IndexBackend):
             raise IndexSearchError(
                 "CAGRA requires contiguous float32 matrices on its declared device"
             )
-        if not bool(torch.isfinite(tensor).all()):
+        if check_finite and not bool(torch.isfinite(tensor).all()):
             raise IndexSearchError("CAGRA vectors/queries must be finite")
 
     def synchronize(self):
@@ -460,7 +718,8 @@ class CagraIndexBackend(IndexBackend):
             self._owners[id(owner)] = owner
             try:
                 kwargs = dict(
-                    metric=metric, graph_degree=self.graph_degree,
+                    metric=metric,
+                    graph_degree=self.graph_degree,
                     intermediate_degree=self.intermediate_degree,
                 )
                 if self.exact_head_groups:
@@ -524,6 +783,61 @@ class CagraIndexBackend(IndexBackend):
                 index.vector_space, index.metric, index.dim, new_count, owner
             )
 
+    def extend_many(self, items):
+        """Extend distinct private graphs with one bounded GPU batch."""
+        items = tuple(items)
+        with self._lock:
+            self._check()
+            if not self.supports_extend:
+                raise IndexSearchError("CAGRA extend requires a supported cuVS binding")
+            if self.extend_concurrency == 1:
+                return [self.extend(index, vectors) for index, vectors in items]
+            native_items, counts, seen = [], [], set()
+            # Validate the entire batch before any native index can change.
+            for index, vectors in items:
+                owner = index.handle
+                if id(owner) in seen:
+                    raise IndexSearchError("batch extend requires distinct indexes")
+                seen.add(id(owner))
+                if self._owners.get(id(owner)) is not owner or owner.disposed:
+                    raise IndexSearchError("unknown or disposed CAGRA index")
+                if index.count != owner.rows:
+                    raise IndexSearchError("stale CAGRA index count after extend")
+                self._matrix(vectors, check_finite=False)
+                if vectors.shape[1] != index.dim:
+                    raise IndexSearchError("CAGRA extension dimension mismatch")
+                count = index.count + int(vectors.shape[0])
+                self._shape(count, index.dim, index.metric)
+                native_items.append((owner, vectors))
+                counts.append(count)
+            # One host-visible reduction for the whole batch, rather than a
+            # CPU/GPU rendezvous for every graph. Masks are reduced and freed
+            # one at a time on the preparation stream; only scalar flags stay.
+            if items and not bool(
+                torch.stack(
+                    [torch.isfinite(vectors).all() for _, vectors in items]
+                ).all()
+            ):
+                raise IndexSearchError("CAGRA vectors/queries must be finite")
+            try:
+                self.runtime.extend_many(
+                    native_items, concurrency=self.extend_concurrency
+                )
+            except BaseException as exc:
+                self._unknown = str(exc)
+                raise IndexCompletionUnknown(
+                    f"CAGRA batch extend completion/state is unknown: {exc}"
+                ) from exc
+            result = []
+            for (index, _), count in zip(items, counts):
+                index.handle.rows = count
+                result.append(
+                    BuiltIndex(
+                        index.vector_space, index.metric, index.dim, count, index.handle
+                    )
+                )
+            return result
+
     def search(self, index, queries, *, top_k, bitset=None):
         with self._lock:
             self._check()
@@ -543,13 +857,18 @@ class CagraIndexBackend(IndexBackend):
                 or not bitset.is_contiguous()
                 or bitset.numel() != (index.count + 31) // 32
             ):
-                raise IndexSearchError("CAGRA filter bitset has an invalid shape/device")
+                raise IndexSearchError(
+                    "CAGRA filter bitset has an invalid shape/device"
+                )
             if queries.shape[1] != index.dim:
                 raise IndexSearchError("CAGRA query dimension mismatch")
             self.search_footprint(index.count, index.dim, len(queries), top_k)
             try:
                 rows, scores = self.runtime.search(
-                    index.handle, queries, top_k=top_k, itopk_size=self.itopk_size,
+                    index.handle,
+                    queries,
+                    top_k=top_k,
+                    itopk_size=self.itopk_size,
                     **({"bitset": bitset} if bitset is not None else {}),
                 )
                 self.runtime.synchronize()

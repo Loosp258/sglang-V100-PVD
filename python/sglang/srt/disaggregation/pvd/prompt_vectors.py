@@ -167,6 +167,19 @@ class PromptKVectors:
             )
 
 
+class PromptKVectorBatch(list):
+    """Head copies plus their owned contiguous batch and optional centered copy.
+
+    Only extraction constructs this result, in canonical layer/head order.
+    Both allocations remain independent of the Entry's registered buffer.
+    """
+
+    def __init__(self, vectors, batch, centered_batch=None):
+        super().__init__(vectors)
+        self.batch = batch
+        self.centered_batch = centered_batch
+
+
 def _validate_layout(
     layout: Any,
 ) -> Tuple[int, List[torch.dtype], List[List[int]], List[int]]:
@@ -209,6 +222,10 @@ def extract_prompt_k(
     first_page: int = 0,
     budget: Any = None,
     budget_owner: Optional[str] = None,
+    batched: bool = False,
+    center_means: Optional[torch.Tensor] = None,
+    center_budget_owner: Optional[str] = None,
+    prepared_batch: Optional[PromptKVectorBatch] = None,
 ) -> List[PromptKVectors]:
     """Turn one stored EntryShard into per-(layer, KV head) Prompt K vectors.
 
@@ -328,6 +345,118 @@ def extract_prompt_k(
         token_ids=tuple(range(first_token, valid_tokens)),
         page_size=page_size,
     )
+
+    if (
+        batched
+        and byte_view.is_cuda
+        and byte_view.is_contiguous()
+        and dtype == torch.float32
+        and (target_device is None or target_device == byte_view.device)
+        and wanted_layers == tuple(owned_layers)
+        and wanted_heads == tuple(owned_heads)
+        and dtypes[0] in (torch.float16, torch.bfloat16, torch.float32)
+        and all(value == dtypes[0] for value in dtypes[:local_layers])
+    ):
+        element = torch.empty(0, dtype=dtypes[0]).element_size()
+        for index in range(local_layers):
+            if (
+                shapes[index] != [heads_per_rank, head_dim]
+                or sizes[index] != heads_per_rank * head_dim * element
+            ):
+                raise PromptVectorError("batched K component shape/size mismatch")
+        from sglang.srt.disaggregation.pvd.prompt_k_batch import extract
+
+        # K occupies the first half of the component-major allocation. Only
+        # that byte span is reinterpreted; no V or unreadable row is loaded.
+        source = byte_view[: sum(sizes[:local_layers]) * total_rows].view(dtypes[0])
+        if prepared_batch is not None:
+            expected_shape = (local_layers * heads_per_rank, selected_tokens, head_dim)
+            if center_means is None or len(prepared_batch) != expected_shape[0]:
+                raise PromptVectorError(
+                    "prepared tail requires its complete centered head batch"
+                )
+            for output in (prepared_batch.batch, prepared_batch.centered_batch):
+                if (
+                    output is None
+                    or output.shape != expected_shape
+                    or output.device != source.device
+                    or output.dtype != torch.float32
+                    or not output.is_contiguous()
+                ):
+                    raise PromptVectorError(
+                        "prepared tail output does not match the proven range"
+                    )
+            for item, (layer, head) in zip(
+                prepared_batch,
+                ((layer, head) for layer in wanted_layers for head in wanted_heads),
+            ):
+                if (
+                    item.entry_transfer_id != entry_transfer_id
+                    or item.layer != layer
+                    or item.kv_head != head
+                    or item.mapping != mapping
+                    or item.positional_encoding != positional_encoding
+                    or item.source_dtype != str(dtypes[0])
+                ):
+                    raise PromptVectorError(
+                        "prepared tail descriptor identity mismatch"
+                    )
+        if center_means is not None:
+            if (
+                center_means.shape != (local_layers * heads_per_rank, head_dim)
+                or center_means.device != source.device
+                or center_means.dtype != torch.float32
+                or not center_means.is_contiguous()
+            ):
+                raise PromptVectorError(
+                    "center means must match the contiguous K batch"
+                )
+            if budget is not None:
+                _require_text("center_budget_owner", center_budget_owner)
+                budget.reserve(
+                    center_budget_owner,
+                    local_layers * heads_per_rank * selected_tokens * head_dim * 4,
+                    0,
+                )
+        data, centered = extract(
+            source,
+            layers=local_layers,
+            heads=heads_per_rank,
+            total_rows=total_rows,
+            first=first_token,
+            rows=selected_tokens,
+            dim=head_dim,
+            means=center_means,
+            outputs=(prepared_batch.batch, prepared_batch.centered_batch)
+            if prepared_batch is not None
+            else None,
+        )
+        if prepared_batch is not None:
+            return prepared_batch
+        return PromptKVectorBatch(
+            [
+                PromptKVectors(
+                    entry_transfer_id=entry_transfer_id,
+                    layer=layer,
+                    kv_head=head,
+                    vectors=data[
+                        (layer - layer_start) * heads_per_rank + head - head_base
+                    ],
+                    mapping=mapping,
+                    positional_encoding=positional_encoding,
+                    source_dtype=str(dtypes[0]),
+                )
+                for layer in wanted_layers
+                for head in wanted_heads
+            ],
+            data,
+            centered,
+        )
+
+    if center_means is not None or prepared_batch is not None:
+        raise PromptVectorError(
+            "fused centering requires uniform local CUDA K extraction"
+        )
 
     offset = 0
     results: List[PromptKVectors] = []
