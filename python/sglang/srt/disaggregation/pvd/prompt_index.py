@@ -1579,6 +1579,7 @@ class PromptIndexManager:
             rows, scores = self.backend.search(index, queries, top_k=top_k, bitset=bitset)
         else:
             rows, scores = raw_result
+        started = time.perf_counter() if timings is not None else 0.0
         global_rows = rows.to(dtype=torch.int64)
         local_rows = torch.full_like(global_rows, -1)
         valid = torch.zeros_like(global_rows, dtype=torch.bool)
@@ -1592,7 +1593,12 @@ class PromptIndexManager:
             valid |= in_section
         if not bool(torch.all(valid)):
             raise IndexSearchError("filtered CAGRA returned an ID from another head")
+        if timings is not None:
+            timings['candidate_mapping'] = time.perf_counter() - started
+            started = time.perf_counter()
         original_scores = scores + (queries @ mean).unsqueeze(1)
+        if timings is not None:
+            timings['score_restore'] = time.perf_counter() - started
         head_index = BuiltIndex(
             index.vector_space,
             index.metric,
@@ -1634,7 +1640,12 @@ class PromptIndexManager:
                 return None
             items.sort(key=lambda item: item[0])
         transfer_id = requests[0][0].entry_transfer_id
+        timings = {} if metadata is not None else None
+        started = time.perf_counter() if timings is not None else 0.0
         with self._group_search_lock:
+            if timings is not None:
+                timings['manager_lock'] = time.perf_counter() - started
+                started = time.perf_counter()
             with self._lock:
                 if self.quarantined:
                     raise IndexCompletionUnknown(self._quarantine_reason)
@@ -1675,6 +1686,8 @@ class PromptIndexManager:
                     prepared[group] = index, rows
                 boundaries = tuple(record.group_boundaries)
                 record.users += 1
+            if timings is not None:
+                timings['identity_lease'] = time.perf_counter() - started
             scratch = f"prompt-index-search-group:{transfer_id}:{uuid.uuid4().hex[:8]}"
             placed = []
             new_cache_owners = []
@@ -1690,7 +1703,10 @@ class PromptIndexManager:
                 self._reserve(scratch, scratch_bytes)
                 results = [None] * len(requests)
                 for group, (index, rows) in prepared.items():
+                    started = time.perf_counter() if timings is not None else 0.0
                     q = torch.stack([row[3] for row in rows]).to(self.backend_device).contiguous()
+                    if timings is not None:
+                        timings['query_place'] = timings.get('query_place', 0.0) + time.perf_counter() - started
                     placed.append(q)
                     nqueries, top_k = len(rows[0][3]), rows[0][4]
                     cached = record.search_workspaces.get(group)
@@ -1727,13 +1743,21 @@ class PromptIndexManager:
                         record.search_workspaces[group] = workspace, owner
                         new_cache_owners.remove(owner)
                     heads = tuple(row[0] for row in rows)
-                    native_rows, scores = workspace.search(q, heads=heads)
+                    stages = {} if timings is not None else None
+                    native_rows, scores = workspace.search(q, heads=heads, timings=stages)
+                    if timings is not None:
+                        for name, elapsed in stages.items():
+                            timings[name] = timings.get(name, 0.0) + elapsed
                     for query_position, row in enumerate(rows):
                         head, position, identity, _, head_top_k, descriptor, validated, item, mean = row
+                        stages = {} if timings is not None else None
                         selection = self._select_grouped(index, q[query_position], identity=identity,
                             mapping=item.mapping, top_k=head_top_k, mean=mean,
-                            boundaries=boundaries, timings=None,
+                            boundaries=boundaries, timings=stages,
                             raw_result=(native_rows[head], scores[head]))
+                        if timings is not None:
+                            for name, elapsed in stages.items():
+                                timings[name] = timings.get(name, 0.0) + elapsed
                         results[position] = SearchResult(selection=selection,
                             index_version=descriptor.index_version,
                             id_mapping_version=descriptor.id_mapping_version,
@@ -1750,7 +1774,10 @@ class PromptIndexManager:
                 raise
             finally:
                 try:
+                    started = time.perf_counter() if timings is not None else 0.0
                     self._fence(*placed)
+                    if timings is not None:
+                        timings['manager_completion'] = time.perf_counter() - started
                 except IndexCompletionUnknown:
                     self._retain_operation(record, scratch, placed, failure)
                     raise
@@ -1766,6 +1793,8 @@ class PromptIndexManager:
                     with self._lock:
                         record.users -= 1
                         self._retire_locked(record)
+                    if metadata is not None:
+                        metadata['stages'] = timings
 
     def search_many(
         self,

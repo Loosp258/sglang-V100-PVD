@@ -447,6 +447,7 @@ def _run_search_many(index, prepared, queued_at=0.0, timings=None):
     if timings is not None:
         timings["manager_total"] = time.perf_counter() - started
         timings["path"] = metadata["path"]
+        timings.update(metadata.get('stages', {}))
     return result
 
 

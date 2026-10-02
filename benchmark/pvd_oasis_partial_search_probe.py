@@ -83,7 +83,7 @@ for rank, path in enumerate(a.fixtures):
                 recalls = [len(set(found) & wanted) / len(wanted)
                     for found, wanted in zip(ids, exact[layer])]
                 rows.append(dict(layer=layer, seconds=seconds, ids=ids,
-                    recall_union_top4=recalls, path=meta['path']))
+                    recall_union_top4=recalls, path=meta['path'], stages=meta.get('stages', {})))
             trials.append(dict(repetition=repetition, warmup=repetition < 2, mode=mode, rows=rows))
     stats = {}
     for mode in ('baseline', 'optimized'):
@@ -91,6 +91,8 @@ for rank, path in enumerate(a.fixtures):
         recalls = [v for row in rows for v in row['recall_union_top4']]
         stats[mode] = dict(median_two_head_ms=median([r['seconds'] * 1000 for r in rows]),
             mean_recall_union_top4=sum(recalls) / len(recalls), worst_recall_union_top4=min(recalls))
+        stats[mode]['stage_ms'] = {name: median([r['stages'].get(name, 0.0) * 1000 for r in rows])
+            for name in sorted({name for r in rows for name in r['stages']})}
     by_layer = {}
     for trial in trials:
         if not trial['warmup']:

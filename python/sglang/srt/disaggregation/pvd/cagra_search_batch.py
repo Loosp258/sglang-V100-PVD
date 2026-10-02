@@ -6,6 +6,7 @@ views before the next call. It does not alter serving defaults or search width.
 
 import importlib
 import threading
+import time
 
 import torch
 
@@ -57,8 +58,11 @@ class FilteredSearchWorkspace:
                 or self.index.count != self.rows):
             raise IndexSearchError("closed, stale or disposed search workspace")
 
-    def search(self, queries, *, heads=(0, 1, 2, 3)):
+    def search(self, queries, *, heads=(0, 1, 2, 3), timings=None):
+        started = time.perf_counter() if timings is not None else 0.0
         with self.lock, self.backend._lock:
+            if timings is not None:
+                timings['workspace_lock'] = time.perf_counter() - started
             self._check_owner()
             if (not isinstance(heads, tuple) or not 1 <= len(heads) <= 4
                     or any(type(head) is not int or not 0 <= head < 4 for head in heads)
@@ -73,19 +77,31 @@ class FilteredSearchWorkspace:
                     or not queries.is_contiguous()):
                 raise IndexSearchError("invalid batched query shape/device/dtype")
             # One finite-Q proof instead of one host wait per filtered call.
+            started = time.perf_counter() if timings is not None else 0.0
             self.backend._matrix(queries.view(-1, self.dim))
+            if timings is not None:
+                timings['finite_proof'] = time.perf_counter() - started
             runtime, owner = self.backend.runtime, self.index.handle
             self.pending_queries = queries
             try:
+                started = time.perf_counter() if timings is not None else 0.0
                 with runtime.scope(owner):
+                    if timings is not None:
+                        timings['native_scope'] = time.perf_counter() - started
+                        started = time.perf_counter()
                     for position, head in enumerate(heads):
                         runtime.cagra.search(self.params, owner.native,
                             runtime.cp.from_dlpack(queries[position]), self.top_k,
                             neighbors=runtime.cp.from_dlpack(self.neighbors[head]),
                             distances=runtime.cp.from_dlpack(self.scores[head]),
                             filter=self.filters[head], resources=owner.resources)
+                    if timings is not None:
+                        timings['native_submit'] = time.perf_counter() - started
+                        started = time.perf_counter()
                     # Preserve the validated device-wide completion contract.
                     runtime.synchronize()
+                    if timings is not None:
+                        timings['native_completion'] = time.perf_counter() - started
             except BaseException as exc:
                 try:
                     runtime.synchronize()

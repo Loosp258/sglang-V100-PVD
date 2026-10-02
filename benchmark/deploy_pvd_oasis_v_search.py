@@ -18,7 +18,7 @@ ssh = ['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15
     '-o', 'HostKeyAlias=clgpu021.clemson.cloudlab.us', '-i', '/home/loosp/.ssh/cloudlab_pub_wsl',
     'Yizhzhu@130.127.134.35']
 names = ['python/sglang/srt/disaggregation/pvd/' + n for n in
-    ('prompt_index.py', 'server.py', 'cagra_search_batch.py')]
+    ('prompt_index.py', 'server.py', 'cagra_search_batch.py', 'control_server.py')]
 names += ['test/registered/disaggregation/' + n for n in
     ('test_pvd_cagra_search_batch.py', 'test_pvd_grouped_search_cache.py', 'test_pvd_cagra_kv_update.py')]
 names += ['benchmark/pvd_oasis_partial_search_probe.py', 'benchmark/pvd_cagra_joint_manager_probe.py']
