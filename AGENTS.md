@@ -159,6 +159,26 @@ as the default until the streaming path passes the gates below.
 
 ## OasisKV experiment branch (2026-10-01)
 
+### V search follow-up (2026-10-02)
+
+Keep the selected fast graph, CAGRA `itopk_size=2048`, Top4, 32-token bank and
+the current paired Decode/arrival schedule fixed. Current Oasis sends two
+head items per rank/layer, so the existing complete-four-head search cache
+falls back to per-item searches. Optimize already-arrived head subsets without
+waiting for another layer or issuing fake queries. Keep this opt-in.
+
+1. Measure existing formal V batch stages and preserve their request counts.
+2. Extend the Entry-owned filtered CAGRA workspace to selected head subsets,
+   reusing filters/params/output storage and one submission-completion fence.
+   Preserve every head's mapping, scores, version pins and reader/budget owner.
+3. Test subsets on both ranks, reversed item order, cache reuse across adjacent
+   layers, shape replacement, stale identities, close/search and unknown work.
+   Validate native search quality on identical K/Q before online comparison.
+4. Deploy only to an isolated V checkout. Compare baseline/optimized/optimized/
+   baseline with identical P/D, graph settings, requests, warmups and resources.
+   Attribute V processing, D layer waits and client time separately. Retain
+   outputs/raw hashes/traffic and negative results; commit completed stages.
+
 ### User-requested paper alignment (2026-10-02)
 
 Follow `docs/pvd_oasis_alignment.md` for the next stages. The user requires
