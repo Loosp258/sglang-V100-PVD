@@ -1,7 +1,8 @@
 """Per-layer CAGRA selection and native V -> D CPU-cache misses.
 
 The CPU receive registry proves exact native terminal success before reading.
-Each worker owns its asyncio loop, clients, CUDA stream and receive records.
+Each worker owns its asyncio loop, CUDA stream and receive records. Opt-in
+request clients use the manager's background I/O loop across layer jobs.
 Unknown remote/native completion keeps those owners in the request quarantine.
 """
 
@@ -115,7 +116,7 @@ class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
 
 class OasisLayerTransport:
     def __init__(self, manager, selected, *, request_id, incarnation, device,
-                 vector_space, capacity, max_new, top_k, timeout=60):
+                 vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -123,13 +124,25 @@ class OasisLayerTransport:
                 or manifest.layout.kv_dtype != "torch.float16"
                 or tuple(route.rank for route in selected.shards) != (0, 1)
                 or not 1 <= capacity <= 2048 or not 0 <= max_new <= capacity
-                or not 1 <= top_k <= 512 or timeout <= 0):
+                or not 1 <= top_k <= 512 or timeout <= 0
+                or type(reuse_io) is not bool):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         self.manager, self.selected = manager, selected
         self.request_id, self.incarnation = request_id, incarnation
         self.device = torch.device(device)
         self.capacity, self.max_new, self.top_k = capacity, max_new, top_k
         self.timeout, self.vector_space = timeout, vector_space
+        self.reuse_io = reuse_io
+        self._shared_clients = None
+        self._shared_close_future = None
+        self._closing = False
+        self._io_loop = None
+        if reuse_io:
+            self._io_loop = getattr(getattr(manager, "control", None), "loop", None)
+            if (not isinstance(self._io_loop, asyncio.AbstractEventLoop)
+                    or not self._io_loop.is_running() or self._io_loop.is_closed()):
+                raise ValueError("reuse_io requires the manager's running I/O loop")
+            self._outside_io_loop()
         shard = manifest.shards[0]
         self.prompt_tokens = ((shard.page_count - 1) * manifest.layout.page_size
                               + shard.last_page_valid_tokens)
@@ -140,6 +153,10 @@ class OasisLayerTransport:
                        for head in range(4)] for layer in range(28)]
         self.local, self.lock = threading.local(), threading.Lock()
         self.workers, self.versions, self.trace = [], {}, []
+        self._io_counts = dict(job_count=0, worker_loops_created=0,
+            search_clients_created=0, control_clients_created=0,
+            search_sessions_created=0, control_sessions_created=0)
+        self._seen_shared_sessions = set()
         self.quarantined = False
         self.closed = False
         # Validate every rail before any asynchronous native registration.
@@ -153,21 +170,89 @@ class OasisLayerTransport:
                 raise ValueError("selected V rail has no healthy D receive session")
             self.endpoints[route.rank] = state["session_id"]
 
+    def _outside_io_loop(self):
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._io_loop and running is not None:
+            raise RuntimeError("cannot block or create Oasis clients on their I/O loop")
+
+    def _new_clients(self, *, background_loop=None):
+        clients = dict(
+            search={r.rank: PVDShardSearchClient(r.url, timeout_seconds=self.timeout,
+                        background_loop=background_loop) for r in self.selected.shards},
+            control={r.rank: HttpShardClient(r.rank, r.url, timeout_seconds=self.timeout,
+                         background_loop=background_loop) for r in self.selected.shards})
+        self._io_counts["search_clients_created"] += len(clients["search"])
+        self._io_counts["control_clients_created"] += len(clients["control"])
+        return clients
+
     def _worker(self):
         if not hasattr(self.local, "state"):
-            loop = asyncio.new_event_loop()
-            state = dict(loop=loop, stream=torch.cuda.Stream(device=self.device),
-                search={r.rank: PVDShardSearchClient(r.url, timeout_seconds=self.timeout)
-                        for r in self.selected.shards},
-                control={r.rank: HttpShardClient(r.rank, r.url, timeout_seconds=self.timeout)
-                         for r in self.selected.shards},
-                registry=OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
-                    self.manager.transfer_budget, receiver_epoch=self.manager.worker_epoch,
-                    device=self.device))
-            self.local.state = state
+            # Admission and client creation share the retirement lock. A close
+            # cannot see an empty worker list while native owners are created.
             with self.lock:
+                if self.closed or self._closing or self.quarantined:
+                    raise RuntimeError("layer transport is closing or quarantined")
+                if self.reuse_io:
+                    if self._shared_clients is None:
+                        self._shared_clients = self._new_clients(background_loop=self._io_loop)
+                    clients = self._shared_clients
+                else:
+                    clients = self._new_clients()
+                state = dict(loop=asyncio.new_event_loop(),
+                    stream=torch.cuda.Stream(device=self.device), **clients,
+                    owner_thread=threading.get_ident(),
+                    registry=OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
+                        self.manager.transfer_budget, receiver_epoch=self.manager.worker_epoch,
+                        device=self.device))
+                self.local.state = state
                 self.workers.append(state)
+                self._io_counts["job_count"] += 1
+                self._io_counts["worker_loops_created"] += 1
         return self.local.state
+
+    def _retire_worker(self, state):
+        if state["owner_thread"] != threading.get_ident():
+            raise RuntimeError("layer receive owners must retire on their worker thread")
+        with self.lock:
+            for kind in ("search", "control"):
+                for rank, client in state[kind].items():
+                    if client._session is None:
+                        continue
+                    identity = kind, rank
+                    if self.reuse_io and identity in self._seen_shared_sessions:
+                        continue
+                    self._io_counts[f"{kind}_sessions_created"] += 1
+                    if self.reuse_io:
+                        self._seen_shared_sessions.add(identity)
+        if not self.reuse_io:
+            state["loop"].run_until_complete(self._close_clients(state))
+        del self.local.state
+        if not state["registry"]._records and not state.get("quarantine"):
+            state["loop"].close()
+            with self.lock:
+                self.workers.remove(state)
+
+    @staticmethod
+    async def _close_clients(clients):
+        # Finish every close, including an exceptional one, before reporting
+        # failure. An unfinished close never proves safe request retirement.
+        outcomes = await asyncio.gather(
+            *(c.close() for c in clients["search"].values()),
+            *(c.close() for c in clients["control"].values()),
+            return_exceptions=True)
+        errors = [item for item in outcomes if isinstance(item, BaseException)]
+        if errors:
+            raise RuntimeError("Oasis HTTP client close failed; retain request owners") from errors[0]
+
+    def io_snapshot(self):
+        with self.lock:
+            return dict(reuse_io=self.reuse_io, **self._io_counts,
+                manager_io_loop_reused=self.reuse_io,
+                shared_close_submitted=self._shared_close_future is not None,
+                closing=self._closing, closed=self.closed)
 
     async def _select_and_fetch(self, state, ticket, query, bank, bootstrap):
         layer_cache = self.cache[ticket.layer]
@@ -243,7 +328,7 @@ class OasisLayerTransport:
         return tuple(selected_ids), remote_rows, time.perf_counter() - started
 
     def job(self, query, bank, *, bootstrap=False):
-        if self.closed or self.quarantined:
+        if self.closed or self._closing or self.quarantined:
             raise RuntimeError("layer transport is closed or quarantined")
         query = query.detach().clone()
         if query.shape != (28, 128) or query.device != self.device:
@@ -303,23 +388,41 @@ class OasisLayerTransport:
                     state.setdefault("quarantine", []).append(retained)
                 raise
             finally:
-                # Clients/registries are loop-affine and drained on their owner
-                # worker. Successful operations leave no receive registrations.
-                async def close_clients():
-                    await asyncio.gather(*(c.close() for c in state["search"].values()),
-                                         *(c.close() for c in state["control"].values()))
-                state["loop"].run_until_complete(close_clients())
-                del self.local.state
-                if not state["registry"]._records and not state.get("quarantine"):
-                    state["loop"].close()
-                    with self.lock:
-                        self.workers.remove(state)
+                # Native registries remain job/thread-local. Request clients
+                # alone survive on the already-running background I/O loop.
+                self._retire_worker(state)
 
         return run
 
     def close(self):
-        if self.workers or self.quarantined:
-            raise RuntimeError("retain undrained layer transport owners")
+        if self.reuse_io:
+            self._outside_io_loop()
+        with self.lock:
+            if self.closed:
+                return
+            if self.workers or self.quarantined:
+                raise RuntimeError("retain undrained layer transport owners")
+            # Caller joins LayerLookahead before this transition. Reject late
+            # jobs while waiting for the real HTTP-close future to complete.
+            self._closing = True
+            if self.reuse_io and self._shared_clients is not None:
+                if self._shared_close_future is None:
+                    if not self._io_loop.is_running() or self._io_loop.is_closed():
+                        raise RuntimeError("Oasis I/O loop stopped; retain request owners")
+                    coroutine = self._close_clients(self._shared_clients)
+                    try:
+                        self._shared_close_future = self.manager.control.submit(coroutine)
+                    except BaseException:
+                        coroutine.close()
+                        raise
+                future = self._shared_close_future
+            else:
+                future = None
+        if future is not None:
+            # Timeout/cancellation/error leaves the cached future, clients and
+            # cache intact. Retrying close never submits a duplicate close.
+            future.result(timeout=self.timeout)
         self.cache.clear()
         self._cpu_cache = self._cache_valid = None
+        self._shared_clients = None
         self.closed = True

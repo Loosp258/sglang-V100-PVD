@@ -25,7 +25,7 @@ parser.add_argument('--tag', required=True)
 parser.add_argument('--arms', default='serial_a,overlap_a,overlap_b,serial_b')
 parser.add_argument('--cases', default='99401,99402,99403,99404')
 parser.add_argument('--tokens', type=int, default=16)
-parser.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query'), default='pipeline')
+parser.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io'), default='pipeline')
 args = parser.parse_args()
 if not re.fullmatch(r'[a-z0-9_]+', args.tag):
     raise ValueError('filename-safe fresh tag required')
@@ -94,11 +94,11 @@ def start(role, arm):
         PVD_PROFILE_V_SEARCH=1, PVD_PROFILE_D_SEARCH_BATCH=1,
         PVD_PROFILE_REFRESH_TIMELINE=1, PVD_GROUPED_EXACT_SEARCH=1,
         PVD_BATCHED_GROUP_SEARCH=1, PVD_SPLIT_POLICY_FILE='/tmp/' + args.tag + '_split.json')
-    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison in ('v-latency', 'v-host-query') or (
+    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison in ('v-latency', 'v-host-query', 'v-io') or (
         args.comparison == 'v-search' and arm.startswith('opt')))
-    env['PVD_HOST_CANDIDATES'] = int(args.comparison == 'v-host-query' or (args.comparison == 'v-latency' and arm.startswith('opt')))
-    env['PVD_NATIVE_POOL'] = int(args.comparison == 'v-host-query' or (args.comparison == 'v-latency' and arm.startswith('opt')))
-    env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-host-query' and arm.startswith('opt'))
+    env['PVD_HOST_CANDIDATES'] = int(args.comparison in ('v-host-query', 'v-io') or (args.comparison == 'v-latency' and arm.startswith('opt')))
+    env['PVD_NATIVE_POOL'] = int(args.comparison in ('v-host-query', 'v-io') or (args.comparison == 'v-latency' and arm.startswith('opt')))
+    env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-io' or (args.comparison == 'v-host-query' and arm.startswith('opt')))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash /tmp/' + args.tag + '_launcher.sh ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -152,7 +152,7 @@ def main():
                 raise RuntimeError('GPU occupied: ' + role)
             CHECKOUTS[role] = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/pvd-direct-20260929'
         CHECKOUTS['v'] = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/' + (
-            'pvd-oasis-v-search-20261002' if args.comparison in ('v-search', 'v-latency', 'v-host-query') else 'pvd-search-decode-20261002')
+            'pvd-oasis-v-search-20261002' if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io') else 'pvd-search-decode-20261002')
         CHECKOUTS['d'] = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002'
         # This named isolated archive was created by deploy_pvd_oasis_stage;
         # give its actual source tree an immutable launch-gate commit.
@@ -199,11 +199,13 @@ def main():
                 max_sequence_tokens=2304, max_decode_steps=32, request_budget_bytes=268435456,
                 request_scratch_bytes=33554432, bootstrap_budget_bytes=536870912,
                 bootstrap_transient_bytes=268435456,
-                overlap=args.comparison in ('v-search', 'v-latency', 'v-host-query') or arm.startswith('overlap'))
+                overlap=args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io') or arm.startswith('overlap'))
+            if args.comparison == 'v-io':
+                config['reuse_io'] = arm.startswith('opt')
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', '/tmp/' + args.tag + '_' + arm + '.json', encoded)
-            if args.comparison in ('v-search', 'v-latency', 'v-host-query'):
+            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io'):
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
@@ -211,7 +213,7 @@ def main():
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)
             stop('gateway'); stop('d')
-            if args.comparison in ('v-search', 'v-latency', 'v-host-query'):
+            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io'):
                 collect('v', arm); collect('p', arm)
                 stop('p'); stop('v')
         if args.comparison == 'pipeline':

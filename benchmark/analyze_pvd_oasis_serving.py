@@ -7,7 +7,7 @@ import statistics
 
 p = argparse.ArgumentParser()
 p.add_argument('directory', type=Path)
-p.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query'), default='pipeline')
+p.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io'), default='pipeline')
 a = p.parse_args()
 root = a.directory
 if (root / 'comparison.json').exists():
@@ -15,9 +15,15 @@ if (root / 'comparison.json').exists():
 online = json.loads((root / 'online.json').read_text())
 configs = [json.loads(path.read_text()) for path in sorted(root.glob('*_config.json'))]
 if configs:
-    comparison_config = {k: v for k, v in configs[0].items() if k != 'overlap'}
-    assert all({k: v for k, v in config.items() if k != 'overlap'} == comparison_config
-               for config in configs), 'comparison has configuration differences beyond overlap'
+    allowed_difference = 'reuse_io' if a.comparison == 'v-io' else 'overlap'
+    comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
+    assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
+               for config in configs), 'comparison has unrelated configuration differences'
+    if a.comparison == 'v-io':
+        for path in sorted(root.glob('*_config.json')):
+            config=json.loads(path.read_text())
+            assert config['overlap'] is True
+            assert config['reuse_io'] is path.name.startswith('opt'), 'IO knob does not match comparison arm'
     if a.comparison in ('v-search', 'v-latency', 'v-host-query'):
         assert all(config == configs[0] and config['overlap'] is True for config in configs), (
             'V search comparison requires identical overlapped Decode configs')
@@ -52,6 +58,17 @@ for arm, rows in online.items():
             assert len(trace['transport']) == len(forwards) * 28
             assert {(t['step'], t['layer']) for t in trace['layers']} == {
                 (s, l) for s in range(len(forwards) - 1) for l in range(28)}
+        if a.comparison == 'v-io':
+            io=trace['io']
+            reuse=arm.startswith('opt')
+            jobs=len(forwards)*28
+            assert io['reuse_io'] is reuse and io['closed'] and io['closing']
+            assert io['job_count']==io['worker_loops_created']==jobs
+            assert io['manager_io_loop_reused'] is reuse
+            assert io['shared_close_submitted'] is reuse
+            assert io['search_clients_created']==io['control_clients_created']==(2 if reuse else 2*jobs)
+            assert io['search_sessions_created']==(2 if reuse else 2*jobs)
+            assert io['control_sessions_created']==2 if reuse else 0<io['control_sessions_created']<=2*jobs
         selected.append(dict(case=row['case'], rid=rid,
             prompt_sha256=row['prompt_sha256'], output_ids=final['output_ids'],
             output_sha256=row['output_sha256'], completion_tokens=row['completion_tokens'],
@@ -110,6 +127,6 @@ output_identity = {case: dict(
 result = dict(aggregate=aggregate, output_identity=output_identity, requests=summary,
     comparison_scope=('live paired serial vs live paired per-layer overlap' if a.comparison == 'pipeline'
         else ('live overlapped paired with baseline vs partial-head cached V search'
-            if a.comparison == 'v-search' else ('live overlapped paired with pooled host candidates and GPU vs private CPU finite-Q proof' if a.comparison == 'v-host-query' else 'live overlapped paired with cached V baseline vs bounded RMM pool and host candidates'))) + '; full initial KV retained')
+            if a.comparison == 'v-search' else ('live overlapped paired with pooled host candidates and GPU vs private CPU finite-Q proof' if a.comparison == 'v-host-query' else ('live overlapped paired with identical V and per-job vs request-scoped HTTP clients' if a.comparison == 'v-io' else 'live overlapped paired with cached V baseline vs bounded RMM pool and host candidates')))) + '; full initial KV retained')
 (root / 'summary.json').write_text(json.dumps(result, indent=2))
 print(json.dumps(dict(aggregate=aggregate, output_identity=output_identity), indent=2))
