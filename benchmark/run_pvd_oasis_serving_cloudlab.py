@@ -92,6 +92,9 @@ def start(role, arm):
         PVD_PREFILL_CHUNK_TOKENS=256, PVD_MODE='oasis',
         PVD_OASIS_CONFIG=ASSETS['d'] + '/' + arm + '_config.json',
         PVD_LOG_DIR=ASSETS[remote] + '/logs',
+        TMPDIR=ASSETS[remote] + '/tmp',
+        TRITON_CACHE_DIR=ASSETS[remote] + '/cache/triton',
+        TORCHINDUCTOR_CACHE_DIR=ASSETS[remote] + '/cache/inductor',
         PVD_CAGRA_KV_EDGE_UPDATE=1, PVD_CAGRA_KV_ROUTING_EDGES=2,
         PVD_CAGRA_SMALL_TAIL_MAX_ROWS=512, PVD_CAGRA_FUSED_PREPARE=1,
         PVD_BATCHED_K_EXTRACTION=1, PVD_FUSED_K_CENTERING=1,
@@ -164,7 +167,8 @@ def probe(arm, warm=False):
     rows = []
     cases = [99991, 99992] if warm else [int(x) for x in args.cases.split(',')]
     for case in cases:
-        data = call('v', '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/bin/python ' +
+        data = call('v', 'TMPDIR=' + shlex.quote(ASSETS['v'] + '/tmp') +
+            ' /proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/bin/python ' +
             shlex.quote(ASSETS['v'] + '/probe.py') + f' --case {case} --tokens {args.tokens}', timeout=300)
         row = json.loads(data.strip())
         rows.append(row)
@@ -190,7 +194,9 @@ def main():
         CHECKOUTS['d'] = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002'
         for role in HOSTS:
             ASSETS[role] = CHECKOUTS[role] + '/artifacts/' + args.tag
-            call(role, 'test ! -e ' + shlex.quote(ASSETS[role]) + ' && mkdir -p ' + shlex.quote(ASSETS[role] + '/logs'))
+            directories = [ASSETS[role] + '/' + name for name in ('logs', 'tmp', 'cache/triton', 'cache/inductor')]
+            call(role, 'test ! -e ' + shlex.quote(ASSETS[role]) + ' && mkdir -p ' +
+                 ' '.join(shlex.quote(path) for path in directories))
         # This named isolated archive was created by deploy_pvd_oasis_stage;
         # give its actual source tree an immutable launch-gate commit.
         d = CHECKOUTS['d']
