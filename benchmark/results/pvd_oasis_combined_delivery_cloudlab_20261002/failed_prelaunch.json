@@ -1,0 +1,5 @@
+{
+  "directory": "artifacts/oasis_delivery_combine_abba01",
+  "measurements_included": false,
+  "note": "D client.py source gate mismatch stopped before any service or request; sources aligned for a fresh ABBA."
+}

@@ -1,0 +1,82 @@
+{
+  "checkout_heads.json": {
+    "bytes": 156,
+    "sha256": "ac78afa325f0287b7ff38c9151c3d044f23fff609a990ff6e1513a861120a794",
+    "normalization": "lf"
+  },
+  "cleanup_errors.json": {
+    "bytes": 3,
+    "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 144,
+    "sha256": "321efcd4273ff50b239ae560dc79968b64d5eaa71dd4ee9efd98d0743e84ef60",
+    "normalization": "lf"
+  },
+  "delivery_stage_summary.json": {
+    "bytes": 2916,
+    "sha256": "8a797ce94d523de8b54ee9e0deb9538005398ffbd39b7d01e78e4865524b3a5f",
+    "normalization": "lf"
+  },
+  "failed_prelaunch.json": {
+    "bytes": 214,
+    "sha256": "6d74b84d884df93026cc63d0651863d58af8d9b2d70ed67c90d9d25c245c10ab",
+    "normalization": "lf"
+  },
+  "failed_prelaunch.tar.gz": {
+    "bytes": 450,
+    "sha256": "c03c1e4f07b54129e0c4d29213c50da7ab6c8299064c6bea5a1378856f050409",
+    "normalization": "raw"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 96,
+    "sha256": "8809d0d0788cece7f34b84a54e9909181a0bd9b59fe62c3257df3f98bc5805fe",
+    "normalization": "lf"
+  },
+  "gate.tar.gz": {
+    "bytes": 379849,
+    "sha256": "10e82c6518137854b916ad42390699db045dfbf6acfa163522b701c476693ce3",
+    "normalization": "raw"
+  },
+  "gate_count_record.json": {
+    "bytes": 3332,
+    "sha256": "5b5452d2a7bfccab7a3d8b19c414f9360c19df5df342ec5daaf607280e78650d",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 270,
+    "sha256": "4dbf6d98d058e554a86d798d5da61fd19c4a54f6cf7ff105cc51279ff7d48bb8",
+    "normalization": "lf"
+  },
+  "owned.json": {
+    "bytes": 3,
+    "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "normalization": "lf"
+  },
+  "raw.tar.gz": {
+    "bytes": 4046347,
+    "sha256": "9f711c4e9eb93e691af48f1f7f606575956173f8822033ddbd4cd1c5007d4826",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 28833,
+    "sha256": "fde96c6c8fef347144759379e3b748bcae02a0983361b91b7aff1a3f4606656d",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 4903,
+    "sha256": "66aa18a955d6bab5517afbed6464a92358337ac51841b9839a78cabf7247c118",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 38563,
+    "sha256": "bd7fcf699b51ce2ac3a027fd8792c2086f14e73dd7e16171ba4955c598a1db98",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9885,
+    "sha256": "f761c2c9b9def5d39df72ec93519b3d73630d5a3a21bced2a303ea600ef62d71",
+    "normalization": "lf"
+  }
+}

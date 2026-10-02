@@ -689,3 +689,23 @@ benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
   no service or formal request started and all six GPUs remained empty. The
   deploy helper now aligns the complete V/D source-gate set. Preserve this
   rejection separately from timed arms and rerun with a fresh tag.
+
+#### Combined reserve/start full-path pilot (2026-10-02)
+
+- Completed clean CloudLab base_a/opt_a/opt_b/base_b on two matched 2159-token
+  Prompts and 16 outputs, all-role restarts and two warmups per arm. Fixed
+  receive slots=false, HTTP reuse=false, fast four-head V/GPU finite-Q/pool/
+  host candidates, and graph-gated initial P->V->D KV. All eight actual output
+  IDs/text match. Exact profiles keep 840 searches/request and unchanged Q.
+- Client median 10.075738->9.886828 s (-1.87%); request cumulative steady D KV
+  wait 6040.889->5780.557 ms (-4.31%); per-step wait median 426.381->414.268 ms.
+  Layer RPC 34.931->33.924 ms. Per-delivery joint reserve/start submission
+  16.802->16.275 ms; these ranges include source work and are not pure RTT.
+  Across four requests/mode, 3084 deliveries each; combined removes 3084
+  reserve/start calls but six additional polls leave 3078 fewer control RPCs.
+- Client change is comparable to the -1.54%/-3.08% within-mode arm drift;
+  treat timing as a small pilot, keep the option default-off. Per-step waiting
+  and per-request cumulative waiting are different statistics. Full raw, native
+  gate, source identities, failed prelaunch, zero-GPU cleanup and portable
+  evidence are in pvd_oasis_combined_delivery_cloudlab_20261002. Registration
+  reuse is being tested separately; independent effects cannot be added.
