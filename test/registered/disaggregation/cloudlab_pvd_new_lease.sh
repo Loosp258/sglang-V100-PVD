@@ -248,6 +248,9 @@ case "$role" in
       if [[ "${PVD_HOST_CANDIDATES:-0}" == "1" ]]; then
         kv_edge_args+=(--prompt-index-host-candidate-processing)
       fi
+      if [[ "${PVD_HOST_QUERY_VALIDATION:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-host-query-validation)
+      fi
       if [[ "${PVD_NATIVE_POOL:-0}" == "1" ]]; then
         kv_edge_args+=(--prompt-index-cagra-native-pool)
       fi

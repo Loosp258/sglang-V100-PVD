@@ -16,7 +16,7 @@ p.add_argument('--output', type=Path, required=True)
 p.add_argument('--repeats', type=int, default=3)
 p.add_argument('--focus-layer', type=int)
 p.add_argument('--native-pool', action='store_true')
-p.add_argument('--comparison', choices=('partial', 'host'), default='partial')
+p.add_argument('--comparison', choices=('partial', 'host', 'host-query'), default='partial')
 a = p.parse_args()
 if a.focus_layer is not None and not 0 <= a.focus_layer < 28:
     p.error('focus layer must be in 0..27')
@@ -72,6 +72,7 @@ for rank, path in enumerate(a.fixtures):
     # Compare postprocessing on the *same* native candidates, independently
     # of CAGRA's approximate candidate jitter between separate searches.
     same_candidates = True
+    host_snapshot_identical = True
     m.partial_group_search = True
     for requests in batches:
         m.search_many(requests)
@@ -81,7 +82,13 @@ for rank, path in enumerate(a.fixtures):
         workspace = record.search_workspaces[group][0]
         queries = torch.stack([r[1] for r in requests]).to(rank).contiguous()
         heads = tuple(r[0].layer % 2 * 2 + r[0].kv_head % 2 for r in requests)
-        native_rows, native_scores = workspace.search(queries, heads=heads)
+        if a.comparison == 'host-query':
+            host_queries = torch.stack([r[1] for r in requests]).contiguous()
+            native_rows, native_scores, copied_queries = workspace.search_host(host_queries, heads=heads)
+            host_snapshot_identical = host_snapshot_identical and torch.equal(copied_queries.cpu(), host_queries)
+            queries = copied_queries
+        else:
+            native_rows, native_scores = workspace.search(queries, heads=heads)
         cpu_rows = native_rows.cpu()
         for position, (identity, _, top_k) in enumerate(requests):
             key = identity.layer, identity.kv_head
@@ -98,8 +105,9 @@ for rank, path in enumerate(a.fixtures):
     trials = []
     for repetition in range(a.repeats + 2):
         for mode in ('baseline', 'optimized', 'optimized', 'baseline'):
-            m.partial_group_search = a.comparison == 'host' or mode == 'optimized'
-            m.host_candidate_processing = a.comparison == 'host' and mode == 'optimized'
+            m.partial_group_search = a.comparison in ('host', 'host-query') or mode == 'optimized'
+            m.host_candidate_processing = a.comparison == 'host-query' or (a.comparison == 'host' and mode == 'optimized')
+            m.host_query_validation = a.comparison == 'host-query' and mode == 'optimized'
             rows = []
             for layer, requests in enumerate(batches):
                 if a.focus_layer is not None and layer != a.focus_layer:
@@ -139,6 +147,7 @@ for rank, path in enumerate(a.fixtures):
         query_sha256=hashlib.sha256(q.numpy().tobytes()).hexdigest(),
         comparison=a.comparison, native_pool=a.native_pool, pool_bytes=pool_bytes,
         same_native_candidates_semantics_identical=same_candidates,
+        host_query_snapshot_identical=host_snapshot_identical if a.comparison == "host-query" else None,
         native_live_after_close=b.runtime.global_allocated_bytes(),
         cached_bytes=cached_bytes, stats=stats, trials=trials))
     a.output.write_text(json.dumps(output, indent=2))

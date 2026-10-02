@@ -52,7 +52,7 @@ class NativeDouble(Runtime):
         super().synchronize()
 
 
-def setup(rank=0, *, partial=False, host=False):
+def setup(rank=0, *, partial=False, host=False, hostq=False):
     rt = NativeDouble()
     b = CagraKVUpdateBackend(device='cpu', native_bytes_per_index=1 << 20,
         graph_degree=16, intermediate_degree=16, itopk_size=32, exact_head_groups=4,
@@ -60,7 +60,7 @@ def setup(rank=0, *, partial=False, host=False):
     budget = TransferBudget(128 << 20, 1)
     manager = PromptIndexManager(vector_space='test', backend=b, budget=budget,
         group_heads=4, batched_group_search=True, partial_group_search=partial,
-        host_candidate_processing=host)
+        host_candidate_processing=host, host_query_validation=hostq)
     k = torch.randn(2, 32, 2, 8, generator=torch.Generator().manual_seed(13)).half()
     packed = torch.cat((k.flatten(), torch.zeros_like(k).flatten())).view(torch.uint8)
     layout = KVLayoutSignature(model_id='test', model_revision='rev', kv_dtype='float16',
@@ -258,3 +258,47 @@ def test_partial_shape_change_replaces_only_one_budgeted_workspace():
     second = next(iter(m._entries['entry'].search_workspaces.values()))[0]
     assert m.budget.snapshot()['used_staging_bytes'] == charged - first.retained_bytes + second.retained_bytes
     m.close('entry')
+
+
+@pytest.mark.parametrize('rank', [0, 1])
+@pytest.mark.parametrize('host', [False, True])
+def test_host_q_matches_private_snapshot_and_refunds(rank, host):
+    m, rt, req = setup(rank, partial=True, host=host, hostq=True)
+    m.host_query_validation = False
+    baseline = m.search_many(req[:2])
+    m.host_query_validation = True
+    meta = {}
+    result = m.search_many(req[:2][::-1], metadata=meta)
+    assert tuple(r.selection for r in result[::-1]) == tuple(r.selection for r in baseline)
+    assert meta['path'] == 'grouped_cagra_partial_batched' + ('_host' if host else '') + '_hostq'
+    assert 'host_snapshot' in meta['stages'] and 'finite_proof' in meta['stages']
+    assert not m.quarantined
+    m.close('entry')
+    assert not m.backend._owners
+    assert m.budget.snapshot()['used_staging_bytes'] == m.shared_native_budget_bytes
+
+
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf')])
+def test_host_q_nonfinite_rejects_before_native_and_refunds(bad):
+    m, rt, req = setup(partial=True, host=True, hostq=True)
+    req[0][1][0, 0] = bad
+    with pytest.raises(IndexSearchError):
+        m.search_many(req[:2])
+    assert rt.submits == 0 and m._entries['entry'].users == 0
+    m.close('entry')
+    assert m.budget.snapshot()['used_staging_bytes'] == m.shared_native_budget_bytes
+
+
+def test_host_q_unknown_retains_snapshot_reader_and_budget():
+    m, rt, req = setup(partial=True, host=True, hostq=True)
+    rt.on_submit = lambda: setattr(rt, 'fail_sync', True)
+    with pytest.raises(IndexCompletionUnknown):
+        m.search_many(req[:2])
+    record = m._entries['entry']
+    ws = next(iter(record.search_workspaces.values()))[0]
+    assert ws.pending_host_queries is not None and ws.pending_queries is not None
+    assert m.quarantined and record.users == 1
+    charged = m.budget.snapshot()['used_staging_bytes']
+    m.close('entry')
+    assert record.search_workspaces and m.backend._owners
+    assert m.budget.snapshot()['used_staging_bytes'] == charged

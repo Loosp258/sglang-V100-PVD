@@ -77,7 +77,7 @@ def test_reject_before_native(change):
         b.runtime.events.clear()
     with pytest.raises(IndexSearchError):
         ws.search(q)
-    assert b.runtime.events == []
+    assert b.runtime.events == ([("sync",)] if change == "nonfinite" else [])
 
 
 def test_native_error_drains_before_release():
@@ -120,3 +120,186 @@ def test_invalid_subset_cannot_submit_native_work(heads):
         ws.search(q[:2], heads=heads)
     assert b.runtime.events == []
     ws.close()
+
+
+@pytest.mark.parametrize("heads", [(0, 1, 2, 3), (2, 0), (3,)])
+def test_host_snapshot_preserves_head_order_and_device_query_values(heads):
+    b, ws, q = workspace()
+    q = torch.stack([torch.full((2, 3), float(head + 1)) for head in heads])
+    seen = []
+    submit = b.runtime.submit
+
+    def capture(params, index, query, k, **kwargs):
+        seen.append(query.clone())
+        submit(params, index, query, k, **kwargs)
+        kwargs['distances'].fill_(float(query[0, 0]))
+
+    b.runtime.cagra.search = capture
+    timings = {}
+    rows, scores, device_queries = ws.search_host(q, heads=heads, timings=timings)
+    assert b.runtime.events == [("submit",)] * len(heads) + [("sync",)]
+    assert torch.equal(device_queries, q)
+    assert device_queries.data_ptr() != q.data_ptr()
+    assert all(torch.equal(query, q[position]) for position, query in enumerate(seen))
+    for position, head in enumerate(heads):
+        assert rows[head].tolist() == [[0, 1], [0, 1]]
+        assert scores[head].tolist() == [[float(head + 1)] * 2] * 2
+    assert all(timings[name] >= 0 for name in
+               ('host_snapshot', 'finite_proof', 'query_place', 'native_completion'))
+    assert ws.pending_queries is ws.pending_host_queries is None
+    ws.close()
+
+
+def test_host_finite_proof_has_no_gpu_reduction_or_public_unchecked_switch(monkeypatch):
+    b, ws, q = workspace()
+    calls = []
+    matrix = b._matrix
+
+    def checked_matrix(tensor, *, check_finite=True):
+        calls.append(check_finite)
+        matrix(tensor, check_finite=check_finite)
+
+    monkeypatch.setattr(b, '_matrix', checked_matrix)
+    ws.search(q)
+    assert calls == [True]
+    calls.clear()
+
+    def unexpected_gpu_reduction(tensor):
+        raise AssertionError("CPU snapshot proof must not call torch.isfinite")
+
+    monkeypatch.setattr(torch, 'isfinite', unexpected_gpu_reduction)
+    ws.search_host(q)
+    assert calls == [False]
+    with pytest.raises(TypeError):
+        ws.search_host(q, check_finite=False)
+    with pytest.raises(TypeError):
+        ws.search(q, check_finite=False)
+    ws.close()
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')])
+def test_host_nonfinite_rejects_before_copy_and_native(value, monkeypatch):
+    b, ws, q = workspace()
+    q[0, 0, 0] = value
+
+    def unexpected_copy(*args, **kwargs):
+        raise AssertionError("non-finite host queries must be refused before copy")
+
+    monkeypatch.setattr(torch.Tensor, 'to', unexpected_copy)
+    with pytest.raises(IndexSearchError, match='finite'):
+        ws.search_host(q)
+    assert b.runtime.events == []
+    assert ws.pending_queries is ws.pending_host_queries is None
+    ws.close()
+
+
+@pytest.mark.parametrize('change', ['shape', 'dtype', 'noncontiguous', 'device', 'nontensor'])
+def test_invalid_host_queries_reject_before_native(change):
+    b, ws, q = workspace()
+    if change == 'shape':
+        q = q[:3]
+    elif change == 'dtype':
+        q = q.double()
+    elif change == 'noncontiguous':
+        q = torch.ones(4, 2, 6)[..., ::2]
+    elif change == 'device':
+        q = torch.empty(4, 2, 3, device='meta')
+    else:
+        q = q.tolist()
+    with pytest.raises(IndexSearchError):
+        ws.search_host(q)
+    assert b.runtime.events == []
+    assert ws.pending_queries is ws.pending_host_queries is None
+    ws.close()
+
+
+@pytest.mark.parametrize('heads', [(), (0, 0), (0, 4), (True, 1), [0, 1]])
+def test_invalid_host_head_subset_cannot_submit_native_work(heads):
+    b, ws, q = workspace()
+    with pytest.raises(IndexSearchError):
+        ws.search_host(q[:2], heads=heads)
+    assert b.runtime.events == []
+    ws.close()
+
+
+def test_host_snapshot_cannot_alias_mutation_after_proof():
+    b, ws, q = workspace()
+    q.requires_grad_(True)
+    seen = []
+    submit = b.runtime.submit
+
+    def scope(owner):
+        # Simulate the caller changing its alias after validation, before the
+        # native calls. The private snapshot is the sole source of submitted Q.
+        with torch.no_grad():
+            q.fill_(float('nan'))
+        return nullcontext()
+
+    def capture(params, index, query, k, **kwargs):
+        seen.append(query.clone())
+        submit(params, index, query, k, **kwargs)
+
+    b.runtime.scope = scope
+    b.runtime.cagra.search = capture
+    _, _, device_queries = ws.search_host(q)
+    assert torch.isnan(q).all()
+    assert torch.equal(device_queries, torch.ones_like(device_queries))
+    assert not device_queries.requires_grad
+    assert device_queries.data_ptr() != q.data_ptr()
+    assert all(torch.equal(query, torch.ones_like(query)) for query in seen)
+    ws.close()
+
+
+def test_host_native_error_drains_both_sources_before_release():
+    b, ws, q = workspace()
+    b.runtime.search_error = ValueError('native submit')
+    with pytest.raises(ValueError, match='native submit'):
+        ws.search_host(q)
+    assert b.runtime.events == [("submit",), ("sync",)]
+    assert ws.pending_queries is ws.pending_host_queries is None
+    ws.close()
+
+
+def test_host_unknown_completion_retains_private_snapshot_device_and_outputs():
+    b, ws, q = workspace()
+    b.runtime.sync_error = ValueError('unknown completion')
+    with pytest.raises(IndexCompletionUnknown):
+        ws.search_host(q)
+    assert b._search_quarantine == [ws]
+    assert ws.pending_host_queries is not q
+    assert ws.pending_host_queries.data_ptr() != q.data_ptr()
+    assert torch.equal(ws.pending_host_queries, q)
+    assert torch.equal(ws.pending_queries, q)
+    q.zero_()
+    assert torch.equal(ws.pending_host_queries, torch.ones_like(q))
+    assert ws.neighbors is not None and ws.bitsets
+    with pytest.raises(IndexCompletionUnknown):
+        ws.close()
+    with pytest.raises(IndexCompletionUnknown):
+        b.dispose(ws.index)
+
+
+@pytest.mark.parametrize('unknown', [False, True])
+def test_host_copy_failure_drains_or_retains_source(monkeypatch, unknown):
+    b, ws, q = workspace()
+    if unknown:
+        b.runtime.sync_error = ValueError('unknown completion')
+
+    def failed_copy(*args, **kwargs):
+        raise ValueError('device copy failed')
+
+    monkeypatch.setattr(torch.Tensor, 'to', failed_copy)
+    expected = IndexCompletionUnknown if unknown else ValueError
+    with pytest.raises(expected):
+        ws.search_host(q)
+    assert b.runtime.events == [("sync",)]
+    assert ws.pending_queries is None
+    if unknown:
+        assert b._search_quarantine == [ws]
+        assert ws.pending_host_queries is not q
+        assert torch.equal(ws.pending_host_queries, q)
+        with pytest.raises(IndexCompletionUnknown):
+            ws.close()
+    else:
+        assert ws.pending_host_queries is None
+        ws.close()

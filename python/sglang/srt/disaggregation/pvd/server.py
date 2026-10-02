@@ -323,6 +323,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Opt in to bounded host candidate mapping after cached native CAGRA; requires batched group search.",
     )
     parser.add_argument(
+        "--prompt-index-host-query-validation", action="store_true",
+        help="Opt in to private CPU finite-Q snapshots before cached CAGRA; requires batched group search.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-native-pool", action="store_true",
         help="Opt in to a zero-initial-size RMM pool within the reserved global native cap.",
     )
@@ -819,6 +823,7 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
         batched_group_search=getattr(args, "prompt_index_batched_group_search", False),
         partial_group_search=getattr(args, "prompt_index_partial_group_search", False),
         host_candidate_processing=getattr(args, "prompt_index_host_candidate_processing", False),
+        host_query_validation=getattr(args, "prompt_index_host_query_validation", False),
     )
 
 

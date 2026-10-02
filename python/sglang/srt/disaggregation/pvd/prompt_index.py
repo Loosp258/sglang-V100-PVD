@@ -187,6 +187,7 @@ class PromptIndexManager:
         batched_group_search: bool = False,
         partial_group_search: bool = False,
         host_candidate_processing: bool = False,
+        host_query_validation: bool = False,
     ) -> None:
         if not isinstance(vector_space, str) or not vector_space.strip():
             raise ValueError("vector_space must be a non-empty string")
@@ -234,6 +235,10 @@ class PromptIndexManager:
                 host_candidate_processing and not batched_group_search):
             raise ValueError("host candidate processing requires batched group search")
         self.host_candidate_processing = host_candidate_processing
+        if type(host_query_validation) is not bool or (
+                host_query_validation and not batched_group_search):
+            raise ValueError("host query validation requires batched group search")
+        self.host_query_validation = host_query_validation
         self._group_search_lock = threading.RLock()
 
         # Where this manager's copies live: the backend's declared device, so
@@ -1712,6 +1717,7 @@ class PromptIndexManager:
             scratch = f"prompt-index-search-group:{transfer_id}:{uuid.uuid4().hex[:8]}"
             placed = []
             new_cache_owners = []
+            used_host_queries = False
             failure = None
             try:
                 scratch_bytes = sum(
@@ -1719,15 +1725,23 @@ class PromptIndexManager:
                         len(rows[0][3]), rows[0][4])
                     + len(rows) * len(rows[0][3]) * rows[0][4] * 48
                     + 4 * ((index.count + 31) // 32) * 4
+                    + (len(rows) * len(rows[0][3]) * index.dim * 4
+                       if self.host_query_validation
+                       and all(row[3].device.type == "cpu" for row in rows) else 0)
                     for index, rows in prepared.values()
                 )
                 self._reserve(scratch, scratch_bytes)
                 results = [None] * len(requests)
                 for group, (index, rows) in prepared.items():
                     started = time.perf_counter() if timings is not None else 0.0
-                    q = torch.stack([row[3] for row in rows]).to(self.backend_device).contiguous()
+                    use_host_queries = self.host_query_validation and all(
+                        row[3].device.type == "cpu" for row in rows)
+                    q = torch.stack([row[3] for row in rows]).contiguous()
+                    if not use_host_queries:
+                        q = q.to(self.backend_device).contiguous()
                     if timings is not None:
-                        timings['query_place'] = timings.get('query_place', 0.0) + time.perf_counter() - started
+                        stage = "query_stack" if use_host_queries else "query_place"
+                        timings[stage] = timings.get(stage, 0.0) + time.perf_counter() - started
                     placed.append(q)
                     nqueries, top_k = len(rows[0][3]), rows[0][4]
                     cached = record.search_workspaces.get(group)
@@ -1765,7 +1779,12 @@ class PromptIndexManager:
                         new_cache_owners.remove(owner)
                     heads = tuple(row[0] for row in rows)
                     stages = {} if timings is not None else None
-                    native_rows, scores = workspace.search(q, heads=heads, timings=stages)
+                    if use_host_queries:
+                        native_rows, scores, q = workspace.search_host(q, heads=heads, timings=stages)
+                        placed.append(q)
+                        used_host_queries = True
+                    else:
+                        native_rows, scores = workspace.search(q, heads=heads, timings=stages)
                     if timings is not None:
                         for name, elapsed in stages.items():
                             timings[name] = timings.get(name, 0.0) + elapsed
@@ -1805,6 +1824,8 @@ class PromptIndexManager:
                         else "grouped_cagra_batched")
                     if self.host_candidate_processing:
                         metadata['path'] += '_host'
+                    if used_host_queries:
+                        metadata['path'] += '_hostq'
                 return tuple(results)
             except BaseException as exc:
                 failure = exc

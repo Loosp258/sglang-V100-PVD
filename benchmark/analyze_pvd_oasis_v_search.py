@@ -59,7 +59,10 @@ for arm, requests in summary['requests'].items():
         if comparison == 'v-latency':
             expected_path = 'grouped_cagra_partial_batched' + ('_host' if arm.startswith('opt') else '')
             assert all(row[0] == expected_path for row in steady), 'unexpected V search fallback/path'
-        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency') else (
+        if comparison == 'v-host-query':
+            expected_path = 'grouped_cagra_partial_batched_host' + ('_hostq' if arm.startswith('opt') else '')
+            assert all(row[0] == expected_path for row in steady), 'unexpected host Q search fallback/path'
+        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency', 'v-host-query') else (
             'overlap' if arm.startswith('overlap') else 'serial')
         mode_rows.setdefault(mode, []).extend(steady)
         selected.append(dict(case=request['case'], batches=len(steady),
