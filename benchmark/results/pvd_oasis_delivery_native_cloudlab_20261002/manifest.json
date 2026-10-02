@@ -1,0 +1,47 @@
+{
+  "configuration.json": {
+    "bytes": 454,
+    "sha256": "6e4b8715c5d3be1cf7412c9020bdd8767ee20964146e37b128cbf361e41b3c9e",
+    "normalization": "lf"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 65,
+    "sha256": "643172e4b03d89cb43c6a6b8b52d3c76707592286c93dc8569d0743f97e1308c",
+    "normalization": "lf"
+  },
+  "gate.tar.gz": {
+    "bytes": 377759,
+    "sha256": "2e1c11a8589ed12fc8f9c7d6e72a89f495118e14872020ec1eee93b909525c9f",
+    "normalization": "raw"
+  },
+  "gate_count_record.json": {
+    "bytes": 3182,
+    "sha256": "7cada1a61b9e5c82ab8eff68ceb64e7fc5d0c4633db219090c3ba53d372da298",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 522,
+    "sha256": "ca2774c666b568c554401d7ccd3bd393066ea722526173c02f03be9a0531cb87",
+    "normalization": "lf"
+  },
+  "native.json": {
+    "bytes": 25332,
+    "sha256": "02da83f14732f48dc13e0f69f3b86cfbac3dbf987ce4523d8357e6faf7c7ef42",
+    "normalization": "lf"
+  },
+  "records_unit.txt": {
+    "bytes": 668,
+    "sha256": "5b5858b579cb838cdb0bab518964c15722fd6a622925c72714b70bafa1a154f8",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 21649,
+    "sha256": "40949e12fddaae8f856e2bb3d5023dc25f304b4dac95f030bf7b6e1853553dd2",
+    "normalization": "lf"
+  },
+  "unit.txt": {
+    "bytes": 1241,
+    "sha256": "c4fe87d536c628834d3dd94e36a6fe9258dbfc37ef8d57ba1105cf46bc050023",
+    "normalization": "lf"
+  }
+}

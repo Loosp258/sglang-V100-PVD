@@ -1,0 +1,14 @@
+{
+  "plan": "7d5d262fd",
+  "combined_rpc": "6f5cab2ca",
+  "receive_slots": "9b8b5dc0c",
+  "evidence_tools": "f28b0f5ea",
+  "tag": "oasis_delivery_slots_gate01",
+  "bundle_sha256": "e004d72d10f4816d50ced8ded13755d17ed5ae30822f0b4dfa9dcd2479527e51",
+  "deployed_files": 55,
+  "local_v_d_sources_match": true,
+  "serving_sources_match_gate": true,
+  "live_working_tree_sources_used": false,
+  "archive_complete": true,
+  "scope": "CPU lifecycle regression and native local-session PUT acceptance; no serving latency claim"
+}

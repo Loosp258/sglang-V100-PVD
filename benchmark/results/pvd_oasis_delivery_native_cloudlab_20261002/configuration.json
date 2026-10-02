@@ -1,0 +1,18 @@
+{
+  "tag": "oasis_delivery_slots_gate01",
+  "mode": "slots",
+  "native_probe": "benchmark/pvd_oasis_receive_slots_native.py",
+  "native_arg": [
+    "--device",
+    "cuda:1",
+    "--current-device",
+    "cuda:0",
+    "--hostname",
+    "10.10.1.3",
+    "--rails",
+    "mlx5_0",
+    "mlx5_0",
+    "--output",
+    "/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002/artifacts/oasis_delivery_slots_gate01/native.json"
+  ]
+}
