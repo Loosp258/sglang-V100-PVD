@@ -27,11 +27,10 @@ Paper: https://arxiv.org/html/2608.08097v1, sections 4.2 and 4.4.
 
 ## Selector scope
 
-The paper performs head-wise block ranking against min/max K summaries on D.
-The existing experiment queries token-wise CAGRA on V. This distinction must
-stay explicit. The user has been asked whether alignment includes moving the
-selector; shared paired-forward and ownership work does not depend on that
-answer. Preserve the selected fast graph if V remains the selector.
+The user selected Decode-pipeline alignment with V/CAGRA and the current fast
+graph retained. The paper performs head-wise block ranking against min/max K
+summaries on D. This project continues querying token-wise CAGRA on V and must
+identify that selector adaptation explicitly. Do not replace CAGRA with Quest.
 
 ## Implementation order and evidence
 

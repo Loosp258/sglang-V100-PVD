@@ -166,9 +166,9 @@ Oasis-mode Decode to use the paper's shared actual/lookahead forward and
 per-layer prefetch/consumption. A complete-prefix target probe is not an Oasis
 implementation. Preserve exact actual-only commits, causal masking, bounded
 request-owned layer banks, cache-miss transfers and terminal drainage. The
-selector location is being clarified because this branch currently retains
-V-side CAGRA while the paper selects on D with block summaries. Continue the
-shared execution/ownership stages while awaiting that answer.
+user selected Decode-pipeline alignment while retaining V-side CAGRA and the
+current fast graph. Do not migrate selection to D-side block summaries. Keep
+the selector adaptation explicit in measurements and documentation.
 
 Work only on `codex/pvd-oasiskv` in its isolated worktree. Commit each completed
 stage. This branch first provides an explicit experimental P/V/D runner; it does

@@ -200,7 +200,11 @@ class Qwen2Attention(nn.Module):
             # Capture target-space Q after RoPE and before attention writes KV.
             # The collector is batch-owned; no hook lives on shared weights.
             forward_batch.pvd_query_capture.capture(self.attn.layer_id, positions, q)
-        attn_output = self.attn(q, k, v, forward_batch)
+        oasis = getattr(forward_batch, "pvd_oasis_context", None)
+        if oasis is not None:
+            attn_output = oasis.attention(self.attn.layer_id, q, k, v)
+        else:
+            attn_output = self.attn(q, k, v, forward_batch)
         if profile is not None:
             profile.mark(layer_id, "attention_return")
         output, _ = self.o_proj(attn_output)
@@ -402,6 +406,9 @@ class Qwen2Model(nn.Module):
                 forward_batch,
                 residual,
             )
+            oasis = getattr(forward_batch, "pvd_oasis_context", None)
+            if oasis is not None:
+                oasis.after_layer(i, hidden_states + residual)
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
                 {
