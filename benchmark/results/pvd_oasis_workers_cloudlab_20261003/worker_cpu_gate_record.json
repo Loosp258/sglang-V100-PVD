@@ -1,0 +1,25 @@
+{
+  "exit_code": 0,
+  "counts": {
+    "passed": 48,
+    "warning": 1
+  },
+  "exact_summary": "48 passed, 1 warning in 11.29s",
+  "record_file": "worker_cpu_gate.tar.gz:oasis_workers_gate01/unit.txt",
+  "source_files_match_deployment": 9,
+  "scope": {
+    "frozen_serving_commit": "9b8b5dc0c",
+    "tests": [
+      "test_pvd_oasis_attention.py",
+      "test_pvd_oasis_request.py",
+      "test_pvd_oasis_pipeline.py",
+      "test_pvd_oasis_serving.py",
+      "test_pvd_oasis_transport_io.py",
+      "test_pvd_oasis_receive_slot_records.py"
+    ],
+    "new_mirror_tests": false,
+    "test_scope": "existing CPU causal/lifecycle regressions; not native four-worker acceptance",
+    "gpu_used": false,
+    "ssh_used": false
+  }
+}

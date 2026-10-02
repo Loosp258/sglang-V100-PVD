@@ -766,3 +766,42 @@ benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
    waiting/client timing; preserve any negative result or failed gate. Keep
    the existing default and commit the completed fair evidence. Independent
    prior RPC/registration gains cannot be added to this new experiment.
+
+#### Two versus four background workers full-path pilot (2026-10-03)
+
+- Completed CloudLab base_a/opt_a/opt_b/base_b with all-role restarts, two
+  identical warmups per arm, two 2159-token Prompts and 16 actual output tokens.
+  Only workers=2/4 differs; graph, Q, retrieval and traffic caps, budgets and
+  delivery/source image remain fixed. Combined RPC, receive registration reuse,
+  HTTP reuse, Triton packing and direct P->D stay disabled on both arms.
+- Actual callback peaks are 2/4/4/2. Every request has 420 jobs, 840 searches
+  and 392 consumed steady callbacks. All eight formal Prompt/output identities
+  match. Every native delivery has exact row/byte proof and ACK; original MRs
+  and request owners retire. Candidate jitter changes payload by at most two
+  rows (0.040%) for one Prompt; do not claim byte-identical traffic across arms.
+- Arithmetic mean later-token D KV wait is 427.322->412.722 ms (-3.42%);
+  request cumulative wait median is 5901.056->5758.343 ms (-2.42%). Actual
+  client TPOT from 15 stream intervals is 499.343->509.332 ms (+2.00%);
+  the 14 later intervals are 531.238->541.488 ms (+1.93%). Client completion
+  median is 9.987313->10.211263 s (+2.24%). No end-to-end gain is demonstrated.
+- Mean consumed callback service rises 38.091->77.652 ms, while queue falls
+  492.415->458.177 ms and ready-before-consume rises 3.763%->32.015%.
+  Observed service/workers/steady-token is 533.278->543.563 ms; doubling
+  worker count did not preserve task service time. Callback occupancy includes
+  blocking HTTP/CUDA work and is not CPU/GPU utilization or a latency bound.
+- On each actual steady forward, total minus measured KV wait averages
+  101.919->125.673 ms. The 23.754 ms increase exceeds the 14.600 ms wait
+  decrease, leaving total forward 529.241->538.395 ms. This residual includes
+  concurrent pipeline work and synchronization; it does not isolate Q compute.
+  V steady batch wall/manager wait/candidate download also increase; native
+  search timing alone cannot identify the cause or explain end-to-end time.
+- Same-config client arm drift is -3.86% baseline and +10.18% optimized,
+  exceeding the aggregate client difference. Four requests/mode and two
+  Prompts cannot establish stable waiting gains or statistical significance.
+  Keep default workers=2 and do not add gains from independent earlier trials.
+- The existing 48-test worker/lifecycle CPU recheck and online cross-node
+  four-worker acceptance passed against the frozen serving image. These CPU
+  tests overlap the historical gate and are not extra unique coverage. No
+  real native failure injection, long Decode, TP2 or multi-request load was
+  performed. Evidence is in pvd_oasis_workers_cloudlab_20261003; owned={},
+  cleanup_errors=[] and all six GPUs returned to 0 MiB.

@@ -1,0 +1,87 @@
+{
+  "checkout_heads.json": {
+    "bytes": 156,
+    "sha256": "c12904484525069c365382eb831b07e38786f82c92a9bda1523cef99de258fe5",
+    "normalization": "lf"
+  },
+  "cleanup_errors.json": {
+    "bytes": 3,
+    "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 144,
+    "sha256": "a760a9755f38a175a50b34e749efa6f11f0f451a5fcefb5f6897c11643f34f3d",
+    "normalization": "lf"
+  },
+  "delivery_stage_summary.json": {
+    "bytes": 2934,
+    "sha256": "05818ac051e72ef201e2f9867b28216720532383e8e02a85e00c2db0ce38055d",
+    "normalization": "lf"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 96,
+    "sha256": "8809d0d0788cece7f34b84a54e9909181a0bd9b59fe62c3257df3f98bc5805fe",
+    "normalization": "lf"
+  },
+  "gate.tar.gz": {
+    "bytes": 379849,
+    "sha256": "71df03fe04e7280807cd95998cb49ece8713e82ce97b93e2aaee6e801e29b1a9",
+    "normalization": "raw"
+  },
+  "gate_count_record.json": {
+    "bytes": 3332,
+    "sha256": "5b5452d2a7bfccab7a3d8b19c414f9360c19df5df342ec5daaf607280e78650d",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 270,
+    "sha256": "4dbf6d98d058e554a86d798d5da61fd19c4a54f6cf7ff105cc51279ff7d48bb8",
+    "normalization": "lf"
+  },
+  "owned.json": {
+    "bytes": 3,
+    "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "normalization": "lf"
+  },
+  "raw.tar.gz": {
+    "bytes": 4259037,
+    "sha256": "5a4d0f11a769c99f0835f0dd1b1ca06d2789d4d19b38f788de3fb6cbf0d1788d",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 35410,
+    "sha256": "8c119286febe756adfabc1950fcf1a57b3ac198ad9e7a2e79e0d474789be4d8d",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 4903,
+    "sha256": "66aa18a955d6bab5517afbed6464a92358337ac51841b9839a78cabf7247c118",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 48931,
+    "sha256": "dc1dc54e869ce600fcd1166127b20a2c84e631e62b687863ec9550486df0e493",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9967,
+    "sha256": "941d729c7377f13d88bc39c4432d106375ddee4ef111dc4486d3f6dc27da5a16",
+    "normalization": "lf"
+  },
+  "worker_cpu_gate.tar.gz": {
+    "bytes": 4125,
+    "sha256": "9577e4d69f423bdea35a9b5082f942df7465050b898e818b0099c0eb22dc8ebe",
+    "normalization": "raw"
+  },
+  "worker_cpu_gate_record.json": {
+    "bytes": 725,
+    "sha256": "834d3cad091044271a138aafc368bddca996adfc417c0c4ed5b23c8489f4ef1f",
+    "normalization": "lf"
+  },
+  "worker_timing_summary.json": {
+    "bytes": 9543,
+    "sha256": "34dd74064fbe9844ef99a36e78ae24d18e0860a0f52b8ce624a56f0a3ff4b2b5",
+    "normalization": "lf"
+  }
+}
