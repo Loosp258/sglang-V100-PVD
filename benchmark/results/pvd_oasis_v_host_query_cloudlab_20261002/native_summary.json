@@ -1,0 +1,134 @@
+[
+  {
+    "rank": 0,
+    "fixture_sha256": "97eb92e92f181564aab78475265ab96e74c7037ca015b47a38b54f4831397f81",
+    "graph_sha256": "c155a9ae3ff7c92af899fc68e53841a7f6fbc789bea23c892fed370d63a078e1",
+    "all_native_ids_identical": false,
+    "original_query_shape": [
+      56,
+      2,
+      128
+    ],
+    "focus_layer": null,
+    "query_sha256": "879295d46b7251f579fe7662e7eb4e10f0356ceca26ebd598275fd7e80ee73fc",
+    "comparison": "host-query",
+    "native_pool": true,
+    "pool_bytes": 335544320,
+    "same_native_candidates_semantics_identical": true,
+    "host_query_snapshot_identical": true,
+    "native_live_after_close": 0,
+    "cached_bytes": 64064,
+    "stats": {
+      "baseline": {
+        "median_two_head_ms": 1.4724755310453475,
+        "mean_recall_union_top4": 0.9995748299319727,
+        "worst_recall_union_top4": 0.8571428571428571,
+        "stage_ms": {
+          "backend_enqueue": 0.00022095628082752228,
+          "candidate_download": 0.16560155199840665,
+          "candidate_mapping": 0.025672954507172108,
+          "finite_proof": 0.08857704233378172,
+          "host_materialize": 0.002825050614774227,
+          "identity_lease": 0.015349010936915874,
+          "manager_completion": 0.02751703141257167,
+          "manager_lock": 0.00040105078369379044,
+          "native_completion": 0.2827220014296472,
+          "native_scope": 0.01410703407600522,
+          "native_submit": 0.6318689556792378,
+          "query_place": 0.03981002373620868,
+          "score_restore": 0.0002899905666708946,
+          "workspace_lock": 0.0007509952411055565
+        }
+      },
+      "optimized": {
+        "median_two_head_ms": 1.4171815128065646,
+        "mean_recall_union_top4": 0.9991496598639455,
+        "worst_recall_union_top4": 0.8571428571428571,
+        "stage_ms": {
+          "backend_enqueue": 0.0002210726961493492,
+          "candidate_download": 0.16660342225804925,
+          "candidate_mapping": 0.02522749127820134,
+          "finite_proof": 0.015444005839526653,
+          "host_materialize": 0.002866028808057308,
+          "host_snapshot": 0.010890478733927011,
+          "identity_lease": 0.015414028894156218,
+          "manager_completion": 0.02827850403264165,
+          "manager_lock": 0.00039103906601667404,
+          "native_completion": 0.2832130412571132,
+          "native_scope": 0.012803997378796339,
+          "native_submit": 0.629864982329309,
+          "query_place": 0.03185501554980874,
+          "query_stack": 0.014316989108920097,
+          "score_restore": 0.00029103830456733704,
+          "workspace_lock": 0.000591040588915348
+        }
+      }
+    }
+  },
+  {
+    "rank": 1,
+    "fixture_sha256": "d52507acd8e71567429953872dca87fa1a018b54b687d609da3709e01d32f21c",
+    "graph_sha256": "b5e39048704152f9f6b6fad2e372e9a6f66616020a2a6db7c9064ca6850f25ff",
+    "all_native_ids_identical": true,
+    "original_query_shape": [
+      56,
+      2,
+      128
+    ],
+    "focus_layer": null,
+    "query_sha256": "37bff8b216e4b253d29a1c090805af81644c5caa512ed4f59dc257a1bbe8d702",
+    "comparison": "host-query",
+    "native_pool": true,
+    "pool_bytes": 335544320,
+    "same_native_candidates_semantics_identical": true,
+    "host_query_snapshot_identical": true,
+    "native_live_after_close": 0,
+    "cached_bytes": 64064,
+    "stats": {
+      "baseline": {
+        "median_two_head_ms": 1.4857800561003387,
+        "mean_recall_union_top4": 1.0,
+        "worst_recall_union_top4": 1.0,
+        "stage_ms": {
+          "backend_enqueue": 0.00022596213966608047,
+          "candidate_download": 0.1659920089878142,
+          "candidate_mapping": 0.02611899981275201,
+          "finite_proof": 0.08738954784348607,
+          "host_materialize": 0.0027850037440657616,
+          "identity_lease": 0.01579447416588664,
+          "manager_completion": 0.02813799073919654,
+          "manager_lock": 0.00040105078369379044,
+          "native_completion": 0.2921554842032492,
+          "native_scope": 0.01441204221919179,
+          "native_submit": 0.6311674369499087,
+          "query_place": 0.03996503073722124,
+          "score_restore": 0.00029010698199272156,
+          "workspace_lock": 0.0007709022611379623
+        }
+      },
+      "optimized": {
+        "median_two_head_ms": 1.42623798456043,
+        "mean_recall_union_top4": 1.0,
+        "worst_recall_union_top4": 1.0,
+        "stage_ms": {
+          "backend_enqueue": 0.00022095628082752228,
+          "candidate_download": 0.16560149379074574,
+          "candidate_mapping": 0.02560298889875412,
+          "finite_proof": 0.015384051948785782,
+          "host_materialize": 0.002795015461742878,
+          "host_snapshot": 0.011090422049164772,
+          "identity_lease": 0.01569895539432764,
+          "manager_completion": 0.029004528187215328,
+          "manager_lock": 0.00040105078369379044,
+          "native_completion": 0.2884024870581925,
+          "native_scope": 0.01298950519412756,
+          "native_submit": 0.6287630531005561,
+          "query_place": 0.03212055889889598,
+          "query_stack": 0.014763034414499998,
+          "score_restore": 0.00029103830456733704,
+          "workspace_lock": 0.0006009358912706375
+        }
+      }
+    }
+  }
+]

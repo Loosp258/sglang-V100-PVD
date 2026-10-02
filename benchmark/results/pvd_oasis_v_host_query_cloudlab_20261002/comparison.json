@@ -1,0 +1,11 @@
+{
+  "comparison": "v-host-query",
+  "arms": [
+    "base_a",
+    "opt_a",
+    "opt_b",
+    "base_b"
+  ],
+  "cases": "99401,99402",
+  "tokens": 16
+}

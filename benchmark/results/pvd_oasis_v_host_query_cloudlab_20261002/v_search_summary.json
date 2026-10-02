@@ -1,0 +1,333 @@
+{
+  "aggregate": {
+    "baseline": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.293,
+        "thread_wait": 0.252,
+        "query_tensor": 0.016,
+        "manager_total": 6.1165,
+        "manager_lock": 0.001,
+        "identity_lease": 0.04,
+        "query_place": 0.4905,
+        "workspace_lock": 0.003,
+        "finite_proof": 1.0735000000000001,
+        "native_scope": 0.041,
+        "native_submit": 0.975,
+        "native_completion": 0.993,
+        "candidate_download": 1.1415,
+        "candidate_mapping": 0.059,
+        "score_restore": 0.0,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.009,
+        "manager_completion": 0.1425,
+        "json_parse": 0.442,
+        "batch_total": 7.268,
+        "native_submit_and_completion": 1.9754999999999998,
+        "candidate_handling": 1.2085
+      }
+    },
+    "optimized": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host_hostq"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.302,
+        "thread_wait": 0.327,
+        "query_tensor": 0.016,
+        "manager_total": 6.105,
+        "manager_lock": 0.001,
+        "identity_lease": 0.041,
+        "query_stack": 0.241,
+        "workspace_lock": 0.002,
+        "host_snapshot": 0.1905,
+        "finite_proof": 0.034,
+        "query_place": 0.247,
+        "native_scope": 0.042,
+        "native_submit": 0.986,
+        "native_completion": 0.964,
+        "candidate_download": 1.34,
+        "candidate_mapping": 0.061,
+        "score_restore": 0.0,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.009,
+        "manager_completion": 0.18,
+        "json_parse": 0.448,
+        "batch_total": 7.482,
+        "native_submit_and_completion": 1.9749999999999999,
+        "candidate_handling": 1.412
+      }
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.298,
+          "thread_wait": 0.2775,
+          "query_tensor": 0.016,
+          "manager_total": 6.1434999999999995,
+          "manager_lock": 0.001,
+          "identity_lease": 0.041,
+          "query_place": 0.461,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.0835,
+          "native_scope": 0.042,
+          "native_submit": 0.978,
+          "native_completion": 0.995,
+          "candidate_download": 1.1804999999999999,
+          "candidate_mapping": 0.06,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.154,
+          "json_parse": 0.454,
+          "batch_total": 7.3309999999999995,
+          "native_submit_and_completion": 1.9714999999999998,
+          "candidate_handling": 1.2560000000000002
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.3025,
+          "thread_wait": 0.296,
+          "query_tensor": 0.016,
+          "manager_total": 6.356999999999999,
+          "manager_lock": 0.001,
+          "identity_lease": 0.043,
+          "query_place": 0.516,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.0685,
+          "native_scope": 0.045,
+          "native_submit": 0.9875,
+          "native_completion": 1.0135,
+          "candidate_download": 1.2325,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.001,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.149,
+          "json_parse": 0.4495,
+          "batch_total": 7.637499999999999,
+          "native_submit_and_completion": 2.003,
+          "candidate_handling": 1.3055
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host_hostq"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.288,
+          "thread_wait": 0.2675,
+          "query_tensor": 0.014,
+          "manager_total": 5.8085,
+          "manager_lock": 0.001,
+          "identity_lease": 0.035,
+          "query_stack": 0.2655,
+          "workspace_lock": 0.002,
+          "host_snapshot": 0.179,
+          "finite_proof": 0.032,
+          "query_place": 0.235,
+          "native_scope": 0.0375,
+          "native_submit": 0.9655,
+          "native_completion": 0.946,
+          "candidate_download": 1.1865,
+          "candidate_mapping": 0.057,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.008,
+          "manager_completion": 0.1675,
+          "json_parse": 0.393,
+          "batch_total": 7.036,
+          "native_submit_and_completion": 1.9409999999999998,
+          "candidate_handling": 1.255
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host_hostq"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.308,
+          "thread_wait": 0.387,
+          "query_tensor": 0.016,
+          "manager_total": 6.1865,
+          "manager_lock": 0.001,
+          "identity_lease": 0.041,
+          "query_stack": 0.2385,
+          "workspace_lock": 0.002,
+          "host_snapshot": 0.186,
+          "finite_proof": 0.034,
+          "query_place": 0.2395,
+          "native_scope": 0.044,
+          "native_submit": 0.99,
+          "native_completion": 0.966,
+          "candidate_download": 1.4235,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.01,
+          "manager_completion": 0.179,
+          "json_parse": 0.4625,
+          "batch_total": 7.678,
+          "native_submit_and_completion": 1.997,
+          "candidate_handling": 1.494
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host_hostq"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.306,
+          "thread_wait": 0.321,
+          "query_tensor": 0.016,
+          "manager_total": 6.2175,
+          "manager_lock": 0.001,
+          "identity_lease": 0.042,
+          "query_stack": 0.231,
+          "workspace_lock": 0.002,
+          "host_snapshot": 0.209,
+          "finite_proof": 0.034,
+          "query_place": 0.247,
+          "native_scope": 0.042,
+          "native_submit": 0.989,
+          "native_completion": 0.947,
+          "candidate_download": 1.3685,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.178,
+          "json_parse": 0.4655,
+          "batch_total": 7.5355,
+          "native_submit_and_completion": 1.9565,
+          "candidate_handling": 1.4480000000000002
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host_hostq"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.312,
+          "thread_wait": 0.329,
+          "query_tensor": 0.017,
+          "manager_total": 6.1795,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_stack": 0.234,
+          "workspace_lock": 0.002,
+          "host_snapshot": 0.1895,
+          "finite_proof": 0.034,
+          "query_place": 0.26,
+          "native_scope": 0.045,
+          "native_submit": 0.996,
+          "native_completion": 0.996,
+          "candidate_download": 1.355,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1925,
+          "json_parse": 0.449,
+          "batch_total": 7.6325,
+          "native_submit_and_completion": 2.001,
+          "candidate_handling": 1.4289999999999998
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.2805,
+          "thread_wait": 0.1735,
+          "query_tensor": 0.014,
+          "manager_total": 5.6655,
+          "manager_lock": 0.001,
+          "identity_lease": 0.033,
+          "query_place": 0.46950000000000003,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.053,
+          "native_scope": 0.031,
+          "native_submit": 0.946,
+          "native_completion": 0.959,
+          "candidate_download": 0.9575,
+          "candidate_mapping": 0.053,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.007,
+          "manager_completion": 0.1215,
+          "json_parse": 0.4045,
+          "batch_total": 6.638999999999999,
+          "native_submit_and_completion": 1.9140000000000001,
+          "candidate_handling": 1.0185
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.293,
+          "thread_wait": 0.25,
+          "query_tensor": 0.016,
+          "manager_total": 6.250500000000001,
+          "manager_lock": 0.001,
+          "identity_lease": 0.042,
+          "query_place": 0.513,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.0885,
+          "native_scope": 0.043,
+          "native_submit": 0.981,
+          "native_completion": 1.029,
+          "candidate_download": 1.198,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.149,
+          "json_parse": 0.456,
+          "batch_total": 7.4239999999999995,
+          "native_submit_and_completion": 2.0125,
+          "candidate_handling": 1.27
+        }
+      }
+    ]
+  },
+  "scope": "ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings"
+}

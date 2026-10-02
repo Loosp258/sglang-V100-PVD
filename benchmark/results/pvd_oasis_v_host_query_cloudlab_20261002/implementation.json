@@ -1,0 +1,11 @@
+{
+  "plan": "1c6c97707",
+  "implementation": "9869bfbbd",
+  "baseline": "c9512e4c0",
+  "negative_result": "keep host_query_validation disabled",
+  "api_limit": {
+    "cuvs_version": "25.10",
+    "c_api_blob": "b3c8a93a91c3d2b3b30f0f225b35237e385f5d91",
+    "cpp_dispatch_blob": "2e528cec7cd6a99d762e6ed8c889e17a3d356c41"
+  }
+}

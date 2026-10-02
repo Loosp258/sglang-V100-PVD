@@ -1,0 +1,137 @@
+{
+  "aggregate": {
+    "baseline": {
+      "search_rpc_count": 3136,
+      "search_ms": {
+        "prepare": 0.31,
+        "encode": 0.068,
+        "http": 11.427,
+        "validate": 0.049,
+        "total": 11.862
+      },
+      "service_outside_rpc_ms": 2.435554633848369,
+      "no_remote_miss_layers": 22,
+      "no_remote_miss_rpc_ms": 11.895925039425492,
+      "remote_miss_layers": 1546,
+      "remote_miss_rpc_ms": 34.15878699161112,
+      "worker_utilization": 0.9973885152552107,
+      "io": []
+    },
+    "optimized": {
+      "search_rpc_count": 3136,
+      "search_ms": {
+        "prepare": 0.31,
+        "encode": 0.067,
+        "http": 11.722,
+        "validate": 0.048,
+        "total": 12.151499999999999
+      },
+      "service_outside_rpc_ms": 2.446881029754877,
+      "no_remote_miss_layers": 22,
+      "no_remote_miss_rpc_ms": 12.015223561320454,
+      "remote_miss_layers": 1546,
+      "remote_miss_rpc_ms": 35.15305800829083,
+      "worker_utilization": 0.9978364807481539,
+      "io": []
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 14.642657864722423,
+        "worker_window_seconds": 7.341270809061825,
+        "worker_utilization": 0.9972835933696932,
+        "service_floor_seconds": 7.321328932361212,
+        "window_above_service_floor_seconds": 0.019941876700613648
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.583509831689298,
+        "worker_window_seconds": 7.808778899023309,
+        "worker_utilization": 0.9978198917655627,
+        "service_floor_seconds": 7.791754915844649,
+        "window_above_service_floor_seconds": 0.017023983178660274
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 14.263302686274983,
+        "worker_window_seconds": 7.154619745910168,
+        "worker_utilization": 0.996789710202865,
+        "service_floor_seconds": 7.1316513431374915,
+        "window_above_service_floor_seconds": 0.0229684027726762
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.79624813736882,
+        "worker_window_seconds": 7.9146039800252765,
+        "worker_utilization": 0.997917784467491,
+        "service_floor_seconds": 7.89812406868441,
+        "window_above_service_floor_seconds": 0.016479911340866238
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.099185939179733,
+        "worker_window_seconds": 7.566578599042259,
+        "worker_utilization": 0.9977551770288169,
+        "service_floor_seconds": 7.549592969589867,
+        "window_above_service_floor_seconds": 0.01698562945239246
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.92247914453037,
+        "worker_window_seconds": 7.977136648027226,
+        "worker_utilization": 0.9980071701835554,
+        "service_floor_seconds": 7.961239572265185,
+        "window_above_service_floor_seconds": 0.015897075762040913
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 13.917425810592249,
+        "worker_window_seconds": 6.982372459024191,
+        "worker_utilization": 0.9966115308418576,
+        "service_floor_seconds": 6.9587129052961245,
+        "window_above_service_floor_seconds": 0.023659553728066385
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.634796663420275,
+        "worker_window_seconds": 7.837042371043935,
+        "worker_utilization": 0.9974934371407282,
+        "service_floor_seconds": 7.817398331710137,
+        "window_above_service_floor_seconds": 0.01964403933379799
+      }
+    ]
+  },
+  "scope": "exact ordered completed RPC blocks; warmups/bootstrap excluded; miss groups differ and are not causal subtraction"
+}
