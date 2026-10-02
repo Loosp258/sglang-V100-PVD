@@ -628,3 +628,38 @@ kernels and15 V sourcehashes proved; all8 outputs match, no retries/fallback,
 and6GPUs0MiB. Default off; no magnitude reduction proved or cross-run gains
 added. Fullraw/native/runtimehealth evidence preserved in
 benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
+
+#### Independently test combined submission and receive registration reuse (2026-10-02)
+
+1. Keep fast four-head degree16/ring2 graph, pooled host candidates, GPU finite-Q
+   proof, Q counts, Top4, capacity32/max_new16, workers2, and graph-gated initial
+   P->V->D delivery. Fix reuse_io=false and Triton sparse packing=false.
+2. Add default-off combine_reserve_start: one shard RPC runs existing reserve
+   validation followed by existing start, returning identical terminal proof.
+   Publish destination locally before first await. Keep exact replay identity,
+   changed-destination rejection, fenced tombstones, cancellation/unknown pins,
+   and ACK only after successful cache installation.
+3. Add per-rank delivery times/counters: allocate/register, reserve/start or
+   combined, polls/count, cache copy, ACK, close/unregister. Existing RPC range
+   is not pure network; do not infer substage savings from unrelated medians.
+4. Test lost reply, identical/changed replay, cancellation before submission,
+   sticky UNKNOWN and exact destination byte proof. Deploy checked isolated
+   sources; run full ABBA changing only combine_reserve_start and preserve raw
+   IDs, traffic, stages, source hashes, cleanup. Commit each completed stage.
+5. Separately add default-off reuse_receive_slots with bounded request-owned
+   physical registrations. Each logical write keeps fresh delivery/generation,
+   exact manifest/extent, exclusive slot ownership and identical byte proof.
+   A slot can recycle only after remote fence, local copy and business ACK.
+   Unknown registration/write/local ordering/unregister quarantines slot and
+   retains physical owner and budget; no force-free or reuse on mere timeout.
+6. Preserve worker thread ownership of record operations and per-job CUDA
+   streams. Close physical registrations only after all lookahead workers join
+   and every slot is proven idle; retain request resources if any close fails.
+   Reserve bounded staging/native registration slots without widening traffic
+   caps. Test changed extents, successive generations/stale replies, busy slot,
+   partial final pages, failed/unknown operations and close races.
+7. Run native real-RDMA multi-round slot reuse plus independent live ABBA:
+   combine_reserve_start=false fixed, only reuse_receive_slots differs. Prove
+   actual register/unregister reductions, unchanged Q/selection/byte counts and
+   same outputs; report D waits and client time separately. No cross-run adding
+   of gains; defaults stay off until wider shape/load/failure gates pass.
