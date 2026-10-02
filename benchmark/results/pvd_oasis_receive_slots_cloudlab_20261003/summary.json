@@ -1,0 +1,1522 @@
+{
+  "aggregate": {
+    "baseline": {
+      "requests": 4,
+      "wall_seconds": 10.202355224464554,
+      "first_event_seconds": 2.5569530814536847,
+      "stream_seconds": 7.658002597978339,
+      "initialization_seconds": 1.4874485,
+      "first_decode_ms": 55.941,
+      "steady_forward_ms": 528.7460000000001,
+      "steady_layer_wait_sum_ms": 423.6,
+      "steady_foreground_except_wait_ms": 103.39950000000002,
+      "steady_draft_ms": 5.361,
+      "layer_rpc_ms": 35.262004006654024,
+      "layer_queue_ms": 508.97751905722544,
+      "layer_service_ms": 39.11845851689577,
+      "layer_consumer_wait_ms": 16.678285493981093,
+      "network_sparse_bytes_per_request": 2562816.0,
+      "startup_full_kv_bytes_per_request": 123805696.0,
+      "actual_forward_count": 60,
+      "layer_consume_count": 1568,
+      "steady_request_wait_sum_ms": 6133.969999999999
+    },
+    "optimized": {
+      "requests": 4,
+      "wall_seconds": 10.109605825564358,
+      "first_event_seconds": 2.579694477026351,
+      "stream_seconds": 7.5116568530211225,
+      "initialization_seconds": 1.4971735000000002,
+      "first_decode_ms": 41.655,
+      "steady_forward_ms": 523.3340000000001,
+      "steady_layer_wait_sum_ms": 424.259,
+      "steady_foreground_except_wait_ms": 92.32850000000002,
+      "steady_draft_ms": 4.215999999999999,
+      "layer_rpc_ms": 34.749095037113875,
+      "layer_queue_ms": 497.20668204827234,
+      "layer_service_ms": 37.90811647195369,
+      "layer_consumer_wait_ms": 14.545476471539587,
+      "network_sparse_bytes_per_request": 2562816.0,
+      "startup_full_kv_bytes_per_request": 123805696.0,
+      "actual_forward_count": 60,
+      "layer_consume_count": 1568,
+      "steady_request_wait_sum_ms": 6159.637500000001
+    }
+  },
+  "output_identity": {
+    "99401": {
+      "prompt_identical": true,
+      "output_ids_identical": true,
+      "text_identical": true,
+      "arms": [
+        "base_a",
+        "opt_a",
+        "opt_b",
+        "base_b"
+      ]
+    },
+    "99402": {
+      "prompt_identical": true,
+      "output_ids_identical": true,
+      "text_identical": true,
+      "arms": [
+        "base_a",
+        "opt_a",
+        "opt_b",
+        "base_b"
+      ]
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "rid": "d455f2fb833e458996f934ef82533e14",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 9.99809581588488,
+        "first_event_seconds": 2.569277126924135,
+        "stream_seconds": 7.428818688960746,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 45.072,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 550.937,
+            "wait_ms": 440.37
+          },
+          {
+            "step": 2,
+            "total_ms": 559.24,
+            "wait_ms": 448.126
+          },
+          {
+            "step": 3,
+            "total_ms": 525.219,
+            "wait_ms": 419.305
+          },
+          {
+            "step": 4,
+            "total_ms": 582.689,
+            "wait_ms": 488.041
+          },
+          {
+            "step": 5,
+            "total_ms": 544.481,
+            "wait_ms": 436.982
+          },
+          {
+            "step": 6,
+            "total_ms": 522.731,
+            "wait_ms": 420.621
+          },
+          {
+            "step": 7,
+            "total_ms": 532.978,
+            "wait_ms": 427.265
+          },
+          {
+            "step": 8,
+            "total_ms": 560.719,
+            "wait_ms": 460.193
+          },
+          {
+            "step": 9,
+            "total_ms": 500.958,
+            "wait_ms": 388.197
+          },
+          {
+            "step": 10,
+            "total_ms": 500.229,
+            "wait_ms": 396.286
+          },
+          {
+            "step": 11,
+            "total_ms": 447.322,
+            "wait_ms": 348.143
+          },
+          {
+            "step": 12,
+            "total_ms": 495.611,
+            "wait_ms": 397.249
+          },
+          {
+            "step": 13,
+            "total_ms": 511.432,
+            "wait_ms": 407.741
+          },
+          {
+            "step": 14,
+            "total_ms": 518.881,
+            "wait_ms": 428.935
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.498314,
+        "draft_ms": [
+          24.609,
+          11.906,
+          5.844,
+          10.564,
+          14.459,
+          4.637,
+          9.781,
+          2.618,
+          2.706,
+          11.368,
+          7.82,
+          7.259,
+          5.295,
+          2.899,
+          3.255
+        ],
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 770,
+          "physical_unregistrations": 770,
+          "median_stage_ms": {
+            "prepare": 1.0674410150386393,
+            "allocate": 0.01722254091873765,
+            "register": 0.907516514416784,
+            "reserve": 3.5418050247244537,
+            "start": 13.562156003899872,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.3668829924426973,
+            "close": 0.40460354648530483,
+            "cache_copy": 0.3023819881491363
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 5907.454,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 770,
+          "unregistration_count": 770,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 0,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "b4c406defe774ba3a1dde81bc31db047",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.408095059916377,
+        "first_event_seconds": 2.5829825919354334,
+        "stream_seconds": 7.825112467980944,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 58.217,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 520.759,
+            "wait_ms": 422.681
+          },
+          {
+            "step": 2,
+            "total_ms": 579.426,
+            "wait_ms": 495.34
+          },
+          {
+            "step": 3,
+            "total_ms": 573.151,
+            "wait_ms": 476.917
+          },
+          {
+            "step": 4,
+            "total_ms": 563.246,
+            "wait_ms": 453.837
+          },
+          {
+            "step": 5,
+            "total_ms": 548.645,
+            "wait_ms": 446.063
+          },
+          {
+            "step": 6,
+            "total_ms": 508.118,
+            "wait_ms": 387.05
+          },
+          {
+            "step": 7,
+            "total_ms": 545.913,
+            "wait_ms": 441.394
+          },
+          {
+            "step": 8,
+            "total_ms": 529.71,
+            "wait_ms": 426.955
+          },
+          {
+            "step": 9,
+            "total_ms": 514.294,
+            "wait_ms": 394.686
+          },
+          {
+            "step": 10,
+            "total_ms": 844.467,
+            "wait_ms": 746.392
+          },
+          {
+            "step": 11,
+            "total_ms": 472.886,
+            "wait_ms": 365.143
+          },
+          {
+            "step": 12,
+            "total_ms": 502.13,
+            "wait_ms": 405.656
+          },
+          {
+            "step": 13,
+            "total_ms": 524.99,
+            "wait_ms": 421.765
+          },
+          {
+            "step": 14,
+            "total_ms": 511.986,
+            "wait_ms": 422.873
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.503794,
+        "draft_ms": [
+          24.456,
+          3.082,
+          2.583,
+          2.676,
+          5.599,
+          9.205,
+          13.592,
+          2.841,
+          7.181,
+          13.259,
+          7.142,
+          6.832,
+          3.455,
+          3.435,
+          3.584
+        ],
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 772,
+          "physical_unregistrations": 772,
+          "median_stage_ms": {
+            "prepare": 1.0731920483522117,
+            "allocate": 0.01756800338625908,
+            "register": 0.9131970000453293,
+            "reserve": 3.470511524938047,
+            "start": 13.504838570952415,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.3987020356580615,
+            "close": 0.41051500011235476,
+            "cache_copy": 0.30658504692837596
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6306.7519999999995,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 772,
+          "unregistration_count": 772,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 1,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "rid": "f2f7d060a67049a0b128acc54b88afa3",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.140615015057847,
+        "first_event_seconds": 2.580759998993017,
+        "stream_seconds": 7.55985501606483,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 41.888,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 563.838,
+            "wait_ms": 466.08
+          },
+          {
+            "step": 2,
+            "total_ms": 589.713,
+            "wait_ms": 511.674
+          },
+          {
+            "step": 3,
+            "total_ms": 582.074,
+            "wait_ms": 480.638
+          },
+          {
+            "step": 4,
+            "total_ms": 598.307,
+            "wait_ms": 499.056
+          },
+          {
+            "step": 5,
+            "total_ms": 559.23,
+            "wait_ms": 462.881
+          },
+          {
+            "step": 6,
+            "total_ms": 517.441,
+            "wait_ms": 421.299
+          },
+          {
+            "step": 7,
+            "total_ms": 598.051,
+            "wait_ms": 494.584
+          },
+          {
+            "step": 8,
+            "total_ms": 584.35,
+            "wait_ms": 493.743
+          },
+          {
+            "step": 9,
+            "total_ms": 551.045,
+            "wait_ms": 462.963
+          },
+          {
+            "step": 10,
+            "total_ms": 493.74,
+            "wait_ms": 413.116
+          },
+          {
+            "step": 11,
+            "total_ms": 445.01,
+            "wait_ms": 355.141
+          },
+          {
+            "step": 12,
+            "total_ms": 484.711,
+            "wait_ms": 393.152
+          },
+          {
+            "step": 13,
+            "total_ms": 462.475,
+            "wait_ms": 370.36
+          },
+          {
+            "step": 14,
+            "total_ms": 460.665,
+            "wait_ms": 379.434
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.509343,
+        "draft_ms": [
+          24.587,
+          9.379,
+          4.021,
+          9.426,
+          2.587,
+          2.924,
+          4.443,
+          5.122,
+          2.972,
+          3.862,
+          2.837,
+          2.901,
+          3.314,
+          3.712,
+          2.504
+        ],
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 4,
+          "physical_unregistrations": 4,
+          "median_stage_ms": {
+            "prepare": 0.1121354871429503,
+            "allocate": 0.0,
+            "register": 0.0,
+            "reserve": 2.916547004133463,
+            "start": 16.40925998799503,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.2979080202057958,
+            "close": 0.015223980881273746,
+            "cache_copy": 0.3104565548710525
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6204.121,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 4,
+          "unregistration_count": 4,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 1,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": true,
+          "receive_pool": {
+            "slots_per_rank": 2,
+            "capacity_bytes": 32768,
+            "physical_slots": 0,
+            "physical_register_calls": 4,
+            "physical_registrations": 4,
+            "physical_release_calls": 4,
+            "physical_releases": 4,
+            "leased_slots": 0,
+            "unknown_slots": 0,
+            "physical_bytes": 0,
+            "acquired_leases": 770,
+            "returned_leases": 770,
+            "quarantine": null,
+            "closing": true,
+            "closed": true
+          },
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "61bdfaf1593b45d4a721938b886569e4",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 9.957427280023694,
+        "first_event_seconds": 2.493968590046279,
+        "stream_seconds": 7.463458689977415,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 37.906,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 529.982,
+            "wait_ms": 426.421
+          },
+          {
+            "step": 2,
+            "total_ms": 522.678,
+            "wait_ms": 420.462
+          },
+          {
+            "step": 3,
+            "total_ms": 531.302,
+            "wait_ms": 439.697
+          },
+          {
+            "step": 4,
+            "total_ms": 554.602,
+            "wait_ms": 467.464
+          },
+          {
+            "step": 5,
+            "total_ms": 894.778,
+            "wait_ms": 806.227
+          },
+          {
+            "step": 6,
+            "total_ms": 463.636,
+            "wait_ms": 377.861
+          },
+          {
+            "step": 7,
+            "total_ms": 501.876,
+            "wait_ms": 408.801
+          },
+          {
+            "step": 8,
+            "total_ms": 499.354,
+            "wait_ms": 409.22
+          },
+          {
+            "step": 9,
+            "total_ms": 487.562,
+            "wait_ms": 396.096
+          },
+          {
+            "step": 10,
+            "total_ms": 482.451,
+            "wait_ms": 390.282
+          },
+          {
+            "step": 11,
+            "total_ms": 439.314,
+            "wait_ms": 346.826
+          },
+          {
+            "step": 12,
+            "total_ms": 498.654,
+            "wait_ms": 412.581
+          },
+          {
+            "step": 13,
+            "total_ms": 504.126,
+            "wait_ms": 410.165
+          },
+          {
+            "step": 14,
+            "total_ms": 485.185,
+            "wait_ms": 403.051
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.417411,
+        "draft_ms": [
+          24.427,
+          4.411,
+          2.668,
+          2.82,
+          3.855,
+          2.598,
+          5.498,
+          5.463,
+          4.669,
+          3.061,
+          5.561,
+          4.627,
+          2.781,
+          7.594,
+          2.77
+        ],
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 4,
+          "physical_unregistrations": 4,
+          "median_stage_ms": {
+            "prepare": 0.11100800475105643,
+            "allocate": 0.0,
+            "register": 0.0,
+            "reserve": 2.822661539539695,
+            "start": 14.866523037198931,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.1457375367172062,
+            "close": 0.014597026165574789,
+            "cache_copy": 0.31571200815960765
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6115.154,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 4,
+          "unregistration_count": 4,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 2,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": true,
+          "receive_pool": {
+            "slots_per_rank": 2,
+            "capacity_bytes": 32768,
+            "physical_slots": 0,
+            "physical_register_calls": 4,
+            "physical_registrations": 4,
+            "physical_release_calls": 4,
+            "physical_releases": 4,
+            "leased_slots": 0,
+            "unknown_slots": 0,
+            "physical_bytes": 0,
+            "acquired_leases": 772,
+            "returned_leases": 772,
+            "quarantine": null,
+            "closing": true,
+            "closed": true
+          },
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "rid": "b4cc75fbe5db407a876ab968b5a2d4b2",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.404713556054048,
+        "first_event_seconds": 2.578628955059685,
+        "stream_seconds": 7.826084600994363,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 41.422,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 591.8,
+            "wait_ms": 487.069
+          },
+          {
+            "step": 2,
+            "total_ms": 616.281,
+            "wait_ms": 509.355
+          },
+          {
+            "step": 3,
+            "total_ms": 568.048,
+            "wait_ms": 466.038
+          },
+          {
+            "step": 4,
+            "total_ms": 631.984,
+            "wait_ms": 529.032
+          },
+          {
+            "step": 5,
+            "total_ms": 586.296,
+            "wait_ms": 496.95
+          },
+          {
+            "step": 6,
+            "total_ms": 523.99,
+            "wait_ms": 422.097
+          },
+          {
+            "step": 7,
+            "total_ms": 577.379,
+            "wait_ms": 483.092
+          },
+          {
+            "step": 8,
+            "total_ms": 549.049,
+            "wait_ms": 455.398
+          },
+          {
+            "step": 9,
+            "total_ms": 514.724,
+            "wait_ms": 419.059
+          },
+          {
+            "step": 10,
+            "total_ms": 526.993,
+            "wait_ms": 431.817
+          },
+          {
+            "step": 11,
+            "total_ms": 469.338,
+            "wait_ms": 381.968
+          },
+          {
+            "step": 12,
+            "total_ms": 515.392,
+            "wait_ms": 427.258
+          },
+          {
+            "step": 13,
+            "total_ms": 545.503,
+            "wait_ms": 449.359
+          },
+          {
+            "step": 14,
+            "total_ms": 538.881,
+            "wait_ms": 451.767
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.485004,
+        "draft_ms": [
+          24.326,
+          3.478,
+          2.571,
+          5.297,
+          3.14,
+          3.334,
+          4.616,
+          2.89,
+          3.471,
+          8.561,
+          5.271,
+          9.744,
+          3.855,
+          2.854,
+          3.528
+        ],
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 4,
+          "physical_unregistrations": 4,
+          "median_stage_ms": {
+            "prepare": 0.11204998008906841,
+            "allocate": 0.0,
+            "register": 0.0,
+            "reserve": 3.0792169854976237,
+            "start": 17.724911507684737,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.1625345214270055,
+            "close": 0.014898017980158329,
+            "cache_copy": 0.32564043067395687
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6410.259,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 4,
+          "unregistration_count": 4,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 0,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": true,
+          "receive_pool": {
+            "slots_per_rank": 2,
+            "capacity_bytes": 32768,
+            "physical_slots": 0,
+            "physical_register_calls": 4,
+            "physical_registrations": 4,
+            "physical_release_calls": 4,
+            "physical_releases": 4,
+            "leased_slots": 0,
+            "unknown_slots": 0,
+            "physical_bytes": 0,
+            "acquired_leases": 770,
+            "returned_leases": 770,
+            "quarantine": null,
+            "closing": true,
+            "closed": true
+          },
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "93e09d1ea3ef444486b0aa3ac076b4b4",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.07859663607087,
+        "first_event_seconds": 2.6305045019835234,
+        "stream_seconds": 7.4480921340873465,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 48.19,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 528.851,
+            "wait_ms": 447.126
+          },
+          {
+            "step": 2,
+            "total_ms": 630.53,
+            "wait_ms": 535.742
+          },
+          {
+            "step": 3,
+            "total_ms": 592.824,
+            "wait_ms": 491.247
+          },
+          {
+            "step": 4,
+            "total_ms": 622.419,
+            "wait_ms": 531.738
+          },
+          {
+            "step": 5,
+            "total_ms": 900.656,
+            "wait_ms": 814.578
+          },
+          {
+            "step": 6,
+            "total_ms": 468.738,
+            "wait_ms": 378.073
+          },
+          {
+            "step": 7,
+            "total_ms": 459.68,
+            "wait_ms": 356.625
+          },
+          {
+            "step": 8,
+            "total_ms": 477.463,
+            "wait_ms": 380.555
+          },
+          {
+            "step": 9,
+            "total_ms": 462.197,
+            "wait_ms": 370.122
+          },
+          {
+            "step": 10,
+            "total_ms": 471.28,
+            "wait_ms": 384.793
+          },
+          {
+            "step": 11,
+            "total_ms": 402.59,
+            "wait_ms": 302.663
+          },
+          {
+            "step": 12,
+            "total_ms": 441.633,
+            "wait_ms": 341.119
+          },
+          {
+            "step": 13,
+            "total_ms": 472.469,
+            "wait_ms": 384.633
+          },
+          {
+            "step": 14,
+            "total_ms": 439.996,
+            "wait_ms": 345.548
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.537078,
+        "draft_ms": [
+          24.458,
+          7.773,
+          5.694,
+          2.933,
+          5.057,
+          9.026,
+          3.354,
+          4.627,
+          7.22,
+          6.128,
+          4.707,
+          10.094,
+          4.867,
+          6.041,
+          10.14
+        ],
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 4,
+          "physical_unregistrations": 4,
+          "median_stage_ms": {
+            "prepare": 0.10843848576769233,
+            "allocate": 0.0,
+            "register": 0.0,
+            "reserve": 2.9198434785939753,
+            "start": 14.654595928732306,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.2110105017200112,
+            "close": 0.014135963283479214,
+            "cache_copy": 0.3128660027869046
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6064.562,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 4,
+          "unregistration_count": 4,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 3,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": true,
+          "receive_pool": {
+            "slots_per_rank": 2,
+            "capacity_bytes": 32768,
+            "physical_slots": 0,
+            "physical_register_calls": 4,
+            "physical_registrations": 4,
+            "physical_release_calls": 4,
+            "physical_releases": 4,
+            "leased_slots": 0,
+            "unknown_slots": 0,
+            "physical_bytes": 0,
+            "acquired_leases": 772,
+            "returned_leases": 772,
+            "quarantine": null,
+            "closing": true,
+            "closed": true
+          },
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "rid": "cfccf6180b2c4012b74dc280d63b6731",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.041850736015476,
+        "first_event_seconds": 2.5446290359832346,
+        "stream_seconds": 7.497221700032242,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 53.665,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 542.64,
+            "wait_ms": 448.57
+          },
+          {
+            "step": 2,
+            "total_ms": 586.926,
+            "wait_ms": 503.72
+          },
+          {
+            "step": 3,
+            "total_ms": 587.764,
+            "wait_ms": 498.915
+          },
+          {
+            "step": 4,
+            "total_ms": 568.083,
+            "wait_ms": 468.649
+          },
+          {
+            "step": 5,
+            "total_ms": 537.825,
+            "wait_ms": 431.779
+          },
+          {
+            "step": 6,
+            "total_ms": 528.864,
+            "wait_ms": 424.327
+          },
+          {
+            "step": 7,
+            "total_ms": 542.686,
+            "wait_ms": 449.278
+          },
+          {
+            "step": 8,
+            "total_ms": 544.24,
+            "wait_ms": 447.953
+          },
+          {
+            "step": 9,
+            "total_ms": 508.956,
+            "wait_ms": 401.747
+          },
+          {
+            "step": 10,
+            "total_ms": 498.028,
+            "wait_ms": 401.877
+          },
+          {
+            "step": 11,
+            "total_ms": 446.196,
+            "wait_ms": 349.786
+          },
+          {
+            "step": 12,
+            "total_ms": 495.023,
+            "wait_ms": 388.051
+          },
+          {
+            "step": 13,
+            "total_ms": 520.615,
+            "wait_ms": 410.91
+          },
+          {
+            "step": 14,
+            "total_ms": 506.974,
+            "wait_ms": 400.371
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.476583,
+        "draft_ms": [
+          30.544,
+          6.672,
+          2.904,
+          2.578,
+          11.2,
+          7.562,
+          3.201,
+          2.511,
+          2.889,
+          3.266,
+          2.576,
+          6.449,
+          5.427,
+          7.887,
+          3.396
+        ],
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 770,
+          "physical_unregistrations": 770,
+          "median_stage_ms": {
+            "prepare": 1.066248514689505,
+            "allocate": 0.01732748933136463,
+            "register": 0.9142790222540498,
+            "reserve": 3.384133509825915,
+            "start": 13.60856945393607,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.3772219535894692,
+            "close": 0.4120274679735303,
+            "cache_copy": 0.29406597604975104
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6025.933,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 770,
+          "unregistration_count": 770,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 0,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "1dc7dce723894557ab1e50f794ac9e7c",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.362859712913632,
+        "first_event_seconds": 2.544076216989197,
+        "stream_seconds": 7.818783495924436,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 61.136,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 529.841,
+            "wait_ms": 435.552
+          },
+          {
+            "step": 2,
+            "total_ms": 586.984,
+            "wait_ms": 496.573
+          },
+          {
+            "step": 3,
+            "total_ms": 569.793,
+            "wait_ms": 470.682
+          },
+          {
+            "step": 4,
+            "total_ms": 572.94,
+            "wait_ms": 461.724
+          },
+          {
+            "step": 5,
+            "total_ms": 541.178,
+            "wait_ms": 426.184
+          },
+          {
+            "step": 6,
+            "total_ms": 504.834,
+            "wait_ms": 391.449
+          },
+          {
+            "step": 7,
+            "total_ms": 533.144,
+            "wait_ms": 418.803
+          },
+          {
+            "step": 8,
+            "total_ms": 528.628,
+            "wait_ms": 409.345
+          },
+          {
+            "step": 9,
+            "total_ms": 511.785,
+            "wait_ms": 400.902
+          },
+          {
+            "step": 10,
+            "total_ms": 867.803,
+            "wait_ms": 771.754
+          },
+          {
+            "step": 11,
+            "total_ms": 452.864,
+            "wait_ms": 336.848
+          },
+          {
+            "step": 12,
+            "total_ms": 490.212,
+            "wait_ms": 386.638
+          },
+          {
+            "step": 13,
+            "total_ms": 521.886,
+            "wait_ms": 417.262
+          },
+          {
+            "step": 14,
+            "total_ms": 515.3,
+            "wait_ms": 418.291
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.461518,
+        "draft_ms": [
+          24.668,
+          2.726,
+          2.577,
+          9.337,
+          3.267,
+          5.71,
+          3.24,
+          6.255,
+          6.515,
+          6.904,
+          3.487,
+          3.889,
+          4.308,
+          7.454,
+          6.424
+        ],
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 772,
+          "physical_unregistrations": 772,
+          "median_stage_ms": {
+            "prepare": 1.0846179793588817,
+            "allocate": 0.018184015061706305,
+            "register": 0.922884966712445,
+            "reserve": 3.4680109820328653,
+            "start": 13.462004950270057,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.4263439807109535,
+            "close": 0.4141920362599194,
+            "cache_copy": 0.2930794726125896
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "steady_wait_sum_ms": 6242.007,
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 772,
+          "unregistration_count": 772,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 2,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ]
+  },
+  "comparison_scope": "live overlapped paired with identical fast V search, per-job HTTP and separate reserve/start; per-delivery vs request-owned physical receive registrations; full initial KV retained",
+  "full_trace_location": "raw.tar.gz: oasis_delivery_slots_abba01/summary.json and *_d.log"
+}

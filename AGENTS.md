@@ -709,3 +709,28 @@ benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
   gate, source identities, failed prelaunch, zero-GPU cleanup and portable
   evidence are in pvd_oasis_combined_delivery_cloudlab_20261002. Registration
   reuse is being tested separately; independent effects cannot be added.
+
+#### Receive registration reuse full-path pilot (2026-10-03)
+
+- Completed independent CloudLab base_a/opt_a/opt_b/base_b on the same two
+  2159-token Prompts and 16 outputs, with full role restarts and two warmups
+  per arm. Only reuse_receive_slots differs; combine_reserve_start=false,
+  HTTP reuse=false, GPU finite-Q proof and Triton packing=false stay fixed.
+  All eight actual outputs match; query counts, graph and traffic caps stay
+  fixed. Initial graph-gated P->V->D KV remains charged to the client.
+- Actual physical registrations and retirements fall from 3084 to 16 across
+  four requests/mode (four per optimized request, -99.48%). Every logical
+  delivery retains fresh generation/exact bytes; all leases returned, original
+  MRs unregistered and pool budgets zero. Steady per-rank prepare median
+  1.072->0.111 ms, physical register 0.913->0 ms, close 0.410->0.015 ms.
+- Client median 10.202355->10.109606 s (-0.91%), while request cumulative
+  steady D KV wait 6133.970->6159.638 ms (+0.42%) and per-step wait median
+  423.600->424.259 ms. This does not show reduced D waiting. Client change
+  is smaller than the +1.92% optimized arm drift; no stable end-to-end gain
+  or latency magnitude reduction is claimed. Independent gains cannot be added.
+- Full source/native/cross-node evidence, actual calls, all eight outputs and
+  cleanup are preserved in pvd_oasis_receive_slots_cloudlab_20261003. Formal
+  date is derived from the first request timestamp in UTC+8. Owned services
+  drained, cleanup_errors=[] and all six GPUs are zero. Options stay default
+  off pending broader shapes, load and failure gates. Both requested independent
+  fixed-cost experiments are complete and their local reductions are measured.

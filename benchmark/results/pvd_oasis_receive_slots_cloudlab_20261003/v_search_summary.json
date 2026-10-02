@@ -1,0 +1,323 @@
+{
+  "aggregate": {
+    "baseline": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.306,
+        "thread_wait": 0.302,
+        "query_tensor": 0.017,
+        "manager_total": 6.3665,
+        "manager_lock": 0.001,
+        "identity_lease": 0.043,
+        "query_place": 0.4795,
+        "workspace_lock": 0.003,
+        "finite_proof": 1.108,
+        "native_scope": 0.044,
+        "native_submit": 0.9864999999999999,
+        "native_completion": 1.019,
+        "candidate_download": 1.225,
+        "candidate_mapping": 0.061,
+        "score_restore": 0.0,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.009,
+        "manager_completion": 0.168,
+        "json_parse": 0.459,
+        "batch_total": 7.658,
+        "native_submit_and_completion": 2.009,
+        "candidate_handling": 1.2935
+      }
+    },
+    "optimized": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.289,
+        "thread_wait": 0.232,
+        "query_tensor": 0.016,
+        "manager_total": 6.5225,
+        "manager_lock": 0.001,
+        "identity_lease": 0.04,
+        "query_place": 0.4575,
+        "workspace_lock": 0.002,
+        "finite_proof": 1.111,
+        "native_scope": 0.041,
+        "native_submit": 0.977,
+        "native_completion": 0.997,
+        "candidate_download": 1.422,
+        "candidate_mapping": 0.06,
+        "score_restore": 0.0,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.009,
+        "manager_completion": 0.17,
+        "json_parse": 0.483,
+        "batch_total": 7.778499999999999,
+        "native_submit_and_completion": 1.983,
+        "candidate_handling": 1.492
+      }
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.298,
+          "thread_wait": 0.29,
+          "query_tensor": 0.017,
+          "manager_total": 6.2305,
+          "manager_lock": 0.001,
+          "identity_lease": 0.042,
+          "query_place": 0.4395,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.022,
+          "native_scope": 0.043,
+          "native_submit": 0.981,
+          "native_completion": 1.0445,
+          "candidate_download": 1.1695,
+          "candidate_mapping": 0.06,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1705,
+          "json_parse": 0.4625,
+          "batch_total": 7.452,
+          "native_submit_and_completion": 2.029,
+          "candidate_handling": 1.234
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.314,
+          "thread_wait": 0.298,
+          "query_tensor": 0.017,
+          "manager_total": 6.3,
+          "manager_lock": 0.001,
+          "identity_lease": 0.042,
+          "query_place": 0.5055000000000001,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.116,
+          "native_scope": 0.044,
+          "native_submit": 0.987,
+          "native_completion": 0.999,
+          "candidate_download": 1.2135,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1615,
+          "json_parse": 0.4675,
+          "batch_total": 7.648,
+          "native_submit_and_completion": 2.0045,
+          "candidate_handling": 1.2839999999999998
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.298,
+          "thread_wait": 0.2325,
+          "query_tensor": 0.016,
+          "manager_total": 6.730499999999999,
+          "manager_lock": 0.001,
+          "identity_lease": 0.043,
+          "query_place": 0.5445,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.124,
+          "native_scope": 0.045,
+          "native_submit": 0.993,
+          "native_completion": 0.9975,
+          "candidate_download": 1.4215,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.001,
+          "host_materialize": 0.009,
+          "manager_completion": 0.195,
+          "json_parse": 0.4925,
+          "batch_total": 8.0465,
+          "native_submit_and_completion": 2.0045,
+          "candidate_handling": 1.4935
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.287,
+          "thread_wait": 0.224,
+          "query_tensor": 0.015,
+          "manager_total": 6.355499999999999,
+          "manager_lock": 0.001,
+          "identity_lease": 0.037,
+          "query_place": 0.4435,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.0545,
+          "native_scope": 0.036,
+          "native_submit": 0.961,
+          "native_completion": 0.9755,
+          "candidate_download": 1.4095,
+          "candidate_mapping": 0.057,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.008,
+          "manager_completion": 0.1565,
+          "json_parse": 0.462,
+          "batch_total": 7.602,
+          "native_submit_and_completion": 1.952,
+          "candidate_handling": 1.4794999999999998
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.2935,
+          "thread_wait": 0.28,
+          "query_tensor": 0.017,
+          "manager_total": 7.0115,
+          "manager_lock": 0.001,
+          "identity_lease": 0.043,
+          "query_place": 0.4135,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.1804999999999999,
+          "native_scope": 0.046,
+          "native_submit": 0.991,
+          "native_completion": 1.023,
+          "candidate_download": 1.607,
+          "candidate_mapping": 0.063,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.01,
+          "manager_completion": 0.2005,
+          "json_parse": 0.514,
+          "batch_total": 8.3275,
+          "native_submit_and_completion": 2.0295,
+          "candidate_handling": 1.6825
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.281,
+          "thread_wait": 0.1865,
+          "query_tensor": 0.014,
+          "manager_total": 6.1175,
+          "manager_lock": 0.001,
+          "identity_lease": 0.036,
+          "query_place": 0.4375,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.0925,
+          "native_scope": 0.034,
+          "native_submit": 0.959,
+          "native_completion": 0.989,
+          "candidate_download": 1.3090000000000002,
+          "candidate_mapping": 0.057,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.008,
+          "manager_completion": 0.1455,
+          "json_parse": 0.4525,
+          "batch_total": 7.3155,
+          "native_submit_and_completion": 1.9545,
+          "candidate_handling": 1.379
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.316,
+          "thread_wait": 0.318,
+          "query_tensor": 0.016,
+          "manager_total": 6.4510000000000005,
+          "manager_lock": 0.001,
+          "identity_lease": 0.043,
+          "query_place": 0.5075000000000001,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.113,
+          "native_scope": 0.045,
+          "native_submit": 0.989,
+          "native_completion": 0.9724999999999999,
+          "candidate_download": 1.252,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.01,
+          "manager_completion": 0.17149999999999999,
+          "json_parse": 0.463,
+          "batch_total": 7.755000000000001,
+          "native_submit_and_completion": 1.9745,
+          "candidate_handling": 1.3155
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.3005,
+          "thread_wait": 0.3015,
+          "query_tensor": 0.017,
+          "manager_total": 6.473000000000001,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_place": 0.487,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.148,
+          "native_scope": 0.045,
+          "native_submit": 0.987,
+          "native_completion": 1.042,
+          "candidate_download": 1.2725,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.174,
+          "json_parse": 0.446,
+          "batch_total": 7.7555,
+          "native_submit_and_completion": 2.0195,
+          "candidate_handling": 1.3445
+        }
+      }
+    ]
+  },
+  "scope": "ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings"
+}

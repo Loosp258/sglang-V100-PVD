@@ -1,0 +1,121 @@
+{
+  "unit": {
+    "record_file": "gate.tar.gz:oasis_delivery_slots_gate01/unit.txt",
+    "exit_code": 0,
+    "counts": {
+      "passed": 512,
+      "skipped": 4,
+      "warning": 1
+    },
+    "exact_summary": "512 passed, 4 skipped, 1 warning in 8.13s",
+    "seconds": 8.13
+  },
+  "records_unit": {
+    "record_file": "gate.tar.gz:oasis_delivery_slots_gate01/records_unit.txt",
+    "exit_code": 0,
+    "counts": {
+      "passed": 9,
+      "warning": 1
+    },
+    "exact_summary": "9 passed, 1 warning in 2.14s",
+    "seconds": 2.14
+  },
+  "native_count_record_file": "gate.tar.gz:oasis_delivery_slots_gate01/native.json",
+  "native_full_observations_saved": true,
+  "native": {
+    "status": "passed",
+    "transport": "mooncake_local_session",
+    "device": "cuda:1",
+    "current_device": "cuda:0",
+    "exact_byte_cases": 48,
+    "two_executor_pools": true,
+    "bootstrap_and_decode_thread_ids_reusable": true,
+    "rows": [
+      1,
+      2,
+      8,
+      16,
+      32,
+      64
+    ],
+    "before_close": {
+      "slots_per_rank": 2,
+      "capacity_bytes": 32768,
+      "physical_slots": 4,
+      "physical_register_calls": 4,
+      "physical_registrations": 4,
+      "physical_release_calls": 0,
+      "physical_releases": 0,
+      "leased_slots": 0,
+      "unknown_slots": 0,
+      "physical_bytes": 131072,
+      "acquired_leases": 48,
+      "returned_leases": 48,
+      "quarantine": null,
+      "closing": false,
+      "closed": false
+    },
+    "after_close": {
+      "slots_per_rank": 2,
+      "capacity_bytes": 32768,
+      "physical_slots": 0,
+      "physical_register_calls": 4,
+      "physical_registrations": 4,
+      "physical_release_calls": 4,
+      "physical_releases": 4,
+      "leased_slots": 0,
+      "unknown_slots": 0,
+      "physical_bytes": 0,
+      "acquired_leases": 48,
+      "returned_leases": 48,
+      "quarantine": null,
+      "closing": true,
+      "closed": true
+    },
+    "transfer_budget": {
+      "staging_bytes": 8388608,
+      "max_inflight": 16,
+      "used_staging_bytes": 0,
+      "used_inflight": 0,
+      "reservations": 0
+    },
+    "receive_health": {
+      "backend": "rail_mapped_receive",
+      "healthy": true,
+      "rails": {
+        "mlx5_0": {
+          "backend": "mooncake",
+          "healthy": true,
+          "registration_unknown_reason": null,
+          "rail": "mlx5_0",
+          "session_id": "10.10.1.3:15949",
+          "registered_regions": 0,
+          "metadata_policy": "fresh",
+          "metadata_policy_verification": "version-pinned-pre-init",
+          "mooncake_version": "0.3.13.post1",
+          "lifecycle": {
+            "staging_bytes": 8388608,
+            "max_inflight": 16,
+            "used_staging_bytes": 0,
+            "used_inflight": 0,
+            "reservations": 0,
+            "tracked_transfers": 0,
+            "unknown_transfers": 0,
+            "quarantined": false,
+            "quarantine_reason": null
+          },
+          "submit_timing": {
+            "cuda_sync_calls": 49,
+            "cuda_sync_seconds": 0.0007779233856126666,
+            "native_submit_calls": 49,
+            "native_submit_seconds": 0.0008910627802833915,
+            "batch_submit_calls": 0,
+            "batch_submit_seconds": 0.0
+          }
+        }
+      },
+      "registered_destinations": 0,
+      "quarantined_collisions": 0
+    }
+  }
+}

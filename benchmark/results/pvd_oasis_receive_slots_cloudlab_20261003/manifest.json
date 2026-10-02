@@ -1,0 +1,72 @@
+{
+  "checkout_heads.json": {
+    "bytes": 156,
+    "sha256": "da65806ad25d5feb658adde8b423d4be07ee52733ddd7db51fc6a1139aa7d0ad",
+    "normalization": "lf"
+  },
+  "cleanup_errors.json": {
+    "bytes": 3,
+    "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 142,
+    "sha256": "45a0ec8dd109c4ecf4c0ae9cf7a685aca9b3505ff76e59b9620c5be877625fd5",
+    "normalization": "lf"
+  },
+  "delivery_stage_summary.json": {
+    "bytes": 2914,
+    "sha256": "2a351da1ac683d0cfa97e1b088aaf00b294c4d1e8f9349ac051afeb9f8763fde",
+    "normalization": "lf"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 96,
+    "sha256": "8809d0d0788cece7f34b84a54e9909181a0bd9b59fe62c3257df3f98bc5805fe",
+    "normalization": "lf"
+  },
+  "gate.tar.gz": {
+    "bytes": 379849,
+    "sha256": "972ea1f744df69f59ec833f14dedebfeb0762860ec4021f276a52b1a15244018",
+    "normalization": "raw"
+  },
+  "gate_count_record.json": {
+    "bytes": 3332,
+    "sha256": "5b5452d2a7bfccab7a3d8b19c414f9360c19df5df342ec5daaf607280e78650d",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 270,
+    "sha256": "4dbf6d98d058e554a86d798d5da61fd19c4a54f6cf7ff105cc51279ff7d48bb8",
+    "normalization": "lf"
+  },
+  "owned.json": {
+    "bytes": 3,
+    "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "normalization": "lf"
+  },
+  "raw.tar.gz": {
+    "bytes": 4004576,
+    "sha256": "ebcad20322941e37b9f474b730460cb04c8576540861e9572a092a66fe7a7857",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 32888,
+    "sha256": "7577b093499327786a1fb544c790a62339e1b98925903b7ad3244561a613cd6a",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 4903,
+    "sha256": "66aa18a955d6bab5517afbed6464a92358337ac51841b9839a78cabf7247c118",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 40618,
+    "sha256": "9ebdb281b7f61f474c50ad11a92102d38b4d69181947d877193202c47aa4a5ab",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9907,
+    "sha256": "d6be2a09e0b39eac677043d0fa023c0c2d5104d1a3da827e97708a6d0591d686",
+    "normalization": "lf"
+  }
+}
