@@ -15,8 +15,9 @@ import subprocess
 import tarfile
 import time
 
+from pvd_oasis_delivery_validation import DELIVERY_COMPARISONS, comparison_workers
+
 ROOT = Path(__file__).resolve().parents[1]
-DELIVERY_COMPARISONS = ('v-combine', 'v-slots')
 V_COMPARISONS = ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') + DELIVERY_COMPARISONS
 FAST_V_COMPARISONS = ('v-host-query', 'v-io', 'v-pack') + DELIVERY_COMPARISONS
 HOSTS = {'p': ('130.127.134.34', 'clgpu020.clemson.cloudlab.us', 0),
@@ -246,7 +247,7 @@ def main():
             arm_running = arm
             config = dict(eagle_source=eagle_root + '/EAGLE', eagle_checkpoint=eagle_root + '/checkpoint',
                 eagle_manifest=eagle_root + '/checkpoint.json', vector_space='qwen25-7b-pvd',
-                capacity=32, max_new=16, top_k=4, workers=2, timeout_seconds=60,
+                capacity=32, max_new=16, top_k=4, workers=comparison_workers(args.comparison, arm), timeout_seconds=60,
                 max_sequence_tokens=2304, max_decode_steps=32, request_budget_bytes=268435456,
                 request_scratch_bytes=33554432, bootstrap_budget_bytes=536870912,
                 bootstrap_transient_bytes=268435456,

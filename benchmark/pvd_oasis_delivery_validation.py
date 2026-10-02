@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots")
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers")
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -35,6 +35,11 @@ def delivery_flags(comparison, arm):
     assert comparison in DELIVERY_COMPARISONS
     return (comparison == "v-combine" and arm.startswith("opt"),
             comparison == "v-slots" and arm.startswith("opt"))
+
+
+def comparison_workers(comparison, arm):
+    """The worker pilot changes only callback concurrency, from two to four."""
+    return 4 if comparison == "v-workers" and arm.startswith("opt") else 2
 
 
 def validate_io_snapshot(snapshot, *, reuse_io, jobs):
@@ -78,14 +83,15 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
         pool = snapshot["receive_pool"]
         assert isinstance(pool, dict), "missing physical receive pool inventory"
         assert pool["closed"] is True and pool["closing"] is True and pool["quarantine"] is None
-        assert integer(pool["slots_per_rank"], "slots_per_rank", minimum=1) == 2
+        workers = comparison_workers(comparison, arm)
+        assert integer(pool["slots_per_rank"], "slots_per_rank", minimum=1) == workers
         assert integer(pool["capacity_bytes"], "capacity_bytes", minimum=1) == 32768
         for name in ("physical_slots", "leased_slots", "unknown_slots", "physical_bytes"):
             assert integer(pool[name], name) == 0, (name, "receive pool did not retire")
         for name in ("physical_register_calls", "physical_registrations",
                      "physical_release_calls", "physical_releases"):
             assert integer(pool[name], name, minimum=1) == registrations
-        assert registrations <= 4, "physical receive pool exceeded two slots per rank"
+        assert registrations <= 2 * workers, "physical receive pool exceeded configured slots per rank"
         assert integer(pool["acquired_leases"], "acquired_leases", minimum=1) == deliveries
         assert integer(pool["returned_leases"], "returned_leases", minimum=1) == deliveries
     else:
