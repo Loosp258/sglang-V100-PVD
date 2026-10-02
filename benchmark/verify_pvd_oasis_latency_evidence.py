@@ -42,12 +42,52 @@ def verify(folder, *, check_git=False):
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']
                for item in summary['output_identity'].values())
     assert len(summary['requests']) == 4
+    comparison = json.loads((folder / 'comparison.json').read_text(encoding='utf-8'))
+    is_io = comparison['comparison'] == 'v-io'
+    if is_io:
+        expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
+        assert comparison['arms'] == expected_arms, 'v-io requires the recorded ABBA order'
+        assert type(comparison['tokens']) is int and comparison['tokens'] == 16
+        cases = [int(value) for value in comparison['cases'].split(',')]
+        assert len(cases) == len(set(cases)) == 2, 'v-io requires two distinct declared cases'
+        assert list(summary['requests']) == expected_arms, 'incomplete or reordered v-io arms'
+        assert set(summary['output_identity']) == {str(case) for case in cases}
+        for case in cases:
+            assert summary['output_identity'][str(case)]['arms'] == expected_arms
+        for arm, rows in summary['requests'].items():
+            assert [row['case'] for row in rows] == cases, (arm, 'mismatched request cases')
     for arm, rows in summary['requests'].items():
         assert len(rows) == 2
         for row in rows:
             assert row['completion_tokens'] == 16 and row['cached_tokens'] == 0
             assert row['trace_counts']['layers'] == 392
             assert row['trace_counts']['transport'] == 420
+            if is_io:
+                # Keep this request snapshot in the compact summary as well as
+                # the complete raw D trace. Counts prove actual reuse, not just
+                # a launch flag or the presence of one shared client object.
+                snapshot = row.get('io')
+                assert isinstance(snapshot, dict), (arm, row['case'], 'missing IO snapshot')
+                reuse = arm.startswith('opt')
+                assert snapshot['reuse_io'] is reuse
+                assert snapshot['manager_io_loop_reused'] is reuse
+                assert snapshot['shared_close_submitted'] is reuse
+                assert snapshot['closed'] is True and snapshot['closing'] is True
+                for name in ('job_count', 'worker_loops_created',
+                             'search_clients_created', 'control_clients_created',
+                             'search_sessions_created', 'control_sessions_created'):
+                    assert type(snapshot[name]) is int, (arm, row['case'], name)
+                assert snapshot['job_count'] == snapshot['worker_loops_created'] == 420
+                clients = 2 if reuse else 840
+                assert snapshot['search_clients_created'] == clients
+                assert snapshot['control_clients_created'] == clients
+                assert snapshot['search_sessions_created'] == clients
+                if reuse:
+                    assert snapshot['control_sessions_created'] == 2
+                else:
+                    # Cache hits create no control HTTP session on that rank;
+                    # baseline control clients are still created for every job.
+                    assert 0 < snapshot['control_sessions_created'] <= 840
     assert all(all(int(line.split(',')[1].split()[0]) == 0 for line in text.splitlines())
                for text in json.loads((folder / 'final_gpu_memory.json').read_text()).values())
     with tarfile.open(folder / 'raw.tar.gz', 'r:gz') as archive:

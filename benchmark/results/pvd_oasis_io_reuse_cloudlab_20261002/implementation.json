@@ -1,0 +1,7 @@
+{
+  "plan": "b9ef29c96",
+  "implementation": "955d3199a",
+  "fixed_v_baseline": "c9512e4c0",
+  "comparison_correction": "d42c479ce",
+  "changes": "only D reuse_io varies; host_query_validation disabled in all V arms"
+}

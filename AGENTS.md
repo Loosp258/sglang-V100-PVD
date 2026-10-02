@@ -576,3 +576,14 @@ Keep host_query_validation off. For the separate I/O-reuse ABBA, both V arms
 use the proven pooled host-candidate path with original GPU finite-Q proof;
 only D reuse_io differs. No host-Q/HTTP combination or cross-run subtraction
 will be used to manufacture a gain. All host-Q services drained and6 GPUs0MiB.
+
+Request-scoped I/O single-knob ABBA oasis_io_reuse_abba01 completed: local16
+passed; CloudLab314 passed/2 native opt-in skips. Actual per-request search
+sessions840->2, control770/772->2; all8 outputs match and close proof holds.
+Client10.0965->9.8086 s (-2.85%); D cumulative layer waits419.218->409.987 ms
+(-2.20%); D search12.042->11.509 ms. Two workers still~99.8% busy. Small pilot
+with order drift; keep default off and do not claim a magnitude reduction.
+Next sparse-pack ablation fixes reuse_io=false, pooled host candidates and GPU
+finite-Q proof, so one knob changes and gains are not added across runs.
+Report benchmark/results/pvd_oasis_io_reuse_cloudlab_20261002.md preserves
+all raw configs/logs/IDs/session counters/source hashes and6-GPU clean exit.

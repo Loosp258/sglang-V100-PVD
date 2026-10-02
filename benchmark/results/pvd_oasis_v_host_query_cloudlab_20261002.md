@@ -64,7 +64,7 @@ P/D配置完全相同，Oasis实际/预测token配对逐层前向、workers2；�
 覆盖非finite、shape/dtype/device、反序heads、调用者alias修改、梯度detach、复制失败、
 unknown双源/reader/预算保留与普通GPU验证。两rank、28层实际设备Q逐值等于已证明CPU快照；
 固定一次原生候选的ID/page/分数/排序处理完全一致，图hash与上一轮相同。
-fixture真实形状[56,2,128]；没有伪造七行Q。ABBA每轮两warmup+三正式repeat：
+fixture真实形状[56,2,128]；没有伪造七行Q。ABBA暖机两轮、正式三轮；每轮均含完整四臂顺序：
 
 | 原生离线 | rank0基线/新 | rank1基线/新 |
 |---|---:|---:|

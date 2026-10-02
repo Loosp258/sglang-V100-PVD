@@ -1,0 +1,62 @@
+{
+  "checkout_heads.json": {
+    "bytes": 155,
+    "sha256": "e5bb6146f617f7c77f9dc200840ef969b897bc068188f44edb5f653821bc08dd",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 138,
+    "sha256": "51639334ff92bcaa23fb895e3099aad8759dc1e842a6a6e199ed7e4fed0947ad",
+    "normalization": "lf"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 95,
+    "sha256": "e326837c4b37f3a1f96887927bbadc6bb26dd2db868e8b4e4fe85eea906ff587",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 219,
+    "sha256": "da2440eabac742f40e65f14289c12aee8f03bd4a2652bb58e544242cd8f6906c",
+    "normalization": "lf"
+  },
+  "local.tar.gz": {
+    "bytes": 4131,
+    "sha256": "4a3a7b64c03961501483cce2a89b30e21233472815b0e4b6ddfa57cac9442bfb",
+    "normalization": "raw"
+  },
+  "native.tar.gz": {
+    "bytes": 557,
+    "sha256": "a5d6c0741a8fcaa503607517f6eb5164c7e2871f1c9f257af277d0701dcc7d47",
+    "normalization": "raw"
+  },
+  "raw.tar.gz": {
+    "bytes": 2433974,
+    "sha256": "12fd2e407e7437723e1227af3bd8b993b62b1bf50f4115a86d38a631eb54e99d",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 11106,
+    "sha256": "ed0da7622ce75655ef4917fe03d4ee1a7e4a967e23cdee73f4b98aa782e613b6",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 2824,
+    "sha256": "67e7a7d3586ed50fb961550ec9dc953892197cc229f46846c6b1daa9582476e4",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 29004,
+    "sha256": "7a4e7191394cdd7bf47e8901a8d6ea53b0bfc69b714b88688c7d466d53fbdac4",
+    "normalization": "lf"
+  },
+  "unit.txt": {
+    "bytes": 1002,
+    "sha256": "3a4828a4cf6c5510486651a2b839954225d40a67d592e2bd80bbea20bc793562",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9883,
+    "sha256": "172f8e088ee8a472013828995cd5a98c26d3287bb6b853c6845d65473b0d8128",
+    "normalization": "lf"
+  }
+}
