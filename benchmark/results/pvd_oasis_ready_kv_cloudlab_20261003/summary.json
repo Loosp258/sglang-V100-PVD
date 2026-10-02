@@ -1,0 +1,70 @@
+{
+  "schema": "pvd-oasis-ready-summary-v1",
+  "date_utc_plus_8": "20261003",
+  "cases": {
+    "99401": {
+      "steady_token_mean_ms": 28.86492349318273,
+      "steady_token_trial_median_ms": 28.920530566080874,
+      "steady_token_trial_means_ms": [
+        28.69232792207705,
+        28.981911991390266,
+        28.920530566080874
+      ],
+      "stage_wall_mean_ms": {
+        "eagle_prediction": 2.458494552965498,
+        "foreground_total": 28.86492349318273,
+        "formal_kv_fence": 0.01560421549670753,
+        "formal_kv_writes_28": 0.8062969566145468,
+        "ordinary_sampler_commit": 0.08746914820568193,
+        "paired_owner_fence": 3.5514011424744414,
+        "paired_target": 25.469510477878863
+      },
+      "ready_before_consume_fraction": 1,
+      "residual_callback_wait_mean_ms_per_token": 0.08350247073741186,
+      "bank_layers_checked": 420,
+      "predicted_and_actual_tokens_match": true,
+      "trajectory_bytes": 85213419,
+      "retained_gpu_bytes": 84364892,
+      "live_capture_client_seconds": 9.293696001986973
+    },
+    "99402": {
+      "steady_token_mean_ms": 28.861334572346614,
+      "steady_token_trial_median_ms": 28.916984572008783,
+      "steady_token_trial_means_ms": [
+        28.65830550269623,
+        28.916984572008783,
+        29.008713642334833
+      ],
+      "stage_wall_mean_ms": {
+        "eagle_prediction": 2.4519134451457787,
+        "foreground_total": 28.861334572346614,
+        "formal_kv_fence": 0.015730595415724174,
+        "formal_kv_writes_28": 0.8109727835593125,
+        "ordinary_sampler_commit": 0.08175550638476298,
+        "paired_owner_fence": 3.4592863604692474,
+        "paired_target": 25.47431654585082
+      },
+      "ready_before_consume_fraction": 1,
+      "residual_callback_wait_mean_ms_per_token": 0.08156686644291594,
+      "bank_layers_checked": 420,
+      "predicted_and_actual_tokens_match": true,
+      "trajectory_bytes": 85259115,
+      "retained_gpu_bytes": 84410036,
+      "live_capture_client_seconds": 10.400011666002683
+    }
+  },
+  "aggregate_steady_token_mean_ms": 28.86312903276467,
+  "per_layer_foreground_budget_ms": 1.0308260368844526,
+  "two_worker_completion_budget_ms": 2.0616520737689052,
+  "budget_is_capacity_diagnostic_not_latency_guarantee": true,
+  "same_runner_and_weights": true,
+  "live_capture_is_not_performance_comparison": true,
+  "scope": "same-runner READY-bank foreground replay; real paired target/EAGLE/sampler/formal writes and original query-ownership/executor/ticket/handoff path; no V/network/native receive/background GPU copy contention",
+  "timing_policy": "two excluded replay warmups + three unprofiled wall trials per case, then one separate GPU-event trial; per-case repeated diagnostic, not ABBA; capture/prime/reset/validation/D2H/save excluded; existing safety fences retained",
+  "initial_graph_and_private_eagle_seed_excluded_from_steady_replay": true,
+  "replay_callbacks_have_no_network_or_v_work": true,
+  "all_trial_callbacks_ready_before_consume": true,
+  "owned": {},
+  "cleanup_errors": [],
+  "all_six_gpus_empty": true
+}

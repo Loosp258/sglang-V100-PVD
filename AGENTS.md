@@ -882,3 +882,44 @@ medians. Keep initial graph-gated P->V->D KV/private EAGLE seed charged; P->D
 direct KV remains off. Do not add gains from separately measured experiments.
 Defaults remain unchanged until measured gates support the change. Capacity
 calculations from service/workers are diagnostic and not latency guarantees.
+
+#### Ready-KV Decode diagnostic completed (2026-10-03)
+
+- Step 1 captured two real 2159-token/16-output fast-graph P/V/D requests and
+  replayed all 15 actual paired target steps on the same loaded SGLang runner,
+  target weights, dedicated EAGLE3 closure and ordinary greedy sampler. Each
+  case retained 420 immutable GPU banks; actual/predicted tokens, positions,
+  logits, features, actual KV and all 420 private formal writes matched bitwise.
+- After original native/session/formal retirement, each case ran two excluded
+  warmups, three unprofiled wall trials and a separate CUDA-event trial. All
+  measured callbacks were READY before consumption. Steady foreground means
+  were 28.865/28.861 ms/token, aggregate 28.863. Ordinary access to already-ready
+  futures still cost 0.084/0.082 ms/token; it is not a network/KV-arrival stall.
+  Paired-target wall averaged about 25.472 ms, EAGLE about 2.455 ms and 28 formal
+  KV writes about 0.809 ms/token. The owner fence is nested inside target time.
+- Query clone/event, two executor workers, tickets and handoffs remain. Replay
+  removes V/network/native receive/CPU backup/background GPU contention and
+  includes sampler item()/actual commit. It is a measured counterfactual, not
+  an online gain or an exact subtraction from the old 101.919 ms residual.
+  The old residual must not be reported as pure Q/model compute.
+- The diagnostic had a separate 256 MiB admission and retained 84364892/
+  84410036 GPU bytes plus bounded scratch. All references and private rows were
+  released after completion proof, and the original initial-KV close future was
+  joined before timing. All six GPUs returned to 0 MiB; owned/cleanup empty.
+- The first diagnostic startup failed on a wrong hook class name, before any
+  formal performance result. The corrected hook has 11 CPU tests including
+  real-source class/method checks. Preserve this failed attempt. A later
+  240-second archive collection timeout occurred after both cases passed;
+  smaller CPU-only SSH ranges recovered the exact original archive, SHA-256
+  1ca5f788d857c56a60fd1ef5bb73ab66886921af52cfdc7fa976566b0899a9a2.
+  No performance rerun or serving restart was used for artifact recovery.
+- Evidence is benchmark/results/pvd_oasis_ready_kv_cloudlab_20261003.md and its
+  result directory, including complete hashed trajectories, raw service logs,
+  code/config identities, callback traces, failure and cleanup evidence.
+  This is TP1, two synthetic-text Prompts and short greedy Decode; it does not
+  establish broader quality, load, TP2 or failure-under-load behavior.
+- At 28 layers the foreground budget is 1.031 ms/layer, or 2.062 ms/callback
+  with two full-chain workers. This is a capacity diagnostic, not a V latency
+  guarantee; compare complete service and per-layer deadlines. Step 2 may now
+  implement the registered-Entry sparse batch PUT and its independent gates.
+  Serving behavior/defaults remain unchanged. Commit locally only; no push.
