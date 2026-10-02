@@ -7,6 +7,7 @@ import statistics
 
 p = argparse.ArgumentParser()
 p.add_argument('directory', type=Path)
+p.add_argument('--comparison', choices=('pipeline', 'v-search'), default='pipeline')
 a = p.parse_args()
 root = a.directory
 online = json.loads((root / 'online.json').read_text())
@@ -15,7 +16,8 @@ if configs:
     comparison_config = {k: v for k, v in configs[0].items() if k != 'overlap'}
     assert all({k: v for k, v in config.items() if k != 'overlap'} == comparison_config
                for config in configs), 'comparison has configuration differences beyond overlap'
-summary, modes = {}, {'serial': [], 'overlap': []}
+summary, modes = {}, ({'serial': [], 'overlap': []} if a.comparison == 'pipeline'
+                     else {'baseline': [], 'optimized': []})
 for arm, rows in online.items():
     log = (root / (arm + '_d.log')).read_text()
     records = {}
@@ -53,7 +55,9 @@ for arm, rows in online.items():
             stream_seconds=row['wall_seconds'] - row['first_event_seconds'],
             **record))
     summary[arm] = selected
-    modes['overlap' if arm.startswith('overlap') else 'serial'].extend(selected)
+    mode = ('overlap' if arm.startswith('overlap') else 'serial') if a.comparison == 'pipeline' else (
+        'optimized' if arm.startswith('opt') else 'baseline')
+    modes[mode].extend(selected)
 
 
 def median(values):
@@ -99,6 +103,7 @@ output_identity = {case: dict(
     text_identical=len({r['output_sha256'] for _, r in rows}) == 1,
     arms=[arm for arm, _ in rows]) for case, rows in by_case.items()}
 result = dict(aggregate=aggregate, output_identity=output_identity, requests=summary,
-    comparison_scope='live paired serial vs live paired per-layer overlap; full initial KV retained')
+    comparison_scope=('live paired serial vs live paired per-layer overlap' if a.comparison == 'pipeline'
+        else 'live overlapped paired with baseline vs partial-head cached V search') + '; full initial KV retained')
 (root / 'summary.json').write_text(json.dumps(result, indent=2))
 print(json.dumps(dict(aggregate=aggregate, output_identity=output_identity), indent=2))

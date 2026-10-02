@@ -315,6 +315,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Experimental Entry-owned cached four-head searches on KV edge graphs.",
     )
     parser.add_argument(
+        "--prompt-index-partial-group-search", action="store_true",
+        help="Opt in to cached searches for already-arrived head subsets; requires batched group search.",
+    )
+    parser.add_argument(
         "--prompt-index-cagra-native-bytes",
         type=_positive_int,
         default=None,
@@ -803,6 +807,7 @@ def _build_prompt_index(args: argparse.Namespace, *, device=None):
         early_final_update=getattr(args, "prompt_index_early_final_update", False),
         profile_chunk_stages=getattr(args, "prompt_index_profile_chunk_stages", False),
         batched_group_search=getattr(args, "prompt_index_batched_group_search", False),
+        partial_group_search=getattr(args, "prompt_index_partial_group_search", False),
     )
 
 

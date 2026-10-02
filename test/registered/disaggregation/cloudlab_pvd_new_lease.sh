@@ -242,6 +242,9 @@ case "$role" in
       if [[ "${PVD_BATCHED_GROUP_SEARCH:-0}" == "1" ]]; then
         kv_edge_args+=(--prompt-index-batched-group-search)
       fi
+      if [[ "${PVD_PARTIAL_GROUP_SEARCH:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-partial-group-search)
+      fi
       if [[ "${PVD_BATCHED_K_EXTRACTION:-0}" == "1" ]]; then
         kv_edge_args+=(--prompt-index-batched-k-extraction)
       fi

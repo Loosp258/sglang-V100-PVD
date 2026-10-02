@@ -25,6 +25,7 @@ parser.add_argument('--tag', required=True)
 parser.add_argument('--arms', default='serial_a,overlap_a,overlap_b,serial_b')
 parser.add_argument('--cases', default='99401,99402,99403,99404')
 parser.add_argument('--tokens', type=int, default=16)
+parser.add_argument('--comparison', choices=('pipeline', 'v-search'), default='pipeline')
 args = parser.parse_args()
 if not re.fullmatch(r'[a-z0-9_]+', args.tag):
     raise ValueError('filename-safe fresh tag required')
@@ -93,6 +94,7 @@ def start(role, arm):
         PVD_PROFILE_V_SEARCH=1, PVD_PROFILE_D_SEARCH_BATCH=1,
         PVD_PROFILE_REFRESH_TIMELINE=1, PVD_GROUPED_EXACT_SEARCH=1,
         PVD_BATCHED_GROUP_SEARCH=1, PVD_SPLIT_POLICY_FILE='/tmp/' + args.tag + '_split.json')
+    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison == 'v-search' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash /tmp/' + args.tag + '_launcher.sh ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -145,7 +147,8 @@ def main():
             if any(int(line.split(',')[1].strip().split()[0]) for line in memory.splitlines()):
                 raise RuntimeError('GPU occupied: ' + role)
             CHECKOUTS[role] = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/pvd-direct-20260929'
-        CHECKOUTS['v'] = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/pvd-search-decode-20261002'
+        CHECKOUTS['v'] = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/' + (
+            'pvd-oasis-v-search-20261002' if args.comparison == 'v-search' else 'pvd-search-decode-20261002')
         CHECKOUTS['d'] = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002'
         # This named isolated archive was created by deploy_pvd_oasis_stage;
         # give its actual source tree an immutable launch-gate commit.
@@ -177,8 +180,11 @@ def main():
                 sources[role][local] = digest
         (OUT / 'source_hashes.json').write_text(json.dumps(sources, indent=2))
         (OUT / 'checkout_heads.json').write_text(json.dumps(HEADS, indent=2))
+        (OUT / 'comparison.json').write_text(json.dumps(dict(comparison=args.comparison,
+            arms=args.arms.split(','), cases=args.cases, tokens=args.tokens), indent=2))
         upload('v', '/tmp/' + args.tag + '_probe.py', (ROOT / 'benchmark/pvd_search_decode_probe.py').read_bytes())
-        start('v', 'shared'); start('p', 'shared')
+        if args.comparison == 'pipeline':
+            start('v', 'shared'); start('p', 'shared')
         eagle_root = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/oasiskv-20261001'
         results = {}
         for arm in args.arms.split(','):
@@ -188,22 +194,29 @@ def main():
                 capacity=32, max_new=16, top_k=4, workers=2, timeout_seconds=60,
                 max_sequence_tokens=2304, max_decode_steps=32, request_budget_bytes=268435456,
                 request_scratch_bytes=33554432, bootstrap_budget_bytes=536870912,
-                bootstrap_transient_bytes=268435456, overlap=arm.startswith('overlap'))
+                bootstrap_transient_bytes=268435456,
+                overlap=args.comparison == 'v-search' or arm.startswith('overlap'))
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', '/tmp/' + args.tag + '_' + arm + '.json', encoded)
+            if args.comparison == 'v-search':
+                start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
             results[arm] = probe(arm)
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)
             stop('gateway'); stop('d')
-        collect('v', 'shared'); collect('p', 'shared')
+            if args.comparison == 'v-search':
+                collect('v', arm); collect('p', arm)
+                stop('p'); stop('v')
+        if args.comparison == 'pipeline':
+            collect('v', 'shared'); collect('p', 'shared')
     finally:
         cleanup_errors = []
         for role in tuple(OWNED):
             try:
-                collect(role, 'shared' if role in ('v', 'p') else arm_running)
+                collect(role, 'shared' if args.comparison == 'pipeline' and role in ('v', 'p') else arm_running)
             except Exception as error:
                 cleanup_errors.append(f'collect {role}: {error!r}')
         for role in ('gateway', 'p', 'd', 'v'):

@@ -1,0 +1,55 @@
+"""V wall stages for ordered, single-request pilots with exact RPC counts.
+
+Each completed request has 28 initial-bank jobs and 28 jobs per future step,
+each searching two ranks. Reject missing/extra/retry profiles instead of using
+the second-granularity D log to infer exact cross-node timing boundaries.
+"""
+import argparse
+import ast
+import json
+from pathlib import Path
+import re
+from statistics import median
+
+p = argparse.ArgumentParser()
+p.add_argument('directory', type=Path)
+a = p.parse_args()
+root = a.directory
+summary = json.loads((root / 'summary.json').read_text())
+result = {}
+shared_offset = 0
+for arm, requests in summary['requests'].items():
+    path = root / f'{arm}_v.log'
+    if not path.exists():
+        path = root / 'shared_v.log'
+    log = path.read_text()
+    batches = [(path, int(items), int(nqueries), ast.literal_eval(stages))
+        for path, items, nqueries, stages in re.findall(
+        r'PVD V search-batch path=(\S+) items=(\d+) query_rows=(\d+) stage_ms=(\{[^\n]+\})', log)]
+    warmups = json.loads((root / f'{arm}_warmup.json').read_text())
+    warm_count = sum((r['completion_tokens'] - 1) * 28 * 2 for r in warmups)
+    formal_count = sum((r['completion_tokens'] - 1) * 28 * 2 for r in requests)
+    if path.name == 'shared_v.log':
+        offset = shared_offset
+        shared_offset += warm_count + formal_count
+    else:
+        offset = 0
+        assert len(batches) == warm_count + formal_count
+    offset += warm_count
+    selected = []
+    for request in requests:
+        # First 56 profiles prime initial banks; subsequent profiles are Decode.
+        expected = (request['completion_tokens'] - 2) * 28 * 2
+        steady = batches[offset + 56:offset + 56 + expected]
+        offset += 56 + expected
+        assert len(steady) == expected, (arm, request['case'], len(steady), expected)
+        assert all(row[1:3] == (2, 14) for row in steady)
+        selected.append(dict(case=request['case'], batches=len(steady),
+            paths=sorted({row[0] for row in steady}),
+            median_stage_ms={name: median([row[3][name] for row in steady])
+                for name in steady[0][3]}))
+    result[arm] = selected
+if shared_offset:
+    assert len(batches) == shared_offset, (len(batches), shared_offset)
+(root / 'v_search_summary.json').write_text(json.dumps(result, indent=2))
+print(json.dumps(result, indent=2))

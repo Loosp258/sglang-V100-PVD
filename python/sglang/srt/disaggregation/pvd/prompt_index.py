@@ -185,6 +185,7 @@ class PromptIndexManager:
         early_final_update: bool = False,
         profile_chunk_stages: bool = False,
         batched_group_search: bool = False,
+        partial_group_search: bool = False,
     ) -> None:
         if not isinstance(vector_space, str) or not vector_space.strip():
             raise ValueError("vector_space must be a non-empty string")
@@ -225,6 +226,9 @@ class PromptIndexManager:
         ):
             raise ValueError("batched group search requires four-head IP KV graphs")
         self.batched_group_search = batched_group_search
+        if partial_group_search and not batched_group_search:
+            raise ValueError("partial group search requires batched group search")
+        self.partial_group_search = partial_group_search
         self._group_search_lock = threading.RLock()
 
         # Where this manager's copies live: the backend's declared device, so
@@ -1611,7 +1615,8 @@ class PromptIndexManager:
     def _search_grouped_many(self, requests, *, metadata=None):
         """One reader lease; one cached four-head workspace per native graph.
 
-        Partial/unequal groups fall back immediately, without waiting for Q.
+        Opt-in subsets consume only Q already received; unequal groups fall
+        back immediately, without waiting for another layer's Q.
         Workspace creation/reuse and output consumption are serialized; close
         detaches the Entry but cannot dispose it until this reader drains.
         """
@@ -1623,7 +1628,8 @@ class PromptIndexManager:
             head = identity.layer % 2 * 2 + identity.kv_head % 2
             groups.setdefault(group, []).append((head, position, identity, queries, top_k))
         for items in groups.values():
-            if (len(items) != 4 or {item[0] for item in items} != {0, 1, 2, 3}
+            if ((not self.partial_group_search and len(items) != 4)
+                    or len({item[0] for item in items}) != len(items)
                     or len({(tuple(item[3].shape), item[4]) for item in items}) != 1):
                 return None
             items.sort(key=lambda item: item[0])
@@ -1675,9 +1681,9 @@ class PromptIndexManager:
             failure = None
             try:
                 scratch_bytes = sum(
-                    4 * self.backend.search_footprint(index.count, index.dim,
+                    len(rows) * self.backend.search_footprint(index.count, index.dim,
                         len(rows[0][3]), rows[0][4])
-                    + 4 * len(rows[0][3]) * rows[0][4] * 48
+                    + len(rows) * len(rows[0][3]) * rows[0][4] * 48
                     + 4 * ((index.count + 31) // 32) * 4
                     for index, rows in prepared.values()
                 )
@@ -1720,9 +1726,11 @@ class PromptIndexManager:
                         assert workspace.retained_bytes == byte_count
                         record.search_workspaces[group] = workspace, owner
                         new_cache_owners.remove(owner)
-                    native_rows, scores = workspace.search(q)
-                    for head, position, identity, _, head_top_k, descriptor, validated, item, mean in rows:
-                        selection = self._select_grouped(index, q[head], identity=identity,
+                    heads = tuple(row[0] for row in rows)
+                    native_rows, scores = workspace.search(q, heads=heads)
+                    for query_position, row in enumerate(rows):
+                        head, position, identity, _, head_top_k, descriptor, validated, item, mean = row
+                        selection = self._select_grouped(index, q[query_position], identity=identity,
                             mapping=item.mapping, top_k=head_top_k, mean=mean,
                             boundaries=boundaries, timings=None,
                             raw_result=(native_rows[head], scores[head]))
@@ -1731,7 +1739,9 @@ class PromptIndexManager:
                             id_mapping_version=descriptor.id_mapping_version,
                             validated=validated + ("positional_encoding", "layer", "kv_head"))
                 if metadata is not None:
-                    metadata["path"] = "grouped_cagra_batched"
+                    metadata["path"] = ("grouped_cagra_partial_batched"
+                        if any(len(rows) < 4 for _, rows in prepared.values())
+                        else "grouped_cagra_batched")
                 return tuple(results)
             except BaseException as exc:
                 failure = exc

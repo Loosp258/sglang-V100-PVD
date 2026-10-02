@@ -18,7 +18,7 @@ buffer = io.BytesIO()
 with tarfile.open(fileobj=buffer, mode='w') as archive:
     for name in sorted(paths):
         path = ROOT / name
-        if path.is_file():
+        if path.is_file() and path.suffix in ('.py', '.sh', '.md', '.json'):
             data = path.read_bytes().replace(b'\r\n', b'\n')
             info = tarfile.TarInfo(name); info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
@@ -30,6 +30,9 @@ command = ('cd ' + REMOTE + '; PYTHONPATH=python '
     'test/registered/disaggregation/test_pvd_oasis_request.py '
     'test/registered/disaggregation/test_pvd_oasis_pipeline.py '
     'test/registered/disaggregation/test_pvd_oasis_serving.py '
+    'test/registered/disaggregation/test_pvd_cagra_search_batch.py '
+    'test/registered/disaggregation/test_pvd_grouped_search_cache.py '
+    'test/registered/disaggregation/test_pvd_four_head_grouping.py '
     'test/registered/disaggregation/test_pvd_prompt_index.py '
     'test/registered/disaggregation/test_pvd_prompt_chunks.py '
     '> /tmp/oasis-serving-unit.log 2>&1 && cat /tmp/oasis-serving-unit.log')

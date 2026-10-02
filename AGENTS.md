@@ -179,6 +179,16 @@ waiting for another layer or issuing fake queries. Keep this opt-in.
    Attribute V processing, D layer waits and client time separately. Retain
    outputs/raw hashes/traffic and negative results; commit completed stages.
 
+The opt-in subset workspace is implemented (`--prompt-index-partial-group-search`,
+launcher `PVD_PARTIAL_GROUP_SEARCH=1`), with 150 tests passing. Native real-K/Q
+two-head probes on identical fast graphs reduced isolated manager time from
+about 3.1 to 2.35 ms. Fixture Q has two rows/head, unlike the live seven-row GQA
+shape. One rank0 layer showed CAGRA candidate jitter; 100 measurements/mode on
+that layer reproduced it in both baseline and cache (union Top4 mean coverage
+0.9893/0.9879, single-observation minimum 0.8571 in both). Do not claim exact
+candidate equivalence or a production recall guarantee. Online seven-row
+ABBA validation follows; full graph/width/arrival/Decode settings stay fixed.
+
 ### User-requested paper alignment (2026-10-02)
 
 Follow `docs/pvd_oasis_alignment.md` for the next stages. The user requires

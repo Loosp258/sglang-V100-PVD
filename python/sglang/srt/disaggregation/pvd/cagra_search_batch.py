@@ -57,13 +57,17 @@ class FilteredSearchWorkspace:
                 or self.index.count != self.rows):
             raise IndexSearchError("closed, stale or disposed search workspace")
 
-    def search(self, queries):
+    def search(self, queries, *, heads=(0, 1, 2, 3)):
         with self.lock, self.backend._lock:
             self._check_owner()
+            if (not isinstance(heads, tuple) or not 1 <= len(heads) <= 4
+                    or any(type(head) is not int or not 0 <= head < 4 for head in heads)
+                    or len(set(heads)) != len(heads)):
+                raise IndexSearchError("unique native head subset required")
             if self.itopk_size != self.backend.itopk_size:
                 raise IndexSearchError("search width changed after workspace creation")
             if (not isinstance(queries, torch.Tensor)
-                    or queries.shape != (4, self.num_queries, self.dim)
+                    or queries.shape != (len(heads), self.num_queries, self.dim)
                     or queries.dtype != torch.float32
                     or queries.device != self.backend.device
                     or not queries.is_contiguous()):
@@ -74,9 +78,9 @@ class FilteredSearchWorkspace:
             self.pending_queries = queries
             try:
                 with runtime.scope(owner):
-                    for head in range(4):
+                    for position, head in enumerate(heads):
                         runtime.cagra.search(self.params, owner.native,
-                            runtime.cp.from_dlpack(queries[head]), self.top_k,
+                            runtime.cp.from_dlpack(queries[position]), self.top_k,
                             neighbors=runtime.cp.from_dlpack(self.neighbors[head]),
                             distances=runtime.cp.from_dlpack(self.scores[head]),
                             filter=self.filters[head], resources=owner.resources)
