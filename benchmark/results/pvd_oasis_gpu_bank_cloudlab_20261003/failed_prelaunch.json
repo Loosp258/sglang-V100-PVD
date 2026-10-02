@@ -1,0 +1,5 @@
+{
+  "directory": "artifacts/oasis_gpu_bank_abba02",
+  "measurements_included": false,
+  "note": "强化最后unpin与并发预算退款的释放顺序，SIGINT中断P启动；未产生正式请求，finally完整释放全部记录服务，六张GPU归零。该目录另保存此前gate02完整通过记录，主资格仅采用gate03。"
+}

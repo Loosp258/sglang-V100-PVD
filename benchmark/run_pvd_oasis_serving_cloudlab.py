@@ -256,6 +256,8 @@ def main():
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
                              ('sparse_batch_plan.py', 'sparse_payload.py', 'sparse_delivery.py',
                               'transfer_lifecycle.py', 'sparse_copy.py', 'sparse_pack_plan.py')]
+            if args.comparison == 'd-gpu-bank' and role in ('v', 'd'):
+                relative += ['python/sglang/srt/disaggregation/pvd/oasis_gpu_backup.py']
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
             sources[role] = {}
             for line in output.splitlines():
@@ -292,6 +294,8 @@ def main():
                 config.update(reuse_io=False,
                     combine_reserve_start=args.comparison == 'v-combine' and arm.startswith('opt'),
                     reuse_receive_slots=args.comparison == 'v-slots' and arm.startswith('opt'))
+                if args.comparison == 'd-gpu-bank':
+                    config['gpu_receive_to_bank'] = arm.startswith('opt')
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', ASSETS['d'] + '/' + arm + '_config.json', encoded)

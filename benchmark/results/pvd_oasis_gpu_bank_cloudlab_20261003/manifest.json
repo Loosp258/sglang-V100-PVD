@@ -1,0 +1,102 @@
+{
+  "checkout_heads.json": {
+    "bytes": 156,
+    "sha256": "e93c6a1ed1335ca0c7d69d27ba2d409fea947df692b90630e495143ac507b0f9",
+    "normalization": "lf"
+  },
+  "cleanup_errors.json": {
+    "bytes": 3,
+    "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 145,
+    "sha256": "027dbc51c176e3c5f11a189fd9532f68b3d765195226a822e55a4f4d8dcd2e73",
+    "normalization": "lf"
+  },
+  "delivery_stage_summary.json": {
+    "bytes": 2942,
+    "sha256": "d63b29d5ddaf14dd0f0b5f9f16d7dbba4d40a8a900cec5709896b6154541b606",
+    "normalization": "lf"
+  },
+  "failed_prelaunch.json": {
+    "bytes": 339,
+    "sha256": "cea6379990d77b04e1a2c44a919beafb3635d2a0b312ac7ad80d7263081e832e",
+    "normalization": "lf"
+  },
+  "failed_prelaunch.tar.gz": {
+    "bytes": 1156545,
+    "sha256": "218217200717b19d1e1098e94bc1ed027ec23b188e7d8fc769b75ef48cbae3f6",
+    "normalization": "raw"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 96,
+    "sha256": "8809d0d0788cece7f34b84a54e9909181a0bd9b59fe62c3257df3f98bc5805fe",
+    "normalization": "lf"
+  },
+  "gate.tar.gz": {
+    "bytes": 1146689,
+    "sha256": "9668d48a8c311fd5e22be519ec726f54b68568e6c147e6237fae2620caab80d3",
+    "normalization": "raw"
+  },
+  "gate_count_record.json": {
+    "bytes": 8513,
+    "sha256": "8cfd59dd12b33b22ac5cc13a3421f18bdec71b13c49663dd2e1d2be9534f7690",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 271,
+    "sha256": "18159debd1cca18b28c7f22d0456c176406adf96d53d36885b13d8711fb3ea17",
+    "normalization": "lf"
+  },
+  "owned.json": {
+    "bytes": 3,
+    "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "normalization": "lf"
+  },
+  "previous_gate.tar.gz": {
+    "bytes": 1146097,
+    "sha256": "30fd760aa8ab76f9acaf153a2fd659630d08fb402e7f623416407c8e6904062a",
+    "normalization": "raw"
+  },
+  "previous_pilot.json": {
+    "bytes": 209,
+    "sha256": "d0c2faf7661891bc4ee0a30c91334bb8b750660cf7141785b6d77d74998ef807",
+    "normalization": "lf"
+  },
+  "previous_pilot.tar.gz": {
+    "bytes": 4212220,
+    "sha256": "ec087160f1d42aec29c97d9bf901a929c41fba1f20dd2814eb1a18b8042bc38f",
+    "normalization": "raw"
+  },
+  "raw.tar.gz": {
+    "bytes": 4210631,
+    "sha256": "6f49f8cf8d0d69ed13447f25533669c2981647360a8d24c034ab92c334927edc",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 39280,
+    "sha256": "fc9fc684baadb4f3c32a959e82de96229b8324d1df6628852d01c1f0538aee08",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 5547,
+    "sha256": "14e6c88b6c267803f754666b016f746b09819553f2f9c0df401549b288f10579",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 51069,
+    "sha256": "c205a5996c4ebd46ec6a60b1b34b7ee1ecd6825987de8c977ab832bc9fb459f0",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9930,
+    "sha256": "b26b21823298ad7753dfe0163815e70b53fef8c58fb58088e815b44af8065369",
+    "normalization": "lf"
+  },
+  "worker_timing_summary.json": {
+    "bytes": 9528,
+    "sha256": "14f067d072eb7ac73544d5dc8a1d47b336691fb735f455c48a44031154b57226",
+    "normalization": "lf"
+  }
+}

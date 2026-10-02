@@ -17,6 +17,7 @@ from sglang.srt.disaggregation.pvd.cuda_sparse_receiver import CUDASparseReceive
 from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerReply, select_resident
 from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
 from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
+from sglang.srt.disaggregation.pvd.oasis_gpu_backup import OasisGPUBackupPool
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient, SearchScope
@@ -77,6 +78,22 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
     def __init__(self, *args):
         super().__init__(*args)
         self._slot_lease = None
+
+    def copy_to_gpu_rows(self, pool, layer):
+        self._live()
+        if self._lock.locked() or not self._ready or not self._safe or self._installed:
+            raise RuntimeError('one exact terminal-success CUDA receive required')
+        try:
+            self._registry.ordering.after_remote_write(self._registration)
+            self._ordered = True
+            reader = pool.copy_and_enqueue(self.manifest, self._buffer, layer)
+            # The independent GPU clone has completed before the MR is ACKed.
+            # Its bank reader and background backup keep separate storage pins.
+            self._installed = True
+            return reader
+        except BaseException:
+            self._local_unknown = 'GPU receive clone/ordering completion unknown'
+            raise
 
     def _release_destination(self):
         if self._slot_lease is not None and self._local_unknown is not None:
@@ -175,7 +192,8 @@ class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
 class OasisLayerTransport:
     def __init__(self, manager, selected, *, request_id, incarnation, device,
                  vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False,
-                 combine_reserve_start=False, reuse_receive_slots=False, workers=2):
+                 combine_reserve_start=False, reuse_receive_slots=False, workers=2,
+                 gpu_receive_to_bank=False, backup_budget_bytes=33554432):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -186,6 +204,7 @@ class OasisLayerTransport:
                 or not 1 <= top_k <= 512 or timeout <= 0
                 or type(reuse_io) is not bool or type(combine_reserve_start) is not bool
                 or type(reuse_receive_slots) is not bool
+                or type(gpu_receive_to_bank) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         self.manager, self.selected = manager, selected
@@ -196,6 +215,7 @@ class OasisLayerTransport:
         self.reuse_io = reuse_io
         self.combine_reserve_start = combine_reserve_start
         self.reuse_receive_slots = reuse_receive_slots
+        self.gpu_receive_to_bank = gpu_receive_to_bank
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
             receiver_epoch=manager.worker_epoch, slots_per_rank=workers,
@@ -218,6 +238,9 @@ class OasisLayerTransport:
         self._cache_valid = torch.zeros((28, 4, self.prompt_tokens), dtype=torch.bool)
         self.cache = [[_HeadCPUCache(self._cpu_cache[layer, head], self._cache_valid[layer, head])
                        for head in range(4)] for layer in range(28)]
+        self.gpu_backups = (OasisGPUBackupPool(self.cache, manager.transfer_budget,
+            device=self.device, request_id=request_id, incarnation=incarnation,
+            max_bytes=backup_budget_bytes, workers=workers) if gpu_receive_to_bank else None)
         self.local, self.lock = threading.local(), threading.Lock()
         self.workers, self.versions, self.trace = [], {}, []
         self._io_counts = dict(job_count=0, worker_loops_created=0,
@@ -329,6 +352,8 @@ class OasisLayerTransport:
                 sums["registration_count"] = pool["physical_register_calls"]
                 sums["unregistration_count"] = pool["physical_release_calls"]
             return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
+                gpu_receive_to_bank=self.gpu_receive_to_bank,
+                gpu_backup=self.gpu_backups.snapshot() if self.gpu_backups else None,
                 combine_reserve_start=self.combine_reserve_start,
                 reuse_receive_slots=self.reuse_receive_slots, receive_pool=pool,
                 delivery_count=len(deliveries),
@@ -338,6 +363,8 @@ class OasisLayerTransport:
 
     async def _select_and_fetch(self, state, ticket, query, bank, bootstrap):
         state["delivery_profiles"] = []
+        state['gpu_readers'] = []
+        state['fresh_gpu_rows'] = {}
         layer_cache = self.cache[ticket.layer]
         selected_ids = [None] * 4
         started = time.perf_counter()
@@ -369,7 +396,9 @@ class OasisLayerTransport:
                 if not chosen:
                     raise RuntimeError("empty layer working set")
                 selected_ids[head] = chosen
-                missing = tuple(t for t in chosen if t not in layer_cache[head])
+                missing = tuple(t for t in chosen if t not in layer_cache[head]
+                    and not (self.gpu_backups and (t in old
+                        or self.gpu_backups.contains(ticket.layer, head, t))))
                 if missing:
                     specs.append(SparseKVSpec(ticket.request_id, ticket.incarnation,
                         f"oasis:{'bootstrap' if bootstrap else 'lookahead'}:{ticket.step}:{ticket.layer}",
@@ -392,7 +421,12 @@ class OasisLayerTransport:
                     await asyncio.sleep(0.001)
                     ready = await record.poll()
                 tick = time.perf_counter()
-                record.copy_to_cache(layer_cache)
+                if self.gpu_backups:
+                    reader = record.copy_to_gpu_rows(self.gpu_backups, ticket.layer)
+                    state['gpu_readers'].append(reader)
+                    state['fresh_gpu_rows'].update(reader.rows)
+                else:
+                    record.copy_to_cache(layer_cache)
                 cache_copy_seconds = time.perf_counter() - tick
                 await record.ack()
                 if not await record.close():
@@ -400,7 +434,8 @@ class OasisLayerTransport:
                 remote_rows += sum(len(s.token_ids) for s in specs)
                 state["delivery_profiles"].append(dict(record.profile, rank=route.rank,
                     nbytes=wire.nbytes, remote_rows=sum(len(s.token_ids) for s in specs),
-                    cache_copy_seconds=cache_copy_seconds))
+                    cache_copy_seconds=cache_copy_seconds,
+                    gpu_receive_to_bank=self.gpu_receive_to_bank))
             except BaseException:
                 # Drain or retain all native destinations. Never infer success
                 # from an HTTP cancellation, timeout, or receiver destruction.
@@ -416,7 +451,8 @@ class OasisLayerTransport:
         return tuple(selected_ids), remote_rows, time.perf_counter() - started
 
     def job(self, query, bank, *, bootstrap=False):
-        if self.closed or self._closing or self.quarantined:
+        if (self.closed or self._closing or self.quarantined
+                or self.gpu_backups and self.gpu_backups.quarantined):
             raise RuntimeError("layer transport is closed or quarantined")
         query = query.detach().clone()
         if query.shape != (28, 128) or query.device != self.device:
@@ -454,16 +490,37 @@ class OasisLayerTransport:
                             keys[head, list(dst)] = resident.keys[head, list(src)]
                             values[head, list(dst)] = resident.values[head, list(src)]
                         if misses:
-                            host = torch.stack([self.cache[ticket.layer][head][t] for _, t in misses]).pin_memory()
-                            gpu = host.to(self.device, non_blocking=True)
-                            retained.extend((host, gpu))
-                            dst = [i for i, _ in misses]
-                            keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
+                            cpu_misses = []
+                            for dst, token in misses:
+                                row = state['fresh_gpu_rows'].get((head, token))
+                                if row is None and self.gpu_backups:
+                                    reader = self.gpu_backups.acquire(ticket.layer, head, token)
+                                    if reader is not None:
+                                        state['gpu_readers'].append(reader)
+                                        row = reader.rows[head, token]
+                                if row is None:
+                                    cpu_misses.append((dst, token))
+                                else:
+                                    keys[head, dst], values[head, dst] = row[0], row[1]
+                            if cpu_misses:
+                                host = torch.stack([self.cache[ticket.layer][head][t]
+                                                    for _, t in cpu_misses]).pin_memory()
+                                gpu = host.to(self.device, non_blocking=True)
+                                retained.extend((host, gpu))
+                                dst = [i for i, _ in cpu_misses]
+                                keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
                         valid[head, :len(ids)] = True
                     complete = torch.cuda.Event()
                     complete.record()
                     # Source owners can retire only after the H2D/copy event.
                     complete.synchronize()
+                    # Borrowed row aliases must disappear before a reader's
+                    # last unpin may drop storage and refund its byte charge.
+                    state['fresh_gpu_rows'].clear()
+                    row = None
+                    for reader in state['gpu_readers']:
+                        reader.release_after_copy(complete)
+                    state['gpu_readers'].clear()
                 with self.lock:
                     self.trace.append(dict(step=ticket.step, layer=ticket.layer,
                         remote_rows=remote_rows, rpc_seconds=rpc_seconds,
@@ -475,6 +532,9 @@ class OasisLayerTransport:
                 except BaseException:
                     self.quarantined = True
                     state.setdefault("quarantine", []).append(retained)
+                if state.get('gpu_readers'):
+                    self.quarantined = True
+                    state.setdefault('quarantine', []).append(state['gpu_readers'])
                 raise
             finally:
                 # Native registries remain job/thread-local. Request clients
@@ -513,6 +573,8 @@ class OasisLayerTransport:
             future.result(timeout=self.timeout)
         if self.receive_pool is not None:
             self.receive_pool.close()
+        if self.gpu_backups is not None:
+            self.gpu_backups.close()
         self.cache.clear()
         self._cpu_cache = self._cache_valid = None
         self._shared_clients = None

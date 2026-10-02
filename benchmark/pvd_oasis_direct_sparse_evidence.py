@@ -5,9 +5,9 @@ import json
 import tarfile
 
 
-def native_proof(native):
+def native_proof(native, *, expected_mode='direct_sparse_batch_put'):
     assert native['status'] == 'passed'
-    assert native['mode'] == 'direct_sparse_batch_put'
+    assert native['mode'] == expected_mode
     assert native['transport'] == 'mooncake_local_session_scatter'
     assert native['exact_byte_cases'] == len(native['observations']) == 48
     for row in native['observations']:
@@ -25,6 +25,19 @@ def native_proof(native):
                    <= row['allocation_offset'] + row['source_entry_bytes']
                    for item in row['source_slices'])
         assert row['device'] == 'cuda:1' and row['current_device'] == 'cuda:0'
+        if expected_mode == 'gpu_receive_to_bank_with_async_backup':
+            bank = row['gpu_bank']
+            assert bank['gpu_bank_exact'] is bank['cpu_backup_exact'] is True
+            assert bank['original_mr_retired_before_cpu_publication'] is True
+            assert bank['cache_valid_before_publication'] is False
+            assert bank['backup_before']['completed'] == 0
+            assert bank['backup_before']['charged_bytes'] == 2 * row['nbytes']
+            assert bank['backup_after']['closed'] is True
+            assert bank['backup_after']['quarantined'] is False
+            assert bank['backup_after']['completed'] == bank['backup_after']['submitted'] == 1
+            assert bank['backup_after']['rows_copied'] == row['rows']
+            assert all(bank['backup_after'][name] == 0 for name in (
+                'pending_rows', 'retained_owners', 'charged_bytes'))
     assert native['source_physical_register_calls'] == 2
     assert native['staging_registration_count'] == 0
     assert native['immutable_source_bytes_exact'] is native['all_owners_retired'] is True
@@ -77,7 +90,7 @@ def runtime_proof(full, load_json):
     return proof
 
 
-def gate_proof(gate_files, sources, read_json, unique_file):
+def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False):
     bundle = unique_file(gate_files, 'deployed.tar.gz')
     with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
         deployed = {item.name: hashlib.sha256(archive.extractfile(item).read()).hexdigest()
@@ -95,5 +108,6 @@ def gate_proof(gate_files, sources, read_json, unique_file):
             text = unique_file(gate_files, role + '_' + phase + '_gpu.txt').decode()
             assert len(text.splitlines()) == 2
             assert all(int(line.split(',')[1].split()[0]) == 0 for line in text.splitlines())
-    native_proof(read_json(gate_files, 'native.json'))
+    native_proof(read_json(gate_files, 'native.json'), expected_mode=(
+        'gpu_receive_to_bank_with_async_backup' if gpu_bank else 'direct_sparse_batch_put'))
     return deployed

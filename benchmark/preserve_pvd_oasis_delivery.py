@@ -29,6 +29,7 @@ RESULT_PREFIX = {"v-combine": "pvd_oasis_combined_delivery_cloudlab_",
                  "v-slots": "pvd_oasis_receive_slots_cloudlab_",
                  "v-workers": "pvd_oasis_workers_cloudlab_",
                  "v-direct-sparse": "pvd_oasis_direct_sparse_cloudlab_"}
+RESULT_PREFIX['d-gpu-bank'] = 'pvd_oasis_gpu_bank_cloudlab_'
 
 
 def project_path(value, parent, *, exists=True):
@@ -128,11 +129,11 @@ def gate_counts(gate):
             result["native_full_observations_saved"] = False
         assert native["status"] == "passed"
         assert native["transport"] == ("mooncake_local_session_scatter"
-            if native.get('mode') == 'direct_sparse_batch_put' else "mooncake_local_session")
+            if native.get('mode') in ('direct_sparse_batch_put', 'gpu_receive_to_bank_with_async_backup') else "mooncake_local_session")
         assert type(native["exact_byte_cases"]) is int and native["exact_byte_cases"] == 48
-        if native.get('mode') == 'direct_sparse_batch_put':
+        if native.get('mode') in ('direct_sparse_batch_put', 'gpu_receive_to_bank_with_async_backup'):
             from pvd_oasis_direct_sparse_evidence import native_proof
-            native_proof(native)
+            native_proof(native, expected_mode=native['mode'])
         assert native["after_close"]["closed"] is True
         assert native["after_close"]["physical_bytes"] == native["after_close"]["unknown_slots"] == 0
         if "observations" in native:
@@ -195,6 +196,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "v-slots": ("复用接收区物理注册", "每次交付注册", "请求内复用 slots"),
         "v-workers": ("预取 workers 2→4", "workers=2", "workers=4"),
         "v-direct-sparse": ("原始注册区直接 sparse batch PUT", "staging packed PUT", "原始 Entry scatter PUT"),
+        'd-gpu-bank': ('D GPU接收直接安装与异步CPU备份', '同步CPU缓存往返', 'GPU直接安装＋owned异步备份'),
     }[kind]
     baseline, optimized = aggregate["baseline"], aggregate["optimized"]
     started = first_formal_time(directory)
@@ -214,7 +216,8 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         {"v-combine": "唯一变量为D combine_reserve_start；所有臂 reuse_receive_slots=false。",
          "v-slots": "唯一变量为D reuse_receive_slots；所有臂 combine_reserve_start=false。",
          "v-workers": "所有臂 combine_reserve_start=false、reuse_receive_slots=false、reuse_io=false；原生serving实现相同，增加worker无需改动交付协议。",
-         "v-direct-sparse": "唯一变量为V direct_sparse_batch_put；D配置完全相同。保留device readiness同步，opt从原pool MR按component-major精确地址直接batch发送，至多128片段。"}[kind],
+         "v-direct-sparse": "唯一变量为V direct_sparse_batch_put；D配置完全相同。保留device readiness同步，opt从原pool MR按component-major精确地址直接batch发送，至多128片段。",
+         'd-gpu-bank': '唯一变量为D gpu_receive_to_bank；V两臂均采用staging packed PUT，直接scatter关闭。GPU接收先完成私有clone，再ACK/退休MR；下一bank直接从clone安装，CPU历史备份独立持有引用和预算。'}[kind],
         "八次Prompt、实际输出ID和文本一致，cached_tokens=0；每请求420jobs/840搜索RPC，每模式3136稳态查询profile，均2items/14Qrows。",
         f"部署 bundle 中{proof['deployed_files']}个文件的实际哈希与V/D serving source gate一致；源码身份使用记录的部署包，没有读取后来编辑的工作树。",
         "所有接收写入保留完整身份、精确native终态字节证明、安装后ACK及UNKNOWN保留；最终 owned={}、cleanup_errors=[]、六张GPU归零。", "",
@@ -242,7 +245,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
             "客户端TPOT按每请求实际16个token事件的(last-first)/15计算，排除TTFT；每模式4请求，共60个输出间隔。",
             "首token来自P Prefill；首个D forward使用已初始化bank，KV等待为零。另报告其后14个间隔，避免短Decode的首步降低均值。",
             "后续KV等待按step>0累计等待/56计算算术平均；以下请求TPOT中位数、单步等待中位数与算术平均分别标明。", "",
-            "| 指标 | workers=2 | workers=4 | 相对变化 |", "|---|---:|---:|---:|"]
+            f"| 指标 | {baseline_label} | {optimized_label} | 相对变化 |", "|---|---:|---:|---:|"]
         for label, field in (
             ("客户端TPOT算术平均", "client_tpot_mean_ms"),
             ("客户端TPOT请求中位数", "client_tpot_request_median_ms"),
@@ -267,7 +270,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "控制提交时间先对每次交付的reserve/start/combined求和，再计算中位数。各阶段独立中位数不能相加重建请求。", "",
         f"| 子阶段 | {baseline_label} | {optimized_label} |", "|---|---:|---:|"]
     for label, field in (("接收区准备", "prepare"), ("物理分配", "allocate"), ("物理注册", "register"),
-                         ("poll RPC", "poll"), ("安装后ACK", "ack"), ("接收区close", "close"), ("GPU→CPU缓存copy", "cache_copy")):
+                         ("poll RPC", "poll"), ("安装后ACK", "ack"), ("接收区close", "close"), ("接收安装／GPU clone与备份提交" if kind == 'd-gpu-bank' else "GPU→CPU缓存copy", "cache_copy")):
         lines.append(f"| {label} | {stages['baseline']['median_stage_ms'][field]:.3f} ms | {stages['optimized']['median_stage_ms'][field]:.3f} ms |")
     lines.append(f"| reserve/start控制提交 | {stages['baseline']['reserve_start_submission_ms']:.3f} ms | {stages['optimized']['reserve_start_submission_ms']:.3f} ms |")
     lines += ["", "实际总调用计数覆盖每模式四个正式请求，含priming及最终物理池退休；poll为实测次数，start直接返回READY时可为零。", "",
@@ -290,7 +293,8 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "CAGRA候选允许原生抖动；没有冻结missing集合。查询、D RPC和交付时间包含不同范围，不把差值当作纯网络或纯native传输时间。", "", "## 验证与范围", "",
         f"CPU gate实际结果：`{counts['unit']['exact_summary']}`；完整输出见gate.tar.gz与gate_count_record.json。"]
     if "native" in counts:
-        detail = ("两GPU原始pool MR、多层、多head、非连续token、非零Entry偏移与末页scatter，0 staging注册；caller初态GPU0，发送使用显式source设备上下文" if kind == 'v-direct-sparse'
+        detail = ('故意阻塞CPU缓存发布，并在原接收逻辑lease退休后覆盖接收区；GPU bank与历史CPU备份均保持精确，独立引用和预算完整退休。固定物理MR在全部案例完成后注销' if kind == 'd-gpu-bank' else
+                  "两GPU原始pool MR、多层、多head、非连续token、非零Entry偏移与末页scatter，0 staging注册；caller初态GPU0，发送使用显式source设备上下文" if kind == 'v-direct-sparse'
                   else "两个执行器复用四个物理MR并安全注销")
         lines.append(f"原生本地Mooncake gate通过{counts['native']['exact_byte_cases']}个精确字节案例，{detail}；本地session gate与线上跨节点RDMA对照是独立观测。")
     if "records_unit" in counts:
@@ -310,7 +314,15 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
             "opt虽然取消V staging复制/注册，但每个缺失head/token变成独立256B源切片。当前绑定下，small-write batch提交成本与额外poll使完整交付变慢；此解释来自实际start/poll和native计数，不能把这些含同步/控制的wall时间当成纯网络延迟。",
             "direct_sparse_summary.json逐arm/rank核对warmup后新增batch/slice数与D真实交付行数，保留adapter native计时（含初始full-KV fan-in）、唯一原pool MR及退休证明。",
             "gate.tar.gz也保存本地CPU初次fixture错误、缺Triton环境失败与后续修正后的原始输出。CloudLab正式CPU和native gate才作为本次资格。"]
-    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers", "v-direct-sparse": "fresh_direct_sparse"}[kind]
+    if kind == 'd-gpu-bank':
+        lines += ['', '## 异步备份与采用范围', '',
+            'opt在同一台D上添加两个有界CPU备份线程；完整回调workers仍为2。它保持每次交付物理注册，不把CPU缓存发布作为新GPU bank就绪的依赖。',
+            '原生强制延迟实验验证逻辑lease可先退休、接收区可先覆盖；实际跨节点路径仍逐次物理注销，IO快照记录了全部注册/注销/ACK与备份完成数。',
+            'CPU历史行仅在复制完成后标记valid；pending行可从独立GPU owner取出。GPU reader和CPU备份各持一份pin，借用行引用先清空，再退还存储预算。',
+            'opt的cache_copy_seconds计量私有GPU clone与备份提交，异步CPU发布时间另在gpu_backup.background_seconds记录；它不是完整D2H复制时长。',
+            '没有根据本次八个短请求默认启用；TPOT、均值等待和顺序漂移分别保留，不能相加或用局部copy节省推断客户端收益。',
+            '先行原型和首次gate另存previous_pilot.tar.gz/previous_gate.tar.gz。复查后修正临时行别名与预算退款次序，重新冻结与重测；主统计只来自当前一轮ABBA。']
+    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers", "v-direct-sparse": "fresh_direct_sparse", 'd-gpu-bank': 'fresh_gpu_bank'}[kind]
     lines += ["", "```text",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/run_pvd_oasis_serving_cloudlab.py --tag {tag} --comparison {comparison['comparison']} --arms base_a,opt_a,opt_b,base_b --cases 99401,99402 --tokens 16",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_serving.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/{tag} --comparison {comparison['comparison']}",
@@ -328,6 +340,8 @@ def main():
                         help="required existing CPU lifecycle recheck for v-workers")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--failed-prelaunch", type=Path)
+    parser.add_argument('--previous-pilot', type=Path)
+    parser.add_argument('--previous-gate', type=Path)
     parser.add_argument("--failure-note", default="前置尝试未产生正式请求，未纳入计时。")
     parser.add_argument("--report", action="store_true", help="write sibling Chinese Markdown report from completed evidence")
     args = parser.parse_args()
@@ -357,7 +371,7 @@ def main():
             if arm.startswith("opt") is (mode == "optimized") for row in rows)
     stages = delivery_stages(summary)
     worker_timings = (worker_timing_evidence(summary, read_json(directory / "online.json"), comparison["comparison"])
-                      if comparison["comparison"] in ("v-workers", "v-direct-sparse") else None)
+                      if comparison["comparison"] in ("v-workers", "v-direct-sparse", 'd-gpu-bank') else None)
     failed = project_path(args.failed_prelaunch, ARTIFACTS) if args.failed_prelaunch else None
     if failed is not None:
         assert not (failed / "online.json").exists() or read_json(failed / "online.json") == {}, "prelaunch archive contains measured requests"
@@ -374,6 +388,16 @@ def main():
         archive_directory(failed, output / "failed_prelaunch.tar.gz")
         write_json(output / "failed_prelaunch.json", dict(directory=failed.relative_to(ROOT).as_posix(),
             measurements_included=False, note=args.failure_note))
+    if args.previous_pilot is not None:
+        assert args.previous_gate is not None
+        previous = project_path(args.previous_pilot, ARTIFACTS)
+        previous_gate = project_path(args.previous_gate, ARTIFACTS)
+        assert read_json(previous / 'comparison.json')['comparison'] == comparison['comparison']
+        archive_directory(previous, output / 'previous_pilot.tar.gz')
+        archive_directory(previous_gate, output / 'previous_gate.tar.gz')
+        write_json(output / 'previous_pilot.json', dict(primary_statistics_included=False,
+            reason='temporary borrowed row references must clear before storage budget refund; requalified and reran frozen final candidate',
+            actual_formal_requests=sum(len(rows) for rows in read_json(previous / 'online.json').values())))
     for name in ("rpc_summary.json", "v_search_summary.json", "source_hashes.json", "comparison.json",
                  "checkout_heads.json", "final_gpu_memory.json", "cleanup_errors.json", "owned.json"):
         write_json(output / name, read_json(directory / name))

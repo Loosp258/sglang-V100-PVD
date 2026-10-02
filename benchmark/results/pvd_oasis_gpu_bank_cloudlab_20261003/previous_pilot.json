@@ -1,0 +1,5 @@
+{
+  "primary_statistics_included": false,
+  "reason": "temporary borrowed row references must clear before storage budget refund; requalified and reran frozen final candidate",
+  "actual_formal_requests": 8
+}

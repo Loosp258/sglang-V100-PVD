@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse")
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank")
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -64,6 +64,19 @@ def validate_io_snapshot(snapshot, *, reuse_io, jobs):
         assert 0 < snapshot["control_sessions_created"] <= 2 * jobs
 
 
+def validate_gpu_backup(snapshot, *, enabled):
+    assert snapshot.get('gpu_receive_to_bank', False) is enabled
+    backup = snapshot.get('gpu_backup')
+    if not enabled:
+        assert backup is None
+        return
+    assert backup['closed'] is backup['closing'] is True
+    assert backup['quarantined'] is False
+    assert backup['submitted'] == backup['completed'] == snapshot['delivery_count']
+    assert all(backup[name] == 0 for name in ('pending_rows', 'retained_owners', 'charged_bytes'))
+    assert 0 < backup['peak_bytes'] <= 33554432
+
+
 def validate_delivery_snapshot(snapshot, *, comparison, arm):
     combine, slots = delivery_flags(comparison, arm)
     assert snapshot["combine_reserve_start"] is combine
@@ -101,6 +114,8 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'd-gpu-bank':
+        validate_gpu_backup(snapshot, enabled=arm.startswith('opt'))
     validate_delivery_snapshot(snapshot, comparison=comparison, arm=arm)
     combine, slots = delivery_flags(comparison, arm)
     profiles = []
@@ -116,6 +131,8 @@ def validate_delivery_profiles(trace, *, comparison, arm):
             assert integer(item["nbytes"], "nbytes", minimum=1) == rows * 512
             assert item["combine_reserve_start"] is combine
             assert item["reuse_receive_slots"] is slots
+            if comparison == 'd-gpu-bank':
+                assert item['gpu_receive_to_bank'] is arm.startswith('opt')
             for name in DELIVERY_TIMINGS:
                 value = item[name]
                 assert type(value) in (int, float) and math.isfinite(value) and value >= 0, (name, value)
@@ -132,6 +149,8 @@ def validate_delivery_profiles(trace, *, comparison, arm):
                 assert item["physical_register_calls"] == item["physical_unregister_calls"] == 1
             profiles.append(item)
     assert len(profiles) == snapshot["delivery_count"]
+    if comparison == 'd-gpu-bank' and arm.startswith('opt'):
+        assert snapshot['gpu_backup']['rows_copied'] == sum(item['remote_rows'] for item in profiles)
     for field, counter in DELIVERY_COUNTS.items():
         total = sum(item[field] for item in profiles)
         if slots and field == "physical_unregister_calls":

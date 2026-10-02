@@ -1,0 +1,323 @@
+{
+  "aggregate": {
+    "baseline": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.296,
+        "thread_wait": 0.259,
+        "query_tensor": 0.016,
+        "manager_total": 6.137499999999999,
+        "manager_lock": 0.001,
+        "identity_lease": 0.041,
+        "query_place": 0.4745,
+        "workspace_lock": 0.002,
+        "finite_proof": 1.0685,
+        "native_scope": 0.042,
+        "native_submit": 0.977,
+        "native_completion": 0.9975,
+        "candidate_download": 1.165,
+        "candidate_mapping": 0.06,
+        "score_restore": 0.0,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.009,
+        "manager_completion": 0.152,
+        "json_parse": 0.4465,
+        "batch_total": 7.366,
+        "native_submit_and_completion": 1.9820000000000002,
+        "candidate_handling": 1.2365
+      }
+    },
+    "optimized": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.302,
+        "thread_wait": 0.3015,
+        "query_tensor": 0.016,
+        "manager_total": 6.418,
+        "manager_lock": 0.001,
+        "identity_lease": 0.045,
+        "query_place": 0.437,
+        "workspace_lock": 0.003,
+        "finite_proof": 1.0625,
+        "native_scope": 0.045,
+        "native_submit": 0.989,
+        "native_completion": 1.0285,
+        "candidate_download": 1.3650000000000002,
+        "candidate_mapping": 0.062,
+        "score_restore": 0.001,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.01,
+        "manager_completion": 0.17,
+        "json_parse": 0.471,
+        "batch_total": 7.722,
+        "native_submit_and_completion": 2.026,
+        "candidate_handling": 1.4335
+      }
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.301,
+          "thread_wait": 0.2715,
+          "query_tensor": 0.017,
+          "manager_total": 6.319,
+          "manager_lock": 0.001,
+          "identity_lease": 0.043,
+          "query_place": 0.442,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.055,
+          "native_scope": 0.044,
+          "native_submit": 0.986,
+          "native_completion": 1.023,
+          "candidate_download": 1.258,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1525,
+          "json_parse": 0.461,
+          "batch_total": 7.5905000000000005,
+          "native_submit_and_completion": 2.0095,
+          "candidate_handling": 1.3245
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.3025,
+          "thread_wait": 0.2985,
+          "query_tensor": 0.017,
+          "manager_total": 6.276,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_place": 0.509,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.036,
+          "native_scope": 0.045,
+          "native_submit": 0.9895,
+          "native_completion": 1.0085,
+          "candidate_download": 1.206,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.171,
+          "json_parse": 0.448,
+          "batch_total": 7.612,
+          "native_submit_and_completion": 2.004,
+          "candidate_handling": 1.2795
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.302,
+          "thread_wait": 0.291,
+          "query_tensor": 0.017,
+          "manager_total": 6.448,
+          "manager_lock": 0.001,
+          "identity_lease": 0.045,
+          "query_place": 0.4835,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.0594999999999999,
+          "native_scope": 0.045,
+          "native_submit": 0.9895,
+          "native_completion": 1.048,
+          "candidate_download": 1.3295,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.001,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.01,
+          "manager_completion": 0.1805,
+          "json_parse": 0.464,
+          "batch_total": 7.7325,
+          "native_submit_and_completion": 2.0195,
+          "candidate_handling": 1.404
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.303,
+          "thread_wait": 0.3135,
+          "query_tensor": 0.017,
+          "manager_total": 6.3395,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_place": 0.43,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.045,
+          "native_scope": 0.044,
+          "native_submit": 0.988,
+          "native_completion": 1.023,
+          "candidate_download": 1.2945,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.001,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.17,
+          "json_parse": 0.477,
+          "batch_total": 7.673,
+          "native_submit_and_completion": 2.016,
+          "candidate_handling": 1.3730000000000002
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.301,
+          "thread_wait": 0.312,
+          "query_tensor": 0.016,
+          "manager_total": 6.388999999999999,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_place": 0.4365,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.0910000000000002,
+          "native_scope": 0.044,
+          "native_submit": 0.989,
+          "native_completion": 0.996,
+          "candidate_download": 1.396,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.01,
+          "manager_completion": 0.1725,
+          "json_parse": 0.47,
+          "batch_total": 7.695,
+          "native_submit_and_completion": 2.0075,
+          "candidate_handling": 1.4700000000000002
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.3,
+          "thread_wait": 0.304,
+          "query_tensor": 0.016,
+          "manager_total": 6.4615,
+          "manager_lock": 0.001,
+          "identity_lease": 0.045,
+          "query_place": 0.417,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.049,
+          "native_scope": 0.046,
+          "native_submit": 0.989,
+          "native_completion": 1.057,
+          "candidate_download": 1.4420000000000002,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.001,
+          "backend_enqueue": 0.001,
+          "host_materialize": 0.01,
+          "manager_completion": 0.1565,
+          "json_parse": 0.476,
+          "batch_total": 7.795,
+          "native_submit_and_completion": 2.0475000000000003,
+          "candidate_handling": 1.5194999999999999
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.283,
+          "thread_wait": 0.182,
+          "query_tensor": 0.014,
+          "manager_total": 5.7725,
+          "manager_lock": 0.001,
+          "identity_lease": 0.0345,
+          "query_place": 0.489,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.0554999999999999,
+          "native_scope": 0.035,
+          "native_submit": 0.953,
+          "native_completion": 0.9684999999999999,
+          "candidate_download": 1.0535,
+          "candidate_mapping": 0.055,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.008,
+          "manager_completion": 0.125,
+          "json_parse": 0.419,
+          "batch_total": 6.9605,
+          "native_submit_and_completion": 1.9445000000000001,
+          "candidate_handling": 1.1179999999999999
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.295,
+          "thread_wait": 0.301,
+          "query_tensor": 0.015,
+          "manager_total": 6.0995,
+          "manager_lock": 0.001,
+          "identity_lease": 0.041,
+          "query_place": 0.463,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.1045,
+          "native_scope": 0.042,
+          "native_submit": 0.977,
+          "native_completion": 0.9984999999999999,
+          "candidate_download": 1.178,
+          "candidate_mapping": 0.06,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1535,
+          "json_parse": 0.4505,
+          "batch_total": 7.342,
+          "native_submit_and_completion": 1.974,
+          "candidate_handling": 1.254
+        }
+      }
+    ]
+  },
+  "scope": "ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings"
+}

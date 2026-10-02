@@ -1,0 +1,7 @@
+{
+  "source": "recorded gate/deployed.tar.gz and runner source_hashes.json",
+  "bundle_sha256": "04da00d86b2d08d8746fd68d703bd7fb6e9ec85cbdf616f2e3bbcc3575430d27",
+  "deployed_files": 327,
+  "serving_sources_match_gate": true,
+  "live_working_tree_sources_used": false
+}

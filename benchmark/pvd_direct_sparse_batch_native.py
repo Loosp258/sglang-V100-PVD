@@ -299,7 +299,13 @@ def run(args):
                                 tracked_transfers_observed=tracked, batch_seconds=batch_seconds,
                                 payload_sha256=hashlib.sha256(observed.numpy().tobytes()).hexdigest(),
                             )
-                            lease.release_after_proof()
+                            consumer = getattr(args, 'gpu_bank_consumer', None)
+                            if consumer is not None:
+                                with torch.cuda.device(device):
+                                    observation['gpu_bank'] = consumer(
+                                        lease, manifest, oracle, budget, device, args.timeout)
+                            else:
+                                lease.release_after_proof()
                             budget.release(receive_owner)
                             observations.append(observation)
                         return observations

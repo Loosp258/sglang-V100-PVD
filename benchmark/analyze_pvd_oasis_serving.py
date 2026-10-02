@@ -25,7 +25,8 @@ if a.comparison in ('v-pack',) + DELIVERY_COMPARISONS:
 if configs:
     allowed_difference = {'v-io': 'reuse_io', 'v-combine': 'combine_reserve_start',
                           'v-slots': 'reuse_receive_slots', 'v-workers': 'workers',
-                          'v-direct-sparse': '__no_config_difference__'}.get(a.comparison, 'overlap')
+                          'v-direct-sparse': '__no_config_difference__',
+                          'd-gpu-bank': 'gpu_receive_to_bank'}.get(a.comparison, 'overlap')
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
     assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
                for config in configs), 'comparison has unrelated configuration differences'
@@ -48,6 +49,8 @@ if configs:
             assert config['combine_reserve_start'] is combine and config['reuse_receive_slots'] is slots
             assert config['workers'] == comparison_workers(a.comparison, arm)
             assert config['top_k'] == 4 and config['capacity'] == 32
+            if a.comparison == 'd-gpu-bank':
+                assert config['gpu_receive_to_bank'] is arm.startswith('opt')
         declared = json.loads((root / 'comparison.json').read_text())
         assert list(online) == declared['arms'] == ['base_a', 'opt_a', 'opt_b', 'base_b']
         cases = [int(value) for value in declared['cases'].split(',')]
@@ -222,6 +225,7 @@ scope = {
     'v-slots': 'live overlapped paired with identical fast V search, per-job HTTP and separate reserve/start; per-delivery vs request-owned physical receive registrations',
     'v-workers': 'live overlapped paired with identical fast V search, per-job HTTP, separate reserve/start and per-delivery registration; two vs four callback workers',
     'v-direct-sparse': 'live overlapped paired with identical fast V search and D; staged packed PUT vs direct registered Entry scatter batch PUT',
+    'd-gpu-bank': 'live overlapped paired with identical packed-PUT V; CPU cache round trip vs direct GPU bank rows with owned asynchronous historical backup',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']

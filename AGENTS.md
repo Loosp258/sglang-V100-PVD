@@ -958,3 +958,42 @@ calculations from service/workers are diagnostic and not latency guarantees.
   TP2, load, broader quality and real failure-under-load remain open. Commit
   locally only. Step 3 GPU receive-to-bank with owned asynchronous CPU backup
   may now proceed; do not add these independent experiment gains.
+
+#### GPU receive-to-bank and asynchronous CPU backup completed (2026-10-03)
+
+- Step 3 adds default-off D gpu_receive_to_bank. Proven terminal GPU receive
+  rows are privately cloned and fenced before ACK/receive MR retirement.
+  Next-layer banks consume owned GPU rows directly; asynchronous historical
+  CPU backup publishes valid rows only after its own completed copy proof.
+  Independent bank/backup pins keep storage charged through actual retirement.
+  Borrowed aliases clear before the final unpin, including a concurrent refund.
+  Failed/UNKNOWN fences retain owners and budget; no silent fallback or repair.
+- The final frozen qualification passed 110 CPU tests and 48 real Mooncake
+  local-session cases. The latter force delayed CPU publication, retire a
+  logical receive lease and poison its original slot; GPU bank and CPU backup
+  remain byte-exact. Four physical receive MRs are unregistered only after all
+  native cases. These are separate observations from cross-node online timing.
+- Final live base_a/opt_a/opt_b/base_b restarts all roles and excludes two
+  identical warmups per arm. Only gpu_receive_to_bank differs; V keeps staging
+  packed PUT, the same fast graph/Q/Top4/capacity32/max_new16 and workers2.
+  Two owned CPU backup threads are additional D resources in the optimized arm.
+  Initial graph-gated full KV/private EAGLE seed stays charged; P->D remains off.
+- Arithmetic mean steady KV wait 425.105 -> 440.957 ms/token;
+  client TPOT 502.199 -> 518.285 ms/token;
+  median client completion 10.147 -> 10.310 s.
+  Mean complete callback service 38.303 -> 39.523 ms/layer.
+  Preserve means, medians and ABBA drift separately; four requests/mode are
+  insufficient to establish broader quality or production gains. Default off.
+- All eight actual output ID/text identities match. Actual completed backup
+  counts/rows agree with every native delivery; pending owners and charges are
+  zero at request close. Original receive registrations/ACKs retire exactly.
+  The first prototype and gate are archived separately. A later start was
+  interrupted before formal requests to strengthen alias-before-unpin order;
+  it and its superseded gate are preserved, excluded from primary statistics.
+- Evidence: benchmark/results/pvd_oasis_gpu_bank_cloudlab_20261003.md and its
+  result directory, including full raw logs/configs/source identities/native
+  observations and portable hashes. Owned/cleanup are empty; six GPUs 0 MiB.
+  TP2, long Decode, load, more Prompts and native failure injection remain open.
+  Commit locally only, no push. Step 4 staged search/delivery/install may now
+  proceed using unchanged packed-PUT V and default CPU-cache D as its baseline.
+  Do not add independent earlier experiment gains.
