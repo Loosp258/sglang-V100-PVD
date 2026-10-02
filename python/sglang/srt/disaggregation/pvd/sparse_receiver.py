@@ -68,6 +68,34 @@ class SparseReceiveRegistry:
     def _after_register(self, record):
         """Device-specific local consumer ownership."""
 
+    def _destination_charge(self, manifest):
+        return manifest.nbytes
+
+    def _prepare_registration(self, record, *, endpoint, rank, rail, generation):
+        try:
+            tick = time.perf_counter()
+            record._buffer = self._allocate_buffer(record.manifest.nbytes)
+            record.profile["allocate_seconds"] = time.perf_counter() - tick
+        except BaseException:
+            self.budget.release(record.owner)
+            self._records.pop(record.identity.transfer_id, None)
+            raise
+        record._registration_unknown = True
+        self._before_register(record)
+        # A raising register_memory may have entered native code. Preserve its
+        # backing storage rather than guessing that registration never happened.
+        tick = time.perf_counter()
+        record.profile["physical_register_calls"] += 1
+        record._registration = self.engine.register_memory(
+            record._buffer, endpoint=endpoint, rank=rank, rail=rail,
+            metadata={
+                PVD_RECEIVER_EPOCH_METADATA_KEY: self.receiver_epoch,
+                PVD_GENERATION_METADATA_KEY: generation,
+                SPARSE_DELIVERY_KEY: record.manifest.to_dict(),
+            },
+        )
+        record.profile["register_seconds"] = time.perf_counter() - tick
+
     def prepare(
         self,
         manifest,
@@ -107,34 +135,10 @@ class SparseReceiveRegistry:
             raise SparseReceiveError("explicit endpoint and rail required")
         record = self._new_record(manifest, identity, client)
         record._scope = owner_scope
-        self.budget.reserve(record.owner, manifest.nbytes, 1)
+        self.budget.reserve(record.owner, self._destination_charge(manifest), 1)
         self._records[delivery_id] = record
-        try:
-            tick = time.perf_counter()
-            record._buffer = self._allocate_buffer(manifest.nbytes)
-            record.profile["allocate_seconds"] = time.perf_counter() - tick
-        except BaseException:
-            self.budget.release(record.owner)
-            del self._records[delivery_id]
-            raise
-        record._registration_unknown = True
-        self._before_register(record)
-        # A raising register_memory may have entered native code. Preserve its
-        # backing storage rather than guessing that registration never happened.
-        tick = time.perf_counter()
-        record.profile["physical_register_calls"] += 1
-        record._registration = self.engine.register_memory(
-            record._buffer,
-            endpoint=endpoint,
-            rank=rank,
-            rail=rail,
-            metadata={
-                PVD_RECEIVER_EPOCH_METADATA_KEY: self.receiver_epoch,
-                PVD_GENERATION_METADATA_KEY: generation,
-                SPARSE_DELIVERY_KEY: manifest.to_dict(),
-            },
-        )
-        record.profile["register_seconds"] = time.perf_counter() - tick
+        self._prepare_registration(record, endpoint=endpoint, rank=rank,
+                                   rail=rail, generation=generation)
         descriptor = record._registration.descriptor
         record.identity = WriteIdentity(
             **{**identity.__dict__, "region_id": descriptor.region_id}

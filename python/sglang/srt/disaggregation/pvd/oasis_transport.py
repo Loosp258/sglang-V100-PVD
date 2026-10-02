@@ -16,6 +16,7 @@ from sglang.srt.disaggregation.pvd.control_server import HttpShardClient
 from sglang.srt.disaggregation.pvd.cuda_sparse_receiver import CUDASparseReceiveRecord, CUDASparseReceiveRegistry
 from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerReply, select_resident
 from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
+from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient, SearchScope
@@ -73,6 +74,31 @@ class OasisCPUReceiveRegistry(SparseReceiveRegistry):
 
 
 class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._slot_lease = None
+
+    def _release_destination(self):
+        if self._slot_lease is not None and self._local_unknown is not None:
+            self._slot_lease.quarantine(self._local_unknown)
+        super()._release_destination()
+
+    def _unregister_destination(self):
+        if self._slot_lease is None:
+            return super()._unregister_destination()
+        self._registry._owner()
+        # close() has fenced every published unacknowledged write. A normal
+        # ACK additionally proves successful delivery and local installation.
+        if (self._local_unknown is not None or not self._closing
+                or (self._published and not self._safe)
+                or getattr(self, "_cache_copy_owners", ())
+                or (self._acknowledged and not (
+                    self._ready and self._installed and self._ordered))):
+            raise RuntimeError("receive slot lacks remote/local retirement proof")
+        self._slot_lease.release_after_proof()
+        self._slot_lease = None
+        self._registration = self._buffer = None
+
     def copy_to_cache(self, cache):
         self._live()
         if self._lock.locked() or not self._ready or not self._safe or self._installed:
@@ -81,7 +107,11 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
         try:
             # Retain the existing conservative GPUDirect ordering policy.
             # This device fence is included in delivery latency, not hidden.
-            self._registry.ordering.after_remote_write(self._registration)
+            try:
+                self._registry.ordering.after_remote_write(self._registration)
+            except BaseException:
+                self._local_unknown = "CUDA receive ordering unknown"
+                raise
             self._ordered = True
             views = self.manifest.payload_views(self._buffer)
             self._cache_copy_owners.extend(views)
@@ -110,6 +140,34 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
 
 
 class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
+    def __init__(self, *args, receive_pool=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if receive_pool is not None and (
+                receive_pool.engine is not self.engine
+                or receive_pool.budget is not self.budget
+                or receive_pool.device != self.device
+                or receive_pool.receiver_epoch != self.receiver_epoch):
+            raise ValueError("request receive pool differs from worker registry")
+        self.receive_pool = receive_pool
+
+    def _destination_charge(self, manifest):
+        # Physical maximum capacity is persistently charged by the pool.
+        return 0 if self.receive_pool is not None else manifest.nbytes
+
+    def _prepare_registration(self, record, **route):
+        if self.receive_pool is None:
+            return super()._prepare_registration(record, **route)
+        record._registration_unknown = True
+        lease = self.receive_pool.acquire(record.manifest, record.identity,
+            endpoint=route["endpoint"], rail=route["rail"], device=self.device,
+            ordering=self.ordering)
+        record._slot_lease = lease
+        record._buffer, record._registration = lease.buffer, lease.registration
+        record.profile.update(reuse_receive_slots=True,
+            allocate_seconds=lease.allocate_seconds,
+            register_seconds=lease.register_seconds,
+            physical_register_calls=lease.physical_register_calls)
+
     def _new_record(self, manifest, identity, client):
         return OasisCUDAReceiveRecord(self, manifest, identity, client)
 
@@ -117,7 +175,7 @@ class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
 class OasisLayerTransport:
     def __init__(self, manager, selected, *, request_id, incarnation, device,
                  vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False,
-                 combine_reserve_start=False):
+                 combine_reserve_start=False, reuse_receive_slots=False, workers=2):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -126,7 +184,9 @@ class OasisLayerTransport:
                 or tuple(route.rank for route in selected.shards) != (0, 1)
                 or not 1 <= capacity <= 2048 or not 0 <= max_new <= capacity
                 or not 1 <= top_k <= 512 or timeout <= 0
-                or type(reuse_io) is not bool or type(combine_reserve_start) is not bool):
+                or type(reuse_io) is not bool or type(combine_reserve_start) is not bool
+                or type(reuse_receive_slots) is not bool
+                or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         self.manager, self.selected = manager, selected
         self.request_id, self.incarnation = request_id, incarnation
@@ -135,6 +195,11 @@ class OasisLayerTransport:
         self.timeout, self.vector_space = timeout, vector_space
         self.reuse_io = reuse_io
         self.combine_reserve_start = combine_reserve_start
+        self.reuse_receive_slots = reuse_receive_slots
+        self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
+            manager.transfer_budget, device=self.device,
+            receiver_epoch=manager.worker_epoch, slots_per_rank=workers,
+            capacity_bytes=capacity * 2 * 512) if reuse_receive_slots else None)
         self._shared_clients = None
         self._shared_close_future = None
         self._closing = False
@@ -208,7 +273,8 @@ class OasisLayerTransport:
                     owner_thread=threading.get_ident(),
                     registry=OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
                         self.manager.transfer_budget, receiver_epoch=self.manager.worker_epoch,
-                        device=self.device, combine_reserve_start=self.combine_reserve_start))
+                        device=self.device, combine_reserve_start=self.combine_reserve_start,
+                        receive_pool=self.receive_pool))
                 self.local.state = state
                 self.workers.append(state)
                 self._io_counts["job_count"] += 1
@@ -258,8 +324,13 @@ class OasisLayerTransport:
                 ("reserve_rpc_count", "reserve_calls"), ("start_rpc_count", "start_calls"),
                 ("combined_rpc_count", "combined_calls"), ("poll_rpc_count", "poll_calls"),
                 ("ack_rpc_count", "ack_calls"))}
+            pool = self.receive_pool.snapshot() if self.receive_pool is not None else None
+            if pool is not None:
+                sums["registration_count"] = pool["physical_register_calls"]
+                sums["unregistration_count"] = pool["physical_release_calls"]
             return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
-                combine_reserve_start=self.combine_reserve_start, reuse_receive_slots=False,
+                combine_reserve_start=self.combine_reserve_start,
+                reuse_receive_slots=self.reuse_receive_slots, receive_pool=pool,
                 delivery_count=len(deliveries),
                 manager_io_loop_reused=self.reuse_io,
                 shared_close_submitted=self._shared_close_future is not None,
@@ -440,6 +511,8 @@ class OasisLayerTransport:
             # Timeout/cancellation/error leaves the cached future, clients and
             # cache intact. Retrying close never submits a duplicate close.
             future.result(timeout=self.timeout)
+        if self.receive_pool is not None:
+            self.receive_pool.close()
         self.cache.clear()
         self._cpu_cache = self._cache_valid = None
         self._shared_clients = None

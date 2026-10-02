@@ -68,7 +68,6 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
     for name in DELIVERY_COUNTS.values():
         integer(snapshot[name], name)
     assert snapshot["ack_rpc_count"] == deliveries
-    assert snapshot["poll_rpc_count"] >= deliveries
     assert snapshot["combined_rpc_count"] == (deliveries if combine else 0)
     assert snapshot["reserve_rpc_count"] == (0 if combine else deliveries)
     assert snapshot["start_rpc_count"] == (0 if combine else deliveries)
@@ -118,7 +117,9 @@ def validate_delivery_profiles(trace, *, comparison, arm):
                 integer(item[name], name)
             assert item["reserve_calls"] == item["start_calls"] == (0 if combine else 1)
             assert item["combined_calls"] == (1 if combine else 0)
-            assert item["ack_calls"] == 1 and item["poll_calls"] >= 1
+            # A successful start response can already prove terminal readiness.
+            # Zero polling is valid; actual totals are matched below.
+            assert item["ack_calls"] == 1
             assert item["physical_register_calls"] in (0, 1)
             assert item["physical_unregister_calls"] in (0, 1)
             if not slots:

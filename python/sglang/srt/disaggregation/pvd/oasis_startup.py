@@ -210,7 +210,8 @@ class OasisResources:
                 incarnation=incarnation, device=self.device, vector_space=cfg["vector_space"],
                 capacity=cfg["capacity"], max_new=cfg["max_new"], top_k=cfg["top_k"],
                 timeout=cfg["timeout_seconds"], reuse_io=cfg.get("reuse_io", False),
-                combine_reserve_start=cfg.get("combine_reserve_start", False))
+                combine_reserve_start=cfg.get("combine_reserve_start", False),
+                reuse_receive_slots=cfg.get("reuse_receive_slots", False), workers=cfg["workers"])
             pending["transport"] = transport
             bootstrap = LayerLookahead(req.rid, incarnation, layers=28,
                 workers=cfg["workers"], timeout=cfg["timeout_seconds"])
@@ -265,7 +266,7 @@ def maybe_install_oasis(scheduler):
             raise ValueError(f"positive integer Oasis {name} required")
     if (type(cfg["overlap"]) is not bool or type(cfg["reuse_io"]) is not bool
             or type(cfg["combine_reserve_start"]) is not bool
-            or type(cfg["reuse_receive_slots"]) is not bool or cfg["reuse_receive_slots"]
+            or type(cfg["reuse_receive_slots"]) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]
             or cfg["workers"] > 4 or cfg["capacity"] > 2048 or cfg["top_k"] > 512
             or cfg["max_sequence_tokens"] > scheduler.tp_worker.model_runner.model_config.context_len):

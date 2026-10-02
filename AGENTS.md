@@ -663,3 +663,29 @@ benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
    actual register/unregister reductions, unchanged Q/selection/byte counts and
    same outputs; report D waits and client time separately. No cross-run adding
    of gains; defaults stay off until wider shape/load/failure gates pass.
+
+#### Delivery fixed-cost implementation and native gates (2026-10-02)
+
+- Added independent default-off combine_reserve_start and reuse_receive_slots.
+  The former uses existing reserve/start lifecycle in one HTTP worker; the
+  latter keeps at most workers slots per rank for one request, with exact
+  logical destination generations and manifests. CPU finite-Q, HTTP reuse and
+  Triton packing remain separate knobs. Every rank delivery now records actual
+  allocation/registration, control RPC, cache-copy and local-close costs/calls.
+- Receive slots charge their maximum physical capacity even while idle; live
+  records retain the existing transfer-slot admission charge without charging
+  physical bytes twice. Normal recycling requires exact terminal/ACK and local
+  copy completion; cancelled paths need the exact identity-bound fence. UNKNOWN
+  never recycles or replaces a slot. Only joined request retirement unregisters
+  the original physical MR. CUDA ordering exceptions now remain sticky UNKNOWN
+  even if a later stream synchronization succeeds, on both benchmark arms.
+- Local CPU gates passed 105 tests including actual HTTP/FP16 record reuse,
+  old delayed authorization after reuse, and ordering UNKNOWN. CloudLab broad
+  CPU gates and a 48-case Mooncake local-session CUDA1 probe passed: four
+  physical receive MRs serviced two separate executors and 48 fresh generations,
+  exact bytes matched, original MRs retired and budgets returned to zero. This
+  is native local PUT proof; online V->D latency still needs independent ABBA.
+- A prelaunch comparison rejected an old D client.py through its source gate;
+  no service or formal request started and all six GPUs remained empty. The
+  deploy helper now aligns the complete V/D source-gate set. Preserve this
+  rejection separately from timed arms and rerun with a fresh tag.

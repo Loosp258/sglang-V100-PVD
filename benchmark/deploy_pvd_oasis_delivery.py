@@ -10,7 +10,7 @@ import gzip
 import hashlib
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
@@ -32,8 +32,17 @@ ROLES = {
     },
 }
 SOURCE_MODULES = (
-    "control_server.py", "sparse_receiver.py", "cuda_sparse_receiver.py",
+    "client.py", "protocol.py", "vector_store.py", "mooncake_engine.py",
+    "transfer_engine.py", "control_server.py", "sparse_receiver.py", "cuda_sparse_receiver.py",
     "oasis_transport.py", "oasis_startup.py", "oasis_receive_slots.py",
+    "cagra_backend.py", "prompt_index.py", "server.py", "cagra_kv_update.py",
+    "cagra_kv_prepare.py", "cagra_search_batch.py", "index_search.py",
+)
+CORE_SOURCES = (
+    "python/sglang/srt/server_args.py", "python/sglang/srt/models/qwen2.py",
+    "python/sglang/srt/managers/scheduler.py",
+    "python/sglang/srt/managers/scheduler_components/batch_result_processor.py",
+    "python/sglang/srt/disaggregation/decode.py",
 )
 CPU_TESTS = (
     "oasis_attention", "oasis_request", "oasis_pipeline", "oasis_serving",
@@ -78,6 +87,9 @@ def main():
     if not output.is_relative_to((root / "artifacts").resolve()):
         raise RuntimeError("output must remain in checkout artifacts")
     source_names = ["python/sglang/srt/disaggregation/pvd/" + n for n in SOURCE_MODULES]
+    source_names += [path.relative_to(root).as_posix() for path in
+                     (root / "python/sglang/srt/disaggregation/pvd").glob("oasis*.py")]
+    source_names += list(CORE_SOURCES)
     required_tests = list(CPU_TESTS)
     if args.mode == "combine":
         # Stage 1 can run before the independent slot implementation exists.
@@ -92,9 +104,14 @@ def main():
         if (root / path).is_file():
             test_names.append(path)
             required_tests.append(name)
+    record_test = "test/registered/disaggregation/test_pvd_oasis_receive_slot_records.py"
+    if (root / record_test).is_file():
+        test_names.append(record_test)
+        required_tests.append("oasis_receive_slot_records")
     names = source_names + test_names
-    if args.mode == "combine" and not (root / source_names[-1]).is_file():
-        names.remove(source_names[-1])
+    slot_source = "python/sglang/srt/disaggregation/pvd/oasis_receive_slots.py"
+    if args.mode == "combine" and not (root / slot_source).is_file():
+        names.remove(slot_source)
     if args.native_probe:
         names.append(args.native_probe)
     names = list(dict.fromkeys(names))
@@ -229,10 +246,28 @@ def main():
         )
         gate("unit", '"$CONDA_PREFIX/bin/python" -B -c ' + shlex.quote(unit_code))
         if args.native_probe:
+            native_output = None
+            for position, arg in enumerate(args.native_arg):
+                if arg == "--output":
+                    if position + 1 >= len(args.native_arg):
+                        raise ValueError("native --output has no path argument")
+                    native_output = args.native_arg[position + 1]
+                elif arg.startswith("--output="):
+                    native_output = arg.split("=", 1)[1]
+            if native_output is not None:
+                native_path = PurePosixPath(native_output)
+                if (".." in native_path.parts or not native_path.is_relative_to(
+                        PurePosixPath(remote_output)) or native_path.suffix != ".json"):
+                    raise ValueError("native JSON output must stay under remote gate artifacts")
             gate("native", '"$CONDA_PREFIX/bin/python" -B '
                  + shlex.quote(args.native_probe) + " "
                  + " ".join(shlex.quote(arg) for arg in args.native_arg),
                  cuda="0,1", timeout=300)
+            if native_output is not None:
+                raw = gzip.decompress(call("d", "native_json_collect", "gzip -c -- "
+                    + shlex.quote(str(native_path))).stdout)
+                json.loads(raw)  # Verify complete JSON while preserving its raw observations.
+                (output / "native.json").write_bytes(raw)
     finally:
         remaining = []
         for role in ROLES:
