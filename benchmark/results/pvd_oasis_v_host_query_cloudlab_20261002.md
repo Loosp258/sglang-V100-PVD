@@ -96,8 +96,10 @@ cuVS25.10的Python虽接受通用Prefilter，但CAGRA的C API和公开C++ dispat
 完整unit、精简summary、逐阶段/RPC汇总和实现身份。服务停止，owned={}、cleanup_errors=[]，三节点6GPU0MiB。
 
 ```text
-wsl -d Ubuntu -- python3 benchmark/run_pvd_oasis_serving_cloudlab.py --tag FRESH --comparison v-host-query --arms base_a,opt_a,opt_b,base_b --cases 99401,99402 --tokens 16
-wsl -d Ubuntu -- python3 benchmark/analyze_pvd_oasis_serving.py artifacts/FRESH --comparison v-host-query
-wsl -d Ubuntu -- python3 benchmark/analyze_pvd_oasis_v_search.py artifacts/FRESH
-wsl -d Ubuntu -- python3 benchmark/analyze_pvd_oasis_rpc.py artifacts/FRESH
+wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/run_pvd_oasis_serving_cloudlab.py --tag fresh_tag --comparison v-host-query --arms base_a,opt_a,opt_b,base_b --cases 99401,99402 --tokens 16
+wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_serving.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/fresh_tag --comparison v-host-query
+wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_v_search.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/fresh_tag
+wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_rpc.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/fresh_tag
 ```
+
+证据清单对JSON/TXT采用LF规范化hash；tar.gz按原始bytes校验，兼容Git跨平台换行。

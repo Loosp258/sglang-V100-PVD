@@ -1,50 +1,62 @@
 {
   "checkout_heads.json": {
+    "normalization": "lf",
     "bytes": 155,
     "sha256": "5b8aa1346bcc2c2b3aec96c68f6ef7f47a24510e1b297f38cb21a5c0302c414d"
   },
   "comparison.json": {
+    "normalization": "lf",
     "bytes": 146,
     "sha256": "6ab339c9dcd8721816abd799adcd87a258bcaf65b5f5a6c07880217cc8534588"
   },
   "final_gpu_memory.json": {
+    "normalization": "lf",
     "bytes": 95,
     "sha256": "e326837c4b37f3a1f96887927bbadc6bb26dd2db868e8b4e4fe85eea906ff587"
   },
   "implementation.json": {
-    "bytes": 338,
-    "sha256": "2531c5b625923db56096843090971c03e2e1f082e2fed70df1ba21eea750f233"
+    "normalization": "lf",
+    "bytes": 327,
+    "sha256": "bb818823b24e5ac767e49f90675d22b8083000739ff6526f6156f953fe96f0ca"
   },
   "native.tar.gz": {
+    "normalization": "raw",
     "bytes": 226126,
     "sha256": "298e9d6de0a0f69a7394452f96e37ecc39fa0690cae1dfee1138db8b5523f46a"
   },
   "native_summary.json": {
-    "bytes": 5327,
-    "sha256": "6c0b07df6a543e8e20feb56e4f18dda6343c2a5a93a9e352dde33ba320d22fb8"
+    "normalization": "lf",
+    "bytes": 5193,
+    "sha256": "30a21cc392d89de2ed71c93cda346a429b4f4ac795f524bede34e44a09c6819e"
   },
   "raw.tar.gz": {
+    "normalization": "raw",
     "bytes": 2468321,
     "sha256": "376ec7932b2d0f8517078a9dddfffed271ce1decb55d6e83006fa0233aaaebdd"
   },
   "rpc_summary.json": {
-    "bytes": 4508,
-    "sha256": "c42476d4a5047ead56b7994ed5f6e574a65883e84ceeb445ac9c258834a49d7b"
+    "normalization": "lf",
+    "bytes": 4371,
+    "sha256": "46ca6f881dbdd6db354a1132b168d992e0f934e6bc789e62bc5ce19ab3d14203"
   },
   "source_hashes.json": {
+    "normalization": "lf",
     "bytes": 2824,
     "sha256": "c94e2fd60fb707cf2aed29cd825bf88d7c90621fddee1dedede5db2185fa83b0"
   },
   "summary.json": {
-    "bytes": 26761,
-    "sha256": "43c1a3e19414098535ab2b987251a2ff7431424c47c3b50502351bbc9fed0f3e"
+    "normalization": "lf",
+    "bytes": 25650,
+    "sha256": "5addc015449385abe321a783d37af1c195d8af69670603f2fa860eaf1fe11bb1"
   },
   "unit.txt": {
+    "normalization": "lf",
     "bytes": 921,
     "sha256": "5fa4de092c3a4f02591b55f44158f521d6845bdf0d9212331ad1a40eb1726842"
   },
   "v_search_summary.json": {
-    "bytes": 10629,
-    "sha256": "50dee9293e35ded37e4de6e7bc0d5309a76d8bfc32e3f77b0f77ad52274bbb22"
+    "normalization": "lf",
+    "bytes": 10297,
+    "sha256": "20f1631ae5eaa1cc6fc34e8f4069e1ea30d05d7a5803fce97d96181216f3e3ce"
   }
 }
