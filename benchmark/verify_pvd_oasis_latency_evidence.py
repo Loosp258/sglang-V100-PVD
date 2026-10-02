@@ -44,31 +44,56 @@ def verify(folder, *, check_git=False):
     assert len(summary['requests']) == 4
     comparison = json.loads((folder / 'comparison.json').read_text(encoding='utf-8'))
     is_io = comparison['comparison'] == 'v-io'
-    if is_io:
+    is_pack = comparison['comparison'] == 'v-pack'
+    if is_io or is_pack:
         expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
-        assert comparison['arms'] == expected_arms, 'v-io requires the recorded ABBA order'
+        assert comparison['arms'] == expected_arms, 'comparison requires the recorded ABBA order'
         assert type(comparison['tokens']) is int and comparison['tokens'] == 16
         cases = [int(value) for value in comparison['cases'].split(',')]
-        assert len(cases) == len(set(cases)) == 2, 'v-io requires two distinct declared cases'
-        assert list(summary['requests']) == expected_arms, 'incomplete or reordered v-io arms'
+        assert len(cases) == len(set(cases)) == 2, 'comparison requires two distinct declared cases'
+        assert list(summary['requests']) == expected_arms, 'incomplete or reordered comparison arms'
         assert set(summary['output_identity']) == {str(case) for case in cases}
         for case in cases:
             assert summary['output_identity'][str(case)]['arms'] == expected_arms
         for arm, rows in summary['requests'].items():
             assert [row['case'] for row in rows] == cases, (arm, 'mismatched request cases')
+    if is_pack:
+        assert 'pack_modes.json' in manifest, 'packing runtime evidence must be hashed'
+        pack_modes = json.loads((folder / 'pack_modes.json').read_text(encoding='utf-8'))
+        assert set(pack_modes) == set(expected_arms), 'missing or extra packing arms'
+        for arm in expected_arms:
+            mode = pack_modes[arm]
+            assert mode['source'] == 'GET /internal/health from both V rank endpoints; full responses saved'
+            ranks = mode['ranks']
+            assert [item['rank'] for item in ranks] == [0, 1], (arm, 'both V ranks required')
+            expected_kernel = 'triton' if arm.startswith('opt') else 'torch'
+            for item in ranks:
+                rank = item['rank']
+                assert type(rank) is int
+                assert item['sparse_pack_kernel'] == expected_kernel
+                assert item['device'] == f'cuda:{rank}'
+                health_file = f'{arm}_v_rank{rank}_health.json'
+                assert item['health_file'] == health_file
+                assert health_file in manifest, (arm, rank, 'full health response must be hashed')
+                health = json.loads((folder / health_file).read_text(encoding='utf-8'))
+                assert type(health['rank']) is int and health['rank'] == rank
+                assert health['ready'] is True
+                assert health['device'] == item['device']
+                assert health['sparse_packing_mode'] == 'cuda_synchronous_experimental'
+                assert health['sparse_pack_kernel'] == expected_kernel
     for arm, rows in summary['requests'].items():
         assert len(rows) == 2
         for row in rows:
             assert row['completion_tokens'] == 16 and row['cached_tokens'] == 0
             assert row['trace_counts']['layers'] == 392
             assert row['trace_counts']['transport'] == 420
-            if is_io:
+            if is_io or is_pack:
                 # Keep this request snapshot in the compact summary as well as
                 # the complete raw D trace. Counts prove actual reuse, not just
                 # a launch flag or the presence of one shared client object.
                 snapshot = row.get('io')
                 assert isinstance(snapshot, dict), (arm, row['case'], 'missing IO snapshot')
-                reuse = arm.startswith('opt')
+                reuse = is_io and arm.startswith('opt')
                 assert snapshot['reuse_io'] is reuse
                 assert snapshot['manager_io_loop_reused'] is reuse
                 assert snapshot['shared_close_submitted'] is reuse

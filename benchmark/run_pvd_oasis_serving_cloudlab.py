@@ -25,7 +25,7 @@ parser.add_argument('--tag', required=True)
 parser.add_argument('--arms', default='serial_a,overlap_a,overlap_b,serial_b')
 parser.add_argument('--cases', default='99401,99402,99403,99404')
 parser.add_argument('--tokens', type=int, default=16)
-parser.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io'), default='pipeline')
+parser.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'), default='pipeline')
 args = parser.parse_args()
 if not re.fullmatch(r'[a-z0-9_]+', args.tag):
     raise ValueError('filename-safe fresh tag required')
@@ -94,11 +94,12 @@ def start(role, arm):
         PVD_PROFILE_V_SEARCH=1, PVD_PROFILE_D_SEARCH_BATCH=1,
         PVD_PROFILE_REFRESH_TIMELINE=1, PVD_GROUPED_EXACT_SEARCH=1,
         PVD_BATCHED_GROUP_SEARCH=1, PVD_SPLIT_POLICY_FILE='/tmp/' + args.tag + '_split.json')
-    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison in ('v-latency', 'v-host-query', 'v-io') or (
+    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison in ('v-latency', 'v-host-query', 'v-io', 'v-pack') or (
         args.comparison == 'v-search' and arm.startswith('opt')))
-    env['PVD_HOST_CANDIDATES'] = int(args.comparison in ('v-host-query', 'v-io') or (args.comparison == 'v-latency' and arm.startswith('opt')))
-    env['PVD_NATIVE_POOL'] = int(args.comparison in ('v-host-query', 'v-io') or (args.comparison == 'v-latency' and arm.startswith('opt')))
+    env['PVD_HOST_CANDIDATES'] = int(args.comparison in ('v-host-query', 'v-io', 'v-pack') or (args.comparison == 'v-latency' and arm.startswith('opt')))
+    env['PVD_NATIVE_POOL'] = int(args.comparison in ('v-host-query', 'v-io', 'v-pack') or (args.comparison == 'v-latency' and arm.startswith('opt')))
     env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-host-query' and arm.startswith('opt'))
+    env['PVD_TRITON_SPARSE_PACKING'] = int(args.comparison == 'v-pack' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash /tmp/' + args.tag + '_launcher.sh ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -115,6 +116,8 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
+            if role == 'v' and args.comparison == 'v-pack':
+                prove_pack_modes(arm)
             return
         if attempt % 15 == 0:
             print('waiting', role, arm, status, flush=True)
@@ -124,6 +127,29 @@ def start(role, arm):
         time.sleep(2)
     collect(role, arm)
     raise RuntimeError('health timeout: ' + role)
+
+
+def prove_pack_modes(arm):
+    """Read both actual rank stores before Prefill; save proof before asserting."""
+    path = OUT / 'pack_modes.json'
+    modes = json.loads(path.read_text()) if path.exists() else {}
+    modes[arm] = dict(source='GET /internal/health from both V rank endpoints; full responses saved', ranks=[])
+    expected = 'triton' if arm.startswith('opt') else 'torch'
+    for rank in (0, 1):
+        url = f'http://10.10.1.2:{9300 + rank}/internal/health'
+        response = call('v', 'curl -fsS --max-time 5 ' + shlex.quote(url))
+        filename = f'{arm}_v_rank{rank}_health.json'
+        (OUT / filename).write_text(response)
+        state = json.loads(response)
+        modes[arm]['ranks'].append(dict(rank=rank,
+            sparse_pack_kernel=state.get('sparse_pack_kernel'),
+            device=state.get('device'), health_file=filename, url=url))
+        path.write_text(json.dumps(modes, indent=2))
+        assert type(state.get('rank')) is int and state['rank'] == rank, 'wrong V rank health'
+        assert state.get('ready') is True, 'V rank not ready'
+        assert state.get('device') == f'cuda:{rank}', 'wrong physical V rank device'
+        assert state.get('sparse_packing_mode') == 'cuda_synchronous_experimental'
+        assert state.get('sparse_pack_kernel') == expected, 'actual V packing kernel differs from arm'
 
 
 def probe(arm, warm=False):
@@ -152,7 +178,7 @@ def main():
                 raise RuntimeError('GPU occupied: ' + role)
             CHECKOUTS[role] = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/pvd-direct-20260929'
         CHECKOUTS['v'] = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/' + (
-            'pvd-oasis-v-search-20261002' if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io') else 'pvd-search-decode-20261002')
+            'pvd-oasis-v-search-20261002' if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') else 'pvd-search-decode-20261002')
         CHECKOUTS['d'] = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002'
         # This named isolated archive was created by deploy_pvd_oasis_stage;
         # give its actual source tree an immutable launch-gate commit.
@@ -172,7 +198,9 @@ def main():
              (ROOT / 'python/sglang/srt/disaggregation/pvd').glob('oasis*.py')]),
             ('v', ['python/sglang/srt/disaggregation/pvd/' + n for n in
              ('cagra_backend.py', 'prompt_index.py', 'control_server.py', 'vector_store.py', 'server.py',
-              'cagra_kv_update.py', 'cagra_kv_prepare.py', 'cagra_search_batch.py', 'index_search.py')])):
+              'cagra_kv_update.py', 'cagra_kv_prepare.py', 'cagra_search_batch.py', 'index_search.py') +
+             (('sparse_copy.py', 'sparse_pack_plan.py', 'sparse_payload.py', 'sparse_delivery.py',
+               'sparse_receiver.py', 'triton_sparse_pack.py') if args.comparison == 'v-pack' else ())])):
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
             sources[role] = {}
             for line in output.splitlines():
@@ -199,13 +227,15 @@ def main():
                 max_sequence_tokens=2304, max_decode_steps=32, request_budget_bytes=268435456,
                 request_scratch_bytes=33554432, bootstrap_budget_bytes=536870912,
                 bootstrap_transient_bytes=268435456,
-                overlap=args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io') or arm.startswith('overlap'))
+                overlap=args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') or arm.startswith('overlap'))
             if args.comparison == 'v-io':
                 config['reuse_io'] = arm.startswith('opt')
+            elif args.comparison == 'v-pack':
+                config['reuse_io'] = False
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', '/tmp/' + args.tag + '_' + arm + '.json', encoded)
-            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io'):
+            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'):
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
@@ -213,7 +243,7 @@ def main():
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)
             stop('gateway'); stop('d')
-            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io'):
+            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'):
                 collect('v', arm); collect('p', arm)
                 stop('p'); stop('v')
         if args.comparison == 'pipeline':

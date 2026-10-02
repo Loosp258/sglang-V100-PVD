@@ -7,13 +7,15 @@ import statistics
 
 p = argparse.ArgumentParser()
 p.add_argument('directory', type=Path)
-p.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io'), default='pipeline')
+p.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'), default='pipeline')
 a = p.parse_args()
 root = a.directory
 if (root / 'comparison.json').exists():
     assert json.loads((root / 'comparison.json').read_text())['comparison'] == a.comparison
 online = json.loads((root / 'online.json').read_text())
 configs = [json.loads(path.read_text()) for path in sorted(root.glob('*_config.json'))]
+if a.comparison == 'v-pack':
+    assert len(configs) == len(online), 'missing/extra packing comparison configs'
 if configs:
     allowed_difference = 'reuse_io' if a.comparison == 'v-io' else 'overlap'
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
@@ -24,9 +26,25 @@ if configs:
             config=json.loads(path.read_text())
             assert config['overlap'] is True
             assert config['reuse_io'] is path.name.startswith('opt'), 'IO knob does not match comparison arm'
-    if a.comparison in ('v-search', 'v-latency', 'v-host-query'):
+    if a.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-pack'):
         assert all(config == configs[0] and config['overlap'] is True for config in configs), (
             'V search comparison requires identical overlapped Decode configs')
+    if a.comparison == 'v-pack':
+        assert all(config['reuse_io'] is False for config in configs), 'packing comparison changed HTTP mode'
+if a.comparison == 'v-pack':
+    pack_modes = json.loads((root / 'pack_modes.json').read_text())
+    assert set(pack_modes) == set(online), 'missing/extra actual packing mode arms'
+    for arm, proof in pack_modes.items():
+        expected = 'triton' if arm.startswith('opt') else 'torch'
+        assert len(proof['ranks']) == 2 and {r['rank'] for r in proof['ranks']} == {0, 1}
+        for rank in proof['ranks']:
+            assert rank['sparse_pack_kernel'] == expected
+            assert rank['health_file'] == f"{arm}_v_rank{rank['rank']}_health.json"
+            raw = json.loads((root / rank['health_file']).read_text())
+            assert type(raw['rank']) is int and raw['rank'] == rank['rank'] and raw['ready'] is True
+            assert raw['device'] == rank['device'] == f"cuda:{rank['rank']}"
+            assert raw['sparse_pack_kernel'] == expected
+            assert raw['sparse_packing_mode'] == 'cuda_synchronous_experimental'
 summary, modes = {}, ({'serial': [], 'overlap': []} if a.comparison == 'pipeline'
                      else {'baseline': [], 'optimized': []})
 for arm, rows in online.items():
@@ -58,9 +76,9 @@ for arm, rows in online.items():
             assert len(trace['transport']) == len(forwards) * 28
             assert {(t['step'], t['layer']) for t in trace['layers']} == {
                 (s, l) for s in range(len(forwards) - 1) for l in range(28)}
-        if a.comparison == 'v-io':
+        if a.comparison in ('v-io', 'v-pack'):
             io=trace['io']
-            reuse=arm.startswith('opt')
+            reuse=a.comparison == 'v-io' and arm.startswith('opt')
             jobs=len(forwards)*28
             assert io['reuse_io'] is reuse and io['closed'] and io['closing']
             assert io['job_count']==io['worker_loops_created']==jobs
@@ -124,9 +142,15 @@ output_identity = {case: dict(
     output_ids_identical=len({tuple(r['output_ids']) for _, r in rows}) == 1,
     text_identical=len({r['output_sha256'] for _, r in rows}) == 1,
     arms=[arm for arm, _ in rows]) for case, rows in by_case.items()}
+scope = {
+    'pipeline': 'live paired serial vs live paired per-layer overlap',
+    'v-search': 'live overlapped paired with baseline vs partial-head cached V search',
+    'v-latency': 'live overlapped paired with cached V baseline vs bounded RMM pool and host candidates',
+    'v-host-query': 'live overlapped paired with pooled host candidates and GPU vs private CPU finite-Q proof',
+    'v-io': 'live overlapped paired with identical V and per-job vs request-scoped HTTP clients',
+    'v-pack': 'live overlapped paired with identical V search and per-job HTTP; Torch vs Triton sparse packing',
+}[a.comparison] + '; full initial KV retained'
 result = dict(aggregate=aggregate, output_identity=output_identity, requests=summary,
-    comparison_scope=('live paired serial vs live paired per-layer overlap' if a.comparison == 'pipeline'
-        else ('live overlapped paired with baseline vs partial-head cached V search'
-            if a.comparison == 'v-search' else ('live overlapped paired with pooled host candidates and GPU vs private CPU finite-Q proof' if a.comparison == 'v-host-query' else ('live overlapped paired with identical V and per-job vs request-scoped HTTP clients' if a.comparison == 'v-io' else 'live overlapped paired with cached V baseline vs bounded RMM pool and host candidates')))) + '; full initial KV retained')
+    comparison_scope=scope)
 (root / 'summary.json').write_text(json.dumps(result, indent=2))
 print(json.dumps(dict(aggregate=aggregate, output_identity=output_identity), indent=2))

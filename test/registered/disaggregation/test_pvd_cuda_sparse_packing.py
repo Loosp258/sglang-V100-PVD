@@ -273,22 +273,59 @@ def test_unknown_metadata_upload_isolates_v_even_if_later_sync_succeeds(monkeypa
         SparsePackCompletionUnknown,
     )
 
-    store, entry, manifest, budget, _, delivery, _ = cuda_policy(monkeypatch)
+    store, entry, manifest, budget, target, delivery, _ = cuda_policy(monkeypatch)
     store.fused_cuda_sparse_packing = True
+    record = store.prompt_index._entries[entry.key.transfer_id]
     module = types.ModuleType("sglang.srt.disaggregation.pvd.triton_sparse_pack")
+    module._QUARANTINED_WORKSPACES = []
+    events = []
 
-    def failed_workspace(selected, *, budget, owner, **unused):
-        budget.reserve(owner, 64, 0)
-        raise SparsePackCompletionUnknown("metadata upload completion unknown")
+    class FailedWorkspace:
+        # CPU policy double, mirroring the real constructor's sticky upload
+        # quarantine; this is not evidence of an actual CUDA fault injection.
+        def __init__(self, selected, *, budget, owner, **unused):
+            self.budget, self.owner = budget, owner
+            self.token_ids = torch.tensor([0], dtype=torch.int64)
+            self.group_meta = torch.tensor([0, 0, 0, 1, 0], dtype=torch.int64)
+            budget.reserve(owner, 64, 0)
+            module._QUARANTINED_WORKSPACES.append(self)
+            events.append("metadata-unknown")
+            raise SparsePackCompletionUnknown("metadata upload completion unknown")
 
-    module.SparsePackWorkspace = failed_workspace
+    def synchronize(device):
+        assert device == torch.device("cuda:1")
+        assert record.users == 1
+        assert delivery.packing_index_lease is not None
+        events.append("later-sync-success")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("UNKNOWN metadata must not register or submit PUT")
+
+    module.SparsePackWorkspace = FailedWorkspace
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
+    monkeypatch.setattr(torch.cuda, "synchronize", synchronize)
+    monkeypatch.setattr(store.transfer_engine, "register_memory", forbidden)
+    monkeypatch.setattr(store.transfer_engine, "submit_put", forbidden)
     store.start_delivery(entry.key, delivery.delivery_id)
+    assert events[0] == "metadata-unknown" and "later-sync-success" in events
     assert delivery.local_terminal is TransportState.UNKNOWN
     assert store.snapshot()["isolated_reason"] is not None
     assert budget.snapshot()["used_staging_bytes"] == manifest.nbytes + 64
     assert delivery.transfer_handle is None
+    assert delivery.packing_index_lease is not None and record.users == 1
+    assert delivery.staging_guard.value is not None
+    assert len(module._QUARANTINED_WORKSPACES) == 1
+    retained_workspace = module._QUARANTINED_WORKSPACES[0]
+    assert retained_workspace.token_ids is not None and retained_workspace.group_meta is not None
+    store.prompt_index.close(entry.key.transfer_id)
+    store.close()
+    assert record.users == 1 and delivery.packing_index_lease is not None
+    assert store.prompt_index.budget.snapshot()["used_staging_bytes"] > 0
+    assert budget.snapshot()["used_staging_bytes"] == manifest.nbytes + 64
+    assert not store.entries[entry.key].resources_released
+    assert not store.fence_write(delivery.authorization.identity)["fenced"]
+    assert module._QUARANTINED_WORKSPACES == [retained_workspace]
+    store.transfer_engine.release_memory(target)  # Double submitted no remote PUT.
 
 
 @pytest.mark.parametrize("missing", ["space", "budget", "cuda"])

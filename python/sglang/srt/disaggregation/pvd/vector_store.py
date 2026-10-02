@@ -1490,6 +1490,7 @@ class VectorKVStore:
         descriptor = lease.enter_context(self.prompt_index.pin_selection(manifest))
         delivery.packing_index_lease = lease
         workspace = None
+        metadata_completion_unknown = False
         try:
             if self.fused_cuda_sparse_packing:
                 from sglang.srt.disaggregation.pvd.triton_sparse_pack import (
@@ -1518,6 +1519,7 @@ class VectorKVStore:
                 fused_workspace=workspace,
             )
         except SparsePackCompletionUnknown:
+            metadata_completion_unknown = True
             with self._lock:
                 delivery.local_terminal = TransportState.UNKNOWN
                 self._isolated_reason = "sparse metadata upload completion unknown"
@@ -1534,11 +1536,15 @@ class VectorKVStore:
                     delivery.local_terminal = TransportState.UNKNOWN
                     self._isolated_reason = "sparse CUDA packing completion unknown"
                 raise
-            if workspace is not None:
-                workspace.release_after_fence()
-                delivery.packing_workspace = None
-            lease.close()
-            delivery.packing_index_lease = None
+            if not metadata_completion_unknown:
+                if workspace is not None:
+                    workspace.release_after_fence()
+                    delivery.packing_workspace = None
+                lease.close()
+                delivery.packing_index_lease = None
+            # A constructor failure already retained its workspace/charge in
+            # the module quarantine. An incidental later successful fence must
+            # not release this delivery's index reader or repair UNKNOWN.
         try:
             registration = self.transfer_engine.register_memory(
                 staging,
