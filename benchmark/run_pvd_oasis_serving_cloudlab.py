@@ -154,6 +154,25 @@ def main():
             launcher = (ROOT / 'test/registered/disaggregation/cloudlab_pvd_new_lease.sh').read_bytes().replace(b'\r\n', b'\n')
             upload(role, '/tmp/' + args.tag + '_launcher.sh', launcher)
             upload(role, '/tmp/' + args.tag + '_split.json', b'{"schema":"pvd-exact16-split-policy-v1","choices":{"2159":{"prefix":2048}}}\n')
+        sources = {}
+        for role, relative in (('d', ['python/sglang/srt/server_args.py', 'python/sglang/srt/models/qwen2.py',
+            'python/sglang/srt/managers/scheduler.py', 'python/sglang/srt/managers/scheduler_components/batch_result_processor.py',
+            'python/sglang/srt/disaggregation/decode.py'] +
+            ['python/sglang/srt/disaggregation/pvd/' + p.name for p in
+             (ROOT / 'python/sglang/srt/disaggregation/pvd').glob('oasis*.py')]),
+            ('v', ['python/sglang/srt/disaggregation/pvd/' + n for n in
+             ('cagra_backend.py', 'prompt_index.py', 'control_server.py', 'vector_store.py', 'server.py',
+              'cagra_kv_update.py', 'cagra_kv_prepare.py', 'cagra_search_batch.py')])):
+            output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
+            sources[role] = {}
+            for line in output.splitlines():
+                digest, remote_path = line.split(None, 1)
+                local = remote_path.removeprefix(CHECKOUTS[role] + '/')
+                expected = hashlib.sha256((ROOT / local).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+                if digest != expected:
+                    raise RuntimeError('deployed source differs: ' + remote_path)
+                sources[role][local] = digest
+        (OUT / 'source_hashes.json').write_text(json.dumps(sources, indent=2))
         (OUT / 'checkout_heads.json').write_text(json.dumps(HEADS, indent=2))
         upload('v', '/tmp/' + args.tag + '_probe.py', (ROOT / 'benchmark/pvd_search_decode_probe.py').read_bytes())
         start('v', 'shared'); start('p', 'shared')

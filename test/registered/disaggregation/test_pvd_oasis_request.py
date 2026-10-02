@@ -98,7 +98,9 @@ class RequestTest(unittest.TestCase):
             owner.forward(19, 9)
         self.assertEqual(len(visits), 2)
         self.assertEqual(owner.state, "failed")
-        self.assertTrue(owner.close())
+        errors = owner.close()
+        self.assertTrue(errors)
+        self.assertEqual(owner.close(), errors)
 
     def test_failed_target_does_not_advance_actual_step(self):
         owner, _, _, _ = self.make(fail_layer=True)

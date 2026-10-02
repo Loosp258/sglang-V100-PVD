@@ -98,6 +98,8 @@ class OasisServingOwner(OasisRequestDecoder):
         logger.info("PVD Oasis retired rid=%s cache_rows=%s layer_wait_ms=%.3f",
             self.request_id, sum(t["remote_rows"] for t in self.transport.trace),
             sum(t["consumer_wait_seconds"] for t in self.pipeline.trace) * 1000)
+        logger.info("PVD Oasis trace rid=%s data=%s", self.request_id,
+            json.dumps(dict(layers=self.pipeline.trace, transport=self.transport.trace), separators=(",", ":")))
         return ()
 
 
@@ -136,7 +138,7 @@ class OasisResources:
         # Explicit upper charge: monotonic CPU cache plus three sparse banks,
         # actual history, EAGLE cached state/features and declared scratch.
         rows = len(receipt.prompt)
-        charge = (rows * 28 * 4 * 128 * 2 * 2
+        charge = (rows * 28 * 4 * (128 * 2 * 2 + 1)
             + 3 * 28 * 4 * cfg["capacity"] * (128 * 2 * 2 + 1)
             + steps * 28 * 4 * 128 * 2 * 2
             + (rows + steps) * 3584 * 12 + cfg["request_scratch_bytes"])

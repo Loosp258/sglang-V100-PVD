@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from sglang.srt.disaggregation.pvd.oasis_scheduler import OasisSchedulerBinding
-from sglang.srt.disaggregation.pvd.oasis_transport import OasisCPUReceiveRegistry
+from sglang.srt.disaggregation.pvd.oasis_transport import OasisCPUReceiveRegistry, _HeadCPUCache
 from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerLookahead, LayerReply
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 from test_pvd_sparse_receiver import finish, receiving
@@ -76,6 +76,20 @@ def test_two_futures_allow_query_publication_before_prior_bank_consumption():
         assert pipe.consume(1, 0) == "next"
     finally:
         assert pipe.close() == ()
+
+
+def test_cpu_cache_owns_bounded_contiguous_rows_and_rejects_replay():
+    rows, valid = torch.empty(3, 2, 128, dtype=torch.float16), torch.zeros(3, dtype=torch.bool)
+    cache = _HeadCPUCache(rows, valid)
+    with pytest.raises(KeyError):
+        cache[0]
+    value = torch.ones(2, 128, dtype=torch.float16)
+    cache[0] = value
+    value.zero_()
+    assert cache[0].sum().item() == 256 and 0 in cache and 1 not in cache
+    for token in (0, 3, -1):
+        with pytest.raises(ValueError):
+            cache[token] = value
 
 
 def test_native_cpu_cache_reads_only_after_terminal_and_ack_owns_clone():

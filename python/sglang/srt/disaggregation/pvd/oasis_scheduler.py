@@ -29,6 +29,7 @@ class OasisSchedulerBinding:
                 or args.speculative_algorithm is not None
                 or not args.disable_cuda_graph or not args.disable_overlap_schedule
                 or scheduler.max_running_requests != 1
+                or not scheduler.disagg_decode_prealloc_queue.kv_manager.waiting_queue_bootstrap
                 or runner.tp_size != 1 or runner.pp_size != 1
                 or getattr(scheduler, "pvd_cuda_binding", None) is not None
                 or getattr(scheduler, "pvd_oasis_binding", None) is not None):

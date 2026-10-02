@@ -23,6 +23,28 @@ from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
 from sglang.srt.disaggregation.pvd.sparse_receiver import SparseReceiveRecord, SparseReceiveRegistry
 
 
+class _HeadCPUCache:
+    """Views into one charged contiguous Prompt allocation, no per-row owners."""
+    def __init__(self, rows, valid):
+        self.rows, self.valid = rows, valid
+
+    def __contains__(self, token):
+        return type(token) is int and 0 <= token < len(self.valid) and bool(self.valid[token])
+
+    def __getitem__(self, token):
+        if token not in self:
+            raise KeyError("uncached Prompt token")
+        return self.rows[token]
+
+    def __setitem__(self, token, value):
+        if (type(token) is not int or not 0 <= token < len(self.valid)
+                or token in self or value.shape != self.rows.shape[1:]
+                or value.device.type != "cpu" or value.dtype != self.rows.dtype):
+            raise ValueError("unique bounded CPU Prompt KV row required")
+        self.rows[token].copy_(value)
+        self.valid[token] = True
+
+
 class OasisCPUReceiveRecord(SparseReceiveRecord):
     def copy_to_cache(self, cache):
         self._live()
@@ -112,7 +134,10 @@ class OasisLayerTransport:
         self.prompt_tokens = ((shard.page_count - 1) * manifest.layout.page_size
                               + shard.last_page_valid_tokens)
         self.scope = SearchScope(self.prompt_tokens, manifest.layout.page_size, 128, "ip")
-        self.cache = [[{} for _ in range(4)] for _ in range(28)]
+        self._cpu_cache = torch.empty((28, 4, self.prompt_tokens, 2, 128), dtype=torch.float16)
+        self._cache_valid = torch.zeros((28, 4, self.prompt_tokens), dtype=torch.bool)
+        self.cache = [[_HeadCPUCache(self._cpu_cache[layer, head], self._cache_valid[layer, head])
+                       for head in range(4)] for layer in range(28)]
         self.local, self.lock = threading.local(), threading.Lock()
         self.workers, self.versions, self.trace = [], {}, []
         self.quarantined = False
@@ -179,7 +204,8 @@ class OasisLayerTransport:
                 missing = tuple(t for t in chosen if t not in layer_cache[head])
                 if missing:
                     specs.append(SparseKVSpec(ticket.request_id, ticket.incarnation,
-                        f"oasis:{ticket.step}:{ticket.layer}", ticket.step,
+                        f"oasis:{'bootstrap' if bootstrap else 'lookahead'}:{ticket.step}:{ticket.layer}",
+                        0 if bootstrap else ticket.step + 1,
                         self.selected.manifest.key.transfer_id, *pair,
                         self.selected.manifest.layout.fingerprint, ticket.layer, head, missing))
             if not specs:
@@ -295,4 +321,5 @@ class OasisLayerTransport:
         if self.workers or self.quarantined:
             raise RuntimeError("retain undrained layer transport owners")
         self.cache.clear()
+        self._cpu_cache = self._cache_valid = None
         self.closed = True

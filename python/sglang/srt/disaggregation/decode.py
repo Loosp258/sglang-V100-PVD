@@ -1669,8 +1669,8 @@ class SchedulerDisaggregationDecodeMixin:
         if failures:
             batch.filter_batch()
             manager.decode_refresher.cleanup_finished()
-        if oasis is not None and not batch.is_empty():
-            oasis.prepare(batch.reqs)
+        if oasis is not None and any(not oasis.owns(req) for req in batch.reqs):
+            raise RuntimeError("Oasis Decode batch bypassed waiting-queue admission")
 
     @torch.no_grad()
     def event_loop_normal_disagg_decode(self: Scheduler):
@@ -1959,6 +1959,11 @@ class SchedulerDisaggregationDecodeMixin:
                 continue
             # we can only add at least `num_not_used_batch` new batch to the running queue
             if admitted < num_not_used_batch:
+                oasis = getattr(self, "pvd_oasis_binding", None)
+                if oasis is not None:
+                    # The completion receipt requires this exact request to
+                    # remain in the final waiting queue through admission.
+                    oasis.prepare([req])
                 admitted += 1
                 can_run_list.append(req)
                 # Decode-radix path: do NOT re-match prefix here.
