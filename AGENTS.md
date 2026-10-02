@@ -923,3 +923,38 @@ calculations from service/workers are diagnostic and not latency guarantees.
   guarantee; compare complete service and per-layer deadlines. Step 2 may now
   implement the registered-Entry sparse batch PUT and its independent gates.
   Serving behavior/defaults remain unchanged. Commit locally only; no push.
+
+#### Direct registered-Entry sparse PUT completed (2026-10-03)
+
+- Step 2 adds default-off --experimental-direct-sparse-batch-put on V. A
+  checked CPU scatter plan reads only the selected immutable Entry's original
+  registered pool. It bounds 128 slices, validates component-major/padded
+  layout, current Entry/index/mapping identity, per-shard heads and exact bytes.
+  It retains CUDA readiness fences, Entry/index/source owners, write
+  authorization, cancellation and UNKNOWN quarantine; no staging fallback.
+- CloudLab CPU qualification: 176 passed, 6 CUDA skipped, 1 existing warning.
+  A separate native local-session gate passed 48 exact scatter cases over two
+  original GPU pools, four receive MRs and two 2-worker executor rounds. It
+  proved exact bytes/sentinels, shared source pins and full native/budget
+  retirement, with zero staging registration. This is not cross-node timing.
+- The live ABBA kept the complete fast graph, target/EAGLE, Top4/capacity32,
+  workers2, per-job HTTP, separate reserve/start and per-delivery D MRs fixed.
+  All eight 2159-Prompt/16-output formal requests had identical actual outputs.
+  Initial graph-gated P->V->D KV/private seed remains charged; P->D stays off.
+- Direct scatter regressed: mean client TPOT 489.666 -> 573.654 ms/token;
+  mean steady KV wait 413.390 -> 515.459 ms/token; median completion
+  9.938 -> 11.607 s (+16.79%). Mean complete callback service 37.344 ->
+  43.758 ms/layer. Many 256-byte native slices and extra poll costs outweighed
+  avoided staging work. Preserve the negative result; keep direct scatter off.
+- Both rank runtime modes and exact formal batch/slice increments were checked
+  against D completed delivery profiles. Source/deployment hashes, all raw
+  logs/configs/events, 48 native observations, local CPU failure attempts and
+  two source-gate prelaunch failures are preserved. No formal request was
+  counted from those failed starts. P keeps its separate historical checkout
+  fixed by the actual step-1 source hashes, not this later D/V source tree.
+- Evidence: benchmark/results/pvd_oasis_direct_sparse_cloudlab_20261003.md
+  and its complete result directory. Owned/cleanup are empty and all six GPUs
+  are 0 MiB. The unchanged two-worker packed-PUT baseline is used for step 3.
+  TP2, load, broader quality and real failure-under-load remain open. Commit
+  locally only. Step 3 GPU receive-to-bank with owned asynchronous CPU backup
+  may now proceed; do not add these independent experiment gains.

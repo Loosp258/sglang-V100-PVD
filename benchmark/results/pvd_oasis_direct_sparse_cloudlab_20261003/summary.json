@@ -1,0 +1,1784 @@
+{
+  "aggregate": {
+    "baseline": {
+      "requests": 4,
+      "wall_seconds": 9.938060893968213,
+      "first_event_seconds": 2.5734850824810565,
+      "stream_seconds": 7.376719808031339,
+      "client_tpot_mean_ms": 489.66590155032463,
+      "client_tpot_median_ms": 491.7674928670749,
+      "client_inter_token_median_ms": 507.26229295833036,
+      "initialization_seconds": 1.5015595,
+      "first_decode_ms": 50.560500000000005,
+      "steady_forward_ms": 512.7815,
+      "steady_forward_mean_ms": 518.84275,
+      "steady_layer_wait_sum_ms": 407.032,
+      "steady_wait_mean_ms_per_token": 413.38982142857145,
+      "steady_request_wait_sum_ms": 5815.576,
+      "steady_request_wait_sum_mean_ms": 5787.4575,
+      "steady_foreground_except_wait_ms": 105.02550000000002,
+      "steady_draft_ms": 4.891500000000001,
+      "layer_rpc_ms": 33.55805145110935,
+      "layer_queue_ms": 488.61436947481707,
+      "layer_queue_mean_ms": 482.9182516473431,
+      "layer_service_ms": 37.19502250896767,
+      "layer_service_mean_ms": 37.34439678351473,
+      "layer_consumer_wait_ms": 15.578061051201075,
+      "network_sparse_bytes_per_request": 2562560.0,
+      "startup_full_kv_bytes_per_request": 123805696.0,
+      "actual_forward_count": 60,
+      "layer_consume_count": 1568
+    },
+    "optimized": {
+      "requests": 4,
+      "wall_seconds": 11.606757612025831,
+      "first_event_seconds": 3.0390822185436264,
+      "stream_seconds": 8.567675393482205,
+      "client_tpot_mean_ms": 573.6537321839327,
+      "client_tpot_median_ms": 571.1632354340206,
+      "client_inter_token_median_ms": 578.6755625158548,
+      "initialization_seconds": 1.9629695,
+      "first_decode_ms": 42.691,
+      "steady_forward_ms": 587.7629999999999,
+      "steady_forward_mean_ms": 609.0609285714285,
+      "steady_layer_wait_sum_ms": 488.9105,
+      "steady_wait_mean_ms_per_token": 515.4590714285714,
+      "steady_request_wait_sum_ms": 7176.120499999999,
+      "steady_request_wait_sum_mean_ms": 7216.427,
+      "steady_foreground_except_wait_ms": 93.65149999999997,
+      "steady_draft_ms": 7.3465,
+      "layer_rpc_ms": 38.248033029958606,
+      "layer_queue_ms": 556.0863044229336,
+      "layer_queue_mean_ms": 567.2946305824051,
+      "layer_service_ms": 42.44635708164424,
+      "layer_service_mean_ms": 43.758405065202574,
+      "layer_consumer_wait_ms": 16.11784246051684,
+      "network_sparse_bytes_per_request": 2563072.0,
+      "startup_full_kv_bytes_per_request": 123805696.0,
+      "actual_forward_count": 60,
+      "layer_consume_count": 1568
+    }
+  },
+  "output_identity": {
+    "99401": {
+      "prompt_identical": true,
+      "output_ids_identical": true,
+      "text_identical": true,
+      "arms": [
+        "base_a",
+        "opt_a",
+        "opt_b",
+        "base_b"
+      ]
+    },
+    "99402": {
+      "prompt_identical": true,
+      "output_ids_identical": true,
+      "text_identical": true,
+      "arms": [
+        "base_a",
+        "opt_a",
+        "opt_b",
+        "base_b"
+      ]
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "rid": "c56f5837e18f413a8dbf7bd97b23af91",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 9.988061462994665,
+        "first_event_seconds": 2.5990254399366677,
+        "stream_seconds": 7.389036023057997,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 49.924,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 564.337,
+            "wait_ms": 463.976
+          },
+          {
+            "step": 2,
+            "total_ms": 585.995,
+            "wait_ms": 496.644
+          },
+          {
+            "step": 3,
+            "total_ms": 543.464,
+            "wait_ms": 439.667
+          },
+          {
+            "step": 4,
+            "total_ms": 561.112,
+            "wait_ms": 444.237
+          },
+          {
+            "step": 5,
+            "total_ms": 529.88,
+            "wait_ms": 421.137
+          },
+          {
+            "step": 6,
+            "total_ms": 505.887,
+            "wait_ms": 393.182
+          },
+          {
+            "step": 7,
+            "total_ms": 523.768,
+            "wait_ms": 412.541
+          },
+          {
+            "step": 8,
+            "total_ms": 511.872,
+            "wait_ms": 406.402
+          },
+          {
+            "step": 9,
+            "total_ms": 498.9,
+            "wait_ms": 377.958
+          },
+          {
+            "step": 10,
+            "total_ms": 518.945,
+            "wait_ms": 423.475
+          },
+          {
+            "step": 11,
+            "total_ms": 449.364,
+            "wait_ms": 343.083
+          },
+          {
+            "step": 12,
+            "total_ms": 503.708,
+            "wait_ms": 397.902
+          },
+          {
+            "step": 13,
+            "total_ms": 513.691,
+            "wait_ms": 411.853
+          },
+          {
+            "step": 14,
+            "total_ms": 498.752,
+            "wait_ms": 394.171
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.527196,
+        "draft_ms": [
+          24.033,
+          10.277,
+          2.612,
+          2.606,
+          3.206,
+          2.778,
+          3.312,
+          5.169,
+          2.809,
+          7.697,
+          6.1,
+          12.008,
+          4.635,
+          3.204,
+          5.234
+        ],
+        "client_token_event_seconds": [
+          2.5990254399366677,
+          2.6495238619390875,
+          3.2173937499755993,
+          3.804834436974488,
+          4.3504171459935606,
+          4.913303648936562,
+          5.445169292972423,
+          5.953145453939214,
+          6.4790814720327035,
+          6.992646798025817,
+          7.493393637938425,
+          8.014011390972883,
+          8.465591724961996,
+          8.971123356954195,
+          9.486571514979005,
+          9.987829506979324
+        ],
+        "client_inter_token_ms": [
+          50.49842200241983,
+          567.8698880365118,
+          587.4406869988889,
+          545.5827090190724,
+          562.8865029430017,
+          531.8656440358609,
+          507.9761609667912,
+          525.9360180934891,
+          513.5653259931132,
+          500.74683991260827,
+          520.6177530344576,
+          451.58033398911357,
+          505.5316319921985,
+          515.4481580248103,
+          501.25799200031906
+        ],
+        "client_tpot_ms": 492.58693780284375,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 5826.228,
+        "steady_wait_mean_ms_per_token": 416.15914285714285,
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 770,
+          "physical_unregistrations": 770,
+          "median_stage_ms": {
+            "prepare": 1.0830144747160375,
+            "allocate": 0.01763296313583851,
+            "register": 0.9189069969579577,
+            "reserve": 3.6118439747951925,
+            "start": 13.199791952501982,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.365869480650872,
+            "close": 0.41466200491413474,
+            "cache_copy": 0.29761751648038626
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 770,
+          "unregistration_count": 770,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 0,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "da81fbdf35ec496795cddf9ddc3882ee",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 10.18515200004913,
+        "first_event_seconds": 2.5479447250254452,
+        "stream_seconds": 7.637207275023684,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 60.442,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 527.352,
+            "wait_ms": 425.011
+          },
+          {
+            "step": 2,
+            "total_ms": 565.786,
+            "wait_ms": 456.637
+          },
+          {
+            "step": 3,
+            "total_ms": 551.052,
+            "wait_ms": 457.154
+          },
+          {
+            "step": 4,
+            "total_ms": 569.753,
+            "wait_ms": 469.928
+          },
+          {
+            "step": 5,
+            "total_ms": 542.41,
+            "wait_ms": 440.446
+          },
+          {
+            "step": 6,
+            "total_ms": 515.682,
+            "wait_ms": 413.514
+          },
+          {
+            "step": 7,
+            "total_ms": 525.952,
+            "wait_ms": 422.442
+          },
+          {
+            "step": 8,
+            "total_ms": 516.435,
+            "wait_ms": 404.866
+          },
+          {
+            "step": 9,
+            "total_ms": 493.386,
+            "wait_ms": 376.508
+          },
+          {
+            "step": 10,
+            "total_ms": 496.964,
+            "wait_ms": 383.831
+          },
+          {
+            "step": 11,
+            "total_ms": 446.918,
+            "wait_ms": 328.917
+          },
+          {
+            "step": 12,
+            "total_ms": 792.345,
+            "wait_ms": 694.501
+          },
+          {
+            "step": 13,
+            "total_ms": 501.438,
+            "wait_ms": 393.877
+          },
+          {
+            "step": 14,
+            "total_ms": 501.019,
+            "wait_ms": 405.467
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.475923,
+        "draft_ms": [
+          24.683,
+          2.735,
+          8.432,
+          9.836,
+          3.017,
+          2.616,
+          6.933,
+          2.627,
+          3.006,
+          3.275,
+          7.96,
+          5.259,
+          2.63,
+          2.941,
+          2.818
+        ],
+        "client_token_event_seconds": [
+          2.5479447250254452,
+          2.6091044840868562,
+          3.138581003062427,
+          3.7092815060168505,
+          4.262905243085697,
+          4.8346532880095765,
+          5.379152759094723,
+          5.896157415001653,
+          6.423890975071117,
+          6.94297048507724,
+          7.43788767803926,
+          7.936421976075508,
+          8.385109006077982,
+          9.178858880070038,
+          9.682302494067699,
+          10.184944199048914
+        ],
+        "client_inter_token_ms": [
+          61.15975906141102,
+          529.4765189755708,
+          570.7005029544234,
+          553.6237370688468,
+          571.7480449238792,
+          544.4994710851461,
+          517.0046559069306,
+          527.7335600694641,
+          519.0795100061223,
+          494.91719296202064,
+          498.5342980362475,
+          448.6870300024748,
+          793.7498739920557,
+          503.4436139976606,
+          502.6417049812153
+        ],
+        "client_tpot_ms": 509.1332982682313,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 6073.099,
+        "steady_wait_mean_ms_per_token": 433.79278571428574,
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 772,
+          "physical_unregistrations": 772,
+          "median_stage_ms": {
+            "prepare": 1.075185020454228,
+            "allocate": 0.018009101040661335,
+            "register": 0.9138729656115174,
+            "reserve": 3.4338304540142417,
+            "start": 13.196510553825647,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.3400764437392354,
+            "close": 0.40804955642670393,
+            "cache_copy": 0.29687152709811926
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 772,
+          "unregistration_count": 772,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 2,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "rid": "1d7cb84a15454a1d9b7c9fb0e8748fab",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 11.718090526061133,
+        "first_event_seconds": 3.0453551680548117,
+        "stream_seconds": 8.672735358006321,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 44.505,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 709.81,
+            "wait_ms": 620.913
+          },
+          {
+            "step": 2,
+            "total_ms": 811.431,
+            "wait_ms": 715.465
+          },
+          {
+            "step": 3,
+            "total_ms": 627.594,
+            "wait_ms": 531.844
+          },
+          {
+            "step": 4,
+            "total_ms": 593.846,
+            "wait_ms": 504.147
+          },
+          {
+            "step": 5,
+            "total_ms": 594.707,
+            "wait_ms": 484.696
+          },
+          {
+            "step": 6,
+            "total_ms": 539.599,
+            "wait_ms": 438.457
+          },
+          {
+            "step": 7,
+            "total_ms": 630.984,
+            "wait_ms": 542.983
+          },
+          {
+            "step": 8,
+            "total_ms": 598.858,
+            "wait_ms": 506.215
+          },
+          {
+            "step": 9,
+            "total_ms": 514.538,
+            "wait_ms": 432.721
+          },
+          {
+            "step": 10,
+            "total_ms": 532.433,
+            "wait_ms": 431.31
+          },
+          {
+            "step": 11,
+            "total_ms": 808.365,
+            "wait_ms": 717.626
+          },
+          {
+            "step": 12,
+            "total_ms": 525.489,
+            "wait_ms": 422.085
+          },
+          {
+            "step": 13,
+            "total_ms": 560.363,
+            "wait_ms": 466.213
+          },
+          {
+            "step": 14,
+            "total_ms": 541.532,
+            "wait_ms": 460.765
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.968062,
+        "draft_ms": [
+          24.795,
+          3.339,
+          12.315,
+          10.146,
+          5.354,
+          5.233,
+          8.872,
+          6.145,
+          10.555,
+          8.304,
+          11.027,
+          6.434,
+          6.742,
+          2.723,
+          3.279
+        ],
+        "client_token_event_seconds": [
+          3.0453551680548117,
+          3.0904995480086654,
+          3.802100214990787,
+          4.615149618010037,
+          5.248122381046414,
+          5.846603356068954,
+          6.442726515000686,
+          6.984075486077927,
+          7.616682542022318,
+          8.217494021053426,
+          8.735533380997367,
+          9.270223555038683,
+          10.081793243996799,
+          10.612482712022029,
+          11.174526056041941,
+          11.717954450054094
+        ],
+        "client_inter_token_ms": [
+          45.144379953853786,
+          711.6006669821218,
+          813.0494030192494,
+          632.9727630363777,
+          598.4809750225395,
+          596.1231589317322,
+          541.348971077241,
+          632.6070559443906,
+          600.8114790311083,
+          518.0393599439412,
+          534.6901740413159,
+          811.5696889581159,
+          530.6894680252299,
+          562.0433440199122,
+          543.4283940121531
+        ],
+        "client_tpot_ms": 578.1732854666188,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 7275.44,
+        "steady_wait_mean_ms_per_token": 519.6742857142857,
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 770,
+          "physical_unregistrations": 770,
+          "median_stage_ms": {
+            "prepare": 1.0717085096985102,
+            "allocate": 0.017017009668052197,
+            "register": 0.911653449293226,
+            "reserve": 3.414935024920851,
+            "start": 13.050812995061278,
+            "combined": 0.0,
+            "poll": 1.8336515058763325,
+            "ack": 0.768625526688993,
+            "close": 0.41611952474340796,
+            "cache_copy": 0.35135349025949836
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 770,
+          "unregistration_count": 770,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 770,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "6a90d36026264b33ba727c7eb53d2637",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 11.41070479201153,
+        "first_event_seconds": 3.0489078720565885,
+        "stream_seconds": 8.36179691995494,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 40.783,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 697.811,
+            "wait_ms": 616.031
+          },
+          {
+            "step": 2,
+            "total_ms": 788.222,
+            "wait_ms": 697.95
+          },
+          {
+            "step": 3,
+            "total_ms": 671.137,
+            "wait_ms": 569.997
+          },
+          {
+            "step": 4,
+            "total_ms": 689.856,
+            "wait_ms": 598.179
+          },
+          {
+            "step": 5,
+            "total_ms": 589.747,
+            "wait_ms": 504.234
+          },
+          {
+            "step": 6,
+            "total_ms": 540.927,
+            "wait_ms": 458.584
+          },
+          {
+            "step": 7,
+            "total_ms": 566.9,
+            "wait_ms": 472.665
+          },
+          {
+            "step": 8,
+            "total_ms": 572.514,
+            "wait_ms": 479.083
+          },
+          {
+            "step": 9,
+            "total_ms": 536.413,
+            "wait_ms": 451.152
+          },
+          {
+            "step": 10,
+            "total_ms": 539.036,
+            "wait_ms": 443.912
+          },
+          {
+            "step": 11,
+            "total_ms": 494.381,
+            "wait_ms": 386.994
+          },
+          {
+            "step": 12,
+            "total_ms": 500.189,
+            "wait_ms": 415.141
+          },
+          {
+            "step": 13,
+            "total_ms": 572.608,
+            "wait_ms": 465.673
+          },
+          {
+            "step": 14,
+            "total_ms": 531.679,
+            "wait_ms": 441.075
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.971105,
+        "draft_ms": [
+          24.49,
+          2.75,
+          7.659,
+          13.338,
+          3.103,
+          7.35,
+          3.642,
+          10.829,
+          6.485,
+          7.733,
+          7.343,
+          8.491,
+          7.117,
+          12.57,
+          4.892
+        ],
+        "client_token_event_seconds": [
+          3.0489078720565885,
+          3.090375285013579,
+          3.789715306018479,
+          4.579605318955146,
+          5.252981284051202,
+          5.946097354986705,
+          6.537903112010099,
+          7.080689999042079,
+          7.6492718840017915,
+          8.223226016038097,
+          8.76125730597414,
+          9.301824416965246,
+          9.798233133042231,
+          10.303240634966642,
+          10.877057648962364,
+          11.410524292034097
+        ],
+        "client_inter_token_ms": [
+          41.4674129569903,
+          699.3400210049003,
+          789.8900129366666,
+          673.3759650960565,
+          693.1160709355026,
+          591.8057570233941,
+          542.7868870319799,
+          568.5818849597126,
+          573.954132036306,
+          538.0312899360433,
+          540.5671109911054,
+          496.408716076985,
+          505.00750192441046,
+          573.8170139957219,
+          533.4666430717334
+        ],
+        "client_tpot_ms": 557.4410946651673,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 7000.67,
+        "steady_wait_mean_ms_per_token": 500.04785714285714,
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 772,
+          "physical_unregistrations": 772,
+          "median_stage_ms": {
+            "prepare": 1.0739279678091407,
+            "allocate": 0.016961945220828056,
+            "register": 0.9113624691963196,
+            "reserve": 3.2923250109888613,
+            "start": 13.385520549491048,
+            "combined": 0.0,
+            "poll": 2.0049120066687465,
+            "ack": 0.8279320318251848,
+            "close": 0.41434698505327106,
+            "cache_copy": 0.32986298901960254
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 772,
+          "unregistration_count": 772,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 772,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "rid": "428c4fdcf407492f97633e70211bc78f",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 11.955388540984131,
+        "first_event_seconds": 3.032550011994317,
+        "stream_seconds": 8.922838528989814,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 42.175,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 631.316,
+            "wait_ms": 550.851
+          },
+          {
+            "step": 2,
+            "total_ms": 799.484,
+            "wait_ms": 700.796
+          },
+          {
+            "step": 3,
+            "total_ms": 657.498,
+            "wait_ms": 556.983
+          },
+          {
+            "step": 4,
+            "total_ms": 724.475,
+            "wait_ms": 624.278
+          },
+          {
+            "step": 5,
+            "total_ms": 591.997,
+            "wait_ms": 507.369
+          },
+          {
+            "step": 6,
+            "total_ms": 575.997,
+            "wait_ms": 476.6
+          },
+          {
+            "step": 7,
+            "total_ms": 561.689,
+            "wait_ms": 472.381
+          },
+          {
+            "step": 8,
+            "total_ms": 625.622,
+            "wait_ms": 531.75
+          },
+          {
+            "step": 9,
+            "total_ms": 544.617,
+            "wait_ms": 454.749
+          },
+          {
+            "step": 10,
+            "total_ms": 910.888,
+            "wait_ms": 821.927
+          },
+          {
+            "step": 11,
+            "total_ms": 494.1,
+            "wait_ms": 384.956
+          },
+          {
+            "step": 12,
+            "total_ms": 562.054,
+            "wait_ms": 452.336
+          },
+          {
+            "step": 13,
+            "total_ms": 585.779,
+            "wait_ms": 490.535
+          },
+          {
+            "step": 14,
+            "total_ms": 576.233,
+            "wait_ms": 487.286
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.957877,
+        "draft_ms": [
+          24.684,
+          3.307,
+          12.785,
+          4.506,
+          4.956,
+          7.376,
+          10.037,
+          9.77,
+          2.604,
+          6.411,
+          5.208,
+          9.229,
+          5.139,
+          2.811,
+          9.132
+        ],
+        "client_token_event_seconds": [
+          3.032550011994317,
+          3.0753479410195723,
+          3.708496953942813,
+          4.509333850000985,
+          5.168098806054331,
+          5.894331444054842,
+          6.4883777590002865,
+          7.065755484974943,
+          7.628758906968869,
+          8.256201943964697,
+          8.807263558963314,
+          9.725423004012555,
+          10.22057029302232,
+          10.783985128975473,
+          11.375287060975097,
+          11.95526046003215
+        ],
+        "client_inter_token_ms": [
+          42.797929025255144,
+          633.1490129232407,
+          800.836896058172,
+          658.7649560533464,
+          726.2326380005106,
+          594.0463149454445,
+          577.3777259746566,
+          563.0034219939262,
+          627.4430369958282,
+          551.0616149986163,
+          918.1594450492412,
+          495.1472890097648,
+          563.4148359531537,
+          591.3019319996238,
+          579.973399057053
+        ],
+        "client_tpot_ms": 594.8473632025222,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 7512.7970000000005,
+        "steady_wait_mean_ms_per_token": 536.6283571428572,
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 770,
+          "physical_unregistrations": 770,
+          "median_stage_ms": {
+            "prepare": 1.0801595053635538,
+            "allocate": 0.016850943211466074,
+            "register": 0.9222084772773087,
+            "reserve": 3.3110654912889004,
+            "start": 14.019597496371716,
+            "combined": 0.0,
+            "poll": 1.8804095452651381,
+            "ack": 0.8038215455599129,
+            "close": 0.4128789878450334,
+            "cache_copy": 0.3317769733257592
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 770,
+          "unregistration_count": 770,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 770,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "024b55a619b44a368cc381c120b07102",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 11.49542469799053,
+        "first_event_seconds": 3.032809269032441,
+        "stream_seconds": 8.462615428958088,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 43.207,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 595.09,
+            "wait_ms": 517.766
+          },
+          {
+            "step": 2,
+            "total_ms": 671.906,
+            "wait_ms": 593.197
+          },
+          {
+            "step": 3,
+            "total_ms": 707.039,
+            "wait_ms": 609.637
+          },
+          {
+            "step": 4,
+            "total_ms": 700.928,
+            "wait_ms": 593.871
+          },
+          {
+            "step": 5,
+            "total_ms": 634.318,
+            "wait_ms": 537.725
+          },
+          {
+            "step": 6,
+            "total_ms": 590.269,
+            "wait_ms": 494.227
+          },
+          {
+            "step": 7,
+            "total_ms": 649.943,
+            "wait_ms": 540.184
+          },
+          {
+            "step": 8,
+            "total_ms": 617.236,
+            "wait_ms": 526.088
+          },
+          {
+            "step": 9,
+            "total_ms": 524.772,
+            "wait_ms": 430.547
+          },
+          {
+            "step": 10,
+            "total_ms": 557.698,
+            "wait_ms": 456.333
+          },
+          {
+            "step": 11,
+            "total_ms": 483.079,
+            "wait_ms": 401.268
+          },
+          {
+            "step": 12,
+            "total_ms": 545.87,
+            "wait_ms": 453.053
+          },
+          {
+            "step": 13,
+            "total_ms": 552.641,
+            "wait_ms": 451.499
+          },
+          {
+            "step": 14,
+            "total_ms": 553.905,
+            "wait_ms": 471.406
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.950779,
+        "draft_ms": [
+          24.706,
+          2.835,
+          6.817,
+          13.048,
+          8.923,
+          10.807,
+          11.936,
+          13.561,
+          13.431,
+          10.287,
+          8.499,
+          2.871,
+          7.186,
+          11.395,
+          5.279
+        ],
+        "client_token_event_seconds": [
+          3.032809269032441,
+          3.076932932017371,
+          3.673540016054176,
+          4.3473287670640275,
+          5.055806681048125,
+          5.7624058610526845,
+          6.4009171220241114,
+          6.992689648992382,
+          7.644389673019759,
+          8.262982139014639,
+          8.789815011085011,
+          9.350025017047301,
+          9.83577048801817,
+          10.38421291008126,
+          10.938489909050986,
+          11.495107050053775
+        ],
+        "client_inter_token_ms": [
+          44.12366298492998,
+          596.6070840368047,
+          673.7887510098517,
+          708.4779139840975,
+          706.5991800045595,
+          638.511260971427,
+          591.7725269682705,
+          651.7000240273774,
+          618.5924659948796,
+          526.8328720703721,
+          560.2100059622899,
+          485.74547097086906,
+          548.4424220630899,
+          554.2769989697263,
+          556.6171410027891
+        ],
+        "client_tpot_ms": 564.1531854014223,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 7076.8009999999995,
+        "steady_wait_mean_ms_per_token": 505.48578571428567,
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 772,
+          "physical_unregistrations": 772,
+          "median_stage_ms": {
+            "prepare": 1.0839614551514387,
+            "allocate": 0.016786449123173952,
+            "register": 0.9256144985556602,
+            "reserve": 3.4274340723641217,
+            "start": 13.642745558172464,
+            "combined": 0.0,
+            "poll": 1.983036461751908,
+            "ack": 0.7734495447948575,
+            "close": 0.41586399311199784,
+            "cache_copy": 0.3484634798951447
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 772,
+          "unregistration_count": 772,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 773,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "rid": "760e5797d54342e59d422b6aa0b09a0c",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 9.60056624293793,
+        "first_event_seconds": 2.6104799959575757,
+        "stream_seconds": 6.990086246980354,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 51.197,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 537.161,
+            "wait_ms": 412.922
+          },
+          {
+            "step": 2,
+            "total_ms": 571.947,
+            "wait_ms": 468.488
+          },
+          {
+            "step": 3,
+            "total_ms": 504.592,
+            "wait_ms": 408.814
+          },
+          {
+            "step": 4,
+            "total_ms": 533.033,
+            "wait_ms": 435.265
+          },
+          {
+            "step": 5,
+            "total_ms": 517.963,
+            "wait_ms": 407.662
+          },
+          {
+            "step": 6,
+            "total_ms": 491.664,
+            "wait_ms": 383.678
+          },
+          {
+            "step": 7,
+            "total_ms": 523.608,
+            "wait_ms": 421.103
+          },
+          {
+            "step": 8,
+            "total_ms": 504.866,
+            "wait_ms": 400.693
+          },
+          {
+            "step": 9,
+            "total_ms": 500.948,
+            "wait_ms": 387.442
+          },
+          {
+            "step": 10,
+            "total_ms": 462.526,
+            "wait_ms": 362.354
+          },
+          {
+            "step": 11,
+            "total_ms": 412.889,
+            "wait_ms": 313.258
+          },
+          {
+            "step": 12,
+            "total_ms": 450.65,
+            "wait_ms": 346.9
+          },
+          {
+            "step": 13,
+            "total_ms": 442.846,
+            "wait_ms": 336.679
+          },
+          {
+            "step": 14,
+            "total_ms": 451.513,
+            "wait_ms": 360.321
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.535311,
+        "draft_ms": [
+          24.664,
+          7.569,
+          3.385,
+          2.893,
+          6.984,
+          10.569,
+          6.427,
+          2.876,
+          4.134,
+          2.962,
+          5.397,
+          3.291,
+          8.99,
+          8.339,
+          5.623
+        ],
+        "client_token_event_seconds": [
+          2.6104799959575757,
+          2.6623068569460884,
+          3.2047490649856627,
+          3.778350919019431,
+          4.2845920249819756,
+          4.82341357099358,
+          5.343627998023294,
+          5.836524476995692,
+          6.36175652500242,
+          6.8683049499522895,
+          7.370458745979704,
+          7.8346316129900515,
+          8.248774460051209,
+          8.701839728048071,
+          9.146682034013793,
+          9.600409828941338
+        ],
+        "client_inter_token_ms": [
+          51.826860988512635,
+          542.4422080395743,
+          573.6018540337682,
+          506.2411059625447,
+          538.8215460116044,
+          520.214427029714,
+          492.89647897239774,
+          525.2320480067283,
+          506.5484249498695,
+          502.1537960274145,
+          464.17286701034755,
+          414.1428470611572,
+          453.06526799686253,
+          444.8423059657216,
+          453.7277949275449
+        ],
+        "client_tpot_ms": 465.99532219891745,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 5445.579,
+        "steady_wait_mean_ms_per_token": 388.96992857142857,
+        "delivery_validation": {
+          "deliveries": 770,
+          "physical_registrations": 770,
+          "physical_unregistrations": 770,
+          "median_stage_ms": {
+            "prepare": 1.0746545158326626,
+            "allocate": 0.01818395685404539,
+            "register": 0.9142589988186955,
+            "reserve": 3.347489458974451,
+            "start": 11.48589001968503,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.3831824762746692,
+            "close": 0.4133250331506133,
+            "cache_copy": 0.303860055282712
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "registration_count": 770,
+          "unregistration_count": 770,
+          "reserve_rpc_count": 770,
+          "start_rpc_count": 770,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 3,
+          "ack_rpc_count": 770,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "1f19eaf1f900458c811cc2dce5acf660",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 9.888060324941762,
+        "first_event_seconds": 2.5236567319370806,
+        "stream_seconds": 7.364403593004681,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 42.63,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 528.093,
+            "wait_ms": 419.181
+          },
+          {
+            "step": 2,
+            "total_ms": 546.598,
+            "wait_ms": 462.523
+          },
+          {
+            "step": 3,
+            "total_ms": 530.692,
+            "wait_ms": 423.905
+          },
+          {
+            "step": 4,
+            "total_ms": 550.846,
+            "wait_ms": 440.357
+          },
+          {
+            "step": 5,
+            "total_ms": 574.399,
+            "wait_ms": 463.853
+          },
+          {
+            "step": 6,
+            "total_ms": 488.589,
+            "wait_ms": 393.858
+          },
+          {
+            "step": 7,
+            "total_ms": 502.951,
+            "wait_ms": 384.762
+          },
+          {
+            "step": 8,
+            "total_ms": 478.917,
+            "wait_ms": 374.899
+          },
+          {
+            "step": 9,
+            "total_ms": 760.107,
+            "wait_ms": 639.132
+          },
+          {
+            "step": 10,
+            "total_ms": 468.865,
+            "wait_ms": 363.063
+          },
+          {
+            "step": 11,
+            "total_ms": 451.109,
+            "wait_ms": 351.732
+          },
+          {
+            "step": 12,
+            "total_ms": 454.612,
+            "wait_ms": 345.701
+          },
+          {
+            "step": 13,
+            "total_ms": 478.227,
+            "wait_ms": 361.537
+          },
+          {
+            "step": 14,
+            "total_ms": 478.816,
+            "wait_ms": 380.421
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.444698,
+        "draft_ms": [
+          24.576,
+          10.482,
+          5.054,
+          5.968,
+          9.316,
+          6.752,
+          2.702,
+          7.044,
+          3.569,
+          7.195,
+          6.898,
+          2.513,
+          8.88,
+          4.729,
+          4.44
+        ],
+        "client_token_event_seconds": [
+          2.5236567319370806,
+          2.566806496004574,
+          3.0982120690168813,
+          3.6460312239360064,
+          4.177968677016906,
+          4.7305125809507445,
+          5.306093778926879,
+          5.796843067975715,
+          6.301683028927073,
+          6.782109265914187,
+          7.543934755958617,
+          8.014540906995535,
+          8.467067681951448,
+          8.922987540950999,
+          9.40506940195337,
+          9.887877450906672
+        ],
+        "client_inter_token_ms": [
+          43.14976406749338,
+          531.4055730123073,
+          547.8191549191251,
+          531.9374530809,
+          552.543903933838,
+          575.5811979761347,
+          490.74928904883564,
+          504.8399609513581,
+          480.42623698711395,
+          761.8254900444299,
+          470.60615103691816,
+          452.5267749559134,
+          455.91985899955034,
+          482.0818610023707,
+          482.8080489533022
+        ],
+        "client_tpot_ms": 490.94804793130606,
+        "steady_tokens": 14,
+        "steady_wait_sum_ms": 5804.924,
+        "steady_wait_mean_ms_per_token": 414.6374285714286,
+        "delivery_validation": {
+          "deliveries": 772,
+          "physical_registrations": 772,
+          "physical_unregistrations": 772,
+          "median_stage_ms": {
+            "prepare": 1.0666195303201675,
+            "allocate": 0.017748563550412655,
+            "register": 0.9055169648490846,
+            "reserve": 3.4044214989989996,
+            "start": 11.834363511297852,
+            "combined": 0.0,
+            "poll": 0.0,
+            "ack": 1.3246629969216883,
+            "close": 0.4119069781154394,
+            "cache_copy": 0.3098004963248968
+          },
+          "scope": "all completed sparse deliveries including initial-bank priming; final pool unregistration included in IO snapshot"
+        },
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        },
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "registration_count": 772,
+          "unregistration_count": 772,
+          "reserve_rpc_count": 772,
+          "start_rpc_count": 772,
+          "combined_rpc_count": 0,
+          "poll_rpc_count": 1,
+          "ack_rpc_count": 772,
+          "combine_reserve_start": false,
+          "reuse_receive_slots": false,
+          "receive_pool": null,
+          "delivery_count": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ]
+  },
+  "comparison_scope": "live overlapped paired with identical fast V search and D; staged packed PUT vs direct registered Entry scatter batch PUT; full initial KV retained",
+  "timing_scope": {
+    "client_tpot": "per request (last token event minus first token event)/(completion_tokens-1); aggregate mean and median of request values",
+    "client_inter_token_median": "median of individual token-event intervals; different from median request TPOT",
+    "steady_wait": "step>0 only; mean per token and median of actual summed waits per request",
+    "layer_means": "arithmetic means of completed consumed-layer callbacks; warmups and initial-bank priming excluded"
+  },
+  "full_trace_location": "raw.tar.gz: oasis_direct_sparse_abba03/summary.json and *_d.log"
+}

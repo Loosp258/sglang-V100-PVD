@@ -24,6 +24,12 @@ HOSTS = {'p': ('130.127.134.34', 'clgpu020.clemson.cloudlab.us', 0),
          'v': ('130.127.134.35', 'clgpu021.clemson.cloudlab.us', 1),
          'd': ('130.127.134.33', 'clgpu019.clemson.cloudlab.us', 2)}
 KEY = '/home/loosp/.ssh/cloudlab_pub_wsl'
+# P uses the original frozen Prefill checkout already measured by ready-KV
+# step 1. Its sources differ from this D/V worktree; do not silently redeploy P.
+PINNED_P_SOURCES = {
+    'runtime.py': '12db45000573a2d464ad3adf374b71838641585c3fb6951d2105fa20796a3eb8',
+    'conn.py': '4e34f9fd3d3035acdcbed0edc2e4dc0be4d111859e4cfcfc57ac079a6f904de2',
+    'sharding.py': '6c44ad74d033ca371cf8b576a54d2aa44da533de60482305a76458ced7fdcfb8'}
 parser = argparse.ArgumentParser()
 parser.add_argument('--tag', required=True)
 parser.add_argument('--arms', default='serial_a,overlap_a,overlap_b,serial_b')
@@ -41,12 +47,13 @@ if args.comparison in DELIVERY_COMPARISONS:
     assert len(cases) == len(set(cases)) == 2 and args.tokens == 16, 'delivery comparison requires two cases and 16 tokens'
 OUT.mkdir(parents=True, exist_ok=False)
 OWNED, CHECKOUTS, HEADS, ASSETS = {}, {}, {}, {}
+(OUT / 'owned.json').write_text('{}\n')
 
 
 def call(role, command, *, data=None, timeout=240, binary=False):
     ip, host, _ = HOSTS[role]
     result = subprocess.run(['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o',
-        'ConnectTimeout=15', '-o', 'ServerAliveInterval=10', '-o',
+        'ConnectTimeout=15', '-o', 'IPQoS=none', '-o', 'ServerAliveInterval=10', '-o',
         'ServerAliveCountMax=3', '-o', 'HostKeyAlias=' + host, '-i', KEY,
         'Yizhzhu@' + ip, command], input=data, capture_output=True, timeout=timeout)
     if result.returncode:
@@ -112,6 +119,8 @@ def start(role, arm):
     env['PVD_NATIVE_POOL'] = int(args.comparison in FAST_V_COMPARISONS or (args.comparison == 'v-latency' and arm.startswith('opt')))
     env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-host-query' and arm.startswith('opt'))
     env['PVD_TRITON_SPARSE_PACKING'] = int(args.comparison == 'v-pack' and arm.startswith('opt'))
+    env['PVD_DIRECT_SPARSE_BATCH_PUT'] = int(
+        args.comparison == 'v-direct-sparse' and role == 'v' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash ' + shlex.quote(ASSETS[remote] + '/launcher.sh') + ' ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -130,6 +139,8 @@ def start(role, arm):
             print('healthy', role, arm, OWNED[role], flush=True)
             if role == 'v' and args.comparison == 'v-pack':
                 prove_pack_modes(arm)
+            if role == 'v' and args.comparison == 'v-direct-sparse':
+                sparse_batch_health(arm, 'before')
             return
         if attempt % 15 == 0:
             print('waiting', role, arm, status, flush=True)
@@ -181,6 +192,20 @@ def probe(arm, warm=False):
     return rows
 
 
+def sparse_batch_health(arm, phase):
+    """Record actual rank mode and submission inventory before/after requests."""
+    for rank in (0, 1):
+        response = call('v', 'curl -fsS --max-time 10 ' + shlex.quote(
+            f'http://10.10.1.2:{9300 + rank}/internal/health'))
+        (OUT / f'{arm}_v_rank{rank}_{phase}_health.json').write_text(response)
+        state = json.loads(response)
+        assert state['rank'] == rank and state['ready'] is True
+        assert state['device'] == f'cuda:{rank}'
+        assert state['direct_sparse_batch_put'] == dict(
+            enabled=arm.startswith('opt'), max_slices=128)
+        assert state['isolated_reason'] is None
+
+
 def main():
     arm_running = None
     try:
@@ -209,7 +234,9 @@ def main():
             upload(role, ASSETS[role] + '/launcher.sh', launcher)
             upload(role, ASSETS[role] + '/split.json', b'{"schema":"pvd-exact16-split-policy-v1","choices":{"2159":{"prefix":2048}}}\n')
         sources = {}
-        for role, relative in (('d', ['python/sglang/srt/server_args.py', 'python/sglang/srt/models/qwen2.py',
+        for role, relative in (('p', ['python/sglang/srt/disaggregation/pvd/' + name
+                                    for name in ('runtime.py', 'conn.py', 'sharding.py')]),
+            ('d', ['python/sglang/srt/server_args.py', 'python/sglang/srt/models/qwen2.py',
             'python/sglang/srt/managers/scheduler.py', 'python/sglang/srt/managers/scheduler_components/batch_result_processor.py',
             'python/sglang/srt/disaggregation/decode.py'] +
             ['python/sglang/srt/disaggregation/pvd/' + p.name for p in
@@ -219,18 +246,23 @@ def main():
               'cagra_kv_update.py', 'cagra_kv_prepare.py', 'cagra_search_batch.py', 'index_search.py') +
              (('sparse_copy.py', 'sparse_pack_plan.py', 'sparse_payload.py', 'sparse_delivery.py',
                'sparse_receiver.py', 'triton_sparse_pack.py') if args.comparison == 'v-pack' else ())])):
-            if args.comparison in DELIVERY_COMPARISONS:
+            if args.comparison in DELIVERY_COMPARISONS and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
                              ('client.py', 'sparse_receiver.py', 'cuda_sparse_receiver.py',
                               'protocol.py', 'control_server.py', 'vector_store.py',
                               'mooncake_engine.py', 'transfer_engine.py', 'oasis_receive_slots.py')]
                 relative = list(dict.fromkeys(relative))
+            if args.comparison == 'v-direct-sparse' and role in ('v', 'd'):
+                relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
+                             ('sparse_batch_plan.py', 'sparse_payload.py', 'sparse_delivery.py',
+                              'transfer_lifecycle.py', 'sparse_copy.py', 'sparse_pack_plan.py')]
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
             sources[role] = {}
             for line in output.splitlines():
                 digest, remote_path = line.split(None, 1)
                 local = remote_path.removeprefix(CHECKOUTS[role] + '/')
-                expected = hashlib.sha256((ROOT / local).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+                expected = (PINNED_P_SOURCES[Path(local).name] if role == 'p' else
+                    hashlib.sha256((ROOT / local).read_bytes().replace(b'\r\n', b'\n')).hexdigest())
                 if digest != expected:
                     raise RuntimeError('deployed source differs: ' + remote_path)
                 sources[role][local] = digest
@@ -267,7 +299,11 @@ def main():
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
+            if args.comparison == 'v-direct-sparse':
+                sparse_batch_health(arm, 'warmed')
             results[arm] = probe(arm)
+            if args.comparison == 'v-direct-sparse':
+                sparse_batch_health(arm, 'after')
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)
             stop('gateway'); stop('d')

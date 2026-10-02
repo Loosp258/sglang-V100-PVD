@@ -24,7 +24,8 @@ if a.comparison in ('v-pack',) + DELIVERY_COMPARISONS:
     assert len(configs) == len(online), 'missing/extra comparison configs'
 if configs:
     allowed_difference = {'v-io': 'reuse_io', 'v-combine': 'combine_reserve_start',
-                          'v-slots': 'reuse_receive_slots', 'v-workers': 'workers'}.get(a.comparison, 'overlap')
+                          'v-slots': 'reuse_receive_slots', 'v-workers': 'workers',
+                          'v-direct-sparse': '__no_config_difference__'}.get(a.comparison, 'overlap')
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
     assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
                for config in configs), 'comparison has unrelated configuration differences'
@@ -69,7 +70,12 @@ if configs:
                                        ('PVD_GATE_INITIAL_FANIN_ON_INDEX', '1'), ('PVD_CAGRA_ITOPK_SIZE', '2048')):
                     assert env[name] == expected, (arm, role, name)
                 launch_envs.append({key: value for key, value in env.items()
-                                    if key not in ('PVD_RUN_TAG', 'PVD_OASIS_CONFIG')})
+                                    if key not in ('PVD_RUN_TAG', 'PVD_OASIS_CONFIG')
+                                    and not (a.comparison == 'v-direct-sparse'
+                                             and role == 'v' and key == 'PVD_DIRECT_SPARSE_BATCH_PUT')})
+                if a.comparison == 'v-direct-sparse':
+                    assert env['PVD_DIRECT_SPARSE_BATCH_PUT'] == str(int(
+                        role == 'v' and arm.startswith('opt')))
             assert all(env == launch_envs[0] for env in launch_envs), (role, 'unrelated launch difference')
 if a.comparison == 'v-pack':
     pack_modes = json.loads((root / 'pack_modes.json').read_text())
@@ -215,6 +221,7 @@ scope = {
     'v-combine': 'live overlapped paired with identical fast V search, per-job HTTP and per-delivery registration; separate vs combined reserve/start',
     'v-slots': 'live overlapped paired with identical fast V search, per-job HTTP and separate reserve/start; per-delivery vs request-owned physical receive registrations',
     'v-workers': 'live overlapped paired with identical fast V search, per-job HTTP, separate reserve/start and per-delivery registration; two vs four callback workers',
+    'v-direct-sparse': 'live overlapped paired with identical fast V search and D; staged packed PUT vs direct registered Entry scatter batch PUT',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']

@@ -47,6 +47,11 @@ from sglang.srt.disaggregation.pvd.sharding import (
     source_rank_and_head_offset,
 )
 from sglang.srt.disaggregation.pvd.sparse_copy import copy_sparse_kv_into
+from sglang.srt.disaggregation.pvd.sparse_batch_plan import (
+    MAX_DIRECT_SPARSE_SLICES,
+    SparseBatchPlan,
+    build_sparse_batch_plan,
+)
 from sglang.srt.disaggregation.pvd.sparse_delivery import (
     SPARSE_DELIVERY_KEY,
     SparseDeliveryManifest,
@@ -197,6 +202,7 @@ class DeliveryShardRecord:
     # Retained on unknown CUDA completion; cancellation must not drop the lease.
     packing_index_lease: Optional[ExitStack] = field(default=None, repr=False)
     packing_workspace: Optional[object] = field(default=None, repr=False)
+    sparse_batch_slices: int = 0
     fanin_writer: Optional[FullKVFanInWriter] = field(default=None, repr=False)
 
     def to_dict(self):
@@ -213,6 +219,7 @@ class DeliveryShardRecord:
             ),
             "packing_index_lease_held": self.packing_index_lease is not None,
             "packing_workspace_held": self.packing_workspace is not None,
+            "sparse_batch_slices": self.sparse_batch_slices,
             "write_identity": (
                 self.authorization.identity.to_dict() if self.authorization else None
             ),
@@ -342,6 +349,7 @@ class VectorKVStore:
         max_absent_entry_cancellations: int = 4096,
         allow_cuda_sparse_packing: bool = False,
         fused_cuda_sparse_packing: bool = False,
+        direct_sparse_batch_put: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -384,6 +392,25 @@ class VectorKVStore:
             raise ValueError("max_absent_entry_cancellations must be positive")
         if type(allow_cuda_sparse_packing) is not bool:
             raise ValueError("allow_cuda_sparse_packing must be a boolean")
+        if type(direct_sparse_batch_put) is not bool:
+            raise ValueError("direct_sparse_batch_put must be a boolean")
+        if direct_sparse_batch_put:
+            if (
+                fused_cuda_sparse_packing
+                or prompt_index is None
+                or budget_of(transfer_engine) is None
+                or not callable(getattr(transfer_engine, "submit_batch_put", None))
+                or (not device.startswith("cuda") and not allow_cpu_for_tests)
+            ):
+                raise ValueError(
+                    "direct sparse batch requires native batch PUT, index, budget "
+                    "and CUDA; cannot use fused packing"
+                )
+            require_batch = getattr(transfer_engine, "require_native_batch", None)
+            if not allow_cpu_for_tests and not callable(require_batch):
+                raise ValueError("direct sparse batch requires native batch capability proof")
+            if callable(require_batch):
+                require_batch()
         if type(fused_cuda_sparse_packing) is not bool or (
             fused_cuda_sparse_packing and not allow_cuda_sparse_packing
         ):
@@ -439,6 +466,7 @@ class VectorKVStore:
         self._quarantined_index_sources = []
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.fused_cuda_sparse_packing = fused_cuda_sparse_packing
+        self.direct_sparse_batch_put = direct_sparse_batch_put
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1286,7 +1314,15 @@ class VectorKVStore:
                     delivery.authorization.begin(delivery.authorization.identity)
                     delivery.authorization_begun = True
                 attempted = True
-            handle = self.transfer_engine.submit_put(local, delivery.destination)
+            if isinstance(local, SparseBatchPlan):
+                handle = self.transfer_engine.submit_batch_put(
+                    local.slices, delivery.destination,
+                    remote_offsets=local.remote_offsets,
+                )
+                self.metrics.increment("vector_sparse_batch_submissions")
+                self.metrics.increment("vector_sparse_batch_slices", len(local.slices))
+            else:
+                handle = self.transfer_engine.submit_put(local, delivery.destination)
             with self._lock:
                 delivery.transfer_handle = handle
         except Exception as exc:
@@ -1320,8 +1356,10 @@ class VectorKVStore:
             self._progress_releases()
         return delivery
 
-    def _prepare_delivery_source(self, entry, delivery) -> MemorySlice:
+    def _prepare_delivery_source(self, entry, delivery):
         if delivery.sparse_manifest is not None:
+            if self.direct_sparse_batch_put:
+                return self._prepare_sparse_batch_source(entry, delivery)
             return self._prepare_sparse_source(entry, delivery)
         allocation_offset = entry.allocation.start_page * self.page_bytes
         local = MemorySlice(
@@ -1418,7 +1456,8 @@ class VectorKVStore:
         # Never silently move GPU KV to host. CUDA uses an explicit synchronous
         # baseline, not a claim of overlap, RDMA visibility or validated kernels.
         if self.pool.device.type != "cpu" and not (
-            self.pool.device.type == "cuda" and self.allow_cuda_sparse_packing
+            self.pool.device.type == "cuda"
+            and (self.allow_cuda_sparse_packing or self.direct_sparse_batch_put)
         ):
             raise EntryConflictError("sparse GPU packing requires explicit CUDA opt-in")
         metadata = destination.backend_metadata
@@ -1456,9 +1495,49 @@ class VectorKVStore:
                 raise EntryConflictError(
                     "sparse selection is outside this source shard"
                 )
+        if self.direct_sparse_batch_put and 2 * sum(
+            len(spec.token_ids) for spec in manifest.specs
+        ) > MAX_DIRECT_SPARSE_SLICES:
+            raise EntryConflictError("direct sparse native slice bound exceeded")
         # Revalidated under a pinned index record when copying at start_delivery.
         with self.prompt_index.pin_selection(manifest):
             pass
+
+    def _prepare_sparse_batch_source(self, entry, delivery):
+        # Reservation owns the allocation; the adapter additionally owns the
+        # original pool MR. This guard owns only CPU plan/index metadata, with
+        # no GPU staging allocation, registration or per-delivery deregistration.
+        lease = ExitStack()
+        try:
+            descriptor = lease.enter_context(
+                self.prompt_index.pin_selection(delivery.sparse_manifest)
+            )
+            plan = build_sparse_batch_plan(
+                delivery.sparse_manifest, entry.layout, entry.manifest,
+                entry_transfer_id=entry.key.transfer_id,
+                index_version=descriptor.index_version,
+                id_mapping_version=descriptor.id_mapping_version,
+                allocation_offset=entry.allocation.start_page * self.page_bytes,
+                registration=self.registration,
+            )
+        except BaseException:
+            lease.close()
+            raise
+
+        def release():
+            lease.close()
+            delivery.packing_index_lease = None
+
+        guard = ResourceGuard((plan, lease), release)
+        guard.pin(delivery.owner)
+        with self._lock:
+            delivery.staging_guard = guard
+            delivery.packing_index_lease = lease
+            delivery.sparse_batch_slices = len(plan.slices)
+        guard.request_release()
+        # start_delivery and the native adapter retain their existing CUDA
+        # readiness fences. UNKNOWN never drops this guard or the Entry pin.
+        return plan
 
     def _prepare_sparse_source(self, entry, delivery):
         manifest = delivery.sparse_manifest
@@ -2172,6 +2251,10 @@ class VectorKVStore:
                 "sparse_pack_kernel": (
                     "triton" if self.fused_cuda_sparse_packing else "torch"
                 ),
+                "direct_sparse_batch_put": {
+                    "enabled": self.direct_sparse_batch_put,
+                    "max_slices": MAX_DIRECT_SPARSE_SLICES,
+                },
                 "page_bytes": self.page_bytes,
                 "worker_epoch": self.worker_epoch,
                 "full_kv_fanin": {

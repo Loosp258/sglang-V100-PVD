@@ -1,0 +1,286 @@
+{
+  "unit": {
+    "record_file": "gate.tar.gz:oasis_direct_sparse_gate01/unit.txt",
+    "exit_code": 0,
+    "counts": {
+      "passed": 176,
+      "skipped": 6,
+      "warning": 1
+    },
+    "exact_summary": "176 passed, 6 skipped, 1 warning in 8.50s",
+    "seconds": 8.5
+  },
+  "native_count_record_file": "gate.tar.gz:oasis_direct_sparse_gate01/native.json",
+  "native_full_observations_saved": true,
+  "native": {
+    "status": "passed",
+    "mode": "direct_sparse_batch_put",
+    "transport": "mooncake_local_session_scatter",
+    "device": "cuda:1",
+    "current_device": "cuda:0",
+    "source_devices": [
+      "cuda:1",
+      "cuda:0"
+    ],
+    "exact_byte_cases": 48,
+    "two_executor_pools": true,
+    "rows": [
+      1,
+      2,
+      8,
+      16,
+      32,
+      64
+    ],
+    "fixture": {
+      "layers": 28,
+      "local_kv_heads": 2,
+      "head_dim": 128,
+      "page_size": 16,
+      "prompt_tokens": 83,
+      "padded_rows": 96,
+      "nonzero_allocation_pages": 2
+    },
+    "source_registrations": [
+      {
+        "endpoint": "10.10.1.3:15265",
+        "region_id": "1c258e0226c8455bbd2b785c511eefe9",
+        "address": 125420963889152,
+        "length": 4128768,
+        "device": "cuda:1",
+        "rank": 0,
+        "rail": "mlx5_0",
+        "backend_metadata": {
+          "transport": "mooncake",
+          "role": "vector",
+          "page_bytes": 458752,
+          "native_original_pool": true
+        }
+      },
+      {
+        "endpoint": "10.10.1.3:15263",
+        "region_id": "253b6ce70eb64366aa92b9a6b7a171fa",
+        "address": 125420984860672,
+        "length": 4128768,
+        "device": "cuda:0",
+        "rank": 1,
+        "rail": "mlx5_0",
+        "backend_metadata": {
+          "transport": "mooncake",
+          "role": "vector",
+          "page_bytes": 458752,
+          "native_original_pool": true
+        }
+      }
+    ],
+    "source_physical_register_calls": 2,
+    "staging_registration_count": 0,
+    "immutable_source_bytes_exact": true,
+    "all_sources_unregistered": true,
+    "all_destinations_unregistered": true,
+    "all_owners_retired": true,
+    "source_before_close": {
+      "0": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:15265",
+        "registered_regions": 1,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 8388608,
+          "used_inflight": 0,
+          "reservations": 6,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.0005249949172139168,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.2524865949526429
+        }
+      },
+      "1": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:15263",
+        "registered_regions": 1,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 8388608,
+          "used_inflight": 0,
+          "reservations": 6,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.0012306362623348832,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.2644159155897796
+        }
+      }
+    },
+    "source_after_close": {
+      "0": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:15265",
+        "registered_regions": 0,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 0,
+          "used_inflight": 0,
+          "reservations": 0,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.0005249949172139168,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.2524865949526429
+        }
+      },
+      "1": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:15263",
+        "registered_regions": 0,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 0,
+          "used_inflight": 0,
+          "reservations": 0,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.0012306362623348832,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.2644159155897796
+        }
+      }
+    },
+    "before_close": {
+      "slots_per_rank": 2,
+      "capacity_bytes": 32768,
+      "physical_slots": 4,
+      "physical_register_calls": 4,
+      "physical_registrations": 4,
+      "physical_release_calls": 0,
+      "physical_releases": 0,
+      "leased_slots": 0,
+      "unknown_slots": 0,
+      "physical_bytes": 131072,
+      "acquired_leases": 48,
+      "returned_leases": 48,
+      "quarantine": null,
+      "closing": false,
+      "closed": false
+    },
+    "after_close": {
+      "slots_per_rank": 2,
+      "capacity_bytes": 32768,
+      "physical_slots": 0,
+      "physical_register_calls": 4,
+      "physical_registrations": 4,
+      "physical_release_calls": 4,
+      "physical_releases": 4,
+      "leased_slots": 0,
+      "unknown_slots": 0,
+      "physical_bytes": 0,
+      "acquired_leases": 48,
+      "returned_leases": 48,
+      "quarantine": null,
+      "closing": true,
+      "closed": true
+    },
+    "transfer_budget": {
+      "staging_bytes": 33554432,
+      "max_inflight": 16,
+      "used_staging_bytes": 0,
+      "used_inflight": 0,
+      "reservations": 0
+    },
+    "receive_health": {
+      "backend": "rail_mapped_receive",
+      "healthy": true,
+      "rails": {
+        "mlx5_0": {
+          "backend": "mooncake",
+          "healthy": true,
+          "registration_unknown_reason": null,
+          "rail": "mlx5_0",
+          "session_id": "10.10.1.3:16971",
+          "registered_regions": 0,
+          "metadata_policy": "fresh",
+          "metadata_policy_verification": "version-pinned-pre-init",
+          "mooncake_version": "0.3.13.post1",
+          "lifecycle": {
+            "staging_bytes": 33554432,
+            "max_inflight": 16,
+            "used_staging_bytes": 0,
+            "used_inflight": 0,
+            "reservations": 0,
+            "tracked_transfers": 0,
+            "unknown_transfers": 0,
+            "quarantined": false,
+            "quarantine_reason": null
+          },
+          "submit_timing": {
+            "cuda_sync_calls": 1,
+            "cuda_sync_seconds": 0.00010471604764461517,
+            "native_submit_calls": 1,
+            "native_submit_seconds": 0.00010506703983992338,
+            "batch_submit_calls": 0,
+            "batch_submit_seconds": 0.0
+          }
+        }
+      },
+      "registered_destinations": 0,
+      "quarantined_collisions": 0
+    }
+  }
+}

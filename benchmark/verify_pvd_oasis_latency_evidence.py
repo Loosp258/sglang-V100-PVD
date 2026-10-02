@@ -354,7 +354,7 @@ def verify_worker_cpu_gate(folder, manifest, deployed):
     assert record['source_files_match_deployment'] == len(hashes)
 
 
-def verify_delivery_launches(files, arms):
+def verify_delivery_launches(files, arms, *, direct_sparse=False):
     """Recheck archived launch modes and warmup inputs independently of summaries."""
     warmups = []
     for arm in arms:
@@ -380,8 +380,11 @@ def verify_delivery_launches(files, arms):
             env = dict(pairs)
             assert len(env) == len(pairs), 'duplicate launch variable'
             assert all(env[name] == value for name, value in flags.items()), (arm, role, 'changed fixed serving mode')
+            if direct_sparse:
+                assert env['PVD_DIRECT_SPARSE_BATCH_PUT'] == str(int(role == 'v' and arm.startswith('opt')))
             environments.append({name: value for name, value in env.items()
-                                 if name not in ('PVD_RUN_TAG', 'PVD_OASIS_CONFIG')})
+                                 if name not in ('PVD_RUN_TAG', 'PVD_OASIS_CONFIG')
+                                 and not (direct_sparse and role == 'v' and name == 'PVD_DIRECT_SPARSE_BATCH_PUT')})
         assert all(env == environments[0] for env in environments), (role, 'unrelated launch changes')
 
 
@@ -414,6 +417,7 @@ def verify(folder, *, check_git=False):
     is_io = comparison['comparison'] == 'v-io'
     is_pack = comparison['comparison'] == 'v-pack'
     is_workers = comparison['comparison'] == 'v-workers'
+    is_direct_sparse = comparison['comparison'] == 'v-direct-sparse'
     is_delivery = comparison['comparison'] in DELIVERY_COMPARISONS
     if is_io or is_pack or is_delivery:
         expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
@@ -477,7 +481,7 @@ def verify(folder, *, check_git=False):
         assert json.loads(archive.extractfile(names[cleanup]).read()) == []
         if is_delivery:
             raw_files = {name: archive.extractfile(member).read() for name, member in names.items()}
-            verify_delivery_launches(raw_files, expected_arms)
+            verify_delivery_launches(raw_files, expected_arms, direct_sparse=is_direct_sparse)
             assert json_file(raw_files, 'comparison.json') == comparison
             final_gpu = json.loads((folder / 'final_gpu_memory.json').read_text(encoding='utf-8'))
             assert set(final_gpu) == {'p', 'v', 'd'}, 'all six GPUs require cleanup proof'
@@ -518,7 +522,7 @@ def verify(folder, *, check_git=False):
                     if 'delivery_validation' in compact:
                         assert compact['delivery_validation'] == proof
             allowed = {'v-combine': 'combine_reserve_start', 'v-slots': 'reuse_receive_slots',
-                       'v-workers': 'workers'}[comparison['comparison']]
+                       'v-workers': 'workers', 'v-direct-sparse': '__no_config_difference__'}[comparison['comparison']]
             fixed = {name: value for name, value in configs[expected_arms[0]].items() if name != allowed}
             assert all({name: value for name, value in config.items() if name != allowed} == fixed
                        for config in configs.values()), 'unrelated configuration changes in raw evidence'
@@ -527,14 +531,22 @@ def verify(folder, *, check_git=False):
                 assert json_file(raw_files, filename) == json.loads(
                     (folder / filename).read_text(encoding='utf-8')), (filename, 'compact evidence differs from raw')
             sources = json.loads((folder / 'source_hashes.json').read_text(encoding='utf-8'))
-            deployed = verify_delivery_gate(folder, manifest, sources)
+            if is_direct_sparse:
+                from pvd_oasis_direct_sparse_evidence import gate_proof, runtime_proof
+                deployed = gate_proof(archive_files(folder / 'gate.tar.gz'), sources, json_file, unique_file)
+                assert 'direct_sparse_summary.json' in manifest
+                assert runtime_proof(full, lambda name: json_file(raw_files, name)) == json.loads(
+                    (folder / 'direct_sparse_summary.json').read_text())
+            else:
+                deployed = verify_delivery_gate(folder, manifest, sources)
             search = json.loads((folder / 'v_search_summary.json').read_text(encoding='utf-8'))
             rpc = json.loads((folder / 'rpc_summary.json').read_text(encoding='utf-8'))
             for mode in ('baseline', 'optimized'):
                 assert search['aggregate'][mode]['batches'] == rpc['aggregate'][mode]['search_rpc_count'] == 3136
                 assert search['aggregate'][mode]['paths'] == ['grouped_cagra_partial_batched_host']
-            if is_workers:
-                verify_worker_cpu_gate(folder, manifest, deployed)
+            if is_workers or is_direct_sparse:
+                if is_workers:
+                    verify_worker_cpu_gate(folder, manifest, deployed)
                 assert 'worker_timing_summary.json' in manifest, 'actual worker/client timings must be hashed'
                 online = json_file(raw_files, 'online.json')
                 assert list(online) == expected_arms

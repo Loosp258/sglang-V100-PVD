@@ -288,6 +288,9 @@ case "$role" in
     nvidia_site="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia"
     export LD_LIBRARY_PATH="$nvidia_site/cublas/lib:$nvidia_site/cusolver/lib:$nvidia_site/cusparse/lib:$nvidia_site/nvjitlink/lib:$nvidia_site/cuda_runtime/lib:$cuvs_site/libcuvs/lib64:$cuvs_site/libraft/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     pack_args=()
+    if [[ "${PVD_DIRECT_SPARSE_BATCH_PUT:-0}" == 1 ]]; then
+      pack_args+=(--experimental-direct-sparse-batch-put)
+    fi
     if [[ "${PVD_TRITON_SPARSE_PACKING:-0}" == 1 ]]; then
       pack_args+=(--experimental-triton-sparse-packing)
     fi

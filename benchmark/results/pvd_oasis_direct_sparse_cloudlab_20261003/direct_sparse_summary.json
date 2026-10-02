@@ -1,0 +1,154 @@
+{
+  "base_a": [
+    {
+      "rank": 0,
+      "enabled": false,
+      "formal_deliveries": 787,
+      "actual_batch_submissions": 0,
+      "actual_slices": 0,
+      "formal_bytes": 2640896,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 789,
+        "cuda_sync_seconds": 0.15822763519827276,
+        "native_submit_calls": 787,
+        "native_submit_seconds": 1.4041374629596248,
+        "batch_submit_calls": 2,
+        "batch_submit_seconds": 0.005956436041742563
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    },
+    {
+      "rank": 1,
+      "enabled": false,
+      "formal_deliveries": 755,
+      "actual_batch_submissions": 0,
+      "actual_slices": 0,
+      "formal_bytes": 2485760,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 757,
+        "cuda_sync_seconds": 0.13956211565528065,
+        "native_submit_calls": 755,
+        "native_submit_seconds": 1.701801496790722,
+        "batch_submit_calls": 2,
+        "batch_submit_seconds": 0.006312035955488682
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    }
+  ],
+  "opt_a": [
+    {
+      "rank": 0,
+      "enabled": true,
+      "formal_deliveries": 787,
+      "actual_batch_submissions": 787,
+      "actual_slices": 10314,
+      "formal_bytes": 2640384,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 789,
+        "cuda_sync_seconds": 0.07688393967691809,
+        "native_submit_calls": 0,
+        "native_submit_seconds": 0.0,
+        "batch_submit_calls": 789,
+        "batch_submit_seconds": 5.511861321050674
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    },
+    {
+      "rank": 1,
+      "enabled": true,
+      "formal_deliveries": 755,
+      "actual_batch_submissions": 755,
+      "actual_slices": 9710,
+      "formal_bytes": 2485760,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 757,
+        "cuda_sync_seconds": 0.08528402773663402,
+        "native_submit_calls": 0,
+        "native_submit_seconds": 0.0,
+        "batch_submit_calls": 757,
+        "batch_submit_seconds": 5.580274092382751
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    }
+  ],
+  "opt_b": [
+    {
+      "rank": 0,
+      "enabled": true,
+      "formal_deliveries": 787,
+      "actual_batch_submissions": 787,
+      "actual_slices": 10314,
+      "formal_bytes": 2640384,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 789,
+        "cuda_sync_seconds": 0.08314989518839866,
+        "native_submit_calls": 0,
+        "native_submit_seconds": 0.0,
+        "batch_submit_calls": 789,
+        "batch_submit_seconds": 5.449068110785447
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    },
+    {
+      "rank": 1,
+      "enabled": true,
+      "formal_deliveries": 755,
+      "actual_batch_submissions": 755,
+      "actual_slices": 9710,
+      "formal_bytes": 2485760,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 757,
+        "cuda_sync_seconds": 0.10129904607310891,
+        "native_submit_calls": 0,
+        "native_submit_seconds": 0.0,
+        "batch_submit_calls": 757,
+        "batch_submit_seconds": 5.172076792106964
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    }
+  ],
+  "base_b": [
+    {
+      "rank": 0,
+      "enabled": false,
+      "formal_deliveries": 787,
+      "actual_batch_submissions": 0,
+      "actual_slices": 0,
+      "formal_bytes": 2639872,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 789,
+        "cuda_sync_seconds": 0.1365421093069017,
+        "native_submit_calls": 787,
+        "native_submit_seconds": 1.3813943031709641,
+        "batch_submit_calls": 2,
+        "batch_submit_seconds": 0.005480541964061558
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    },
+    {
+      "rank": 1,
+      "enabled": false,
+      "formal_deliveries": 755,
+      "actual_batch_submissions": 0,
+      "actual_slices": 0,
+      "formal_bytes": 2485248,
+      "submit_timing_delta": {
+        "cuda_sync_calls": 757,
+        "cuda_sync_seconds": 0.13215124781709164,
+        "native_submit_calls": 755,
+        "native_submit_seconds": 1.3113553753355518,
+        "batch_submit_calls": 2,
+        "batch_submit_seconds": 0.006292037898674607
+      },
+      "retirement_proven": true,
+      "timing_scope": "actual native adapter counters during both formal requests, including initial full-KV fan-in"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "directory": "artifacts/oasis_direct_sparse_prelaunch",
+  "measurements_included": false,
+  "note": "两次源码门禁脚本错误都在服务启动前发生，未产生正式请求。修正P检查范围，并以第一步记录的独立P源码版本固定四臂；未重新部署或修改P。"
+}

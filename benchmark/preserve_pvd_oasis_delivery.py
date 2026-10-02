@@ -27,7 +27,8 @@ ARTIFACTS = (ROOT / "artifacts").resolve()
 RESULTS = (ROOT / "benchmark/results").resolve()
 RESULT_PREFIX = {"v-combine": "pvd_oasis_combined_delivery_cloudlab_",
                  "v-slots": "pvd_oasis_receive_slots_cloudlab_",
-                 "v-workers": "pvd_oasis_workers_cloudlab_"}
+                 "v-workers": "pvd_oasis_workers_cloudlab_",
+                 "v-direct-sparse": "pvd_oasis_direct_sparse_cloudlab_"}
 
 
 def project_path(value, parent, *, exists=True):
@@ -125,13 +126,18 @@ def gate_counts(gate):
             native = records[0]
             result["native_count_record_file"] = "gate.tar.gz:" + gate.name + "/native.txt final JSON"
             result["native_full_observations_saved"] = False
-        assert native["status"] == "passed" and native["transport"] == "mooncake_local_session"
+        assert native["status"] == "passed"
+        assert native["transport"] == ("mooncake_local_session_scatter"
+            if native.get('mode') == 'direct_sparse_batch_put' else "mooncake_local_session")
         assert type(native["exact_byte_cases"]) is int and native["exact_byte_cases"] == 48
+        if native.get('mode') == 'direct_sparse_batch_put':
+            from pvd_oasis_direct_sparse_evidence import native_proof
+            native_proof(native)
         assert native["after_close"]["closed"] is True
         assert native["after_close"]["physical_bytes"] == native["after_close"]["unknown_slots"] == 0
         if "observations" in native:
             assert len(native["observations"]) == native["exact_byte_cases"]
-        result["native"] = {key: value for key, value in native.items() if key != "observations"}
+        result["native"] = {key: value for key, value in native.items() if key not in ("observations", "cases")}
     return result
 
 
@@ -188,6 +194,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "v-combine": ("合并 reserve＋start", "独立 reserve/start", "合并 reserve/start"),
         "v-slots": ("复用接收区物理注册", "每次交付注册", "请求内复用 slots"),
         "v-workers": ("预取 workers 2→4", "workers=2", "workers=4"),
+        "v-direct-sparse": ("原始注册区直接 sparse batch PUT", "staging packed PUT", "原始 Entry scatter PUT"),
     }[kind]
     baseline, optimized = aggregate["baseline"], aggregate["optimized"]
     started = first_formal_time(directory)
@@ -206,7 +213,8 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "V固定 pool/host candidates/GPU finite-Q proof；Triton打包关闭；D显式 reuse_io=false。初始KV仍图门后P→V→D，private Prompt seed计入客户端。",
         {"v-combine": "唯一变量为D combine_reserve_start；所有臂 reuse_receive_slots=false。",
          "v-slots": "唯一变量为D reuse_receive_slots；所有臂 combine_reserve_start=false。",
-         "v-workers": "所有臂 combine_reserve_start=false、reuse_receive_slots=false、reuse_io=false；原生serving实现相同，增加worker无需改动交付协议。"}[kind],
+         "v-workers": "所有臂 combine_reserve_start=false、reuse_receive_slots=false、reuse_io=false；原生serving实现相同，增加worker无需改动交付协议。",
+         "v-direct-sparse": "唯一变量为V direct_sparse_batch_put；D配置完全相同。保留device readiness同步，opt从原pool MR按component-major精确地址直接batch发送，至多128片段。"}[kind],
         "八次Prompt、实际输出ID和文本一致，cached_tokens=0；每请求420jobs/840搜索RPC，每模式3136稳态查询profile，均2items/14Qrows。",
         f"部署 bundle 中{proof['deployed_files']}个文件的实际哈希与V/D serving source gate一致；源码身份使用记录的部署包，没有读取后来编辑的工作树。",
         "所有接收写入保留完整身份、精确native终态字节证明、安装后ACK及UNKNOWN保留；最终 owned={}、cleanup_errors=[]、六张GPU归零。", "",
@@ -221,6 +229,8 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         ("每请求后续Decode累计KV等待", baseline["steady_request_wait_sum_ms"], optimized["steady_request_wait_sum_ms"], "ms"),
         ("每步逐层等待和中位数", baseline["steady_layer_wait_sum_ms"], optimized["steady_layer_wait_sum_ms"], "ms"),
         ("后续Decode执行", baseline["steady_forward_ms"], optimized["steady_forward_ms"], "ms"),
+        ("客户端TPOT均值（15个流式间隔）", baseline["client_tpot_mean_ms"], optimized["client_tpot_mean_ms"], "ms"),
+        ("D每token KV等待均值（后14步）", baseline["steady_wait_mean_ms_per_token"], optimized["steady_wait_mean_ms_per_token"], "ms"),
         ("首个客户端事件", baseline["first_event_seconds"], optimized["first_event_seconds"], "s"),
         ("客户端完成", baseline["wall_seconds"], optimized["wall_seconds"], "s")):
         lines.append(f"| {label} | {old:.3f} {unit} | {new:.3f} {unit} | {change(old,new):+.2f}% |")
@@ -280,7 +290,9 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "CAGRA候选允许原生抖动；没有冻结missing集合。查询、D RPC和交付时间包含不同范围，不把差值当作纯网络或纯native传输时间。", "", "## 验证与范围", "",
         f"CPU gate实际结果：`{counts['unit']['exact_summary']}`；完整输出见gate.tar.gz与gate_count_record.json。"]
     if "native" in counts:
-        lines.append(f"原生本地Mooncake gate通过{counts['native']['exact_byte_cases']}个精确字节案例，两个执行器复用四个物理MR并安全注销；本地session gate与线上跨节点RDMA对照是独立观测。")
+        detail = ("两GPU原始pool MR、多层、多head、非连续token、非零Entry偏移与末页scatter，0 staging注册；caller初态GPU0，发送使用显式source设备上下文" if kind == 'v-direct-sparse'
+                  else "两个执行器复用四个物理MR并安全注销")
+        lines.append(f"原生本地Mooncake gate通过{counts['native']['exact_byte_cases']}个精确字节案例，{detail}；本地session gate与线上跨节点RDMA对照是独立观测。")
     if "records_unit" in counts:
         lines.append(f"接收record集成重复gate：`{counts['records_unit']['exact_summary']}`；这九项已包含在完整CPU gate中，不相加为新的独立测试。")
     if worker_cpu is not None:
@@ -291,7 +303,14 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "同名目录保存完整raw.tar.gz、gate.tar.gz、紧凑summary/实际IO计数、V/RPC分解、部署来源、GPU归零与LF便携manifest。"]
     if failure_note:
         lines.append("前置失败尝试另存failed_prelaunch.tar.gz：" + failure_note)
-    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers"}[kind]
+    if kind == 'v-direct-sparse':
+        lines += ["", "## 采用决定", "",
+            "这次直接scatter没有收益，保持默认关闭；下一步D GPU直接安装对照继续使用原staging packed PUT。",
+            f"TPOT均值{baseline['client_tpot_mean_ms']:.3f}→{optimized['client_tpot_mean_ms']:.3f} ms/token；KV等待均值{baseline['steady_wait_mean_ms_per_token']:.3f}→{optimized['steady_wait_mean_ms_per_token']:.3f} ms/token。",
+            "opt虽然取消V staging复制/注册，但每个缺失head/token变成独立256B源切片。当前绑定下，small-write batch提交成本与额外poll使完整交付变慢；此解释来自实际start/poll和native计数，不能把这些含同步/控制的wall时间当成纯网络延迟。",
+            "direct_sparse_summary.json逐arm/rank核对warmup后新增batch/slice数与D真实交付行数，保留adapter native计时（含初始full-KV fan-in）、唯一原pool MR及退休证明。",
+            "gate.tar.gz也保存本地CPU初次fixture错误、缺Triton环境失败与后续修正后的原始输出。CloudLab正式CPU和native gate才作为本次资格。"]
+    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers", "v-direct-sparse": "fresh_direct_sparse"}[kind]
     lines += ["", "```text",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/run_pvd_oasis_serving_cloudlab.py --tag {tag} --comparison {comparison['comparison']} --arms base_a,opt_a,opt_b,base_b --cases 99401,99402 --tokens 16",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_serving.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/{tag} --comparison {comparison['comparison']}",
@@ -338,7 +357,7 @@ def main():
             if arm.startswith("opt") is (mode == "optimized") for row in rows)
     stages = delivery_stages(summary)
     worker_timings = (worker_timing_evidence(summary, read_json(directory / "online.json"), comparison["comparison"])
-                      if comparison["comparison"] == "v-workers" else None)
+                      if comparison["comparison"] in ("v-workers", "v-direct-sparse") else None)
     failed = project_path(args.failed_prelaunch, ARTIFACTS) if args.failed_prelaunch else None
     if failed is not None:
         assert not (failed / "online.json").exists() or read_json(failed / "online.json") == {}, "prelaunch archive contains measured requests"
@@ -361,6 +380,9 @@ def main():
     write_json(output / "implementation.json", proof)
     write_json(output / "gate_count_record.json", counts)
     write_json(output / "delivery_stage_summary.json", stages)
+    if comparison['comparison'] == 'v-direct-sparse':
+        from pvd_oasis_direct_sparse_evidence import runtime_proof
+        write_json(output / 'direct_sparse_summary.json', runtime_proof(summary, lambda name: read_json(directory / name)))
     if worker_timings is not None:
         write_json(output / "worker_timing_summary.json", worker_timings)
     compact = copy.deepcopy(summary)

@@ -485,6 +485,14 @@ def build_parser() -> argparse.ArgumentParser:
         "attention/predictive serving or claim GPU/RDMA validation or overlap.",
     )
     parser.add_argument(
+        "--experimental-direct-sparse-batch-put",
+        action="store_true",
+        help="V-only opt-in: native aggregate sparse batch PUT directly from the "
+        "registered immutable Entry. Maximum 128 slices; requires Mooncake, "
+        "CUDA, an index and budgets. Retains CUDA readiness fences and "
+        "quarantines uncertain aggregate writes.",
+    )
+    parser.add_argument(
         "--experimental-triton-sparse-packing",
         action="store_true",
         help="V-only opt-in: gather selected Prompt K/V into the owned sparse "
@@ -680,6 +688,17 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
     ):
         raise ValueError(
             "experimental Triton sparse packing requires CUDA sparse packing"
+        )
+    if getattr(args, "experimental_direct_sparse_batch_put", False) and (
+        args.transfer_backend != "mooncake"
+        or args.allow_cpu_for_tests
+        or getattr(args, "experimental_triton_sparse_packing", False)
+        or not getattr(args, "prompt_index_vector_space", None)
+        or not getattr(args, "prompt_index_budget_bytes", None)
+    ):
+        raise ValueError(
+            "direct sparse batch requires Mooncake, CUDA and an indexed budget; "
+            "cannot use Triton packing"
         )
     if getattr(args, "experimental_triton_sparse_packing", False) and (
         importlib.util.find_spec("triton") is None
@@ -1010,6 +1029,9 @@ def _create_store(
         ),
         fused_cuda_sparse_packing=getattr(
             args, "experimental_triton_sparse_packing", False
+        ),
+        direct_sparse_batch_put=getattr(
+            args, "experimental_direct_sparse_batch_put", False
         ),
     )
     return store, preflight

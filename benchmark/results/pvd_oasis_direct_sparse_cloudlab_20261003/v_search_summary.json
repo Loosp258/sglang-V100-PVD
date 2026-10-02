@@ -1,0 +1,323 @@
+{
+  "aggregate": {
+    "baseline": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.286,
+        "thread_wait": 0.2465,
+        "query_tensor": 0.015,
+        "manager_total": 5.907,
+        "manager_lock": 0.001,
+        "identity_lease": 0.037,
+        "query_place": 0.4755,
+        "workspace_lock": 0.002,
+        "finite_proof": 1.035,
+        "native_scope": 0.038,
+        "native_submit": 0.962,
+        "native_completion": 0.987,
+        "candidate_download": 1.1070000000000002,
+        "candidate_mapping": 0.058,
+        "score_restore": 0.0,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.008,
+        "manager_completion": 0.14,
+        "json_parse": 0.424,
+        "batch_total": 7.067,
+        "native_submit_and_completion": 1.952,
+        "candidate_handling": 1.176
+      }
+    },
+    "optimized": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched_host"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.288,
+        "thread_wait": 0.213,
+        "query_tensor": 0.017,
+        "manager_total": 6.3835,
+        "manager_lock": 0.001,
+        "identity_lease": 0.045,
+        "query_place": 0.397,
+        "workspace_lock": 0.003,
+        "finite_proof": 0.889,
+        "native_scope": 0.046,
+        "native_submit": 0.994,
+        "native_completion": 1.039,
+        "candidate_download": 1.3849999999999998,
+        "candidate_mapping": 0.061,
+        "score_restore": 0.001,
+        "backend_enqueue": 0.0,
+        "host_materialize": 0.009,
+        "manager_completion": 0.184,
+        "json_parse": 0.515,
+        "batch_total": 7.544499999999999,
+        "native_submit_and_completion": 2.022,
+        "candidate_handling": 1.4545
+      }
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.29,
+          "thread_wait": 0.2935,
+          "query_tensor": 0.016,
+          "manager_total": 6.224,
+          "manager_lock": 0.001,
+          "identity_lease": 0.04,
+          "query_place": 0.463,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.0815000000000001,
+          "native_scope": 0.041,
+          "native_submit": 0.972,
+          "native_completion": 1.024,
+          "candidate_download": 1.2505,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1615,
+          "json_parse": 0.4405,
+          "batch_total": 7.4704999999999995,
+          "native_submit_and_completion": 1.999,
+          "candidate_handling": 1.317
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.29,
+          "thread_wait": 0.365,
+          "query_tensor": 0.016,
+          "manager_total": 6.18,
+          "manager_lock": 0.001,
+          "identity_lease": 0.041,
+          "query_place": 0.4575,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.0655000000000001,
+          "native_scope": 0.042,
+          "native_submit": 0.9764999999999999,
+          "native_completion": 1.022,
+          "candidate_download": 1.19,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.153,
+          "json_parse": 0.4285,
+          "batch_total": 7.4155,
+          "native_submit_and_completion": 1.9955,
+          "candidate_handling": 1.2675
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.2845,
+          "thread_wait": 0.182,
+          "query_tensor": 0.016,
+          "manager_total": 6.183,
+          "manager_lock": 0.001,
+          "identity_lease": 0.043,
+          "query_place": 0.376,
+          "workspace_lock": 0.003,
+          "finite_proof": 0.7695000000000001,
+          "native_scope": 0.04,
+          "native_submit": 0.9795,
+          "native_completion": 1.0285,
+          "candidate_download": 1.33,
+          "candidate_mapping": 0.059,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.1615,
+          "json_parse": 0.514,
+          "batch_total": 7.2615,
+          "native_submit_and_completion": 1.995,
+          "candidate_handling": 1.399
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.294,
+          "thread_wait": 0.209,
+          "query_tensor": 0.017,
+          "manager_total": 6.3385,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_place": 0.459,
+          "workspace_lock": 0.003,
+          "finite_proof": 0.878,
+          "native_scope": 0.045,
+          "native_submit": 0.9944999999999999,
+          "native_completion": 1.012,
+          "candidate_download": 1.415,
+          "candidate_mapping": 0.061,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.181,
+          "json_parse": 0.521,
+          "batch_total": 7.5355,
+          "native_submit_and_completion": 2.002,
+          "candidate_handling": 1.4845000000000002
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.287,
+          "thread_wait": 0.244,
+          "query_tensor": 0.017,
+          "manager_total": 6.5145,
+          "manager_lock": 0.001,
+          "identity_lease": 0.046,
+          "query_place": 0.3815,
+          "workspace_lock": 0.003,
+          "finite_proof": 0.9989999999999999,
+          "native_scope": 0.048,
+          "native_submit": 1.0,
+          "native_completion": 1.081,
+          "candidate_download": 1.4085,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.001,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.01,
+          "manager_completion": 0.1925,
+          "json_parse": 0.52,
+          "batch_total": 7.7035,
+          "native_submit_and_completion": 2.0595,
+          "candidate_handling": 1.483
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.287,
+          "thread_wait": 0.2155,
+          "query_tensor": 0.017,
+          "manager_total": 6.529999999999999,
+          "manager_lock": 0.001,
+          "identity_lease": 0.046,
+          "query_place": 0.405,
+          "workspace_lock": 0.003,
+          "finite_proof": 0.945,
+          "native_scope": 0.048,
+          "native_submit": 1.0,
+          "native_completion": 1.061,
+          "candidate_download": 1.395,
+          "candidate_mapping": 0.062,
+          "score_restore": 0.001,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.009,
+          "manager_completion": 0.2095,
+          "json_parse": 0.506,
+          "batch_total": 7.5995,
+          "native_submit_and_completion": 2.048,
+          "candidate_handling": 1.4655
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.281,
+          "thread_wait": 0.2,
+          "query_tensor": 0.013,
+          "manager_total": 5.502,
+          "manager_lock": 0.001,
+          "identity_lease": 0.032,
+          "query_place": 0.4915,
+          "workspace_lock": 0.002,
+          "finite_proof": 1.0194999999999999,
+          "native_scope": 0.031,
+          "native_submit": 0.949,
+          "native_completion": 0.946,
+          "candidate_download": 0.9275,
+          "candidate_mapping": 0.053,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.007,
+          "manager_completion": 0.125,
+          "json_parse": 0.407,
+          "batch_total": 6.6195,
+          "native_submit_and_completion": 1.8855,
+          "candidate_handling": 0.9895
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched_host"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.282,
+          "thread_wait": 0.183,
+          "query_tensor": 0.014,
+          "manager_total": 5.789,
+          "manager_lock": 0.001,
+          "identity_lease": 0.034,
+          "query_place": 0.495,
+          "workspace_lock": 0.002,
+          "finite_proof": 0.995,
+          "native_scope": 0.033,
+          "native_submit": 0.949,
+          "native_completion": 0.9615,
+          "candidate_download": 1.02,
+          "candidate_mapping": 0.054,
+          "score_restore": 0.0,
+          "backend_enqueue": 0.0,
+          "host_materialize": 0.008,
+          "manager_completion": 0.128,
+          "json_parse": 0.411,
+          "batch_total": 6.713,
+          "native_submit_and_completion": 1.8984999999999999,
+          "candidate_handling": 1.1005
+        }
+      }
+    ]
+  },
+  "scope": "ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings"
+}
