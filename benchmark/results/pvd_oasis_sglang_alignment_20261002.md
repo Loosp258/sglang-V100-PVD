@@ -54,10 +54,12 @@ The existing GPUDirect device fence remains, followed by owned D2H/cache/H2D.
 V/CAGRA is the selected two-rank fast graph (14 graphs/rank), carried in commit
 `80a91419c`. Partial per-layer groups use existing filtered native search.
 
-117 tests passed on CloudLab: paired causality, request/future ownership,
+118 tests passed on CloudLab: paired causality, request/future ownership,
 foreign commits, deferred consumer release, actual CPU terminal/ACK cache
 copy over localhost control, Prompt index and chunks. These tests do not prove
-real RDMA, live Scheduler admission or client latency; online validation follows.
+real RDMA, live Scheduler admission or client latency by themselves. The later
+bounded native Scheduler/ABBA validation is recorded separately in
+`pvd_oasis_formal_cloudlab_20261002.md`; it demonstrates no reliable overlap gain.
 
 This pilot retains the existing full P->V->D initial KV, then performs one
 separately charged private Prompt pass for EAGLE initialization. It does not

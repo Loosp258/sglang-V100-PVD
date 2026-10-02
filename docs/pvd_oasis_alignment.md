@@ -50,7 +50,9 @@ identify that selector adaptation explicitly. Do not replace CAGRA with Quest.
 5. Test row isolation, shared projection calls, per-layer publication/consumption,
    foreign/stale replies, cancellation, memory limits and transfer drainage.
 6. On idle CloudLab GPUs, use the same model/Prompt/KV budget/graphs and warmup
-   to compare ordinary probe, serialized paired, and overlapped paired paths.
+   to compare serialized paired and overlapped paired paths. Ordinary probe
+   uses a different refresh schedule; label its evidence separately rather
+   than attributing that schedule change to overlap.
    Include startup, Q generation, selection, delivery, consumer waits and client
    completion. Use live selection for free Decode; record quality independently.
 
@@ -91,4 +93,24 @@ Admission JSON has exactly these keys (no inferred budgets or model paths):
 `max_decode_steps`, `request_budget_bytes`, `request_scratch_bytes`,
 `bootstrap_budget_bytes`, `bootstrap_transient_bytes`, `overlap`.
 `overlap=false` is the serialized paired control; both use identical layer KV
-selection/replacement/transport. Online Scheduler validation is still pending.
+selection/replacement/transport.
+
+## Completed bounded formal validation
+
+Implementation `173a2ac0e` passed 118 tests and the real native Gateway/P/V/D
+path. Admission runs before the waiting-queue handoff; the exact native bootstrap
+receipt is required. Two 2159-token Prompts with 16 output tokens were measured
+in serialized/overlap/overlap/serialized order, two warmups per arm and four
+formal requests/mode. All modes' actual output IDs/text matched.
+
+Client medians were 13.8479 s serialized and 13.8243 s overlap. The 0.17% difference
+is below observed order drift and does not demonstrate reliable speedup. Overlap
+subsequent forward median was 783.61 ms, of which 701.53 ms was layer waiting;
+EAGLE proposal was 2.67 ms. Per-layer remote search/delivery fragmentation is
+the main remaining measured issue, not a slow EAGLE proposal. No Q-only timing
+is inferred from total forward minus layer waiting.
+
+The initial full KV and one private seed Prompt pass remain separately charged.
+Default-off TP1/single-request restrictions remain; broader quality, memory and
+failure-under-load gates are open. Full report/raw evidence:
+`benchmark/results/pvd_oasis_formal_cloudlab_20261002.md`.

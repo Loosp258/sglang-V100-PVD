@@ -180,14 +180,24 @@ Decode/refresh. The original sparse-seed standalone experiment remains separate.
 Completed stages: `32f3971f0` existing-weight paired target; `706f2fb0e`
 request-local actual commits/layer futures; `80a91419c` measured fast V source
 snapshot; `033b9974e` opt-in formal Scheduler sampler/result integration and
-native layer misses. 117 bounded causal/protocol/index checks passed in the
-isolated CloudLab checkout. Full online validation and latency/quality evidence
-are still required before declaring serving conversion validated.
+native layer misses; `173a2ac0e` admission before waiting-queue handoff and bounded
+contiguous CPU cache. 118 bounded causal/protocol/index checks passed in the
+isolated CloudLab checkout. The formal native Gateway/P/V/D path completed the
+bounded TP1 ABBA trial: two 2159-token Prompts, 16 output tokens, four requests
+per mode, identical actual IDs/text. Client medians 13.8479 s serialized versus
+13.8243 s overlap do not establish a reliable gain (0.17%, below order drift).
+Overlap subsequent steps took 783.61 ms with 701.53 ms foreground layer waits;
+EAGLE proposals took 2.67 ms. Report/raw evidence:
+`benchmark/results/pvd_oasis_formal_cloudlab_20261002.md`. Defaults remain off;
+broader quality, TP2, concurrent/load/cancellation/memory gates remain open.
 
 Work only on `codex/pvd-oasiskv` in its isolated worktree. Commit each completed
 stage. This branch first provides an explicit experimental P/V/D runner; it does
 not enable the existing Scheduler automatically. Existing whole-forward bank
 leases cannot provide per-layer replacement without a separate ownership design.
+
+The numbered sequence below records the original standalone experiment. The
+formal pilot uses the admission contract and completed validation above.
 
 1. Pin the already validated Qwen2.5-7B/EAGLE3 pair. P prepares immutable Prompt
    KV, target auxiliary features and a known root token. D receives its initial

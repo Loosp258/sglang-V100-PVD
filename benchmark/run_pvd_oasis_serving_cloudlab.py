@@ -4,6 +4,7 @@ Only recorded process groups are terminated. Fresh tagged artifacts preserve
 config, raw outputs, argv, service logs and deployed source identities.
 """
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -32,14 +33,15 @@ OUT.mkdir(parents=True, exist_ok=False)
 OWNED, CHECKOUTS, HEADS = {}, {}, {}
 
 
-def call(role, command, *, data=None, timeout=240):
+def call(role, command, *, data=None, timeout=240, binary=False):
     ip, host, _ = HOSTS[role]
     result = subprocess.run(['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o',
-        'ConnectTimeout=15', '-o', 'HostKeyAlias=' + host, '-i', KEY,
+        'ConnectTimeout=15', '-o', 'ServerAliveInterval=10', '-o',
+        'ServerAliveCountMax=3', '-o', 'HostKeyAlias=' + host, '-i', KEY,
         'Yizhzhu@' + ip, command], input=data, capture_output=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f'{role}: {result.stdout.decode(errors="replace")}\n{result.stderr.decode(errors="replace")}')
-    return result.stdout.decode()
+    return result.stdout if binary else result.stdout.decode()
 
 
 def upload(role, path, data):
@@ -50,7 +52,8 @@ def collect(role, arm):
     remote = 'v' if role == 'gateway' else role
     node = HOSTS[remote][2]
     path = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/logs/{role}-{args.tag}_{arm}.log'
-    (OUT / f'{arm}_{role}.log').write_text(call(remote, 'cat ' + path + ' || true'))
+    compressed = call(remote, 'gzip -c -- ' + shlex.quote(path), binary=True)
+    (OUT / f'{arm}_{role}.log').write_bytes(gzip.decompress(compressed))
 
 
 def stop(role):
@@ -197,19 +200,28 @@ def main():
             stop('gateway'); stop('d')
         collect('v', 'shared'); collect('p', 'shared')
     finally:
-        if 'd' in OWNED and arm_running:
-            collect('d', arm_running)
-        if 'gateway' in OWNED and arm_running:
-            collect('gateway', arm_running)
-        if 'v' in OWNED:
-            collect('v', 'shared')
-        if 'p' in OWNED:
-            collect('p', 'shared')
+        cleanup_errors = []
+        for role in tuple(OWNED):
+            try:
+                collect(role, 'shared' if role in ('v', 'p') else arm_running)
+            except Exception as error:
+                cleanup_errors.append(f'collect {role}: {error!r}')
         for role in ('gateway', 'p', 'd', 'v'):
-            stop(role)
-        checks = {r: call(r, 'nvidia-smi --query-gpu=index,memory.used --format=csv,noheader') for r in HOSTS}
+            try:
+                stop(role)
+            except Exception as error:
+                cleanup_errors.append(f'stop {role}: {error!r}')
+        checks = {}
+        for role in HOSTS:
+            try:
+                checks[role] = call(role, 'nvidia-smi --query-gpu=index,memory.used --format=csv,noheader')
+            except Exception as error:
+                cleanup_errors.append(f'final GPU {role}: {error!r}')
         (OUT / 'final_gpu_memory.json').write_text(json.dumps(checks, indent=2))
+        (OUT / 'cleanup_errors.json').write_text(json.dumps(cleanup_errors, indent=2))
         print('final GPU', checks, flush=True)
+        if cleanup_errors:
+            raise RuntimeError('cleanup incomplete; inspect cleanup_errors.json and owned.json')
 
 
 if __name__ == '__main__':

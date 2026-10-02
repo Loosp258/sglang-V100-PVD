@@ -1,0 +1,81 @@
+{
+  "repository": "thoughtworks/Qwen2.5-7B-Instruct-Eagle3",
+  "revision": "ff17dda64a036cf5bd7bc56c0ab728325f1c0d0b",
+  "weights_sha256": "f77665495c620c17d05d6672444094844866e2a27e545d6837e8b107465ddfd8",
+  "bytes": 717798344,
+  "config": {
+    "architectures": [
+      "LlamaForCausalLM"
+    ],
+    "model_type": "llama",
+    "hidden_size": 3584,
+    "intermediate_size": 14336,
+    "num_hidden_layers": 1,
+    "num_attention_heads": 28,
+    "num_key_value_heads": 7,
+    "head_dim": 128,
+    "vocab_size": 152064,
+    "draft_vocab_size": 32000,
+    "rope_theta": 1000000.0,
+    "rms_norm_eps": 1e-06,
+    "torch_dtype": "bfloat16",
+    "tie_word_embeddings": false
+  },
+  "tensor_shapes": {
+    "d2t": [
+      32000
+    ],
+    "fc.weight": [
+      3584,
+      10752
+    ],
+    "lm_head.weight": [
+      32000,
+      3584
+    ],
+    "midlayer.hidden_norm.weight": [
+      3584
+    ],
+    "midlayer.input_layernorm.weight": [
+      3584
+    ],
+    "midlayer.mlp.down_proj.weight": [
+      3584,
+      14336
+    ],
+    "midlayer.mlp.gate_proj.weight": [
+      14336,
+      3584
+    ],
+    "midlayer.mlp.up_proj.weight": [
+      14336,
+      3584
+    ],
+    "midlayer.post_attention_layernorm.weight": [
+      3584
+    ],
+    "midlayer.self_attn.k_proj.weight": [
+      896,
+      7168
+    ],
+    "midlayer.self_attn.o_proj.weight": [
+      3584,
+      3584
+    ],
+    "midlayer.self_attn.q_proj.weight": [
+      3584,
+      7168
+    ],
+    "midlayer.self_attn.v_proj.weight": [
+      896,
+      7168
+    ],
+    "norm.weight": [
+      3584
+    ],
+    "t2d": [
+      152064
+    ]
+  },
+  "eagle_commit": "cb7e0841fe0c206c6ed74a197ad5e2a1f13f5a2b"
+}

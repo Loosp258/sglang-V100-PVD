@@ -1,0 +1,6 @@
+{
+  "initial_runner_exit": 1,
+  "reason": "SSH uncompressed V log transfer timed out after all formal requests completed",
+  "recovery": "Only recorded P/V process groups terminated; shared logs retrieved with gzip; GPU memory verified zero on all nodes",
+  "changed_serving_sources": false
+}
