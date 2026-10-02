@@ -1,0 +1,12 @@
+{
+  "raw.tar.gz": {
+    "bytes": 147640,
+    "sha256": "0c9d493d55edba7818acf4b83c54d73d9fa35e00064875433a8d15609d30aef3",
+    "normalization": "raw"
+  },
+  "summary.json": {
+    "bytes": 128849,
+    "sha256": "3fdb3d0fa69b6ad4174ff9dccfb9247b9ca395f55bb78639c97b6a2cccf5d2c2",
+    "normalization": "lf"
+  }
+}

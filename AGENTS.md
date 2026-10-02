@@ -611,3 +611,11 @@ all raw configs/logs/IDs/session counters/source hashes and6-GPU clean exit.
    wall. Packing is outside the V batch search timer; never call its gain a
    CAGRA search-kernel improvement. Preserve full evidence and commit each
    completed gate. Do not add gains from independent experiments.
+
+V sparse packing native gate oasis_v_sparse_pack_native01 passed143 regressions,
+24 standalone CUDA cases and both-GPU page1/page2 byte equality/padding gates.
+Triton large60-row pack~2.67->1.23ms; small8-row~0.89->1.20ms including metadata
+and fences. No online gain inferred. b61c671a4 also retains index lease after
+metadata UNKNOWN despite later successful sync; CPU policy faultgate passes.
+See benchmark/results/pvd_oasis_v_sparse_pack_native_cloudlab_20261002.md.
+Live single-knob ABBA oasis_v_sparse_pack_abba01 running with I/O reuse false.
