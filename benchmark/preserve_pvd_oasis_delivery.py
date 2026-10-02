@@ -6,6 +6,7 @@ against the recorded deployment bundle, never against a later working tree.
 
 import argparse
 import copy
+from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
 import io
@@ -39,6 +40,13 @@ def project_path(value, parent, *, exists=True):
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def first_formal_time(directory):
+    online = read_json(directory / "online.json")
+    stamps = [row["started_unix"] for rows in online.values() for row in rows]
+    assert stamps and all(type(value) in (int, float) and value > 0 for value in stamps)
+    return datetime.fromtimestamp(min(stamps), timezone(timedelta(hours=8)))
 
 
 def write_json(path, data):
@@ -159,9 +167,11 @@ def report_text(directory, summary, stages, counts, proof, failure_note):
     baseline_label = "独立 reserve/start" if comparison["comparison"] == "v-combine" else "每次交付注册"
     optimized_label = "合并 reserve/start" if comparison["comparison"] == "v-combine" else "请求内复用 slots"
     baseline, optimized = aggregate["baseline"], aggregate["optimized"]
+    started = first_formal_time(directory)
     def change(old, new):
         return (new / old - 1) * 100 if old else None
-    lines = [f"# Oasis KV 交付：{title}公平对照", "", "CloudLab 2026-10-02；完整快图＋V/CAGRA＋Oasis 配对逐层 Decode。", "",
+    lines = [f"# Oasis KV 交付：{title}公平对照", "", f"CloudLab {started:%Y-%m-%d}；完整快图＋V/CAGRA＋Oasis 配对逐层 Decode。",
+        f"日期按首个正式请求started_unix换算UTC+8：{started.isoformat(timespec='seconds')}。", "",
         "## 结果", "",
         f"客户端完成中位数 **{baseline['wall_seconds']:.3f}→{optimized['wall_seconds']:.3f} s（{change(baseline['wall_seconds'], optimized['wall_seconds']):+.2f}%）**；",
         f"每请求后续Decode累计 KV 等待 **{baseline['steady_request_wait_sum_ms']:.3f}→{optimized['steady_request_wait_sum_ms']:.3f} ms**。",
@@ -251,6 +261,7 @@ def main():
     comparison = read_json(directory / "comparison.json")
     assert comparison["comparison"] in DELIVERY_COMPARISONS
     assert re.fullmatch(RESULT_PREFIX[comparison["comparison"]] + r"\d{8}", output.name)
+    assert output.name.endswith(first_formal_time(directory).strftime("%Y%m%d")), "result filename must match the first formal request date in UTC+8"
     summary = read_json(directory / "summary.json")
     assert comparison["arms"] == list(summary["requests"]) == ["base_a", "opt_a", "opt_b", "base_b"]
     assert read_json(directory / "owned.json") == {} and read_json(directory / "cleanup_errors.json") == []
