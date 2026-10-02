@@ -540,3 +540,26 @@ Oasis Decode unchanged. Work only in the codex/pvd-oasiskv isolated worktree.
    Save full raw logs, actual output IDs, source hashes, traffic and cleanup.
    Report V processing, D wait and client timing separately. Retain default-off
    until broader quality, concurrency, cancellation and memory gates pass.
+
+#### Separately measure per-request HTTP connection reuse (2026-10-02)
+
+Saved formal traces show D search HTTP ~11.7 ms versus V batch7.5 ms, while
+layer search/delivery ~35.3 ms. Each layer currently closes its search/control
+sessions; control already reuses connections within a layer. Do not attribute
+all delivery time to TCP handshakes or promise a magnitude gain from reuse.
+
+1. After host-query single-knob ABBA, add default-off request-scoped search and
+   control clients on the existing D manager I/O loop. Route calls through a
+   bounded loop-affine proxy; retain each worker's own receive registry/stream
+   and their existing terminal, native drain and cache-copy contracts.
+2. Keep per-layer request/incarnation/step/layer/index identities unchanged.
+   Drain HTTP futures on cancellation, join the lookahead workers before
+   closing shared clients, retain close futures/cache/budget on unknown or
+   timed-out closure, and refuse blocking close on the owning I/O thread.
+3. Test multi-worker session reuse, foreign/stale identities, cancel/close
+   unwind and unknown owner retention. Add actual session creation/reuse counts
+   and search/delivery stage evidence, without asserting network-only timings.
+4. Compare latest V baseline with/without only request-scoped I/O on matched
+   live CloudLab ABBA requests. Keep Q counts, retrieval budgets, graph, workers
+   and all other generation controls fixed; save IDs/traffic/logs/cleanup and
+   preserve negative results. Commit separately; defaults remain disabled.
