@@ -563,3 +563,16 @@ all delivery time to TCP handshakes or promise a magnitude gain from reuse.
    live CloudLab ABBA requests. Keep Q counts, retrieval budgets, graph, workers
    and all other generation controls fixed; save IDs/traffic/logs/cleanup and
    preserve negative results. Commit separately; defaults remain disabled.
+
+
+Host-Q single-knob ABBA (9869bfbbd, oasis_v_host_query_abba01) completed with
+226 tests passed/2 native opt-in skips and same-graph two-rank real-Q probes.
+Private device copies equal the proven CPU snapshots and fixed candidate
+semantics remain identical. Offline ~1.48->1.42 ms does not transfer online:
+V batch7.268->7.482 ms; client10.1576->10.3243 s; layer waits413.382->436.585 ms.
+The finite proof itself1.0735->0.034 ms is not a total-query improvement.
+All8 formal outputs match; native rank0 approximate candidate jitter persists.
+Keep host_query_validation off. For the separate I/O-reuse ABBA, both V arms
+use the proven pooled host-candidate path with original GPU finite-Q proof;
+only D reuse_io differs. No host-Q/HTTP combination or cross-run subtraction
+will be used to manufacture a gain. All host-Q services drained and6 GPUs0MiB.
