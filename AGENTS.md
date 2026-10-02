@@ -161,6 +161,33 @@ as the default until the streaming path passes the gates below.
 
 ### V search follow-up (2026-10-02)
 
+#### V latency follow-up: native search versus candidate handling
+
+The user requests a further reduction in V retrieval time, including testing
+whether its time scale can change. Use the validated partial-head cache as the
+new baseline. Keep the fast graph, native CAGRA, itopk2048, Top4, seven live Q
+rows/head, resident budget and P/D pipeline unchanged. Do not promise a tenfold
+gain from isolated kernel timings or reduce recall/budgets to manufacture one.
+
+1. Instrument manager admission/lock, query placement, finite proof, native
+   submissions/completion, candidate mapping/mean restoration/materialization
+   and retirement. Measure real K/Q on one and two V GPUs, then live serving;
+   distinguish host wall stages, CUDA execution and end-to-end D latency.
+2. Optimize the measured hot path behind a default-off flag. For tiny native
+   candidate sets, evaluate batched host materialization and CPU mapping/union,
+   preserving float32 score restoration, head/chunk mapping and tie policies.
+   Retain all input/output/index owners and budget until completion; preserve
+   quarantine on an unknown fence. Avoid extra queries or delayed layer batches.
+3. Validate fixed candidate semantics (invalid/cross-head/duplicate/nonfinite
+   outputs, ties, mappings, reversed subsets), stale versions, cache replacement,
+   close/search races and unknown completion. Run same-graph real-Q native recall
+   before live comparison; preserve approximate-search candidate jitter.
+4. Compare cached baseline/new/new/baseline on CloudLab with identical P/D,
+   requests, warmups, graph/selection budgets and resources. Save raw stage
+   timings, outputs, traffic/source hashes and cleanup evidence. Report V time,
+   D wait and client time independently; commit completed stages. Broader
+   concurrency/quality/memory gates remain open and defaults stay off.
+
 Keep the selected fast graph, CAGRA `itopk_size=2048`, Top4, 32-token bank and
 the current paired Decode/arrival schedule fixed. Current Oasis sends two
 head items per rank/layer, so the existing complete-four-head search cache
