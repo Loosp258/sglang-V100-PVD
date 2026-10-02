@@ -1042,3 +1042,53 @@ calculations from service/workers are diagnostic and not latency guarantees.
   evaluation remain to do; completing the transport trial does not complete
   the full authorized sequence. Use unchanged two-worker/packed/cache serving
   as the next independent baseline and do not add previous experiment gains.
+
+#### Bounded attention workspace and graph subsegment measured (2026-10-03)
+
+- Step 4's remaining experiment adds default-off attention_workspace on D.
+  Request-owned flat buffers preserve original variable span, contiguous GQA
+  expansion, mask and SDPA. Actual-only history and publication order remain.
+  Static workspace storage is 820160 bytes for the qualified capacity32/steps15
+  shape, inside the already charged 32 MiB scratch; close fences before release.
+- CloudLab gate: 121 CPU tests and 48 real Mooncake scatter cases. Received
+  bytes pass actual serving bank installation and compare to an independent
+  oracle; original/workspace CUDA attention matches bitwise at histories0/3/14.
+  These use proxy random Q, not real-model quality. A first fixture omitted
+  receive-lease return and aborted the next acquisition barrier; preserved
+  separately, excluded from qualification. Final owners/budgets/MRs retire.
+- The actual P/V/D capture keeps the same loaded SGLang target, real EAGLE
+  closure and ordinary sampler for three replay modes on two live trajectories.
+  Two warmups and three wall trials per mode/case use alternating reverse order;
+  CUDA-event trials are separate. All logits/features/actual KV, predicted and
+  actual tokens, positions and420 formal writes match bitwise. Every callback
+  is READY before consumption. Native/session/formal original owners retire
+  before replay; query clone/event,2workers,tickets and handoffs remain.
+- READY-KV steady means: original 28.836,
+  workspace 28.604, SDPA graph
+  28.543 ms/token. Graph setup/capture
+  costs 20.043 ms/trial outside that interval.
+  Graph captures only SDPA on39 explicit actual spans; waits/publication/EAGLE/
+  sampling/formal writes remain outside. Private graph allocated increment
+  560128 bytes; explicit32MiB bound and owned post-fence disposal pass. This
+  reduces foreground by about1%, not a magnitude. Short16-output Decode does
+  not amortize graph preparation; no serving CUDA graph flag is enabled.
+- Independent complete-path base_a/opt_a/opt_b/base_b switches only workspace.
+  Hardware/fast graph/Q/Top4/cap32/max_new16/workers2 stay fixed, all roles restart
+  with identical two warmups. Stage/GPU backup/IO reuse/combine/receive slots
+  stay off. Initial graph-gated P->V->D KV/private EAGLE seed remain charged.
+  All8 actual output IDs/text match. Mean KV wait 420.369 ->
+  411.835 ms/token; client TPOT 494.448 ->
+  487.835 ms; median completion 9.983 ->
+  9.870 s. Means/medians/order drift remain separate;
+  four requests/mode do not establish broad quality or production gains.
+- Evidence: benchmark/results/pvd_oasis_attention_workspace_cloudlab_20261003.md and result directory;
+  benchmark/results/pvd_oasis_attention_replay_cloudlab_20261003.md and complete
+  hashed live trajectories, exact replay source, stages, configs and logs.
+  Portable verification covers deployment/bytes/native/outputs/timestamps and
+  archival hashes. Local24-test and11-hook-test repeats are not added to121.
+  Owned/cleanup empty, all6GPU0. Default remains off; broader quality, TP2,
+  longer Decode, load and native failure injection are still open.
+- The authorized four-step bounded experiment sequence is now complete.
+  It has not made V complete delivery fit D's roughly1ms/layer foreground
+  budget. Preserve negative results and do not sum independent experiments.
+  Commit completed code/evidence locally only; no GitHub push.

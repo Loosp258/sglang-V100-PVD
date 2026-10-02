@@ -100,7 +100,9 @@ class OasisServingOwner(OasisRequestDecoder):
             sum(t["consumer_wait_seconds"] for t in self.pipeline.trace) * 1000)
         logger.info("PVD Oasis trace rid=%s data=%s", self.request_id,
             json.dumps(dict(layers=self.pipeline.trace, transport=self.transport.trace,
-                io=self.transport.io_snapshot()), separators=(",", ":")))
+                io=self.transport.io_snapshot(),
+                attention_workspace=self.decoder.workspace.snapshot()
+                    if self.decoder.workspace is not None else None), separators=(",", ":")))
         return ()
 
 
@@ -225,8 +227,11 @@ class OasisResources:
             errors = bootstrap.close()
             if errors:
                 raise RuntimeError("bootstrap layer transfer failed")
+            workspace = self._attention_workspace(steps)
+            pending['attention_workspace'] = workspace
             owner = OasisServingOwner(req.rid, incarnation,
-                decoder=SGLangQwenPairedDecode(self.runner, execution_lock=self.lock),
+                decoder=SGLangQwenPairedDecode(self.runner, execution_lock=self.lock,
+                    workspace=workspace),
                 initial_banks=banks, predict_one=predict_one, fetch_layer=transport.job,
                 current_token=receipt.outputs[-1], position=rows, max_steps=steps,
                 workers=cfg["workers"], timeout=cfg["timeout_seconds"],
@@ -250,6 +255,14 @@ class OasisResources:
             for hook in hooks:
                 hook.remove()
 
+    def _attention_workspace(self, steps):
+        if not self.config.get('attention_workspace', False):
+            return None
+        from sglang.srt.disaggregation.pvd.oasis_attention_workspace import PairedAttentionWorkspace
+        return PairedAttentionWorkspace(device=self.device, dtype=torch.float16,
+            q_heads=28, kv_heads=4, head_dim=128, max_bank_rows=self.config['capacity'],
+            max_history=steps, max_bytes=self.config['request_scratch_bytes'])
+
 
 def maybe_install_oasis(scheduler):
     path = getattr(scheduler.server_args, "pvd_oasis_config", None)
@@ -259,13 +272,14 @@ def maybe_install_oasis(scheduler):
     fields = {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "capacity",
         "max_new", "top_k", "workers", "timeout_seconds", "max_sequence_tokens", "max_decode_steps",
         "request_budget_bytes", "request_scratch_bytes", "bootstrap_budget_bytes", "bootstrap_transient_bytes", "overlap"}
-    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport'} != fields:
+    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace'} != fields:
         raise ValueError("Oasis config must contain exactly the documented bounds and pins")
     cfg.setdefault("reuse_io", False)
     cfg.setdefault("combine_reserve_start", False)
     cfg.setdefault("reuse_receive_slots", False)
     cfg.setdefault('gpu_receive_to_bank', False)
     cfg.setdefault('staged_transport', False)
+    cfg.setdefault('attention_workspace', False)
     for name in fields - {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "max_new", "overlap"}:
         if type(cfg[name]) is not int or cfg[name] <= 0:
             raise ValueError(f"positive integer Oasis {name} required")
@@ -274,6 +288,7 @@ def maybe_install_oasis(scheduler):
             or type(cfg["reuse_receive_slots"]) is not bool
             or type(cfg['gpu_receive_to_bank']) is not bool
             or type(cfg['staged_transport']) is not bool
+            or type(cfg['attention_workspace']) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]
             or cfg["workers"] > 4 or cfg["capacity"] > 2048 or cfg["top_k"] > 512
             or cfg["max_sequence_tokens"] > scheduler.tp_worker.model_runner.model_config.context_len):

@@ -298,6 +298,9 @@ def main():
                     config['gpu_receive_to_bank'] = arm.startswith('opt')
                 if args.comparison == 'd-stages':
                     config.update(gpu_receive_to_bank=False, staged_transport=arm.startswith('opt'))
+                if args.comparison == 'd-workspace':
+                    config.update(gpu_receive_to_bank=False, staged_transport=False,
+                                  attention_workspace=arm.startswith('opt'))
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', ASSETS['d'] + '/' + arm + '_config.json', encoded)

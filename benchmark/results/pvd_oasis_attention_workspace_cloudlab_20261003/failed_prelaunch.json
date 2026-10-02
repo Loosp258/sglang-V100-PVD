@@ -1,0 +1,5 @@
+{
+  "directory": "artifacts/oasis_workspace_gate01",
+  "measurements_included": false,
+  "note": "首个native夹具未归还接收lease，四个案例完成后下一轮acquire屏障中断；未产生线上正式请求，未纳入资格与性能统计。修复lease退休并覆盖64-row夹具后重新冻结gate02，通过121项CPU与48项native。"
+}

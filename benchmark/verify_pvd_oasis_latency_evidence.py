@@ -420,6 +420,7 @@ def verify(folder, *, check_git=False):
     is_direct_sparse = comparison['comparison'] == 'v-direct-sparse'
     is_gpu_bank = comparison['comparison'] == 'd-gpu-bank'
     is_stages = comparison['comparison'] == 'd-stages'
+    is_workspace = comparison['comparison'] == 'd-workspace'
     is_delivery = comparison['comparison'] in DELIVERY_COMPARISONS
     if is_io or is_pack or is_delivery:
         expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
@@ -512,6 +513,9 @@ def verify(folder, *, check_git=False):
                 if is_stages:
                     assert config['staged_transport'] is arm.startswith('opt')
                     assert config['gpu_receive_to_bank'] is False
+                if is_workspace:
+                    assert config['attention_workspace'] is arm.startswith('opt')
+                    assert config['staged_transport'] is config['gpu_receive_to_bank'] is False
                 assert [row['case'] for row in full['requests'][arm]] == cases
                 for complete, compact in zip(full['requests'][arm], summary['requests'][arm]):
                     assert complete['rid'] == compact['rid']
@@ -531,7 +535,8 @@ def verify(folder, *, check_git=False):
             allowed = {'v-combine': 'combine_reserve_start', 'v-slots': 'reuse_receive_slots',
                        'v-workers': 'workers', 'v-direct-sparse': '__no_config_difference__',
                        'd-gpu-bank': 'gpu_receive_to_bank',
-                       'd-stages': 'staged_transport'}[comparison['comparison']]
+                       'd-stages': 'staged_transport',
+                       'd-workspace': 'attention_workspace'}[comparison['comparison']]
             fixed = {name: value for name, value in configs[expected_arms[0]].items() if name != allowed}
             assert all({name: value for name, value in config.items() if name != allowed} == fixed
                        for config in configs.values()), 'unrelated configuration changes in raw evidence'
@@ -540,10 +545,10 @@ def verify(folder, *, check_git=False):
                 assert json_file(raw_files, filename) == json.loads(
                     (folder / filename).read_text(encoding='utf-8')), (filename, 'compact evidence differs from raw')
             sources = json.loads((folder / 'source_hashes.json').read_text(encoding='utf-8'))
-            if is_direct_sparse or is_gpu_bank or is_stages:
+            if is_direct_sparse or is_gpu_bank or is_stages or is_workspace:
                 from pvd_oasis_direct_sparse_evidence import gate_proof, runtime_proof
                 deployed = gate_proof(archive_files(folder / 'gate.tar.gz'), sources, json_file, unique_file,
-                                      gpu_bank=is_gpu_bank, staged=is_stages)
+                                      gpu_bank=is_gpu_bank, staged=is_stages, workspace=is_workspace)
                 if is_direct_sparse:
                     assert 'direct_sparse_summary.json' in manifest
                     assert runtime_proof(full, lambda name: json_file(raw_files, name)) == json.loads(
@@ -560,7 +565,7 @@ def verify(folder, *, check_git=False):
                 assert 'stage_timing_summary.json' in manifest
                 assert stage_timing_evidence(full, json_file(raw_files, 'online.json')) == json.loads(
                     (folder / 'stage_timing_summary.json').read_text(encoding='utf-8'))
-            if is_workers or is_direct_sparse or is_gpu_bank:
+            if is_workers or is_direct_sparse or is_gpu_bank or is_workspace:
                 if is_workers:
                     verify_worker_cpu_gate(folder, manifest, deployed)
                 assert 'worker_timing_summary.json' in manifest, 'actual worker/client timings must be hashed'

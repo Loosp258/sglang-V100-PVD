@@ -1,0 +1,285 @@
+{
+  "schema": "pvd-oasis-attention-replay-summary-v1",
+  "date_utc_plus_8": "20261003",
+  "cases": {
+    "99401": {
+      "original": {
+        "steady_token_mean_ms": 28.86323984767798,
+        "trial_means_ms": [
+          28.994729850507742,
+          28.66625992880602,
+          28.928729763720185
+        ],
+        "stage_mean_ms": {
+          "eagle_prediction": 2.4700459602865434,
+          "foreground_total": 28.86323984767798,
+          "formal_kv_fence": 0.01578819328209474,
+          "formal_kv_writes_28": 0.8169288880058697,
+          "ordinary_sampler_commit": 0.08323116760168757,
+          "paired_owner_fence": 3.493487025566754,
+          "paired_target": 25.45021675593619
+        },
+        "setup_mean_ms": 0.0011927137772242229,
+        "ready_before_consume_fraction": 1,
+        "callback_wait_ms_per_token": 0.11961004098079034,
+        "all_logits_features_actual_kv_formal_writes_tokens_exact": true,
+        "workspace_scope": null
+      },
+      "workspace": {
+        "steady_token_mean_ms": 28.5967667365358,
+        "trial_means_ms": [
+          28.546525855615204,
+          28.584966061836376,
+          28.65880829215582
+        ],
+        "stage_mean_ms": {
+          "eagle_prediction": 2.468261657105315,
+          "foreground_total": 28.5967667365358,
+          "formal_kv_fence": 0.015871330452639432,
+          "formal_kv_writes_28": 0.8163640103746383,
+          "ordinary_sampler_commit": 0.0818407334875138,
+          "paired_owner_fence": 3.861871667184113,
+          "paired_target": 25.187645664638175
+        },
+        "setup_mean_ms": 0.10251832039405902,
+        "ready_before_consume_fraction": 1,
+        "callback_wait_ms_per_token": 0.12129765846544788,
+        "all_logits_features_actual_kv_formal_writes_tokens_exact": true,
+        "workspace_scope": {
+          "base_bytes": 820160,
+          "max_bytes": 33554432,
+          "graph": false,
+          "graph_shapes": [],
+          "graph_reserved_bytes": 0,
+          "graph_allocated_bytes": 0,
+          "closed": false,
+          "quarantined": false
+        }
+      },
+      "sdpa_graph": {
+        "steady_token_mean_ms": 28.523036777707084,
+        "trial_means_ms": [
+          28.555907575147494,
+          28.55210383755288,
+          28.461098920420877
+        ],
+        "stage_mean_ms": {
+          "eagle_prediction": 2.4671167650792216,
+          "foreground_total": 28.523036777707084,
+          "formal_kv_fence": 0.01597443562267082,
+          "formal_kv_writes_28": 0.8141648445633196,
+          "ordinary_sampler_commit": 0.0814880421828656,
+          "paired_owner_fence": 5.694875693214791,
+          "paired_target": 25.118406421305345
+        },
+        "setup_mean_ms": 20.00372763723135,
+        "ready_before_consume_fraction": 1,
+        "callback_wait_ms_per_token": 0.12141856409254528,
+        "all_logits_features_actual_kv_formal_writes_tokens_exact": true,
+        "workspace_scope": {
+          "base_bytes": 820160,
+          "max_bytes": 33554432,
+          "graph": true,
+          "graph_shapes": [
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48
+          ],
+          "graph_reserved_bytes": 0,
+          "graph_allocated_bytes": 560128,
+          "closed": false,
+          "quarantined": false
+        }
+      }
+    },
+    "99402": {
+      "original": {
+        "steady_token_mean_ms": 28.809525804328068,
+        "trial_means_ms": [
+          28.832223939908936,
+          28.761082619894296,
+          28.83527085318097
+        ],
+        "stage_mean_ms": {
+          "eagle_prediction": 2.448903091828383,
+          "foreground_total": 28.809525804328068,
+          "formal_kv_fence": 0.015681024662972914,
+          "formal_kv_writes_28": 0.8168525805342055,
+          "ordinary_sampler_commit": 0.10193626873106473,
+          "paired_owner_fence": 3.395355924675685,
+          "paired_target": 25.40017164123821
+        },
+        "setup_mean_ms": 0.0013293465599417686,
+        "ready_before_consume_fraction": 1,
+        "callback_wait_ms_per_token": 0.12108308008118045,
+        "all_logits_features_actual_kv_formal_writes_tokens_exact": true,
+        "workspace_scope": null
+      },
+      "workspace": {
+        "steady_token_mean_ms": 28.611211879511497,
+        "trial_means_ms": [
+          28.489166854082473,
+          28.81134462742401,
+          28.533124157028006
+        ],
+        "stage_mean_ms": {
+          "eagle_prediction": 2.4691985066359243,
+          "foreground_total": 28.611211879511497,
+          "formal_kv_fence": 0.01603689521462435,
+          "formal_kv_writes_28": 0.814082841056266,
+          "ordinary_sampler_commit": 0.08150919650991757,
+          "paired_owner_fence": 3.895338860318242,
+          "paired_target": 25.203667320532812
+        },
+        "setup_mean_ms": 0.10403133152673642,
+        "ready_before_consume_fraction": 1,
+        "callback_wait_ms_per_token": 0.12338258204094711,
+        "all_logits_features_actual_kv_formal_writes_tokens_exact": true,
+        "workspace_scope": {
+          "base_bytes": 820160,
+          "max_bytes": 33554432,
+          "graph": false,
+          "graph_shapes": [],
+          "graph_reserved_bytes": 0,
+          "graph_allocated_bytes": 0,
+          "closed": false,
+          "quarantined": false
+        }
+      },
+      "sdpa_graph": {
+        "steady_token_mean_ms": 28.56396286959006,
+        "trial_means_ms": [
+          28.59338137620528,
+          28.5714637887265,
+          28.5270434438384
+        ],
+        "stage_mean_ms": {
+          "eagle_prediction": 2.4574640140469586,
+          "foreground_total": 28.56396286959006,
+          "formal_kv_fence": 0.015849438828549216,
+          "formal_kv_writes_28": 0.8299604440773172,
+          "ordinary_sampler_commit": 0.08186968209754143,
+          "paired_owner_fence": 5.496747007349595,
+          "paired_target": 25.15224332732725
+        },
+        "setup_mean_ms": 20.081576386777062,
+        "ready_before_consume_fraction": 1,
+        "callback_wait_ms_per_token": 0.1262786543174159,
+        "all_logits_features_actual_kv_formal_writes_tokens_exact": true,
+        "workspace_scope": {
+          "base_bytes": 820160,
+          "max_bytes": 33554432,
+          "graph": true,
+          "graph_shapes": [
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48
+          ],
+          "graph_reserved_bytes": 0,
+          "graph_allocated_bytes": 560128,
+          "closed": false,
+          "quarantined": false
+        }
+      }
+    }
+  },
+  "aggregate": {
+    "original": {
+      "steady_token_mean_ms": 28.836382826003025,
+      "setup_mean_ms": 0.0012610301685829959
+    },
+    "workspace": {
+      "steady_token_mean_ms": 28.60398930802365,
+      "setup_mean_ms": 0.10327482596039772
+    },
+    "sdpa_graph": {
+      "steady_token_mean_ms": 28.543499823648574,
+      "setup_mean_ms": 20.042652012004204
+    }
+  },
+  "pid": 970406,
+  "runner_id": 123220724002176,
+  "target_model_id": 123219002470096,
+  "trajectory_hashes": {
+    "99401": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+    "99402": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9"
+  },
+  "same_runner_and_live_trajectory": true,
+  "scope": "READY-KV replay; actual SGLang target/EAGLE/ordinary sampler/formal writes; no V/network/background native receive or copy contention",
+  "timing_policy": "alternating/reversed order by repetition and case; two excluded warmups plus three wall trials per mode; SDPA graph allocation/warmup/capture measured separately before timing; bank waits, publication, EAGLE, sampler and formal writes outside CUDA graph",
+  "graph_scope": "SDPA only; bank waits, publication, EAGLE, sampling and formal writes outside graph",
+  "setup_excluded_from_steady_but_measured": true,
+  "live_capture_is_not_speedup_arm": true
+}

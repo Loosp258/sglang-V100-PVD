@@ -31,6 +31,7 @@ RESULT_PREFIX = {"v-combine": "pvd_oasis_combined_delivery_cloudlab_",
                  "v-direct-sparse": "pvd_oasis_direct_sparse_cloudlab_"}
 RESULT_PREFIX['d-gpu-bank'] = 'pvd_oasis_gpu_bank_cloudlab_'
 RESULT_PREFIX['d-stages'] = 'pvd_oasis_stages_cloudlab_'
+RESULT_PREFIX['d-workspace'] = 'pvd_oasis_attention_workspace_cloudlab_'
 
 
 def project_path(value, parent, *, exists=True):
@@ -130,9 +131,9 @@ def gate_counts(gate):
             result["native_full_observations_saved"] = False
         assert native["status"] == "passed"
         assert native["transport"] == ("mooncake_local_session_scatter"
-            if native.get('mode') in ('direct_sparse_batch_put', 'gpu_receive_to_bank_with_async_backup', 'bounded_stages_native_scatter') else "mooncake_local_session")
+            if native.get('mode') in ('direct_sparse_batch_put', 'gpu_receive_to_bank_with_async_backup', 'bounded_stages_native_scatter', 'attention_workspace_native') else "mooncake_local_session")
         assert type(native["exact_byte_cases"]) is int and native["exact_byte_cases"] == 48
-        if native.get('mode') in ('direct_sparse_batch_put', 'gpu_receive_to_bank_with_async_backup', 'bounded_stages_native_scatter'):
+        if native.get('mode') in ('direct_sparse_batch_put', 'gpu_receive_to_bank_with_async_backup', 'bounded_stages_native_scatter', 'attention_workspace_native'):
             from pvd_oasis_direct_sparse_evidence import native_proof
             native_proof(native, expected_mode=native['mode'])
         assert native["after_close"]["closed"] is True
@@ -199,6 +200,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         "v-direct-sparse": ("原始注册区直接 sparse batch PUT", "staging packed PUT", "原始 Entry scatter PUT"),
         'd-gpu-bank': ('D GPU接收直接安装与异步CPU备份', '同步CPU缓存往返', 'GPU直接安装＋owned异步备份'),
         'd-stages': ('有界搜索／交付／安装阶段', '两个完整回调worker', '2搜索＋2交付＋1安装线程'),
+        'd-workspace': ('有界注意力工作区', '普通逐层分配', '预分配工作区'),
     }[kind]
     baseline, optimized = aggregate["baseline"], aggregate["optimized"]
     started = first_formal_time(directory)
@@ -220,7 +222,8 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
          "v-workers": "所有臂 combine_reserve_start=false、reuse_receive_slots=false、reuse_io=false；原生serving实现相同，增加worker无需改动交付协议。",
          "v-direct-sparse": "唯一变量为V direct_sparse_batch_put；D配置完全相同。保留device readiness同步，opt从原pool MR按component-major精确地址直接batch发送，至多128片段。",
          'd-gpu-bank': '唯一变量为D gpu_receive_to_bank；V两臂均采用staging packed PUT，直接scatter关闭。GPU接收先完成私有clone，再ACK/退休MR；下一bank直接从clone安装，CPU历史备份独立持有引用和预算。',
-         'd-stages': '唯一变量为D staged_transport；opt使用2搜索＋2交付＋1安装线程，持久线程相关loop/client/stream/registry。固定硬件，额外CPU线程明确计入；旧manager共享reuse_io开关仍false，stage自己的HTTP客户端跨job复用。GPU直接安装关闭，CPU历史缓存政策、每次交付注册、独立reserve/start保持一致。'}[kind],
+         'd-stages': '唯一变量为D staged_transport；opt使用2搜索＋2交付＋1安装线程，持久线程相关loop/client/stream/registry。固定硬件，额外CPU线程明确计入；旧manager共享reuse_io开关仍false，stage自己的HTTP客户端跨job复用。GPU直接安装关闭，CPU历史缓存政策、每次交付注册、独立reserve/start保持一致。',
+         'd-workspace': '唯一变量为D attention_workspace；保持原变长span、GQA展开、mask和SDPA语义。工作区独立持有在已计费的32MiB request scratch内，关闭时先同步再清空。完整线上ABBA不捕获CUDA Graph；纯SDPA图另由同进程真实轨迹诊断验证。stage/GPU备份、HTTP复用、合并reserve/start和接收槽均关闭。'}[kind],
         "八次Prompt、实际输出ID和文本一致，cached_tokens=0；每请求420jobs/840搜索RPC，每模式3136稳态查询profile，均2items/14Qrows。",
         f"部署 bundle 中{proof['deployed_files']}个文件的实际哈希与V/D serving source gate一致；源码身份使用记录的部署包，没有读取后来编辑的工作树。",
         "所有接收写入保留完整身份、精确native终态字节证明、安装后ACK及UNKNOWN保留；最终 owned={}、cleanup_errors=[]、六张GPU归零。", "",
@@ -297,6 +300,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
         f"CPU gate实际结果：`{counts['unit']['exact_summary']}`；完整输出见gate.tar.gz与gate_count_record.json。"]
     if "native" in counts:
         detail = ('由真实有界stage执行器调度48次native scatter，交付线程峰值2，持久CUDA资源在创建线程退休；本地search/install为调度／proof检查，未在此gate运行CAGRA或serving bank安装，完整阶段另由线上trace验证' if kind == 'd-stages' else
+                  '真实收到的字节经serving bank安装后与独立oracle精确比较；原注意力与工作区在0/3/14历史长度上CUDA逐位一致。此处Q为代理随机张量，真实模型logits/token由独立轨迹实验验证' if kind == 'd-workspace' else
                   '故意阻塞CPU缓存发布，并在原接收逻辑lease退休后覆盖接收区；GPU bank与历史CPU备份均保持精确，独立引用和预算完整退休。固定物理MR在全部案例完成后注销' if kind == 'd-gpu-bank' else
                   "两GPU原始pool MR、多层、多head、非连续token、非零Entry偏移与末页scatter，0 staging注册；caller初态GPU0，发送使用显式source设备上下文" if kind == 'v-direct-sparse'
                   else "两个执行器复用四个物理MR并安全注销")
@@ -344,7 +348,7 @@ def report_text(directory, summary, stages, counts, proof, failure_note,
             '完整链中可以同时存在多个排队job，不能用完整链service／2解释stage线程占用。rpc_summary将不适用的worker容量字段置null。',
             '额外线程、stage持久HTTP资源和排队均属于这一架构变量；不叠加此前独立连接／注册优化的结果。',
             'stage_timing_summary.json保存逐请求实测阶段、完成间隔与最小READY截止余量。仍需长Decode、TP2、负载与原生故障注入，默认关闭。']
-    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers", "v-direct-sparse": "fresh_direct_sparse", 'd-gpu-bank': 'fresh_gpu_bank', 'd-stages': 'fresh_stages'}[kind]
+    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers", "v-direct-sparse": "fresh_direct_sparse", 'd-gpu-bank': 'fresh_gpu_bank', 'd-stages': 'fresh_stages', 'd-workspace': 'fresh_workspace'}[kind]
     lines += ["", "```text",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/run_pvd_oasis_serving_cloudlab.py --tag {tag} --comparison {comparison['comparison']} --arms base_a,opt_a,opt_b,base_b --cases 99401,99402 --tokens 16",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_serving.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/{tag} --comparison {comparison['comparison']}",
@@ -393,7 +397,7 @@ def main():
             if arm.startswith("opt") is (mode == "optimized") for row in rows)
     stages = delivery_stages(summary)
     worker_timings = (worker_timing_evidence(summary, read_json(directory / "online.json"), comparison["comparison"])
-                      if comparison["comparison"] in ("v-workers", "v-direct-sparse", 'd-gpu-bank') else None)
+                      if comparison["comparison"] in ("v-workers", "v-direct-sparse", 'd-gpu-bank', 'd-workspace') else None)
     failed = project_path(args.failed_prelaunch, ARTIFACTS) if args.failed_prelaunch else None
     if failed is not None:
         assert not (failed / "online.json").exists() or read_json(failed / "online.json") == {}, "prelaunch archive contains measured requests"

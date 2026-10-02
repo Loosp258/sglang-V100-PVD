@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -153,6 +153,17 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'd-workspace':
+        assert snapshot['staged_transport'] is False
+        validate_gpu_backup(snapshot, enabled=False)
+        workspace = trace['attention_workspace']
+        if arm.startswith('opt'):
+            assert workspace['closed'] is True and workspace['quarantined'] is False
+            assert 0 < workspace['base_bytes'] <= workspace['max_bytes'] == 32 << 20
+            assert workspace['graph'] is False and workspace['graph_shapes'] == []
+            assert workspace['graph_allocated_bytes'] == workspace['graph_reserved_bytes'] == 0
+        else:
+            assert workspace is None
     if comparison == 'd-gpu-bank':
         validate_gpu_backup(snapshot, enabled=arm.startswith('opt'))
     if comparison == 'd-stages':

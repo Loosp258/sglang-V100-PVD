@@ -1,0 +1,7 @@
+{
+  "qualification_primary": "121 CloudLab CPU tests and48 native cases, gate02",
+  "local_workspace_cpu": "24 passed, 1 existing warning; overlaps final121",
+  "local_diagnostic_hook_cpu": "11 tests OK,0.304s; same hook retirement/spawn tests, not model quality",
+  "outputs": "local_cpu_repeats.tar.gz; no generated fixture/cache directories archived",
+  "all_replays_and_live_requests_completed": true
+}

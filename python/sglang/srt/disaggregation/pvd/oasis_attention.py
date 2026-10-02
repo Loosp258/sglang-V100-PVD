@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 class PairedLayerAttention:
     def __init__(self, history, banks, *, q_heads, kv_heads, head_dim,
-                 feature_layers, publish=None, capture=None, project=None):
+                 feature_layers, publish=None, capture=None, project=None, workspace=None):
         if q_heads <= 0 or kv_heads <= 0 or q_heads % kv_heads or head_dim <= 0:
             raise ValueError("valid GQA dimensions required")
         self.history, self.banks = history, banks
@@ -18,6 +18,7 @@ class PairedLayerAttention:
         self.feature_layers = tuple(feature_layers)
         self.publish, self.capture = publish, capture
         self.project = project
+        self.workspace = workspace
         self.pending, self.features, self.owners = [], [], []
         self._committed = False
 
@@ -48,19 +49,23 @@ class PairedLayerAttention:
         if self.publish is not None:
             self.publish(layer, q[1], bank)
         prior = self.history[layer]
-        keys = torch.cat([bank.keys, *(item[0] for item in prior), k.transpose(0, 1)], dim=1)
-        values = torch.cat([bank.values, *(item[1] for item in prior), v.transpose(0, 1)], dim=1)
-        valid = torch.cat([bank.valid, torch.ones(
-            (self.kv_heads, len(prior) + 2), device=q.device, dtype=torch.bool)], dim=1)
-        repeat = self.q_heads // self.kv_heads
-        mask = valid.repeat_interleave(repeat, dim=0)[None, :, None, :].expand(
-            1, self.q_heads, 2, -1).clone()
-        mask[:, :, 0, -1] = False
-        self.owners.extend((keys, values, valid, mask))
-        output = F.scaled_dot_product_attention(
-            q.transpose(0, 1)[None], keys.repeat_interleave(repeat, dim=0)[None],
-            values.repeat_interleave(repeat, dim=0)[None], attn_mask=mask,
-            dropout_p=0.0)[0].transpose(0, 1).reshape(2, -1)
+        if self.workspace is not None:
+            self.owners.append(self.workspace)
+            output = self.workspace.attention(q, k, v, bank, prior)
+        else:
+            keys = torch.cat([bank.keys, *(item[0] for item in prior), k.transpose(0, 1)], dim=1)
+            values = torch.cat([bank.values, *(item[1] for item in prior), v.transpose(0, 1)], dim=1)
+            valid = torch.cat([bank.valid, torch.ones(
+                (self.kv_heads, len(prior) + 2), device=q.device, dtype=torch.bool)], dim=1)
+            repeat = self.q_heads // self.kv_heads
+            mask = valid.repeat_interleave(repeat, dim=0)[None, :, None, :].expand(
+                1, self.q_heads, 2, -1).clone()
+            mask[:, :, 0, -1] = False
+            self.owners.extend((keys, values, valid, mask))
+            output = F.scaled_dot_product_attention(
+                q.transpose(0, 1)[None], keys.repeat_interleave(repeat, dim=0)[None],
+                values.repeat_interleave(repeat, dim=0)[None], attn_mask=mask,
+                dropout_p=0.0)[0].transpose(0, 1).reshape(2, -1)
         # Only actual rows may become committed history. Commit is atomic at
         # successful end of the target forward, rather than once per layer.
         self.pending.append((k[0, :, None, :].clone(), v[0, :, None, :].clone()))

@@ -135,6 +135,9 @@ class OasisRequestDecoder:
         if owner is not None and (owner.active is not None or owner.quarantined):
             raise RuntimeError("retain request until target completion is proved")
         errors = self.pipeline.close()
+        workspace = getattr(self.decoder, 'workspace', None)
+        if workspace is not None and not errors:
+            workspace.close()
         self._close_errors = errors
         self.banks.clear()
         self._deferred.clear()

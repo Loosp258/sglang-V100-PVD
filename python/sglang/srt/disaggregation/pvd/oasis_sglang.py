@@ -16,7 +16,7 @@ from sglang.srt.disaggregation.pvd.oasis_attention import (
 
 class SGLangQwenPairedDecode:
     supports_early_publication = True
-    def __init__(self, runner, *, execution_lock):
+    def __init__(self, runner, *, execution_lock, workspace=None):
         from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 
         model = runner.model
@@ -42,6 +42,7 @@ class SGLangQwenPairedDecode:
         self.generated = [[] for _ in range(self.layers)]
         self.owner = PairedForwardOwner(model.model.embed_tokens.weight.device)
         self._next_position = None
+        self.workspace = workspace
 
     @torch.inference_mode()
     def step(self, current, predicted, position, banks, *, publish=None, capture=None, project=None):
@@ -55,7 +56,7 @@ class SGLangQwenPairedDecode:
             raise RuntimeError("target execution is busy")
         context = PairedLayerAttention(self.generated, banks, q_heads=self.q_heads,
             kv_heads=self.kv_heads, head_dim=self.dim, feature_layers=self.feature_layers,
-            publish=publish, capture=capture, project=project)
+            publish=publish, capture=capture, project=project, workspace=self.workspace)
         begun, success = False, False
         try:
             self.owner.begin(context)

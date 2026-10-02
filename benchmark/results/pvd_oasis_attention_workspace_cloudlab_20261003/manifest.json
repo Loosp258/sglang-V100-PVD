@@ -1,0 +1,102 @@
+{
+  "checkout_heads.json": {
+    "bytes": 156,
+    "sha256": "0ae15331ed02793bff119737a43eaa8920d01179b8e031c0490478aa4b03017d",
+    "normalization": "lf"
+  },
+  "cleanup_errors.json": {
+    "bytes": 3,
+    "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 146,
+    "sha256": "9726aa99e15941c9e4d59dfba033a9ad8c4243dab7f9016722559351fc091ff5",
+    "normalization": "lf"
+  },
+  "delivery_stage_summary.json": {
+    "bytes": 2949,
+    "sha256": "a28ff62b8efa8290fe71d908b07e4a4f08a442bbac5c86ff503c604cf1343659",
+    "normalization": "lf"
+  },
+  "failed_prelaunch.json": {
+    "bytes": 352,
+    "sha256": "ad76273a83d63b362ba7e6eac83663fe7e3c8fa08d0ddf6ba940275664ad1c4d",
+    "normalization": "lf"
+  },
+  "failed_prelaunch.tar.gz": {
+    "bytes": 1116327,
+    "sha256": "031393f982f8479638a17a169c7975b0c5f4a47be2500aea4118649de1934916",
+    "normalization": "raw"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 96,
+    "sha256": "8809d0d0788cece7f34b84a54e9909181a0bd9b59fe62c3257df3f98bc5805fe",
+    "normalization": "lf"
+  },
+  "gate.tar.gz": {
+    "bytes": 1151305,
+    "sha256": "526032b1fd2a882aba61dff95d10dbc597c6f6feb59f6e49050374fc03f429cd",
+    "normalization": "raw"
+  },
+  "gate_count_record.json": {
+    "bytes": 8506,
+    "sha256": "ff49d0048e3efe375802191da0db2eac256a0a6bef263cbc57c07ef3bfbf68e2",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 271,
+    "sha256": "e350912f29e98920f21b82e03d14564c0670cdeec33bdba2a3a69addb32cc20f",
+    "normalization": "lf"
+  },
+  "local_cpu_repeats.json": {
+    "bytes": 407,
+    "sha256": "cb39eab1b21de288595fcae4ae995bbf66fa6a5065a2510d1a7c773c3f92224f",
+    "normalization": "lf"
+  },
+  "local_cpu_repeats.tar.gz": {
+    "bytes": 613,
+    "sha256": "ca7cc703b33db585ad811bcc9c9068bfd38ad8eecd30d795a5b00e8499583fcc",
+    "normalization": "raw"
+  },
+  "owned.json": {
+    "bytes": 3,
+    "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "normalization": "lf"
+  },
+  "raw.tar.gz": {
+    "bytes": 4205635,
+    "sha256": "bd6d6880c5796ff249af39092aeff1b23b90b50f8817f79bd158419dd5cab8ae",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 38045,
+    "sha256": "c0a34ea257fa982e1221f335a827d94cfb5efe94420988af98120fe53b954a41",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 5684,
+    "sha256": "bd2e46068041dca1a2b059c43c5e9faaec2d2b1be9bf60bc43f257647804f92d",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 50285,
+    "sha256": "8d92999bf6a35cf70bcbc211ef8b19142d1e71729e6dcef87aff62b0d612f22f",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9910,
+    "sha256": "ab792db7e809fb0e0e80e58d43bb8ca0327b0f774f8dc61a00d4617600521e85",
+    "normalization": "lf"
+  },
+  "worker_timing_summary.json": {
+    "bytes": 9547,
+    "sha256": "85900308291317918e971b8b8a2a8470ad0fce96c9a252154f6461041eca0896",
+    "normalization": "lf"
+  },
+  "../pvd_oasis_attention_workspace_cloudlab_20261003.md": {
+    "bytes": 10983,
+    "sha256": "6ac0cea11e113423fd30d530c41db6ba0ec6096f044171bbe3ed8c436e3fcf49",
+    "normalization": "lf"
+  }
+}

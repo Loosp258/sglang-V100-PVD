@@ -27,6 +27,7 @@ parser.add_argument('--tag', required=True)
 parser.add_argument('--cases', default='99401,99402')
 parser.add_argument('--prepare-only', action='store_true', help='Run only source/tokenizer/CPU setup')
 parser.add_argument('--prepared', action='store_true', help='Resume a CPU-prepared tag after rechecking GPU/source identities')
+parser.add_argument('--workspace-gate', type=Path, help='Qualified project artifacts gate for workspace/SDPA graph replay')
 args = parser.parse_args()
 if not re.fullmatch(r'[a-z0-9_]+', args.tag):
     raise ValueError('filename-safe fresh tag required')
@@ -173,11 +174,19 @@ def prepare():
     for role, text in memory.items():
         if len(text.splitlines()) != 2 or any(int(row.split(',')[1].split()[0]) for row in text.splitlines()):
             raise RuntimeError('GPU occupied: ' + role)
-    gate = ROOT / 'benchmark/results/pvd_oasis_workers_cloudlab_20261003/gate.tar.gz'
-    with tarfile.open(gate, 'r:gz') as archive:
-        source_name = 'oasis_delivery_slots_gate01/local_source_hashes.json'
-        sources = json.load(archive.extractfile(source_name))
-        bundle = archive.extractfile('oasis_delivery_slots_gate01/deployed.tar.gz').read()
+    if args.workspace_gate is not None:
+        gate = args.workspace_gate.resolve()
+        assert gate.is_relative_to(ROOT / 'artifacts')
+        assert json.loads((gate / 'unit_status.json').read_text()) == {'exit_code': 0}
+        assert json.loads((gate / 'native_status.json').read_text()) == {'exit_code': 0}
+        sources = json.loads((gate / 'local_source_hashes.json').read_text())
+        bundle = (gate / 'deployed.tar.gz').read_bytes()
+    else:
+        gate = ROOT / 'benchmark/results/pvd_oasis_workers_cloudlab_20261003/gate.tar.gz'
+        with tarfile.open(gate, 'r:gz') as archive:
+            source_name = 'oasis_delivery_slots_gate01/local_source_hashes.json'
+            sources = json.load(archive.extractfile(source_name))
+            bundle = archive.extractfile('oasis_delivery_slots_gate01/deployed.tar.gz').read()
     with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
         bundle_sources = {item.name: hashlib.sha256(archive.extractfile(item).read()).hexdigest()
                           for item in archive if item.isfile()}
@@ -256,6 +265,8 @@ print(json.dumps(out))
         expected_prompt_tokens=2159, output_tokens=16, workers=2,
         warmup_replays=2, measured_replays=3, diagnostic_gpu_budget_bytes=268435456,
         expected_prompt_ids_sha256={case: row['sha256'] for case, row in identities.items()})
+    if args.workspace_gate is not None:
+        diagnostic['attention_modes'] = ['original', 'workspace', 'sdpa_graph']
     for name, value in [('capture_config.json', config), ('diagnostic.json', diagnostic)]:
         write_json(OUT / name, value)
         upload('d', ASSETS['d'] + '/' + name, (OUT / name).read_bytes())
@@ -267,7 +278,7 @@ print(json.dumps(out))
 
 
 def collect_capture():
-    data = call('d', 'tar -czf - -C ' + shlex.quote(ASSETS['d']) + ' capture', binary=True)
+    data = call('d', 'tar -czf - -C ' + shlex.quote(ASSETS['d']) + ' capture', binary=True, timeout=900)
     (OUT / 'capture.tar.gz').write_bytes(data)
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         for member in archive:
@@ -312,7 +323,7 @@ def restore_prepared():
 
 def wait_replays():
     """The last streamed event can precede scheduler-side replay completion."""
-    deadline = time.monotonic() + 240
+    deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
         errors = call('d', 'find ' + shlex.quote(ASSETS['d'] + '/capture') +
                       ' -type f -name error.json -print').splitlines()

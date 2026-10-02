@@ -65,8 +65,10 @@ def load_config(path):
     required = {"capture_directory", "cases", "expected_prompt_tokens", "output_tokens",
                 "workers", "warmup_replays", "measured_replays", "diagnostic_gpu_budget_bytes",
                 "expected_prompt_ids_sha256"}
-    if set(config) != required:
+    if set(config) - {'attention_modes'} != required:
         raise ValueError("exact documented diagnostic fields required")
+    if 'attention_modes' in config and config['attention_modes'] != ['original', 'workspace', 'sdpa_graph']:
+        raise ValueError('explicit original/workspace/SDPA graph diagnostic policy required')
     if (config["cases"] != [99401, 99402] or config["expected_prompt_tokens"] != 2159
             or config["output_tokens"] != 16 or config["workers"] != 2
             or config["warmup_replays"] != 2 or config["measured_replays"] != 3
@@ -321,7 +323,21 @@ class Capture:
                 return LayerReply(ticket, self.steps[bank_step]["banks"][ticket.layer])
             return ready
 
-        decoder = SGLangQwenPairedDecode(runner, execution_lock=self.resources.lock)
+        setup_started = time.perf_counter()
+        mode = getattr(self, 'attention_mode', 'original')
+        workspace = None
+        if mode != 'original':
+            from sglang.srt.disaggregation.pvd.oasis_attention_workspace import PairedAttentionWorkspace
+            workspace = PairedAttentionWorkspace(device=device, dtype=torch.float16,
+                q_heads=28, kv_heads=4, head_dim=128, max_bank_rows=32,
+                max_history=self.live_max_steps, max_bytes=32 << 20, graph=mode == 'sdpa_graph')
+            scratch_owners['workspace'] = workspace
+            if workspace.graph:
+                workspace.prime({bank.keys.shape[1] + index + 2
+                    for index, row in enumerate(self.steps) for bank in row['banks']})
+        workspace_setup_ms = (time.perf_counter() - setup_started) * 1000
+        workspace_before = workspace.snapshot() if workspace is not None else None
+        decoder = SGLangQwenPairedDecode(runner, execution_lock=self.resources.lock, workspace=workspace)
         owner = OasisRequestDecoder(self.req.rid, "ready-replay", decoder=decoder,
             initial_banks=self.steps[0]["banks"], predict_one=self.predict_one,
             fetch_layer=fetch_layer, current_token=self.initial_outputs[-1], position=2159,
@@ -431,6 +447,9 @@ class Capture:
                     start_event, end_event = stage.pop("events")
                     stage["gpu_event_ms"] = start_event.elapsed_time(end_event)
             return dict(repetition=repetition, warmup=warmup, profiled=profile,
+                attention_mode=mode, workspace_setup_ms=workspace_setup_ms,
+                workspace_before=workspace_before,
+                workspace_after=workspace.snapshot() if workspace is not None else None,
                 started_unix=started_unix, finished_unix=finished_unix,
                 total_wall_ms=total_ms, steady_token_wall_mean_ms=sum(t["wall_ms"] for t in stages
                     if t["name"] == "foreground_total" and t["step"] > 0) / 14,
@@ -495,13 +514,24 @@ class Capture:
                 or self.owner.transport.workers or self.owner.transport.quarantined
                 or self.req.req_pool_idx is not None or self.resources.owners):
             raise RuntimeError("live request/native/formal ownership must retire before replay")
-        trials = []
+        modes = config.get('attention_modes', ['original'])
+        mode_trials = {mode: [] for mode in modes}
+        # All modes use the same live trajectory, runner, ordinary sampler and
+        # real EAGLE closure. Reverse order on alternate repetitions and cases.
         for repetition in range(config["warmup_replays"] + config["measured_replays"]):
-            trials.append(self.replay(profile=False, repetition=repetition,
-                warmup=repetition < config["warmup_replays"]))
+            order = modes if (repetition + self.case) % 2 else list(reversed(modes))
+            for mode in order:
+                self.attention_mode = mode
+                mode_trials[mode].append(self.replay(profile=False, repetition=repetition,
+                    warmup=repetition < config["warmup_replays"]))
+        trials = mode_trials['original']
         # Events are a separate diagnostic trial, keeping event-record overhead
         # out of primary repeated wall measurements. No per-layer sync is added.
-        event_trial = self.replay(profile=True, repetition=0, warmup=False)
+        mode_events = {}
+        for mode in modes:
+            self.attention_mode = mode
+            mode_events[mode] = self.replay(profile=True, repetition=0, warmup=False)
+        event_trial = mode_events['original']
         prefix = config["capture_directory"] / str(self.case)
         prefix.mkdir(parents=True, exist_ok=False)
         payload = dict(schema=SCHEMA, case=self.case, request_id=self.req.rid,
@@ -529,7 +559,10 @@ class Capture:
             scope="same-runner READY-bank foreground replay; real paired target/EAGLE/sampler/formal writes and original query-ownership/executor/ticket/handoff path; no V/network/native receive/background GPU copy contention",
             timing_policy="two excluded replay warmups + three unprofiled wall trials per case, then one separate GPU-event trial; per-case repeated diagnostic, not ABBA; capture/prime/reset/validation/D2H/save excluded; existing safety fences retained",
             stage_scope="paired_owner_fence is included in paired_target; foreground_total envelopes all stages, so nested wall/event stages must not be added; CUDA event elapsed may include stream idle/CPU submission gaps and is not GPU utilization",
-            trials=trials, event_trial=event_trial, budget=dict(limit_bytes=config["diagnostic_gpu_budget_bytes"],
+            trials=trials, event_trial=event_trial, attention_mode_trials=mode_trials,
+            attention_mode_events=mode_events,
+            attention_mode_policy='alternating/reversed order by repetition and case; two excluded warmups plus three wall trials per mode; SDPA graph allocation/warmup/capture measured separately before timing; bank waits, publication, EAGLE, sampler and formal writes outside CUDA graph',
+            budget=dict(limit_bytes=config["diagnostic_gpu_budget_bytes"],
                 retained_storage_bytes=self.retained_bytes, replay_scratch_bound_bytes=self.scratch_bound,
                 reservation_bytes=config["diagnostic_gpu_budget_bytes"], released=False),
             live_native_retired_before_replay=True, formal_private_rows_released=True,

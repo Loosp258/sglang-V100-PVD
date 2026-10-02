@@ -27,7 +27,8 @@ if configs:
                           'v-slots': 'reuse_receive_slots', 'v-workers': 'workers',
                           'v-direct-sparse': '__no_config_difference__',
                           'd-gpu-bank': 'gpu_receive_to_bank',
-                          'd-stages': 'staged_transport'}.get(a.comparison, 'overlap')
+                          'd-stages': 'staged_transport',
+                          'd-workspace': 'attention_workspace'}.get(a.comparison, 'overlap')
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
     assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
                for config in configs), 'comparison has unrelated configuration differences'
@@ -55,6 +56,9 @@ if configs:
             if a.comparison == 'd-stages':
                 assert config['staged_transport'] is arm.startswith('opt')
                 assert config['gpu_receive_to_bank'] is False
+            if a.comparison == 'd-workspace':
+                assert config['attention_workspace'] is arm.startswith('opt')
+                assert config['staged_transport'] is config['gpu_receive_to_bank'] is False
         declared = json.loads((root / 'comparison.json').read_text())
         assert list(online) == declared['arms'] == ['base_a', 'opt_a', 'opt_b', 'base_b']
         cases = [int(value) for value in declared['cases'].split(',')]
@@ -231,6 +235,7 @@ scope = {
     'v-direct-sparse': 'live overlapped paired with identical fast V search and D; staged packed PUT vs direct registered Entry scatter batch PUT',
     'd-gpu-bank': 'live overlapped paired with identical packed-PUT V; CPU cache round trip vs direct GPU bank rows with owned asynchronous historical backup',
     'd-stages': 'live overlapped paired with identical packed-PUT V and CPU historical cache; full-chain callbacks vs bounded persistent search/delivery/install stages',
+    'd-workspace': 'live overlapped paired with identical packed-PUT V and CPU history; original variable-span attention vs bounded preallocated workspace, no serving CUDA graphs',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']

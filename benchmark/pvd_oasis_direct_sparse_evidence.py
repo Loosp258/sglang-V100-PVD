@@ -25,6 +25,14 @@ def native_proof(native, *, expected_mode='direct_sparse_batch_put'):
                    <= row['allocation_offset'] + row['source_entry_bytes']
                    for item in row['source_slices'])
         assert row['device'] == 'cuda:1' and row['current_device'] == 'cuda:0'
+        if expected_mode == 'attention_workspace_native':
+            bank = row['gpu_bank']
+            assert bank['stage_install_bank_exact'] is bank['workspace_attention_bitwise'] is True
+            assert bank['tested_history_lengths'] == [0, 3, 14]
+            workspace = bank['workspace']
+            assert workspace['closed'] is True and workspace['quarantined'] is False
+            assert workspace['graph'] is False and workspace['graph_shapes'] == []
+            assert 0 < workspace['base_bytes'] <= workspace['max_bytes'] == 8 << 20
         if expected_mode == 'gpu_receive_to_bank_with_async_backup':
             bank = row['gpu_bank']
             assert bank['gpu_bank_exact'] is bank['cpu_backup_exact'] is True
@@ -103,7 +111,7 @@ def runtime_proof(full, load_json):
     return proof
 
 
-def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False, staged=False):
+def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False, staged=False, workspace=False):
     bundle = unique_file(gate_files, 'deployed.tar.gz')
     with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
         deployed = {item.name: hashlib.sha256(archive.extractfile(item).read()).hexdigest()
@@ -122,6 +130,7 @@ def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False, s
             assert len(text.splitlines()) == 2
             assert all(int(line.split(',')[1].split()[0]) == 0 for line in text.splitlines())
     native_proof(read_json(gate_files, 'native.json'), expected_mode=(
+        'attention_workspace_native' if workspace else
         'bounded_stages_native_scatter' if staged else
         'gpu_receive_to_bank_with_async_backup' if gpu_bank else 'direct_sparse_batch_put'))
     return deployed
