@@ -182,7 +182,7 @@ def run(args):
     inventory = [source["registration"].descriptor.to_dict() for source in sources.values()]
     generations, physical_ids = set(), set()
     for executor_round in range(2):
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with getattr(args, 'executor_factory', ThreadPoolExecutor)(max_workers=2) as executor:
             for rows in ROWS:
                 acquired = threading.Barrier(3)
                 submitted = {rank: threading.Barrier(2) for rank in (0, 1)}

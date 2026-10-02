@@ -296,6 +296,8 @@ def main():
                     reuse_receive_slots=args.comparison == 'v-slots' and arm.startswith('opt'))
                 if args.comparison == 'd-gpu-bank':
                     config['gpu_receive_to_bank'] = arm.startswith('opt')
+                if args.comparison == 'd-stages':
+                    config.update(gpu_receive_to_bank=False, staged_transport=arm.startswith('opt'))
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', ASSETS['d'] + '/' + arm + '_config.json', encoded)

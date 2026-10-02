@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank")
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -52,6 +52,10 @@ def validate_io_snapshot(snapshot, *, reuse_io, jobs):
                  "control_clients_created", "search_sessions_created",
                  "control_sessions_created"):
         integer(snapshot[name], name)
+    if snapshot.get('staged_transport', False):
+        assert not reuse_io
+        validate_stage_snapshot(snapshot, jobs=jobs)
+        return
     assert snapshot["job_count"] == snapshot["worker_loops_created"] == jobs
     clients = 2 if reuse_io else 2 * jobs
     assert snapshot["search_clients_created"] == clients
@@ -62,6 +66,41 @@ def validate_io_snapshot(snapshot, *, reuse_io, jobs):
     else:
         # Cache hits need no control HTTP session, but clients are per job.
         assert 0 < snapshot["control_sessions_created"] <= 2 * jobs
+
+
+def validate_stage_snapshot(snapshot, *, jobs):
+    stages = snapshot['stages']
+    assert stages['closed'] is stages['closing'] is True
+    assert stages['accepted'] == stages['completed'] == snapshot['job_count'] == jobs
+    assert stages['failed'] == stages['pending'] == stages['retained_states'] == stages['retirement_errors'] == 0
+    assert stages['max_pending'] == 56 and 0 < stages['peak_pending'] <= 56
+    assert stages['workers'] == dict(search=2, delivery=2, install=1)
+    retired = stages['retired_workers']
+    for name, limit in stages['workers'].items():
+        assert 0 < stages['peak_active'][name] <= limit
+        assert 0 < retired[name] <= limit
+    assert snapshot['worker_loops_created'] == sum(retired.values())
+    assert snapshot['search_clients_created'] == snapshot['search_sessions_created'] == 2 * retired['search']
+    assert snapshot['control_clients_created'] == 2 * retired['delivery']
+    assert 0 < snapshot['control_sessions_created'] <= snapshot['control_clients_created']
+    rows = snapshot['stage_trace']
+    assert len(rows) == jobs and jobs % 28 == 0
+    actual = set()
+    expected = {(True, 0, layer) for layer in range(28)}
+    expected.update((False, step, layer) for step in range(jobs // 28 - 1) for layer in range(28))
+    for row in rows:
+        key = row['bootstrap'], row['step'], row['layer']
+        assert key not in actual and key in expected
+        actual.add(key)
+        assert row['failed'] is False
+        assert row['published'] <= row['terminal'] <= row['deadline']
+        assert [phase['stage'] for phase in row['phases']] == ['search', 'delivery', 'install']
+        previous = row['published']
+        for phase in row['phases']:
+            assert previous <= phase['queued'] <= phase['start'] <= phase['end'] <= row['terminal']
+            assert type(phase['worker']) is int and 0 <= phase['worker'] < stages['workers'][phase['stage']]
+            previous = phase['end']
+    assert actual == expected
 
 
 def validate_gpu_backup(snapshot, *, enabled):
@@ -116,6 +155,17 @@ def validate_delivery_profiles(trace, *, comparison, arm):
     snapshot = trace["io"]
     if comparison == 'd-gpu-bank':
         validate_gpu_backup(snapshot, enabled=arm.startswith('opt'))
+    if comparison == 'd-stages':
+        assert snapshot['staged_transport'] is arm.startswith('opt')
+        validate_gpu_backup(snapshot, enabled=False)
+        if arm.startswith('opt'):
+            validate_stage_snapshot(snapshot, jobs=420)
+            timing = {(row['step'], row['layer']): row for row in snapshot['stage_trace'] if not row['bootstrap']}
+            for row in trace['layers']:
+                stages = timing[row['step'], row['layer']]
+                assert row['published'] == stages['published']
+                assert row['worker_start'] == stages['phases'][0]['start']
+                assert row['ready'] == stages['terminal']
     validate_delivery_snapshot(snapshot, comparison=comparison, arm=arm)
     combine, slots = delivery_flags(comparison, arm)
     profiles = []

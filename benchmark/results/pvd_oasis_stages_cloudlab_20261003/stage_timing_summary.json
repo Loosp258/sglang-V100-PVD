@@ -1,0 +1,242 @@
+{
+  "aggregate": {
+    "baseline": {
+      "client_tpot_mean_ms": 494.6312613009165,
+      "kv_wait_mean_ms": 419.78957142857143,
+      "bank_completion_interval_mean_ms": 18.84202501150634,
+      "mean_chain_service_ms": 37.72496870479532,
+      "mean_publish_to_consume_ms": 525.3940684778339,
+      "mean_publish_to_required_ms": 510.40158613792227,
+      "ready_before_consume_fraction": 0.032525510204081634
+    },
+    "optimized": {
+      "client_tpot_mean_ms": 492.5048762311538,
+      "kv_wait_mean_ms": 446.476875,
+      "bank_completion_interval_mean_ms": 18.641600954582167,
+      "mean_chain_service_ms": 516.9952425010483,
+      "mean_publish_to_consume_ms": 533.4795234115036,
+      "mean_publish_to_required_ms": 517.5339207837949,
+      "ready_before_consume_fraction": 0.13903061224489796,
+      "phases": {
+        "search": {
+          "workers": 2,
+          "peak_active": 2,
+          "mean_service_ms": 27.298649411653855,
+          "mean_queue_ms": 15.586988606869733
+        },
+        "delivery": {
+          "workers": 2,
+          "peak_active": 2,
+          "mean_service_ms": 37.54095075968581,
+          "mean_queue_ms": 445.46063825625
+        },
+        "install": {
+          "workers": 1,
+          "peak_active": 1,
+          "mean_service_ms": 5.118581376318245,
+          "mean_queue_ms": 1.57286152742537
+        }
+      },
+      "minimum_ready_deadline_slack_ms": 59125.53159601521
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "client_tpot_mean_ms": 501.2923384628569,
+        "kv_wait_mean_ms": 428.38264285714286,
+        "bank_completion_interval_mean_ms": 19.069343214899853,
+        "mean_chain_service_ms": 38.22713342646127,
+        "mean_publish_to_consume_ms": 531.9613718237058,
+        "mean_publish_to_required_ms": 516.6619906121181,
+        "ready_before_consume_fraction": 0.025510204081632654
+      },
+      {
+        "case": 99402,
+        "client_tpot_mean_ms": 520.1617781383296,
+        "kv_wait_mean_ms": 449.834,
+        "bank_completion_interval_mean_ms": 19.812051237791852,
+        "mean_chain_service_ms": 39.70066476815228,
+        "mean_publish_to_consume_ms": 553.5253621266598,
+        "mean_publish_to_required_ms": 537.4598685540354,
+        "ready_before_consume_fraction": 0.025510204081632654
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "client_tpot_mean_ms": 493.1326758659755,
+        "kv_wait_mean_ms": 446.4990714285714,
+        "bank_completion_interval_mean_ms": 18.686932585764286,
+        "mean_chain_service_ms": 517.2151909515675,
+        "mean_publish_to_consume_ms": 533.7494963332202,
+        "mean_publish_to_required_ms": 517.8031033520915,
+        "ready_before_consume_fraction": 0.1556122448979592,
+        "phases": {
+          "search": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 26.974359914489394,
+            "mean_queue_ms": 15.631244280280507,
+            "service_seconds": 10.573949086479843
+          },
+          "delivery": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 37.58892332107465,
+            "mean_queue_ms": 445.9573747599093,
+            "service_seconds": 14.734857941861264
+          },
+          "install": {
+            "phase_jobs": 392,
+            "workers": 1,
+            "peak_active": 1,
+            "mean_service_ms": 5.126369321167621,
+            "mean_queue_ms": 1.5646499348210399,
+            "service_seconds": 2.0095367738977075
+          }
+        },
+        "minimum_ready_deadline_slack_ms": 59242.04661499243
+      },
+      {
+        "case": 99402,
+        "client_tpot_mean_ms": 513.0972274035836,
+        "kv_wait_mean_ms": 471.2400714285714,
+        "bank_completion_interval_mean_ms": 19.45885056016438,
+        "mean_chain_service_ms": 539.5728072774601,
+        "mean_publish_to_consume_ms": 556.0658093513945,
+        "mean_publish_to_required_ms": 539.2358062402179,
+        "ready_before_consume_fraction": 0.11734693877551021,
+        "phases": {
+          "search": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 28.712589931329806,
+            "mean_queue_ms": 15.872265766101547,
+            "service_seconds": 11.255335253081284
+          },
+          "delivery": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 39.111462215612626,
+            "mean_queue_ms": 465.0500564683319,
+            "service_seconds": 15.331693188520148
+          },
+          "install": {
+            "phase_jobs": 392,
+            "workers": 1,
+            "peak_active": 1,
+            "mean_service_ms": 5.132117515372834,
+            "mean_queue_ms": 1.562895925361568,
+            "service_seconds": 2.011790066026151
+          }
+        },
+        "minimum_ready_deadline_slack_ms": 59125.53159601521
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "client_tpot_mean_ms": 490.0227920617908,
+        "kv_wait_mean_ms": 442.87064285714285,
+        "bank_completion_interval_mean_ms": 18.526738283850843,
+        "mean_chain_service_ms": 513.9380633677783,
+        "mean_publish_to_consume_ms": 531.0879560346045,
+        "mean_publish_to_required_ms": 515.2711457666722,
+        "ready_before_consume_fraction": 0.14285714285714285,
+        "phases": {
+          "search": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 27.006888919514697,
+            "mean_queue_ms": 16.09323740959386,
+            "service_seconds": 10.586700456449762
+          },
+          "delivery": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 37.354486798439936,
+            "mean_queue_ms": 442.9500958079244,
+            "service_seconds": 14.642958824988455
+          },
+          "install": {
+            "phase_jobs": 392,
+            "workers": 1,
+            "peak_active": 1,
+            "mean_service_ms": 5.099357599071797,
+            "mean_queue_ms": 1.5236306873183432,
+            "service_seconds": 1.9989481788361445
+          }
+        },
+        "minimum_ready_deadline_slack_ms": 59212.29250903707
+      },
+      {
+        "case": 99402,
+        "client_tpot_mean_ms": 473.76680959326524,
+        "kv_wait_mean_ms": 425.2977142857143,
+        "bank_completion_interval_mean_ms": 17.89388238854916,
+        "mean_chain_service_ms": 497.25490840738735,
+        "mean_publish_to_consume_ms": 513.0148319267948,
+        "mean_publish_to_required_ms": 497.8256277761978,
+        "ready_before_consume_fraction": 0.14030612244897958,
+        "phases": {
+          "search": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 26.50075888128153,
+            "mean_queue_ms": 14.751206971503015,
+            "service_seconds": 10.38829748146236
+          },
+          "delivery": {
+            "phase_jobs": 392,
+            "workers": 2,
+            "peak_active": 2,
+            "mean_service_ms": 36.10893070361605,
+            "mean_queue_ms": 427.88502598883423,
+            "service_seconds": 14.154700835817493
+          },
+          "install": {
+            "phase_jobs": 392,
+            "workers": 1,
+            "peak_active": 1,
+            "mean_service_ms": 5.116481069660726,
+            "mean_queue_ms": 1.640269562200529,
+            "service_seconds": 2.005660579307005
+          }
+        },
+        "minimum_ready_deadline_slack_ms": 59170.2382620424
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "client_tpot_mean_ms": 475.54383200282854,
+        "kv_wait_mean_ms": 395.6212142857143,
+        "bank_completion_interval_mean_ms": 18.143495086871106,
+        "mean_chain_service_ms": 36.266880707722635,
+        "mean_publish_to_consume_ms": 505.30409666814137,
+        "mean_publish_to_required_ms": 491.1747666242727,
+        "ready_before_consume_fraction": 0.05102040816326531
+      },
+      {
+        "case": 99402,
+        "client_tpot_mean_ms": 481.52709659965086,
+        "kv_wait_mean_ms": 405.3204285714286,
+        "bank_completion_interval_mean_ms": 18.34321050646255,
+        "mean_chain_service_ms": 36.7051959168451,
+        "mean_publish_to_consume_ms": 510.7854432928286,
+        "mean_publish_to_required_ms": 496.30971876126284,
+        "ready_before_consume_fraction": 0.02806122448979592
+      }
+    ]
+  },
+  "scope": "392 consumed later-token banks/request; arithmetic means; completion cadence spans actual foreground publication and stage queues; not a pure kernel capacity bound"
+}

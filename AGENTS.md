@@ -997,3 +997,48 @@ calculations from service/workers are diagnostic and not latency guarantees.
   Commit locally only, no push. Step 4 staged search/delivery/install may now
   proceed using unchanged packed-PUT V and default CPU-cache D as its baseline.
   Do not add independent earlier experiment gains.
+
+#### Bounded persistent layer stages measured (2026-10-03)
+
+- Step 4's transport experiment adds default-off staged_transport with two
+  search, two delivery and one install thread. Every thread owns a persistent
+  loop/stream and only its own stage HTTP clients/native registry. At most 56
+  jobs may be admitted; exact bootstrap/lookahead tickets and publication
+  deadlines are retained. Published futures cannot abandon active owners.
+  Close joins upstream before downstream and retires resources on their
+  creating threads. Unknown/failing drainage retains owners and reservations.
+- Qualification: 116 CloudLab CPU tests and 48 real native scatter cases,
+  dispatched as 24 jobs on the actual stage executor. Isolated search/install
+  are dispatch/proof checks; CAGRA and actual bank installation are exercised
+  separately by complete online requests. The 53 local CPU repeats overlap
+  the CloudLab gate; their initial project-local tmp parent error is preserved.
+- Live ABBA uses the same two Prompts, 16 outputs, two warmups/arm, hardware,
+  fast graph, Q/Top4/capacity32/max_new16, packed V PUT and CPU history cache.
+  Only staged_transport differs. Persistent stage clients inherently reuse
+  their own sessions, while the older manager-shared reuse_io option is off.
+  Extra CPU threads are part of the architecture variable, explicitly counted.
+  GPU direct-bank, combined reserve/start, receive slots and P->D remain off.
+- All eight actual outputs match; each request has 420 completed jobs/840
+  searches, 392 consumed banks and actual phase peaks 2/2/1. Five persistent
+  owners retire, versus 420 per-job loops; four search/control clients retire.
+  Native registrations/ACKs/byte proofs match every delivery. All deadline
+  and consumption timestamps are checked. No abandoned queue/owner remains.
+- No stable end-to-end gain: mean KV wait 419.790 -> 446.477 ms/token;
+  mean client TPOT 494.631 -> 492.505 ms; median completion 9.894 -> 9.998 s.
+  Mean phases are search27.299, delivery37.541 and install5.119 ms; delivery
+  queue445.461 ms. Actual bank completion interval18.842 -> 18.642 ms still
+  exceeds the 1.031 ms/layer ready-KV diagnostic budget. V batch wall increases
+  7.180 -> 14.372 ms with simultaneous search/delivery; individual lock,
+  readiness-fence and network contributions were not causally isolated.
+- The optimized mean full-chain service516.995 ms includes inter-stage queue,
+  unlike baseline37.725 ms callback service. Do not divide chain service by two
+  as stage capacity or report it as GPU work. Invalid worker-capacity fields
+  are null; phase service/queue and exact sustained intervals are preserved.
+- Evidence: benchmark/results/pvd_oasis_stages_cloudlab_20261003.md and its
+  hashed raw/deployment/native/phase/event records. Owned/cleanup are empty;
+  all six GPUs 0 MiB. Default remains off; broader quality, TP2, load and native
+  failure injection remain open. Commit locally only; no GitHub push.
+- Step 4's bounded attention workspace and CUDA-graph-safe subsegment
+  evaluation remain to do; completing the transport trial does not complete
+  the full authorized sequence. Use unchanged two-worker/packed/cache serving
+  as the next independent baseline and do not add previous experiment gains.

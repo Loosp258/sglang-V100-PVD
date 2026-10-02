@@ -419,6 +419,7 @@ def verify(folder, *, check_git=False):
     is_workers = comparison['comparison'] == 'v-workers'
     is_direct_sparse = comparison['comparison'] == 'v-direct-sparse'
     is_gpu_bank = comparison['comparison'] == 'd-gpu-bank'
+    is_stages = comparison['comparison'] == 'd-stages'
     is_delivery = comparison['comparison'] in DELIVERY_COMPARISONS
     if is_io or is_pack or is_delivery:
         expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
@@ -508,6 +509,9 @@ def verify(folder, *, check_git=False):
                 assert config['max_new'] == 16
                 if is_gpu_bank:
                     assert config['gpu_receive_to_bank'] is arm.startswith('opt')
+                if is_stages:
+                    assert config['staged_transport'] is arm.startswith('opt')
+                    assert config['gpu_receive_to_bank'] is False
                 assert [row['case'] for row in full['requests'][arm]] == cases
                 for complete, compact in zip(full['requests'][arm], summary['requests'][arm]):
                     assert complete['rid'] == compact['rid']
@@ -526,7 +530,8 @@ def verify(folder, *, check_git=False):
                         assert compact['delivery_validation'] == proof
             allowed = {'v-combine': 'combine_reserve_start', 'v-slots': 'reuse_receive_slots',
                        'v-workers': 'workers', 'v-direct-sparse': '__no_config_difference__',
-                       'd-gpu-bank': 'gpu_receive_to_bank'}[comparison['comparison']]
+                       'd-gpu-bank': 'gpu_receive_to_bank',
+                       'd-stages': 'staged_transport'}[comparison['comparison']]
             fixed = {name: value for name, value in configs[expected_arms[0]].items() if name != allowed}
             assert all({name: value for name, value in config.items() if name != allowed} == fixed
                        for config in configs.values()), 'unrelated configuration changes in raw evidence'
@@ -535,10 +540,10 @@ def verify(folder, *, check_git=False):
                 assert json_file(raw_files, filename) == json.loads(
                     (folder / filename).read_text(encoding='utf-8')), (filename, 'compact evidence differs from raw')
             sources = json.loads((folder / 'source_hashes.json').read_text(encoding='utf-8'))
-            if is_direct_sparse or is_gpu_bank:
+            if is_direct_sparse or is_gpu_bank or is_stages:
                 from pvd_oasis_direct_sparse_evidence import gate_proof, runtime_proof
                 deployed = gate_proof(archive_files(folder / 'gate.tar.gz'), sources, json_file, unique_file,
-                                      gpu_bank=is_gpu_bank)
+                                      gpu_bank=is_gpu_bank, staged=is_stages)
                 if is_direct_sparse:
                     assert 'direct_sparse_summary.json' in manifest
                     assert runtime_proof(full, lambda name: json_file(raw_files, name)) == json.loads(
@@ -550,6 +555,11 @@ def verify(folder, *, check_git=False):
             for mode in ('baseline', 'optimized'):
                 assert search['aggregate'][mode]['batches'] == rpc['aggregate'][mode]['search_rpc_count'] == 3136
                 assert search['aggregate'][mode]['paths'] == ['grouped_cagra_partial_batched_host']
+            if is_stages:
+                from pvd_oasis_stage_evidence import stage_timing_evidence
+                assert 'stage_timing_summary.json' in manifest
+                assert stage_timing_evidence(full, json_file(raw_files, 'online.json')) == json.loads(
+                    (folder / 'stage_timing_summary.json').read_text(encoding='utf-8'))
             if is_workers or is_direct_sparse or is_gpu_bank:
                 if is_workers:
                     verify_worker_cpu_gate(folder, manifest, deployed)

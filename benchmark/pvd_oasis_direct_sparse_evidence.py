@@ -46,6 +46,19 @@ def native_proof(native, *, expected_mode='direct_sparse_batch_put'):
     assert native['after_close']['physical_bytes'] == 0
     assert native['after_close']['closed'] is True
     assert native['after_close']['unknown_slots'] == 0
+    if expected_mode == 'bounded_stages_native_scatter':
+        assert len(native['stage_runs']) == 2
+        for run in native['stage_runs']:
+            snapshot = run['snapshot']
+            assert snapshot['closed'] is snapshot['closing'] is True
+            assert snapshot['accepted'] == snapshot['completed'] == len(run['trace']) == 12
+            assert snapshot['failed'] == snapshot['pending'] == snapshot['retained_states'] == snapshot['retirement_errors'] == 0
+            assert snapshot['workers'] == dict(search=2, delivery=2, install=1)
+            assert snapshot['peak_active']['delivery'] == 2
+            assert sum(snapshot['retired_workers'].values()) == len(run['resources']) == run['retired_resources']
+            for row in run['trace']:
+                assert not row['failed'] and row['terminal'] <= row['deadline']
+                assert [phase['stage'] for phase in row['phases']] == ['search', 'delivery', 'install']
     return native
 
 
@@ -90,7 +103,7 @@ def runtime_proof(full, load_json):
     return proof
 
 
-def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False):
+def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False, staged=False):
     bundle = unique_file(gate_files, 'deployed.tar.gz')
     with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
         deployed = {item.name: hashlib.sha256(archive.extractfile(item).read()).hexdigest()
@@ -109,5 +122,6 @@ def gate_proof(gate_files, sources, read_json, unique_file, *, gpu_bank=False):
             assert len(text.splitlines()) == 2
             assert all(int(line.split(',')[1].split()[0]) == 0 for line in text.splitlines())
     native_proof(read_json(gate_files, 'native.json'), expected_mode=(
+        'bounded_stages_native_scatter' if staged else
         'gpu_receive_to_bank_with_async_backup' if gpu_bank else 'direct_sparse_batch_put'))
     return deployed

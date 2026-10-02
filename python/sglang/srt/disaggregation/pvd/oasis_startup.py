@@ -213,6 +213,7 @@ class OasisResources:
                 combine_reserve_start=cfg.get("combine_reserve_start", False),
                 reuse_receive_slots=cfg.get("reuse_receive_slots", False), workers=cfg["workers"],
                 gpu_receive_to_bank=cfg.get('gpu_receive_to_bank', False),
+                staged_transport=cfg.get('staged_transport', False),
                 backup_budget_bytes=cfg['request_scratch_bytes'])
             pending["transport"] = transport
             bootstrap = LayerLookahead(req.rid, incarnation, layers=28,
@@ -258,12 +259,13 @@ def maybe_install_oasis(scheduler):
     fields = {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "capacity",
         "max_new", "top_k", "workers", "timeout_seconds", "max_sequence_tokens", "max_decode_steps",
         "request_budget_bytes", "request_scratch_bytes", "bootstrap_budget_bytes", "bootstrap_transient_bytes", "overlap"}
-    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank'} != fields:
+    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport'} != fields:
         raise ValueError("Oasis config must contain exactly the documented bounds and pins")
     cfg.setdefault("reuse_io", False)
     cfg.setdefault("combine_reserve_start", False)
     cfg.setdefault("reuse_receive_slots", False)
     cfg.setdefault('gpu_receive_to_bank', False)
+    cfg.setdefault('staged_transport', False)
     for name in fields - {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "max_new", "overlap"}:
         if type(cfg[name]) is not int or cfg[name] <= 0:
             raise ValueError(f"positive integer Oasis {name} required")
@@ -271,6 +273,7 @@ def maybe_install_oasis(scheduler):
             or type(cfg["combine_reserve_start"]) is not bool
             or type(cfg["reuse_receive_slots"]) is not bool
             or type(cfg['gpu_receive_to_bank']) is not bool
+            or type(cfg['staged_transport']) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]
             or cfg["workers"] > 4 or cfg["capacity"] > 2048 or cfg["top_k"] > 512
             or cfg["max_sequence_tokens"] > scheduler.tp_worker.model_runner.model_config.context_len):

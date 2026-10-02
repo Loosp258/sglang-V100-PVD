@@ -1,0 +1,102 @@
+{
+  "baseline": {
+    "rank_deliveries": 2860,
+    "request_steady_wait_sum_ms": [
+      {
+        "case": 99401,
+        "rid": "b2b0d98c8a4a4bfab6b1abadb05abea6",
+        "milliseconds": 5997.357
+      },
+      {
+        "case": 99402,
+        "rid": "00a1a34df8ae4773974c541a44163787",
+        "milliseconds": 6297.676
+      },
+      {
+        "case": 99401,
+        "rid": "51014c358c254821ac6eaba2887afb52",
+        "milliseconds": 5538.697
+      },
+      {
+        "case": 99402,
+        "rid": "f441dbb6290042e99b3411bb0c564dce",
+        "milliseconds": 5674.486
+      }
+    ],
+    "median_stage_ms": {
+      "prepare": 1.0782209574244916,
+      "allocate": 0.01781346509233117,
+      "register": 0.9192630532197654,
+      "reserve": 3.437012492213398,
+      "start": 12.32685096329078,
+      "combined": 0.0,
+      "poll": 0.0,
+      "ack": 1.3984759571030736,
+      "close": 0.41110545862466097,
+      "cache_copy": 0.28324598679319024
+    },
+    "reserve_start_submission_ms": 16.07616851106286,
+    "median_payload_bytes": 2048.0,
+    "actual_request_counts": {
+      "delivery_count": 3084,
+      "registration_count": 3084,
+      "unregistration_count": 3084,
+      "reserve_rpc_count": 3084,
+      "start_rpc_count": 3084,
+      "combined_rpc_count": 0,
+      "poll_rpc_count": 4,
+      "ack_rpc_count": 3084
+    },
+    "scope": "stage medians exclude initial-bank priming; total request counters include priming and final physical pool retirement"
+  },
+  "optimized": {
+    "rank_deliveries": 2860,
+    "request_steady_wait_sum_ms": [
+      {
+        "case": 99401,
+        "rid": "f96f0f6baabe4592a109ceb7fda33fda",
+        "milliseconds": 6250.987
+      },
+      {
+        "case": 99402,
+        "rid": "ba4bcc16649344029684e0656ae95a12",
+        "milliseconds": 6597.361
+      },
+      {
+        "case": 99401,
+        "rid": "2663270a2dea443bbd5aa8237a00c6e7",
+        "milliseconds": 6200.189
+      },
+      {
+        "case": 99402,
+        "rid": "c1bff637fd874fe29bd86d9f77c8f865",
+        "milliseconds": 5954.168
+      }
+    ],
+    "median_stage_ms": {
+      "prepare": 0.9800920379348099,
+      "allocate": 0.040946470107883215,
+      "register": 0.8553379448130727,
+      "reserve": 2.639857993926853,
+      "start": 28.786207549273968,
+      "combined": 0.0,
+      "poll": 0.0,
+      "ack": 1.7037689685821533,
+      "close": 0.4045584937557578,
+      "cache_copy": 0.4278070409782231
+    },
+    "reserve_start_submission_ms": 31.550062471069396,
+    "median_payload_bytes": 2048.0,
+    "actual_request_counts": {
+      "delivery_count": 3084,
+      "registration_count": 3084,
+      "unregistration_count": 3084,
+      "reserve_rpc_count": 3084,
+      "start_rpc_count": 3084,
+      "combined_rpc_count": 0,
+      "poll_rpc_count": 2,
+      "ack_rpc_count": 3084
+    },
+    "scope": "stage medians exclude initial-bank priming; total request counters include priming and final physical pool retirement"
+  }
+}

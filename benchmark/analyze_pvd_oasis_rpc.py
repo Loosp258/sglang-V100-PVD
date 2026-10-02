@@ -98,17 +98,21 @@ for arm, rows in summary['requests'].items():
         if comparison in DELIVERY_COMPARISONS:
             assert workers == comparison_workers(comparison, arm)
         steady_tokens=len(row['forward'])-1
-        callbacks=callback_metrics(layers, workers, steady_tokens)
+        staged = trace.get('io', {}).get('staged_transport', False)
+        callbacks=callback_metrics(layers, 56 if staged else workers, steady_tokens)
+        if staged:
+            callbacks['callback_slot_occupancy'] = None
+            callbacks['callback_ms_per_worker_per_steady_token'] = None
         if comparison == 'v-workers':
             assert callbacks['peak_concurrent_callbacks'] == workers, 'actual callback peak does not prove two/four workers'
         span=max(t['ready'] for t in layers)-min(t['worker_start'] for t in layers)
         samples['delivery'].extend((t['service_seconds']-rpc[t['step'],t['layer']])*1000 for t in layers)
         item=dict(case=row['case'],consumed_layers=len(layers),search_rpcs=n,workers=workers,
                   service_seconds=service,worker_window_seconds=span,
-                  steady_tokens=steady_tokens, **callbacks,
-                  worker_utilization=service/(workers*span),
-                  service_floor_seconds=service/workers,
-                  window_above_service_floor_seconds=span-service/workers)
+                  steady_tokens=steady_tokens, staged_transport=staged, **callbacks,
+                  worker_utilization=None if staged else service/(workers*span),
+                  service_floor_seconds=None if staged else service/workers,
+                  window_above_service_floor_seconds=None if staged else span-service/workers)
         if 'io' in trace:
             item['io']=trace['io']
             samples['io'].append(trace['io'])
@@ -125,6 +129,7 @@ for arm, rows in summary['requests'].items():
         samples['workers'].append(item)
 out={}
 for mode, s in per_mode.items():
+    staged = any(t['staged_transport'] for t in s['workers'])
     out[mode]=dict(search_rpc_count=len(s['search']),
                   search_ms={k:median(t[k] for t in s['search']) for k in s['search'][0]},
                   service_outside_rpc_ms=median(s['delivery']),
@@ -132,15 +137,15 @@ for mode, s in per_mode.items():
                   no_remote_miss_rpc_ms=median(s['without_miss']) if s['without_miss'] else None,
                   remote_miss_layers=len(s['with_miss']),
                   remote_miss_rpc_ms=median(s['with_miss']) if s['with_miss'] else None,
-                  worker_utilization=median(t['worker_utilization'] for t in s['workers']),
-                  callback_slot_occupancy=sum(t['service_seconds'] for t in s['workers']) /
+                  worker_utilization=None if staged else median(t['worker_utilization'] for t in s['workers']),
+                  callback_slot_occupancy=None if staged else sum(t['service_seconds'] for t in s['workers']) /
                       sum(t['workers'] * t['worker_window_seconds'] for t in s['workers']),
-                  callback_slot_occupancy_median=median(t['callback_slot_occupancy'] for t in s['workers']),
+                  callback_slot_occupancy_median=None if staged else median(t['callback_slot_occupancy'] for t in s['workers']),
                   mean_concurrent_callbacks=sum(t['service_seconds'] for t in s['workers']) /
                       sum(t['worker_window_seconds'] for t in s['workers']),
                   peak_concurrent_callbacks=max(t['peak_concurrent_callbacks'] for t in s['workers']),
-                  callback_ms_per_worker_per_steady_token_mean=fmean(t['callback_ms_per_worker_per_steady_token'] for t in s['workers']),
-                  callback_ms_per_worker_per_steady_token_median=median(t['callback_ms_per_worker_per_steady_token'] for t in s['workers']),
+                  callback_ms_per_worker_per_steady_token_mean=None if staged else fmean(t['callback_ms_per_worker_per_steady_token'] for t in s['workers']),
+                  callback_ms_per_worker_per_steady_token_median=None if staged else median(t['callback_ms_per_worker_per_steady_token'] for t in s['workers']),
                   mean_layer_service_ms=sum(t['service_seconds'] for t in s['workers']) * 1000 /
                       sum(t['consumed_layers'] for t in s['workers']),
                   mean_layer_queue_ms=sum(t['mean_layer_queue_ms'] * t['consumed_layers'] for t in s['workers']) /
@@ -148,7 +153,8 @@ for mode, s in per_mode.items():
                   ready_before_consume_count=sum(t['ready_before_consume_count'] for t in s['workers']),
                   ready_before_consume_fraction=sum(t['ready_before_consume_count'] for t in s['workers']) /
                       sum(t['consumed_layers'] for t in s['workers']),
-                  callback_scope='weighted time occupying executor callbacks, including HTTP/CUDA waits; not CPU or GPU utilization; priming excluded',
+                  callback_scope=('in-flight layer chains including inter-stage queues; not executor occupancy; phase evidence gives actual stage concurrency' if staged else
+                      'weighted time occupying executor callbacks, including HTTP/CUDA waits; not CPU or GPU utilization; priming excluded'),
                   io=s['io'])
     if comparison in DELIVERY_COMPARISONS:
         deliveries=s['rank_deliveries']
@@ -162,4 +168,5 @@ for mode, s in per_mode.items():
 result=dict(aggregate=out,requests=requests,
             scope='exact ordered completed RPC blocks; warmups/bootstrap excluded; miss groups differ and are not causal subtraction')
 (root/'rpc_summary.json').write_text(json.dumps(result,indent=2)+'\n')
-print(json.dumps(out,indent=2))
+print(json.dumps({mode: {name: value for name, value in fields.items() if name != 'io'}
+                  for mode, fields in out.items()}, indent=2))

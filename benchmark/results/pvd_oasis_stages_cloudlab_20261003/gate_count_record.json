@@ -1,0 +1,1266 @@
+{
+  "unit": {
+    "record_file": "gate.tar.gz:oasis_stages_gate01/unit.txt",
+    "exit_code": 0,
+    "counts": {
+      "passed": 116,
+      "warning": 1
+    },
+    "exact_summary": "116 passed, 1 warning in 10.39s",
+    "seconds": 10.39
+  },
+  "native_count_record_file": "gate.tar.gz:oasis_stages_gate01/native.json",
+  "native_full_observations_saved": true,
+  "native": {
+    "status": "passed",
+    "mode": "bounded_stages_native_scatter",
+    "transport": "mooncake_local_session_scatter",
+    "device": "cuda:1",
+    "current_device": "cuda:0",
+    "source_devices": [
+      "cuda:1",
+      "cuda:0"
+    ],
+    "exact_byte_cases": 48,
+    "two_executor_pools": true,
+    "rows": [
+      1,
+      2,
+      8,
+      16,
+      32,
+      64
+    ],
+    "fixture": {
+      "layers": 28,
+      "local_kv_heads": 2,
+      "head_dim": 128,
+      "page_size": 16,
+      "prompt_tokens": 83,
+      "padded_rows": 96,
+      "nonzero_allocation_pages": 2
+    },
+    "source_registrations": [
+      {
+        "endpoint": "10.10.1.3:16775",
+        "region_id": "a392540c4a0b4ecba70a5fdc6b4d6bbc",
+        "address": 127023557115904,
+        "length": 4128768,
+        "device": "cuda:1",
+        "rank": 0,
+        "rail": "mlx5_0",
+        "backend_metadata": {
+          "transport": "mooncake",
+          "role": "vector",
+          "page_bytes": 458752,
+          "native_original_pool": true
+        }
+      },
+      {
+        "endpoint": "10.10.1.3:15527",
+        "region_id": "bcde32002ae6499b96b2f32d9ae310d4",
+        "address": 127023578087424,
+        "length": 4128768,
+        "device": "cuda:0",
+        "rank": 1,
+        "rail": "mlx5_0",
+        "backend_metadata": {
+          "transport": "mooncake",
+          "role": "vector",
+          "page_bytes": 458752,
+          "native_original_pool": true
+        }
+      }
+    ],
+    "source_physical_register_calls": 2,
+    "staging_registration_count": 0,
+    "immutable_source_bytes_exact": true,
+    "all_sources_unregistered": true,
+    "all_destinations_unregistered": true,
+    "all_owners_retired": true,
+    "source_before_close": {
+      "0": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:16775",
+        "registered_regions": 1,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 8388608,
+          "used_inflight": 0,
+          "reservations": 6,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.000800460809841752,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.270380777772516
+        }
+      },
+      "1": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:15527",
+        "registered_regions": 1,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 8388608,
+          "used_inflight": 0,
+          "reservations": 6,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.0008170412620529532,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.2688324137125164
+        }
+      }
+    },
+    "source_after_close": {
+      "0": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:16775",
+        "registered_regions": 0,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 0,
+          "used_inflight": 0,
+          "reservations": 0,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.000800460809841752,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.270380777772516
+        }
+      },
+      "1": {
+        "backend": "mooncake",
+        "healthy": true,
+        "registration_unknown_reason": null,
+        "rail": "mlx5_0",
+        "session_id": "10.10.1.3:15527",
+        "registered_regions": 0,
+        "metadata_policy": "fresh",
+        "metadata_policy_verification": "version-pinned-pre-init",
+        "mooncake_version": "0.3.13.post1",
+        "lifecycle": {
+          "staging_bytes": 33554432,
+          "max_inflight": 16,
+          "used_staging_bytes": 0,
+          "used_inflight": 0,
+          "reservations": 0,
+          "tracked_transfers": 0,
+          "unknown_transfers": 0,
+          "quarantined": false,
+          "quarantine_reason": null
+        },
+        "submit_timing": {
+          "cuda_sync_calls": 24,
+          "cuda_sync_seconds": 0.0008170412620529532,
+          "native_submit_calls": 0,
+          "native_submit_seconds": 0.0,
+          "batch_submit_calls": 24,
+          "batch_submit_seconds": 0.2688324137125164
+        }
+      }
+    },
+    "before_close": {
+      "slots_per_rank": 2,
+      "capacity_bytes": 32768,
+      "physical_slots": 4,
+      "physical_register_calls": 4,
+      "physical_registrations": 4,
+      "physical_release_calls": 0,
+      "physical_releases": 0,
+      "leased_slots": 0,
+      "unknown_slots": 0,
+      "physical_bytes": 131072,
+      "acquired_leases": 48,
+      "returned_leases": 48,
+      "quarantine": null,
+      "closing": false,
+      "closed": false
+    },
+    "after_close": {
+      "slots_per_rank": 2,
+      "capacity_bytes": 32768,
+      "physical_slots": 0,
+      "physical_register_calls": 4,
+      "physical_registrations": 4,
+      "physical_release_calls": 4,
+      "physical_releases": 4,
+      "leased_slots": 0,
+      "unknown_slots": 0,
+      "physical_bytes": 0,
+      "acquired_leases": 48,
+      "returned_leases": 48,
+      "quarantine": null,
+      "closing": true,
+      "closed": true
+    },
+    "transfer_budget": {
+      "staging_bytes": 33554432,
+      "max_inflight": 16,
+      "used_staging_bytes": 0,
+      "used_inflight": 0,
+      "reservations": 0
+    },
+    "receive_health": {
+      "backend": "rail_mapped_receive",
+      "healthy": true,
+      "rails": {
+        "mlx5_0": {
+          "backend": "mooncake",
+          "healthy": true,
+          "registration_unknown_reason": null,
+          "rail": "mlx5_0",
+          "session_id": "10.10.1.3:15945",
+          "registered_regions": 0,
+          "metadata_policy": "fresh",
+          "metadata_policy_verification": "version-pinned-pre-init",
+          "mooncake_version": "0.3.13.post1",
+          "lifecycle": {
+            "staging_bytes": 33554432,
+            "max_inflight": 16,
+            "used_staging_bytes": 0,
+            "used_inflight": 0,
+            "reservations": 0,
+            "tracked_transfers": 0,
+            "unknown_transfers": 0,
+            "quarantined": false,
+            "quarantine_reason": null
+          },
+          "submit_timing": {
+            "cuda_sync_calls": 1,
+            "cuda_sync_seconds": 0.00010335305705666542,
+            "native_submit_calls": 1,
+            "native_submit_seconds": 0.00010336295235902071,
+            "batch_submit_calls": 0,
+            "batch_submit_seconds": 0.0
+          }
+        }
+      },
+      "registered_destinations": 0,
+      "quarantined_collisions": 0
+    },
+    "producer_mode": "direct_sparse_batch_put",
+    "stage_runs": [
+      {
+        "snapshot": {
+          "closing": true,
+          "closed": true,
+          "max_pending": 56,
+          "pending": 0,
+          "peak_pending": 2,
+          "accepted": 12,
+          "completed": 12,
+          "failed": 0,
+          "workers": {
+            "search": 2,
+            "delivery": 2,
+            "install": 1
+          },
+          "peak_active": {
+            "search": 1,
+            "delivery": 2,
+            "install": 1
+          },
+          "retired_workers": {
+            "search": 1,
+            "delivery": 2,
+            "install": 1
+          },
+          "retained_states": 0,
+          "retirement_errors": 0
+        },
+        "trace": [
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=1, layer=0)",
+            "step": 1,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.498051715,
+            "deadline": 555005.498051715,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.498052687,
+                "start": 554975.501679164,
+                "end": 554975.501683703
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127019027265216,
+                "queued": 554975.501683703,
+                "start": 554975.502435602,
+                "end": 554975.530752592
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.530752592,
+                "start": 554975.530872778,
+                "end": 554975.531025414
+              }
+            ],
+            "terminal": 554975.53103956,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=0, layer=0)",
+            "step": 0,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.497964311,
+            "deadline": 555005.497964311,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.497966655,
+                "start": 554975.498109042,
+                "end": 554975.501661371
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127019018872512,
+                "queued": 554975.501661371,
+                "start": 554975.501713499,
+                "end": 554975.531106235
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.531106235,
+                "start": 554975.531138556,
+                "end": 554975.531152051
+              }
+            ],
+            "terminal": 554975.531155548,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=2, layer=0)",
+            "step": 2,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.531251508,
+            "deadline": 555005.531251508,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.531253171,
+                "start": 554975.531340685,
+                "end": 554975.531345314
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127019018872512,
+                "queued": 554975.531345314,
+                "start": 554975.531377774,
+                "end": 554975.547618057
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.547618057,
+                "start": 554975.547649696,
+                "end": 554975.547665706
+              }
+            ],
+            "terminal": 554975.547668471,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=3, layer=0)",
+            "step": 3,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.531296392,
+            "deadline": 555005.531296392,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.531296763,
+                "start": 554975.531355082,
+                "end": 554975.531356705
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127019027265216,
+                "queued": 554975.531356705,
+                "start": 554975.531896447,
+                "end": 554975.547876351
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.547876351,
+                "start": 554975.547907439,
+                "end": 554975.547922457
+              }
+            ],
+            "terminal": 554975.547925122,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=5, layer=0)",
+            "step": 5,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.548038174,
+            "deadline": 555005.548038174,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.548038665,
+                "start": 554975.548104148,
+                "end": 554975.548106673
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127019018872512,
+                "queued": 554975.548106673,
+                "start": 554975.548612891,
+                "end": 554975.577066337
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.577066337,
+                "start": 554975.5771265,
+                "end": 554975.577141959
+              }
+            ],
+            "terminal": 554975.577145626,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=4, layer=0)",
+            "step": 4,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.547991867,
+            "deadline": 555005.547991867,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.54799312,
+                "start": 554975.548088458,
+                "end": 554975.548093588
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127019027265216,
+                "queued": 554975.548093588,
+                "start": 554975.548130838,
+                "end": 554975.577272173
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.577272173,
+                "start": 554975.577302941,
+                "end": 554975.577316827
+              }
+            ],
+            "terminal": 554975.577319151,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=6, layer=0)",
+            "step": 6,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.577405473,
+            "deadline": 555005.577405473,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.577406585,
+                "start": 554975.577492055,
+                "end": 554975.577497896
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127019027265216,
+                "queued": 554975.577497896,
+                "start": 554975.577533062,
+                "end": 554975.626816934
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.626816934,
+                "start": 554975.626986983,
+                "end": 554975.627023321
+              }
+            ],
+            "terminal": 554975.627029343,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=7, layer=0)",
+            "step": 7,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.577445318,
+            "deadline": 555005.577445318,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.577445638,
+                "start": 554975.577507364,
+                "end": 554975.577509919
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127019018872512,
+                "queued": 554975.577509919,
+                "start": 554975.577913595,
+                "end": 554975.626946317
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.626946317,
+                "start": 554975.627073175,
+                "end": 554975.627083544
+              }
+            ],
+            "terminal": 554975.627086009,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=8, layer=0)",
+            "step": 8,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.627177991,
+            "deadline": 555005.627177991,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.627179013,
+                "start": 554975.627281235,
+                "end": 554975.627290402
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127019018872512,
+                "queued": 554975.627290402,
+                "start": 554975.627330217,
+                "end": 554975.709217413
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.709217413,
+                "start": 554975.709379267,
+                "end": 554975.709402981
+              }
+            ],
+            "terminal": 554975.709408952,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=9, layer=0)",
+            "step": 9,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.62722021,
+            "deadline": 555005.62722021,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.627220731,
+                "start": 554975.627304659,
+                "end": 554975.627307464
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127019027265216,
+                "queued": 554975.627307464,
+                "start": 554975.627730026,
+                "end": 554975.709528737
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.709528737,
+                "start": 554975.709599189,
+                "end": 554975.709622763
+              }
+            ],
+            "terminal": 554975.709628254,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=11, layer=0)",
+            "step": 11,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.709769899,
+            "deadline": 555005.709769899,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.70977045,
+                "start": 554975.709859387,
+                "end": 554975.709863304
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127019018872512,
+                "queued": 554975.709863304,
+                "start": 554975.710396935,
+                "end": 554975.868279865
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.868279865,
+                "start": 554975.868321844,
+                "end": 554975.868341861
+              }
+            ],
+            "terminal": 554975.868345939,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=10, layer=0)",
+            "step": 10,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.709725496,
+            "deadline": 555005.709725496,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127022407624384,
+                "queued": 554975.709726708,
+                "start": 554975.709830803,
+                "end": 554975.709841393
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127019027265216,
+                "queued": 554975.709841393,
+                "start": 554975.709900825,
+                "end": 554975.869064756
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127019010479808,
+                "queued": 554975.869064756,
+                "start": 554975.869120771,
+                "end": 554975.869139897
+              }
+            ],
+            "terminal": 554975.869143494,
+            "failed": false
+          }
+        ],
+        "resources": [
+          {
+            "stage": "search",
+            "index": 0,
+            "thread": 127022407624384
+          },
+          {
+            "stage": "delivery",
+            "index": 1,
+            "thread": 127019018872512
+          },
+          {
+            "stage": "delivery",
+            "index": 0,
+            "thread": 127019027265216
+          },
+          {
+            "stage": "install",
+            "index": 0,
+            "thread": 127019010479808
+          }
+        ],
+        "retired_resources": 4
+      },
+      {
+        "snapshot": {
+          "closing": true,
+          "closed": true,
+          "max_pending": 56,
+          "pending": 0,
+          "peak_pending": 2,
+          "accepted": 12,
+          "completed": 12,
+          "failed": 0,
+          "workers": {
+            "search": 2,
+            "delivery": 2,
+            "install": 1
+          },
+          "peak_active": {
+            "search": 1,
+            "delivery": 2,
+            "install": 1
+          },
+          "retired_workers": {
+            "search": 2,
+            "delivery": 2,
+            "install": 1
+          },
+          "retained_states": 0,
+          "retirement_errors": 0
+        },
+        "trace": [
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=0, layer=0)",
+            "step": 0,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.878069435,
+            "deadline": 555005.878069435,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127019018872512,
+                "queued": 554975.878070497,
+                "start": 554975.878172639,
+                "end": 554975.878262257
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127017903003328,
+                "queued": 554975.878262257,
+                "start": 554975.878309786,
+                "end": 554975.892524962
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.892524962,
+                "start": 554975.892557153,
+                "end": 554975.892721631
+              }
+            ],
+            "terminal": 554975.89272659,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=1, layer=0)",
+            "step": 1,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.878117105,
+            "deadline": 555005.878117105,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127019018872512,
+                "queued": 554975.878118097,
+                "start": 554975.878278567,
+                "end": 554975.878280882
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127018221926080,
+                "queued": 554975.878280882,
+                "start": 554975.879158517,
+                "end": 554975.89293469
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.89293469,
+                "start": 554975.892963634,
+                "end": 554975.892975557
+              }
+            ],
+            "terminal": 554975.8929775,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=3, layer=0)",
+            "step": 3,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.893090943,
+            "deadline": 555005.893090943,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554975.893091484,
+                "start": 554975.893293914,
+                "end": 554975.893296148
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127017903003328,
+                "queued": 554975.893296148,
+                "start": 554975.893747043,
+                "end": 554975.908134071
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.908134071,
+                "start": 554975.908328215,
+                "end": 554975.90835182
+              }
+            ],
+            "terminal": 554975.90835717,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=2, layer=0)",
+            "step": 2,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.893050137,
+            "deadline": 555005.893050137,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554975.89305184,
+                "start": 554975.893139083,
+                "end": 554975.893278845
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127018221926080,
+                "queued": 554975.893278845,
+                "start": 554975.893316987,
+                "end": 554975.908286377
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.908286377,
+                "start": 554975.908401743,
+                "end": 554975.908411652
+              }
+            ],
+            "terminal": 554975.908413946,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=5, layer=0)",
+            "step": 5,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.908615233,
+            "deadline": 555005.908615233,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127019018872512,
+                "queued": 554975.908616516,
+                "start": 554975.908731621,
+                "end": 554975.908735529
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127017903003328,
+                "queued": 554975.908735529,
+                "start": 554975.90916307,
+                "end": 554975.935651513
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.935651513,
+                "start": 554975.935824517,
+                "end": 554975.93584732
+              }
+            ],
+            "terminal": 554975.935853291,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=4, layer=0)",
+            "step": 4,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.908543298,
+            "deadline": 555005.908543298,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 0,
+                "thread": 127019018872512,
+                "queued": 554975.908545963,
+                "start": 554975.908694051,
+                "end": 554975.908709921
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127018221926080,
+                "queued": 554975.908709921,
+                "start": 554975.90876269,
+                "end": 554975.93577805
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.93577805,
+                "start": 554975.935890861,
+                "end": 554975.935901211
+              }
+            ],
+            "terminal": 554975.935903725,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=7, layer=0)",
+            "step": 7,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.93613579,
+            "deadline": 555005.93613579,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554975.936137183,
+                "start": 554975.936245115,
+                "end": 554975.936248692
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127017903003328,
+                "queued": 554975.936248692,
+                "start": 554975.936580374,
+                "end": 554975.97888306
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.97888306,
+                "start": 554975.978985913,
+                "end": 554975.979023102
+              }
+            ],
+            "terminal": 554975.979029565,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=6, layer=0)",
+            "step": 6,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.936063264,
+            "deadline": 555005.936063264,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554975.936065769,
+                "start": 554975.936211773,
+                "end": 554975.936224958
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127018221926080,
+                "queued": 554975.936224958,
+                "start": 554975.936272397,
+                "end": 554975.978934066
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554975.978934066,
+                "start": 554975.979065502,
+                "end": 554975.979076633
+              }
+            ],
+            "terminal": 554975.979079488,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=8, layer=0)",
+            "step": 8,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.979214912,
+            "deadline": 555005.979214912,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554975.979217687,
+                "start": 554975.979364593,
+                "end": 554975.979376054
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127018221926080,
+                "queued": 554975.979376054,
+                "start": 554975.979428753,
+                "end": 554976.050614931
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554976.050614931,
+                "start": 554976.050684441,
+                "end": 554976.05070504
+              }
+            ],
+            "terminal": 554976.050710179,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=9, layer=0)",
+            "step": 9,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554975.979286496,
+            "deadline": 555005.979286496,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554975.979287598,
+                "start": 554975.979394649,
+                "end": 554975.979397905
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127017903003328,
+                "queued": 554975.979397905,
+                "start": 554975.979812863,
+                "end": 554976.051772671
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554976.051772671,
+                "start": 554976.051816703,
+                "end": 554976.051830099
+              }
+            ],
+            "terminal": 554976.051833515,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=11, layer=0)",
+            "step": 11,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554976.052050792,
+            "deadline": 555006.052050792,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554976.052052085,
+                "start": 554976.052154426,
+                "end": 554976.052157522
+              },
+              {
+                "stage": "delivery",
+                "worker": 0,
+                "thread": 127018221926080,
+                "queued": 554976.052157522,
+                "start": 554976.052625449,
+                "end": 554976.197252281
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554976.197252281,
+                "start": 554976.197295362,
+                "end": 554976.197319978
+              }
+            ],
+            "terminal": 554976.19732614,
+            "failed": false
+          },
+          {
+            "key": "LayerTicket(request_id='native-stage', incarnation='native-inc', step=10, layer=0)",
+            "step": 10,
+            "layer": 0,
+            "bootstrap": null,
+            "published": 554976.051959992,
+            "deadline": 555006.051959992,
+            "phases": [
+              {
+                "stage": "search",
+                "worker": 1,
+                "thread": 127017263539904,
+                "queued": 554976.051962597,
+                "start": 554976.05212455,
+                "end": 554976.052135691
+              },
+              {
+                "stage": "delivery",
+                "worker": 1,
+                "thread": 127017903003328,
+                "queued": 554976.052135691,
+                "start": 554976.052181788,
+                "end": 554976.19785457
+              },
+              {
+                "stage": "install",
+                "worker": 0,
+                "thread": 127017819076288,
+                "queued": 554976.19785457,
+                "start": 554976.197884066,
+                "end": 554976.197898132
+              }
+            ],
+            "terminal": 554976.197901318,
+            "failed": false
+          }
+        ],
+        "resources": [
+          {
+            "stage": "search",
+            "index": 0,
+            "thread": 127019018872512
+          },
+          {
+            "stage": "delivery",
+            "index": 1,
+            "thread": 127017903003328
+          },
+          {
+            "stage": "delivery",
+            "index": 0,
+            "thread": 127018221926080
+          },
+          {
+            "stage": "install",
+            "index": 0,
+            "thread": 127017819076288
+          },
+          {
+            "stage": "search",
+            "index": 1,
+            "thread": 127017263539904
+          }
+        ],
+        "retired_resources": 5
+      }
+    ],
+    "stage_scope": "real bounded dispatch/thread-affine CUDA resources and native scatter delivery; no CAGRA or serving bank install in this isolated gate"
+  }
+}

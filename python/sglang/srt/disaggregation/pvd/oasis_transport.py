@@ -193,7 +193,8 @@ class OasisLayerTransport:
     def __init__(self, manager, selected, *, request_id, incarnation, device,
                  vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False,
                  combine_reserve_start=False, reuse_receive_slots=False, workers=2,
-                 gpu_receive_to_bank=False, backup_budget_bytes=33554432):
+                 gpu_receive_to_bank=False, backup_budget_bytes=33554432,
+                 staged_transport=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -205,8 +206,12 @@ class OasisLayerTransport:
                 or type(reuse_io) is not bool or type(combine_reserve_start) is not bool
                 or type(reuse_receive_slots) is not bool
                 or type(gpu_receive_to_bank) is not bool
+                or type(staged_transport) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
+        if staged_transport and (reuse_io or combine_reserve_start or reuse_receive_slots
+                                 or gpu_receive_to_bank or workers != 2):
+            raise ValueError('staged experiment requires unchanged two-worker packed/cache baseline')
         self.manager, self.selected = manager, selected
         self.request_id, self.incarnation = request_id, incarnation
         self.device = torch.device(device)
@@ -216,6 +221,8 @@ class OasisLayerTransport:
         self.combine_reserve_start = combine_reserve_start
         self.reuse_receive_slots = reuse_receive_slots
         self.gpu_receive_to_bank = gpu_receive_to_bank
+        self.staged_transport = staged_transport
+        self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
             receiver_epoch=manager.worker_epoch, slots_per_rank=workers,
@@ -259,6 +266,11 @@ class OasisLayerTransport:
                     or not state["session_id"]):
                 raise ValueError("selected V rail has no healthy D receive session")
             self.endpoints[route.rank] = state["session_id"]
+        if staged_transport:
+            from sglang.srt.disaggregation.pvd.oasis_stages import BoundedLayerStages
+            self.stages = BoundedLayerStages(
+                (self._stage_search, self._stage_delivery, self._stage_install),
+                initialize=self._stage_worker, retire=self._retire_stage_worker)
 
     def _outside_io_loop(self):
         try:
@@ -268,12 +280,14 @@ class OasisLayerTransport:
         if running is self._io_loop and running is not None:
             raise RuntimeError("cannot block or create Oasis clients on their I/O loop")
 
-    def _new_clients(self, *, background_loop=None):
+    def _new_clients(self, *, background_loop=None, kinds=('search', 'control')):
         clients = dict(
             search={r.rank: PVDShardSearchClient(r.url, timeout_seconds=self.timeout,
-                        background_loop=background_loop) for r in self.selected.shards},
+                        background_loop=background_loop) for r in self.selected.shards
+                    if 'search' in kinds},
             control={r.rank: HttpShardClient(r.rank, r.url, timeout_seconds=self.timeout,
-                         background_loop=background_loop) for r in self.selected.shards})
+                         background_loop=background_loop) for r in self.selected.shards
+                     if 'control' in kinds})
         self._io_counts["search_clients_created"] += len(clients["search"])
         self._io_counts["control_clients_created"] += len(clients["control"])
         return clients
@@ -352,6 +366,9 @@ class OasisLayerTransport:
                 sums["registration_count"] = pool["physical_register_calls"]
                 sums["unregistration_count"] = pool["physical_release_calls"]
             return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
+                staged_transport=self.staged_transport,
+                stages=self.stages.snapshot() if self.stages else None,
+                stage_trace=list(self.stages.trace) if self.stages else None,
                 gpu_receive_to_bank=self.gpu_receive_to_bank,
                 gpu_backup=self.gpu_backups.snapshot() if self.gpu_backups else None,
                 combine_reserve_start=self.combine_reserve_start,
@@ -361,17 +378,22 @@ class OasisLayerTransport:
                 shared_close_submitted=self._shared_close_future is not None,
                 closing=self._closing, closed=self.closed)
 
-    async def _select_and_fetch(self, state, ticket, query, bank, bootstrap):
+    async def _select_and_fetch(self, state, ticket, query, bank, bootstrap,
+                                *, select_only=False, plan=None, deadline=None):
         state["delivery_profiles"] = []
         state['gpu_readers'] = []
         state['fresh_gpu_rows'] = {}
         layer_cache = self.cache[ticket.layer]
-        selected_ids = [None] * 4
+        selected_ids = [None] * 4 if plan is None else list(plan['chosen'])
+        plans = {}
         started = time.perf_counter()
         remote_rows = 0
 
         async def shard_job(route):
             nonlocal remote_rows
+            if plan is not None:
+                await deliver(route, plan['wires'][route.rank])
+                return
             with self.lock:
                 pin = self.versions.get(route.rank, (None, None))
             heads = tuple(range(route.rank * 2, route.rank * 2 + 2))
@@ -405,8 +427,17 @@ class OasisLayerTransport:
                         0 if bootstrap else ticket.step + 1,
                         self.selected.manifest.key.transfer_id, *pair,
                         self.selected.manifest.layout.fingerprint, ticket.layer, head, missing))
+            if select_only:
+                plans[route.rank] = tuple(specs)
+                return
+            await deliver(route, specs)
+
+        async def deliver(route, specs):
+            nonlocal remote_rows
             if not specs:
                 return
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('layer expired before native destination submission')
             wire = SparseDeliveryManifest(tuple(specs), "torch.float16", 128)
             registry = state["registry"]
             record = registry.prepare(wire, key=self.selected.manifest.key, rank=route.rank,
@@ -414,9 +445,9 @@ class OasisLayerTransport:
                 client=state["control"][route.rank], owner_scope=self.incarnation)
             try:
                 ready = await record.start()
-                deadline = time.monotonic() + self.timeout
+                native_deadline = min(deadline, time.monotonic() + self.timeout) if deadline is not None else time.monotonic() + self.timeout
                 while not ready:
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= native_deadline:
                         raise TimeoutError("Oasis native layer delivery expired")
                     await asyncio.sleep(0.001)
                     ready = await record.poll()
@@ -448,7 +479,125 @@ class OasisLayerTransport:
         errors = [o for o in outcomes if isinstance(o, BaseException)]
         if errors:
             raise errors[0]
+        if select_only:
+            return dict(chosen=tuple(selected_ids), wires=plans,
+                        search_seconds=time.perf_counter() - started)
         return tuple(selected_ids), remote_rows, time.perf_counter() - started
+
+    def _stage_worker(self, stage, index):
+        # Each persistent loop/client/registry is created and retired on this
+        # actual stage thread. No registry or mutable job state crosses threads.
+        with self.lock:
+            if self.closed or self.quarantined:
+                raise RuntimeError('persistent stage owner admission closed')
+            kinds = ('search',) if stage == 'search' else ('control',) if stage == 'delivery' else ()
+            state = dict(owner_thread=threading.get_ident(), stage=stage,
+                         search={}, control={})
+            self.workers.append(state)
+            try:
+                state.update(self._new_clients(kinds=kinds))
+                state['loop'] = asyncio.new_event_loop()
+                state['stream'] = torch.cuda.Stream(device=self.device)
+                if stage == 'delivery':
+                    state['registry'] = OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
+                        self.manager.transfer_budget, receiver_epoch=self.manager.worker_epoch,
+                        device=self.device)
+                self._io_counts['worker_loops_created'] += 1
+            except BaseException:
+                self.quarantined = True
+                raise
+            return state
+
+    def _retire_stage_worker(self, stage, state):
+        if state['owner_thread'] != threading.get_ident() or state['stage'] != stage:
+            raise RuntimeError('persistent stage retirement on foreign thread')
+        registry = state.get('registry')
+        if state.get('quarantine') or registry is not None and registry._records:
+            self.quarantined = True
+            raise RuntimeError('retain undrained native stage owners')
+        with self.lock:
+            for kind in ('search', 'control'):
+                self._io_counts[kind + '_sessions_created'] += sum(
+                    client._session is not None for client in state[kind].values())
+        state['loop'].run_until_complete(self._close_clients(state))
+        state['loop'].close()
+        with self.lock:
+            self.workers.remove(state)
+
+    def _drain_stage_payload(self, context):
+        try:
+            context['event'].synchronize()
+            if context.get('stream') is not None:
+                context['stream'].synchronize()
+        except BaseException:
+            self.quarantined = True
+            with self.lock:
+                self.workers.append(dict(quarantine=[context]))
+            raise
+
+    @torch.inference_mode()
+    def _stage_search(self, context, state):
+        context['stream'] = state['stream']
+        with torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+            state['stream'].wait_event(context['event'])
+            host = torch.empty_like(context['query'], device='cpu', pin_memory=True)
+            context['retained'].append(host)
+            host.copy_(context['query'], non_blocking=True)
+            state['stream'].synchronize()
+            context['plan'] = state['loop'].run_until_complete(self._select_and_fetch(
+                state, context['ticket'], host.tolist(), context['bank'],
+                context['bootstrap'], select_only=True, deadline=context['deadline']))
+        return context
+
+    @torch.inference_mode()
+    def _stage_delivery(self, context, state):
+        context['stream'] = state['stream']
+        with torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+            chosen, rows, seconds = state['loop'].run_until_complete(self._select_and_fetch(
+                state, context['ticket'], None, context['bank'], context['bootstrap'],
+                plan=context['plan'], deadline=context['deadline']))
+            context.update(chosen=chosen, remote_rows=rows,
+                rpc_seconds=context['plan']['search_seconds'] + seconds,
+                deliveries=state['delivery_profiles'])
+        return context
+
+    @torch.inference_mode()
+    def _stage_install(self, context, state):
+        context['stream'] = state['stream']
+        ticket, chosen = context['ticket'], context['chosen']
+        resident = context['bank']() if callable(context['bank']) else context['bank']
+        with torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+            width = max(map(len, chosen))
+            keys = torch.zeros((4, width, 128), device=self.device, dtype=torch.float16)
+            values = torch.zeros_like(keys)
+            valid = torch.zeros((4, width), device=self.device, dtype=torch.bool)
+            context['retained'].extend((resident, keys, values, valid))
+            if resident is not None and resident.completion is not None:
+                state['stream'].wait_event(resident.completion)
+            for head, ids in enumerate(chosen):
+                old = {} if resident is None else {token: i for i, token in enumerate(resident.ids[head])}
+                hits = [(i, old[token]) for i, token in enumerate(ids) if token in old]
+                misses = [(i, token) for i, token in enumerate(ids) if token not in old]
+                if hits:
+                    dst, src = zip(*hits)
+                    keys[head, list(dst)] = resident.keys[head, list(src)]
+                    values[head, list(dst)] = resident.values[head, list(src)]
+                if misses:
+                    host = torch.stack([self.cache[ticket.layer][head][token]
+                                        for _, token in misses]).pin_memory()
+                    gpu = host.to(self.device, non_blocking=True)
+                    context['retained'].extend((host, gpu))
+                    dst = [i for i, _ in misses]
+                    keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
+                valid[head, :len(ids)] = True
+            complete = torch.cuda.Event()
+            complete.record()
+            complete.synchronize()
+        with self.lock:
+            self.trace.append(dict(step=ticket.step, layer=ticket.layer,
+                remote_rows=context['remote_rows'], rpc_seconds=context['rpc_seconds'],
+                deliveries=context['deliveries']))
+        return LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
 
     def job(self, query, bank, *, bootstrap=False):
         if (self.closed or self._closing or self.quarantined
@@ -459,6 +608,27 @@ class OasisLayerTransport:
             raise ValueError("target post-RoPE Q required")
         event = torch.cuda.Event()
         event.record(torch.cuda.current_stream(self.device))
+        if self.staged_transport:
+            transport = self
+            class StagedCallback:
+                def __call__(self, ticket):
+                    raise RuntimeError('staged callback must be submitted with publication deadline')
+
+                def submit_layer(self, ticket, *, published, timeout):
+                    if (ticket.request_id, ticket.incarnation) != (transport.request_id, transport.incarnation):
+                        raise RuntimeError('foreign staged layer transport ticket')
+                    context = dict(query=query, event=event, bank=bank, bootstrap=bootstrap,
+                        ticket=ticket, deadline=published + timeout, retained=[query, event, bank])
+                    try:
+                        future = transport.stages.submit((bootstrap, ticket), ticket, context,
+                            published=published, timeout=timeout, cleanup=transport._drain_stage_payload)
+                    except BaseException:
+                        transport._drain_stage_payload(context)
+                        raise
+                    with transport.lock:
+                        transport._io_counts['job_count'] += 1
+                    return future
+            return StagedCallback()
 
         @torch.inference_mode()
         def run(ticket):
@@ -544,6 +714,8 @@ class OasisLayerTransport:
         return run
 
     def close(self):
+        if self.stages is not None:
+            self.stages.close()
         if self.reuse_io:
             self._outside_io_loop()
         with self.lock:

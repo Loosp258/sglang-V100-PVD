@@ -69,7 +69,7 @@ def main():
             'test/registered/disaggregation/conftest.py',
             'test/registered/disaggregation/cloudlab_pvd_new_lease.sh'))
         paths.add(native)
-        if args.native == 'benchmark/pvd_oasis_gpu_bank_native.py':
+        if args.native in ('benchmark/pvd_oasis_gpu_bank_native.py', 'benchmark/pvd_oasis_stages_native.py'):
             paths.add(ROOT / 'benchmark/pvd_direct_sparse_batch_native.py')
         hashes = {}
         buffer = io.BytesIO()

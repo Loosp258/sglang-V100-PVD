@@ -104,7 +104,9 @@ class LayerLookahead:
                     raise RuntimeError("stale or foreign layer reply")
                 return reply, started, monotonic()
 
-            future = self._pool.submit(work)
+            submit_layer = getattr(callback, 'submit_layer', None)
+            future = (submit_layer(ticket, published=published, timeout=self.timeout)
+                      if callable(submit_layer) else self._pool.submit(work))
             self._pending[step, layer] = (ticket, future, published)
             self._published[layer] = step
             return ticket
@@ -123,6 +125,8 @@ class LayerLookahead:
         if remaining <= 0:
             raise TimeoutError("layer lookahead expired")
         reply, started, completed = future.result(timeout=remaining)
+        if not isinstance(reply, LayerReply) or reply.ticket != ticket:
+            raise RuntimeError("stale or foreign layer reply")
         consumed = monotonic()
         with self._lock:
             if self._closed or self._pending.get((step, layer)) is not item:
