@@ -8,11 +8,12 @@ import math
 from pathlib import Path
 import re
 import shlex
+from statistics import mean, median
 import subprocess
 import tarfile
 
 from pvd_oasis_delivery_validation import (
-    DELIVERY_COMPARISONS, delivery_flags, validate_delivery_profiles,
+    DELIVERY_COMPARISONS, comparison_workers, delivery_flags, validate_delivery_profiles,
     validate_delivery_snapshot, validate_io_snapshot,
 )
 
@@ -51,6 +52,149 @@ def zero_gpu_csv(data):
     assert len(rows) == 2, 'both GPUs require recorded cleanup proof'
     assert [int(row.split(',')[0]) for row in rows] == [0, 1]
     assert all(int(row.split(',')[1].split()[0]) == 0 for row in rows)
+
+
+def client_token_evidence(complete, online):
+    """Measure actual streamed token intervals, excluding admission/TTFT."""
+    assert online['status'] == 200 and online['error'] is None
+    assert type(online['completion_tokens']) is int and online['completion_tokens'] == 16
+    events = online['events']
+    assert len(events) == 16, 'one actual event for every output token required'
+    times = [item['seconds'] for item in events]
+    assert all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+               for value in times)
+    assert times == sorted(times), 'client token events reordered'
+    for count, item in enumerate(events, 1):
+        event = item['event']
+        assert type(event['meta_info']['completion_tokens']) is int
+        assert event['meta_info']['completion_tokens'] == count
+        assert event['meta_info']['id'] == complete['rid']
+        assert event['output_ids'] == complete['output_ids'][:count]
+    for field in ('case', 'prompt_sha256', 'output_sha256', 'completion_tokens',
+                  'wall_seconds', 'first_event_seconds'):
+        assert online[field] == complete[field], (field, 'actual client event identity differs')
+    assert times[0] == online['first_event_seconds'] and times[-1] <= online['wall_seconds']
+    intervals = [(last - first) * 1000 for first, last in zip(times, times[1:])]
+    if 'client_token_event_seconds' in complete:
+        assert complete['client_token_event_seconds'] == times
+    if 'client_inter_token_ms' in complete:
+        assert complete['client_inter_token_ms'] == intervals
+    tpot = (times[-1] - times[0]) * 1000 / 15
+    if 'client_tpot_ms' in complete:
+        assert math.isclose(complete['client_tpot_ms'], tpot, abs_tol=1e-9)
+    return dict(client_tpot_ms=tpot,
+                steady_client_tpot_ms=(times[-1] - times[1]) * 1000 / 14,
+                first_client_interval_ms=(times[1] - times[0]) * 1000,
+                event_count=16, client_intervals=15, steady_client_intervals=14)
+
+
+def callback_evidence(trace, forwards, *, workers):
+    """Reconstruct executor occupancy from callback start/ready endpoints.
+
+    Occupied slots include blocking RPC time; this is not hardware utilization.
+    The work window divides the observed service sum by the worker count. It
+    is a fixed-duration capacity measure, not an end-to-end latency prediction.
+    """
+    assert type(workers) is int and workers in (2, 4)
+    assert len(forwards) == 15 and all(type(item['step']) is int for item in forwards)
+    assert [item['step'] for item in forwards] == list(range(15))
+    assert all(type(item['total_ms']) in (int, float) and math.isfinite(item['total_ms'])
+               and item['total_ms'] >= 0 for item in forwards)
+    assert all(type(item['wait_ms']) in (int, float) and math.isfinite(item['wait_ms'])
+               and 0 <= item['wait_ms'] <= item['total_ms'] for item in forwards)
+    assert forwards[0]['wait_ms'] == 0
+    layers = trace['layers']
+    expected = {(step, layer) for step in range(14) for layer in range(28)}
+    assert len(layers) == 392 and {(item['step'], item['layer']) for item in layers} == expected
+    assert all(type(item['step']) is int and type(item['layer']) is int for item in layers)
+    assert [(item['step'], item['layer']) for item in layers] == sorted(expected)
+    assert [item['consumed'] for item in layers] == sorted(item['consumed'] for item in layers)
+    assert len(trace['transport']) == 420
+    steady_transport = trace['transport'][28:]
+    assert {(item['step'], item['layer']) for item in steady_transport} == expected
+    endpoints = []
+    for item in layers:
+        for field in ('published', 'worker_start', 'ready', 'consumed', 'queue_seconds',
+                      'service_seconds', 'consumer_wait_seconds'):
+            value = item[field]
+            assert type(value) in (int, float) and math.isfinite(value) and value >= 0, field
+        assert item['published'] <= item['worker_start'] < item['ready'] <= item['consumed']
+        assert math.isclose(item['queue_seconds'], item['worker_start'] - item['published'], abs_tol=1e-9)
+        assert math.isclose(item['service_seconds'], item['ready'] - item['worker_start'], abs_tol=1e-9)
+        assert type(item['ready_before_consume']) is bool
+        wait_start = item['consumed'] - item['consumer_wait_seconds']
+        assert item['ready_before_consume'] == (item['ready'] <= wait_start)
+        endpoints.extend(((item['worker_start'], 1), (item['ready'], -1)))
+    endpoints.sort()  # A completion at the same timestamp precedes the next start.
+    active = peak = 0
+    area = 0.0
+    previous = endpoints[0][0]
+    for timestamp, delta in endpoints:
+        area += active * (timestamp - previous)
+        active += delta
+        assert 0 <= active <= workers, 'actual executor concurrency exceeds configuration'
+        peak = max(peak, active)
+        previous = timestamp
+    assert active == 0
+    service = sum(item['service_seconds'] for item in layers)
+    assert math.isclose(area, service, abs_tol=1e-8)
+    span = endpoints[-1][0] - endpoints[0][0]
+    wait_ms = sum(item['wait_ms'] for item in forwards[1:])
+    raw_wait_ms = sum(item['consumer_wait_seconds'] for item in layers) * 1000
+    assert abs(raw_wait_ms - wait_ms) <= 14 * 0.00051, 'forward wait differs from actual layer waits'
+    return dict(workers=workers, consumed_callbacks=392, steady_tokens=14,
+                executor_peak=peak, service_seconds=service, worker_window_seconds=span,
+                worker_occupancy=service / (workers * span),
+                mean_service_ms=service * 1000 / 392,
+                mean_queue_ms=mean(item['queue_seconds'] for item in layers) * 1000,
+                work_window_ms_per_token=service * 1000 / workers / 14,
+                kv_wait_mean_ms=wait_ms / 14,
+                kv_wait_step_median_ms=median(item['wait_ms'] for item in forwards[1:]),
+                kv_wait_request_sum_ms=wait_ms,
+                ready_before_consume_fraction=mean(item['ready_before_consume'] for item in layers))
+
+
+def worker_timing_evidence(full, online, comparison):
+    """Independent request and mode statistics from complete raw observations."""
+    requests = {}
+    for arm, rows in full['requests'].items():
+        actual = online[arm]
+        assert len(actual) == len(rows) == 2
+        requests[arm] = []
+        workers = comparison_workers(comparison, arm)
+        for complete, client in zip(rows, actual):
+            evidence = callback_evidence(complete['trace'], complete['forward'], workers=workers)
+            assert evidence['executor_peak'] == workers, 'configured worker concurrency not demonstrated'
+            evidence.update(client_token_evidence(complete, client))
+            evidence.update(case=complete['case'], rid=complete['rid'])
+            requests[arm].append(evidence)
+    aggregate = {}
+    for mode in ('baseline', 'optimized'):
+        rows = [row for arm, values in requests.items()
+                if arm.startswith('opt') is (mode == 'optimized') for row in values]
+        forwards = [item for arm, values in full['requests'].items()
+                    if arm.startswith('opt') is (mode == 'optimized')
+                    for row in values for item in row['forward'][1:]]
+        assert len(rows) == 4 and len(forwards) == 56
+        workers = rows[0]['workers']
+        service = sum(row['service_seconds'] for row in rows)
+        span = sum(row['worker_window_seconds'] for row in rows)
+        aggregate[mode] = dict(requests=4, steady_tokens=56, consumed_callbacks=1568,
+            workers=workers, executor_peaks=[row['executor_peak'] for row in rows],
+            client_tpot_mean_ms=mean(row['client_tpot_ms'] for row in rows),
+            client_tpot_request_median_ms=median(row['client_tpot_ms'] for row in rows),
+            steady_client_tpot_mean_ms=mean(row['steady_client_tpot_ms'] for row in rows),
+            steady_client_tpot_request_median_ms=median(row['steady_client_tpot_ms'] for row in rows),
+            kv_wait_mean_ms=mean(item['wait_ms'] for item in forwards),
+            kv_wait_step_median_ms=median(item['wait_ms'] for item in forwards),
+            kv_wait_request_sum_median_ms=median(row['kv_wait_request_sum_ms'] for row in rows),
+            mean_service_ms=service * 1000 / 1568,
+            mean_queue_ms=mean(row['mean_queue_ms'] for row in rows),
+            work_window_ms_per_token=service * 1000 / workers / 56,
+            worker_occupancy=service / (workers * span),
+            ready_before_consume_fraction=mean(row['ready_before_consume_fraction'] for row in rows))
+    return dict(aggregate=aggregate, requests=requests,
+        scope='four formal requests per mode; client TPOT uses 15 actual stream intervals; steady client/forward waiting uses 14 tokens per request; executor occupancy includes callback RPC blocking and is not hardware utilization')
 
 
 def verify_native_slots(native):
@@ -174,6 +318,40 @@ def verify_delivery_gate(folder, manifest, source_hashes):
     verify_native_slots(native)
     assert record['native_full_observations_saved'] is True
     assert record['native'] == {name: value for name, value in native.items() if name != 'observations'}
+    return deployed
+
+
+def verify_worker_cpu_gate(folder, manifest, deployed):
+    """Keep the repeated CPU lifecycle gate distinct from native acceptance."""
+    for name in ('worker_cpu_gate.tar.gz', 'worker_cpu_gate_record.json'):
+        assert name in manifest, (name, 'worker CPU recheck evidence must be hashed')
+    files = archive_files(folder / 'worker_cpu_gate.tar.gz')
+    assert json_file(files, 'status.json') == {'exit_code': 0}
+    text = unique_file(files, 'unit.txt').decode('utf-8')
+    summaries = [line for line in text.splitlines()
+                 if re.search(r'\d+ passed', line) and re.search(r'in [\d.]+s', line)]
+    assert len(summaries) == 1
+    counts = {kind: int(number) for number, kind in re.findall(
+        r'(\d+) (passed|failed|skipped|errors?|warnings?)', summaries[0])}
+    assert counts == {'passed': 48, 'warning': 1}
+    scope = json_file(files, 'scope.json')
+    assert scope['frozen_serving_commit'] == '9b8b5dc0c'
+    assert scope['new_mirror_tests'] is scope['gpu_used'] is scope['ssh_used'] is False
+    assert scope['test_scope'] == 'existing CPU causal/lifecycle regressions; not native four-worker acceptance'
+    assert scope['tests'] == ['test_pvd_oasis_attention.py', 'test_pvd_oasis_request.py',
+        'test_pvd_oasis_pipeline.py', 'test_pvd_oasis_serving.py', 'test_pvd_oasis_transport_io.py',
+        'test_pvd_oasis_receive_slot_records.py']
+    hashes = json_file(files, 'source_hashes.json')
+    prefix = 'python/sglang/srt/disaggregation/pvd/'
+    assert set(hashes) == {prefix + name for name in (
+        'oasis_attention.py', 'oasis_pipeline.py', 'oasis_request.py', 'oasis_transport.py',
+        'oasis_startup.py', 'oasis_receive_slots.py', 'sparse_receiver.py',
+        'cuda_sparse_receiver.py', 'oasis_sglang.py')}
+    assert all(deployed.get(name) == digest for name, digest in hashes.items()), 'worker CPU serving source differs from deployed gate'
+    record = json.loads((folder / 'worker_cpu_gate_record.json').read_text(encoding='utf-8'))
+    assert record['counts'] == counts and record['exact_summary'] == summaries[0]
+    assert record['exit_code'] == 0 and record['scope'] == scope
+    assert record['source_files_match_deployment'] == len(hashes)
 
 
 def verify_delivery_launches(files, arms):
@@ -235,6 +413,7 @@ def verify(folder, *, check_git=False):
     comparison = json.loads((folder / 'comparison.json').read_text(encoding='utf-8'))
     is_io = comparison['comparison'] == 'v-io'
     is_pack = comparison['comparison'] == 'v-pack'
+    is_workers = comparison['comparison'] == 'v-workers'
     is_delivery = comparison['comparison'] in DELIVERY_COMPARISONS
     if is_io or is_pack or is_delivery:
         expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
@@ -318,7 +497,9 @@ def verify(folder, *, check_git=False):
                 combine, slots = delivery_flags(comparison['comparison'], arm)
                 assert config['combine_reserve_start'] is combine and config['reuse_receive_slots'] is slots
                 assert config['reuse_io'] is False and config['overlap'] is True
-                assert config['workers'] == 2 and config['capacity'] == 32 and config['top_k'] == 4
+                assert type(config['workers']) is int
+                assert config['workers'] == comparison_workers(comparison['comparison'], arm)
+                assert config['capacity'] == 32 and config['top_k'] == 4
                 assert config['max_new'] == 16
                 assert [row['case'] for row in full['requests'][arm]] == cases
                 for complete, compact in zip(full['requests'][arm], summary['requests'][arm]):
@@ -336,7 +517,8 @@ def verify(folder, *, check_git=False):
                     proof = validate_delivery_profiles(trace, comparison=comparison['comparison'], arm=arm)
                     if 'delivery_validation' in compact:
                         assert compact['delivery_validation'] == proof
-            allowed = 'combine_reserve_start' if comparison['comparison'] == 'v-combine' else 'reuse_receive_slots'
+            allowed = {'v-combine': 'combine_reserve_start', 'v-slots': 'reuse_receive_slots',
+                       'v-workers': 'workers'}[comparison['comparison']]
             fixed = {name: value for name, value in configs[expected_arms[0]].items() if name != allowed}
             assert all({name: value for name, value in config.items() if name != allowed} == fixed
                        for config in configs.values()), 'unrelated configuration changes in raw evidence'
@@ -345,12 +527,40 @@ def verify(folder, *, check_git=False):
                 assert json_file(raw_files, filename) == json.loads(
                     (folder / filename).read_text(encoding='utf-8')), (filename, 'compact evidence differs from raw')
             sources = json.loads((folder / 'source_hashes.json').read_text(encoding='utf-8'))
-            verify_delivery_gate(folder, manifest, sources)
+            deployed = verify_delivery_gate(folder, manifest, sources)
             search = json.loads((folder / 'v_search_summary.json').read_text(encoding='utf-8'))
             rpc = json.loads((folder / 'rpc_summary.json').read_text(encoding='utf-8'))
             for mode in ('baseline', 'optimized'):
                 assert search['aggregate'][mode]['batches'] == rpc['aggregate'][mode]['search_rpc_count'] == 3136
                 assert search['aggregate'][mode]['paths'] == ['grouped_cagra_partial_batched_host']
+            if is_workers:
+                verify_worker_cpu_gate(folder, manifest, deployed)
+                assert 'worker_timing_summary.json' in manifest, 'actual worker/client timings must be hashed'
+                online = json_file(raw_files, 'online.json')
+                assert list(online) == expected_arms
+                for arm in expected_arms:
+                    log = unique_file(raw_files, arm + '_d.log').decode('utf-8')
+                    traced = re.findall(r'PVD Oasis trace rid=(\S+) data=(\{[^\n]+\})', log)
+                    for complete in full['requests'][arm]:
+                        records = [json.loads(data) for rid, data in traced if rid == complete['rid']]
+                        assert len(records) == 1 and records[0] == complete['trace'], 'summary callbacks differ from actual D trace'
+                        forwards = [dict(step=int(step), total_ms=float(total), wait_ms=float(wait))
+                                    for rid, step, total, wait in re.findall(
+                                        r'PVD Oasis forward rid=(\S+) step=(\d+) total_ms=([\d.]+) layer_wait_ms=([\d.]+)', log)
+                                    if rid == complete['rid']]
+                        assert forwards == complete['forward'], 'summary forward timings differ from actual D log'
+                timing = worker_timing_evidence(full, online, comparison['comparison'])
+                preserved = json.loads((folder / 'worker_timing_summary.json').read_text(encoding='utf-8'))
+                assert preserved == timing, 'preserved worker timing differs from actual raw endpoints/events'
+                for arm, rows in timing['requests'].items():
+                    worker_rows = rpc['requests'][arm]
+                    assert len(worker_rows) == len(rows)
+                    for observed, profiled in zip(rows, worker_rows):
+                        assert profiled['case'] == observed['case']
+                        assert profiled['workers'] == observed['workers']
+                        assert math.isclose(profiled['service_seconds'], observed['service_seconds'], abs_tol=1e-9)
+                        assert math.isclose(profiled['worker_window_seconds'], observed['worker_window_seconds'], abs_tol=1e-9)
+                        assert math.isclose(profiled['worker_utilization'], observed['worker_occupancy'], abs_tol=1e-9)
     return dict(passed=True, files=len(manifest), formal_requests=8, git_blobs_checked=check_git)
 
 

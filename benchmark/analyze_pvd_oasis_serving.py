@@ -7,7 +7,7 @@ import shlex
 import statistics
 
 from pvd_oasis_delivery_validation import (
-    DELIVERY_COMPARISONS, delivery_flags, validate_delivery_profiles,
+    DELIVERY_COMPARISONS, comparison_workers, delivery_flags, validate_delivery_profiles,
     validate_io_snapshot,
 )
 
@@ -24,7 +24,7 @@ if a.comparison in ('v-pack',) + DELIVERY_COMPARISONS:
     assert len(configs) == len(online), 'missing/extra comparison configs'
 if configs:
     allowed_difference = {'v-io': 'reuse_io', 'v-combine': 'combine_reserve_start',
-                          'v-slots': 'reuse_receive_slots'}.get(a.comparison, 'overlap')
+                          'v-slots': 'reuse_receive_slots', 'v-workers': 'workers'}.get(a.comparison, 'overlap')
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
     assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
                for config in configs), 'comparison has unrelated configuration differences'
@@ -45,7 +45,8 @@ if configs:
             combine, slots = delivery_flags(a.comparison, arm)
             assert config['overlap'] is True and config['reuse_io'] is False
             assert config['combine_reserve_start'] is combine and config['reuse_receive_slots'] is slots
-            assert config['workers'] == 2 and config['top_k'] == 4 and config['capacity'] == 32
+            assert config['workers'] == comparison_workers(a.comparison, arm)
+            assert config['top_k'] == 4 and config['capacity'] == 32
         declared = json.loads((root / 'comparison.json').read_text())
         assert list(online) == declared['arms'] == ['base_a', 'opt_a', 'opt_b', 'base_b']
         cases = [int(value) for value in declared['cases'].split(',')]
@@ -109,6 +110,18 @@ for arm, rows in online.items():
         forwards = record['forward']
         assert len(forwards) == row['completion_tokens'] - 1
         assert [f['step'] for f in forwards] == list(range(len(forwards)))
+        token_times = [event['seconds'] for event in row['events']]
+        assert len(token_times) == row['completion_tokens']
+        assert [event['event']['meta_info']['completion_tokens'] for event in row['events']] == list(range(1, len(token_times) + 1))
+        assert all(later >= earlier for earlier, later in zip(token_times, token_times[1:]))
+        intervals_ms = [(later - earlier) * 1000 for earlier, later in zip(token_times, token_times[1:])]
+        steady_tokens = len(forwards) - 1
+        wait_sum_ms = sum(forward['wait_ms'] for forward in forwards if forward['step'] > 0)
+        record.update(client_token_event_seconds=token_times,
+                      client_inter_token_ms=intervals_ms,
+                      client_tpot_ms=(token_times[-1] - token_times[0]) * 1000 / (len(token_times) - 1),
+                      steady_tokens=steady_tokens, steady_wait_sum_ms=wait_sum_ms,
+                      steady_wait_mean_ms_per_token=wait_sum_ms / steady_tokens)
         trace = record.get('trace')
         if trace is not None:
             assert len(trace['layers']) == (len(forwards) - 1) * 28
@@ -141,6 +154,10 @@ def median(values):
     return statistics.median(values) if values else None
 
 
+def mean(values):
+    return statistics.fmean(values) if values else None
+
+
 aggregate = {}
 for mode, rows in modes.items():
     if not rows:
@@ -153,16 +170,25 @@ for mode, rows in modes.items():
         wall_seconds=median([r['wall_seconds'] for r in rows]),
         first_event_seconds=median([r['first_event_seconds'] for r in rows]),
         stream_seconds=median([r['stream_seconds'] for r in rows]),
+        client_tpot_mean_ms=mean([r['client_tpot_ms'] for r in rows]),
+        client_tpot_median_ms=median([r['client_tpot_ms'] for r in rows]),
+        client_inter_token_median_ms=median([interval for r in rows for interval in r['client_inter_token_ms']]),
         initialization_seconds=median([r['initialization_seconds'] for r in rows]),
         first_decode_ms=median(first),
         steady_forward_ms=median([f['total_ms'] for f in forwards]),
+        steady_forward_mean_ms=mean([f['total_ms'] for f in forwards]),
         steady_layer_wait_sum_ms=median([f['wait_ms'] for f in forwards]),
+        steady_wait_mean_ms_per_token=mean([f['wait_ms'] for f in forwards]),
+        steady_request_wait_sum_ms=median([r['steady_wait_sum_ms'] for r in rows]),
+        steady_request_wait_sum_mean_ms=mean([r['steady_wait_sum_ms'] for r in rows]),
         steady_foreground_except_wait_ms=median([f['total_ms'] - f['wait_ms'] for f in forwards]),
         # First EAGLE proposal initializes Prompt cache during admission.
         steady_draft_ms=median([t for r in rows for t in r['draft_ms'][1:]]),
         layer_rpc_ms=median([t['rpc_seconds'] * 1000 for t in transport]),
         layer_queue_ms=median([t['queue_seconds'] * 1000 for t in layers]),
+        layer_queue_mean_ms=mean([t['queue_seconds'] * 1000 for t in layers]),
         layer_service_ms=median([t['service_seconds'] * 1000 for t in layers]),
+        layer_service_mean_ms=mean([t['service_seconds'] * 1000 for t in layers]),
         layer_consumer_wait_ms=median([t['consumer_wait_seconds'] * 1000 for t in layers]),
         network_sparse_bytes_per_request=median([sum(t['remote_rows'] * 512 for t in r['trace']['transport'])
             for r in rows if 'trace' in r]),
@@ -188,11 +214,16 @@ scope = {
     'v-pack': 'live overlapped paired with identical V search and per-job HTTP; Torch vs Triton sparse packing',
     'v-combine': 'live overlapped paired with identical fast V search, per-job HTTP and per-delivery registration; separate vs combined reserve/start',
     'v-slots': 'live overlapped paired with identical fast V search, per-job HTTP and separate reserve/start; per-delivery vs request-owned physical receive registrations',
+    'v-workers': 'live overlapped paired with identical fast V search, per-job HTTP, separate reserve/start and per-delivery registration; two vs four callback workers',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']
                for item in output_identity.values()), 'delivery comparison changed prompt or actual output'
 result = dict(aggregate=aggregate, output_identity=output_identity, requests=summary,
-    comparison_scope=scope)
+    comparison_scope=scope, timing_scope=dict(
+        client_tpot='per request (last token event minus first token event)/(completion_tokens-1); aggregate mean and median of request values',
+        client_inter_token_median='median of individual token-event intervals; different from median request TPOT',
+        steady_wait='step>0 only; mean per token and median of actual summed waits per request',
+        layer_means='arithmetic means of completed consumed-layer callbacks; warmups and initial-bank priming excluded'))
 (root / 'summary.json').write_text(json.dumps(result, indent=2))
 print(json.dumps(dict(aggregate=aggregate, output_identity=output_identity), indent=2))

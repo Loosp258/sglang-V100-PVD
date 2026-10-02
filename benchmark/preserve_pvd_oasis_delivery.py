@@ -19,14 +19,15 @@ import tarfile
 from pvd_oasis_delivery_validation import (
     DELIVERY_COMPARISONS, DELIVERY_TIMINGS, validate_delivery_profiles,
 )
-from verify_pvd_oasis_latency_evidence import verify
+from verify_pvd_oasis_latency_evidence import verify, worker_timing_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = (ROOT / "artifacts").resolve()
 RESULTS = (ROOT / "benchmark/results").resolve()
 RESULT_PREFIX = {"v-combine": "pvd_oasis_combined_delivery_cloudlab_",
-                 "v-slots": "pvd_oasis_receive_slots_cloudlab_"}
+                 "v-slots": "pvd_oasis_receive_slots_cloudlab_",
+                 "v-workers": "pvd_oasis_workers_cloudlab_"}
 
 
 def project_path(value, parent, *, exists=True):
@@ -134,6 +135,24 @@ def gate_counts(gate):
     return result
 
 
+def worker_cpu_counts(directory, gate):
+    assert read_json(directory / "status.json") == {"exit_code": 0}
+    text = (directory / "unit.txt").read_text(encoding="utf-8")
+    summaries = [line for line in text.splitlines()
+                 if re.search(r"\d+ passed", line) and re.search(r"in [\d.]+s", line)]
+    assert len(summaries) == 1
+    line = summaries[0]
+    counts = {kind: int(number) for number, kind in re.findall(
+        r"(\d+) (passed|failed|skipped|errors?|warnings?)", line)}
+    assert counts == {"passed": 48, "warning": 1}
+    hashes = read_json(directory / "source_hashes.json")
+    deployed = read_json(gate / "local_source_hashes.json")
+    assert len(hashes) == 9 and all(deployed.get(name) == digest for name, digest in hashes.items())
+    return dict(exit_code=0, counts=counts, exact_summary=line,
+        record_file="worker_cpu_gate.tar.gz:" + directory.name + "/unit.txt",
+        source_files_match_deployment=len(hashes), scope=read_json(directory / "scope.json"))
+
+
 def delivery_stages(summary):
     output = {}
     for mode in ("baseline", "optimized"):
@@ -158,14 +177,18 @@ def delivery_stages(summary):
     return output
 
 
-def report_text(directory, summary, stages, counts, proof, failure_note):
+def report_text(directory, summary, stages, counts, proof, failure_note,
+                worker_timings=None, worker_cpu=None):
     comparison = read_json(directory / "comparison.json")
     rpc = read_json(directory / "rpc_summary.json")["aggregate"]
     search = read_json(directory / "v_search_summary.json")["aggregate"]
     aggregate = summary["aggregate"]
-    title = "合并 reserve＋start" if comparison["comparison"] == "v-combine" else "复用接收区物理注册"
-    baseline_label = "独立 reserve/start" if comparison["comparison"] == "v-combine" else "每次交付注册"
-    optimized_label = "合并 reserve/start" if comparison["comparison"] == "v-combine" else "请求内复用 slots"
+    kind = comparison["comparison"]
+    title, baseline_label, optimized_label = {
+        "v-combine": ("合并 reserve＋start", "独立 reserve/start", "合并 reserve/start"),
+        "v-slots": ("复用接收区物理注册", "每次交付注册", "请求内复用 slots"),
+        "v-workers": ("预取 workers 2→4", "workers=2", "workers=4"),
+    }[kind]
     baseline, optimized = aggregate["baseline"], aggregate["optimized"]
     started = first_formal_time(directory)
     def change(old, new):
@@ -175,12 +198,15 @@ def report_text(directory, summary, stages, counts, proof, failure_note):
         "## 结果", "",
         f"客户端完成中位数 **{baseline['wall_seconds']:.3f}→{optimized['wall_seconds']:.3f} s（{change(baseline['wall_seconds'], optimized['wall_seconds']):+.2f}%）**；",
         f"每请求后续Decode累计 KV 等待 **{baseline['steady_request_wait_sum_ms']:.3f}→{optimized['steady_request_wait_sum_ms']:.3f} ms**。",
-        "每模式四个正式请求、只覆盖两个Prompt；3136个层/rank profile不视作独立请求样本。两个独立优化的结果不能相加。新选项仍默认关闭。", "", "## 公平性", "",
+        ("每模式四个正式请求、只覆盖两个Prompt；3136个层/rank profile不视作独立请求样本。本实验与之前的合并RPC、接收注册复用实验不能叠加计算收益；默认workers仍为2。" if kind == "v-workers"
+         else "每模式四个正式请求、只覆盖两个Prompt；3136个层/rank profile不视作独立请求样本。两个独立优化的结果不能相加。新选项仍默认关闭。"), "", "## 公平性", "",
         "base_a→opt_a→opt_b→base_b，各臂重启全角色，排除相同两次 warmup；两个2159-token Prompt、16输出token、greedy/ignore_eos。",
-        "四合一快图、degree16、prefix2048＋tail111、itopk2048、Top4、capacity32、max_new16、workers2保持一致。",
+        ("四合一快图、degree16、prefix2048＋tail111、itopk2048、Top4、capacity32、max_new16保持一致；唯一变量为每请求预取workers=2/4。" if kind == "v-workers"
+         else "四合一快图、degree16、prefix2048＋tail111、itopk2048、Top4、capacity32、max_new16、workers2保持一致。"),
         "V固定 pool/host candidates/GPU finite-Q proof；Triton打包关闭；D显式 reuse_io=false。初始KV仍图门后P→V→D，private Prompt seed计入客户端。",
-        ("唯一变量为D combine_reserve_start；所有臂 reuse_receive_slots=false。" if comparison["comparison"] == "v-combine"
-         else "唯一变量为D reuse_receive_slots；所有臂 combine_reserve_start=false。"),
+        {"v-combine": "唯一变量为D combine_reserve_start；所有臂 reuse_receive_slots=false。",
+         "v-slots": "唯一变量为D reuse_receive_slots；所有臂 combine_reserve_start=false。",
+         "v-workers": "所有臂 combine_reserve_start=false、reuse_receive_slots=false、reuse_io=false；原生serving实现相同，增加worker无需改动交付协议。"}[kind],
         "八次Prompt、实际输出ID和文本一致，cached_tokens=0；每请求420jobs/840搜索RPC，每模式3136稳态查询profile，均2items/14Qrows。",
         f"部署 bundle 中{proof['deployed_files']}个文件的实际哈希与V/D serving source gate一致；源码身份使用记录的部署包，没有读取后来编辑的工作树。",
         "所有接收写入保留完整身份、精确native终态字节证明、安装后ACK及UNKNOWN保留；最终 owned={}、cleanup_errors=[]、六张GPU归零。", "",
@@ -200,6 +226,32 @@ def report_text(directory, summary, stages, counts, proof, failure_note):
         lines.append(f"| {label} | {old:.3f} {unit} | {new:.3f} {unit} | {change(old,new):+.2f}% |")
     lines += ["", "每请求累计等待先对该请求step>0的各次forward等待求和，再对每模式四个正式请求取中位数；",
               "每步逐层等待和另按forward取中位数。两者范围不同，不能将每步约数百毫秒当作整个请求的累计等待。"]
+    if worker_timings is not None:
+        timing = worker_timings["aggregate"]
+        lines += ["", "## 实际 token 间隔与后台任务容量", "",
+            "客户端TPOT按每请求实际16个token事件的(last-first)/15计算，排除TTFT；每模式4请求，共60个输出间隔。",
+            "首token来自P Prefill；首个D forward使用已初始化bank，KV等待为零。另报告其后14个间隔，避免短Decode的首步降低均值。",
+            "后续KV等待按step>0累计等待/56计算算术平均；以下请求TPOT中位数、单步等待中位数与算术平均分别标明。", "",
+            "| 指标 | workers=2 | workers=4 | 相对变化 |", "|---|---:|---:|---:|"]
+        for label, field in (
+            ("客户端TPOT算术平均", "client_tpot_mean_ms"),
+            ("客户端TPOT请求中位数", "client_tpot_request_median_ms"),
+            ("后续14间隔TPOT算术平均", "steady_client_tpot_mean_ms"),
+            ("后续14间隔TPOT请求中位数", "steady_client_tpot_request_median_ms"),
+            ("后续每token KV等待算术平均", "kv_wait_mean_ms"),
+            ("后续每token KV等待单步中位数", "kv_wait_step_median_ms"),
+            ("层任务service算术平均", "mean_service_ms"),
+            ("层任务queue算术平均", "mean_queue_ms"),
+            ("实际service总和/workers/56", "work_window_ms_per_token")):
+            old, new = timing["baseline"][field], timing["optimized"][field]
+            lines.append(f"| {label} | {old:.3f} ms | {new:.3f} ms | {change(old,new):+.2f}% |")
+        old, new = timing["baseline"], timing["optimized"]
+        lines += ["", f"实际callback峰值并发：baseline {old['executor_peaks']}，optimized {new['executor_peaks']}；每请求392个已消费任务，每模式1568个。",
+            f"按实际start/ready时间戳重建的worker占用率为{old['worker_occupancy']*100:.3f}%/{new['worker_occupancy']*100:.3f}%；",
+            f"消费者需要前已经READY的比例为{old['ready_before_consume_fraction']*100:.3f}%/{new['ready_before_consume_fraction']*100:.3f}%。",
+            "占用率=sum(service)/(workers×已消费callback时间窗)，包含RPC阻塞，不能解释成CPU或GPU利用率。",
+            "service总和/workers/56仅描述本次观察到的任务容量，未假定增加并发后service保持不变，也不是端到端时延下限或未来加速预测。",
+            "客户端事件、28层等待、worker callback与V单rank查询包含不同范围；独立中位数不能相加解释客户端TPOT。"]
     lines += ["", "## 实际交付子阶段与调用", "",
         "以下时间为已完成的稳态missing-rank交付，排除初始28层bank priming；注册池首次注册仍计入客户端初始化。",
         "控制提交时间先对每次交付的reserve/start/combined求和，再计算中位数。各阶段独立中位数不能相加重建请求。", "",
@@ -231,12 +283,15 @@ def report_text(directory, summary, stages, counts, proof, failure_note):
         lines.append(f"原生本地Mooncake gate通过{counts['native']['exact_byte_cases']}个精确字节案例，两个执行器复用四个物理MR并安全注销；本地session gate与线上跨节点RDMA对照是独立观测。")
     if "records_unit" in counts:
         lines.append(f"接收record集成重复gate：`{counts['records_unit']['exact_summary']}`；这九项已包含在完整CPU gate中，不相加为新的独立测试。")
+    if worker_cpu is not None:
+        lines.append(f"worker资格/生命周期CPU复核：`{worker_cpu['exact_summary']}`；9个相关serving文件LF哈希与冻结部署包一致，完整证据保存在worker_cpu_gate.tar.gz。")
+        lines.append("这48项是已有CPU测试的重复复核，不与共享512项CPU gate或48个原生字节案例相加为新的独立测试数；它不证明原生四worker故障场景。线上callback实际并发另由start/ready时间戳验证。")
     lines += ["单元异常测试采用CPU policy double；没有注入真实RDMA/CUDA故障。长Decode、多请求并发、TP2、更多Prompt质量与服务显存峰值仍开放。",
         "客户端完成与最终安全退休分别验证；本次子阶段profile不能单独证明整个流水线的重叠收益。", "", "## 证据与复现", "",
         "同名目录保存完整raw.tar.gz、gate.tar.gz、紧凑summary/实际IO计数、V/RPC分解、部署来源、GPU归零与LF便携manifest。"]
     if failure_note:
         lines.append("前置失败尝试另存failed_prelaunch.tar.gz：" + failure_note)
-    tag = "fresh_combine" if comparison["comparison"] == "v-combine" else "fresh_slots"
+    tag = {"v-combine": "fresh_combine", "v-slots": "fresh_slots", "v-workers": "fresh_workers"}[kind]
     lines += ["", "```text",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/run_pvd_oasis_serving_cloudlab.py --tag {tag} --comparison {comparison['comparison']} --arms base_a,opt_a,opt_b,base_b --cases 99401,99402 --tokens 16",
         f"wsl -d Ubuntu -- python3 /mnt/d/code/sglang-V100-PVD-oasiskv/benchmark/analyze_pvd_oasis_serving.py /mnt/d/code/sglang-V100-PVD-oasiskv/artifacts/{tag} --comparison {comparison['comparison']}",
@@ -250,6 +305,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--gate", type=Path, required=True)
+    parser.add_argument("--worker-cpu-gate", type=Path,
+                        help="required existing CPU lifecycle recheck for v-workers")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--failed-prelaunch", type=Path)
     parser.add_argument("--failure-note", default="前置尝试未产生正式请求，未纳入计时。")
@@ -260,6 +317,8 @@ def main():
     assert not output.exists(), "fresh result destination required"
     comparison = read_json(directory / "comparison.json")
     assert comparison["comparison"] in DELIVERY_COMPARISONS
+    assert (args.worker_cpu_gate is not None) is (comparison["comparison"] == "v-workers")
+    worker_cpu_gate = project_path(args.worker_cpu_gate, ARTIFACTS) if args.worker_cpu_gate else None
     assert re.fullmatch(RESULT_PREFIX[comparison["comparison"]] + r"\d{8}", output.name)
     assert output.name.endswith(first_formal_time(directory).strftime("%Y%m%d")), "result filename must match the first formal request date in UTC+8"
     summary = read_json(directory / "summary.json")
@@ -267,6 +326,7 @@ def main():
     assert read_json(directory / "owned.json") == {} and read_json(directory / "cleanup_errors.json") == []
     assert_gpu_empty(read_json(directory / "final_gpu_memory.json"))
     proof, counts = deployment_proof(directory, gate), gate_counts(gate)
+    worker_cpu = worker_cpu_counts(worker_cpu_gate, gate) if worker_cpu_gate else None
     for arm, rows in summary["requests"].items():
         assert len(rows) == 2
         for row in rows:
@@ -277,6 +337,8 @@ def main():
             row["steady_wait_sum_ms"] for arm, rows in summary["requests"].items()
             if arm.startswith("opt") is (mode == "optimized") for row in rows)
     stages = delivery_stages(summary)
+    worker_timings = (worker_timing_evidence(summary, read_json(directory / "online.json"), comparison["comparison"])
+                      if comparison["comparison"] == "v-workers" else None)
     failed = project_path(args.failed_prelaunch, ARTIFACTS) if args.failed_prelaunch else None
     if failed is not None:
         assert not (failed / "online.json").exists() or read_json(failed / "online.json") == {}, "prelaunch archive contains measured requests"
@@ -286,6 +348,9 @@ def main():
     # Do not rewrite complete raw inputs; preserve their existing observed bytes.
     archive_directory(directory, output / "raw.tar.gz")
     archive_directory(gate, output / "gate.tar.gz")
+    if worker_cpu_gate is not None:
+        archive_directory(worker_cpu_gate, output / "worker_cpu_gate.tar.gz")
+        write_json(output / "worker_cpu_gate_record.json", worker_cpu)
     if failed is not None:
         archive_directory(failed, output / "failed_prelaunch.tar.gz")
         write_json(output / "failed_prelaunch.json", dict(directory=failed.relative_to(ROOT).as_posix(),
@@ -296,6 +361,8 @@ def main():
     write_json(output / "implementation.json", proof)
     write_json(output / "gate_count_record.json", counts)
     write_json(output / "delivery_stage_summary.json", stages)
+    if worker_timings is not None:
+        write_json(output / "worker_timing_summary.json", worker_timings)
     compact = copy.deepcopy(summary)
     for rows in compact["requests"].values():
         for row in rows:
@@ -317,7 +384,7 @@ def main():
     checked = verify(output)
     if args.report:
         report_path.write_text(report_text(directory, summary, stages, counts, proof,
-                                          args.failure_note if failed is not None else None),
+                                          args.failure_note if failed is not None else None, worker_timings, worker_cpu),
                                encoding="utf-8", newline="\n")
     print(json.dumps(dict(output=output.relative_to(ROOT).as_posix(), verification=checked,
                          report=report_path.relative_to(ROOT).as_posix() if args.report else None), ensure_ascii=False))
