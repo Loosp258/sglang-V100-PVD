@@ -619,3 +619,12 @@ and fences. No online gain inferred. b61c671a4 also retains index lease after
 metadata UNKNOWN despite later successful sync; CPU policy faultgate passes.
 See benchmark/results/pvd_oasis_v_sparse_pack_native_cloudlab_20261002.md.
 Live single-knob ABBA oasis_v_sparse_pack_abba01 running with I/O reuse false.
+
+V sparse-pack live single-knob ABBA oasis_v_sparse_pack_abba01 completed.
+Client10.0111->10.6680s (+6.56%), cumulative KVwait
+415.997->463.596ms. Actualbothrank
+kernels and15 V sourcehashes proved; all8 outputs match, no retries/fallback,
+420jobs and840RPC perrequest with fixed reuse_io=false. Ownedservices drained
+and6GPUs0MiB. Default off; no magnitude reduction proved or cross-run gains
+added. Fullraw/native/runtimehealth evidence preserved in
+benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.

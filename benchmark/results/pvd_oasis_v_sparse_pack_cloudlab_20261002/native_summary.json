@@ -1,0 +1,2037 @@
+{
+  "kind": "synthetic-real-shape-byte-gate-and-microbenchmark",
+  "torch_version": "2.9.1+cu128",
+  "triton_version": "3.5.1",
+  "warmup_per_block": 2,
+  "measured_repeats_per_block": 10,
+  "order": [
+    "torch",
+    "triton",
+    "triton",
+    "torch"
+  ],
+  "shape": {
+    "layers": 28,
+    "heads_per_rank": 2,
+    "head_dim": 128,
+    "dtype": "torch.float16",
+    "valid_tokens": 2159,
+    "page_sizes": [
+      1,
+      2
+    ]
+  },
+  "timing_scope": "Preallocated source/staging; includes validation, fresh Triton metadata allocation/upload/release, copy, two device fences. Excludes source/staging allocation, event creation, registration, RDMA. CUDA event span includes host pacing; not pure kernel time.",
+  "memory_scope": "Torch allocator counters only; reserved cache is not live ownership and is not refunded physical GPU memory. Source represents an already-owned Entry; only staging and metadata use TransferBudget here.",
+  "limits": [
+    "synthetic bytes, not actual model KV or retrieval-quality evidence",
+    "requires idle devices; no concurrent serving-load measurement",
+    "not CAGRA, RDMA, cancellation/unknown-fault, online latency or physical process peak validation",
+    "28x32 groups are capacity/boundary coverage, not the typical steady max_new16 payload",
+    "1x3/4x4 are specified small-payload probes, not an observed live payload distribution",
+    "two-fence policy retained; no stream/event serving optimization"
+  ],
+  "status": "passed",
+  "devices": [
+    {
+      "rank": 0,
+      "device": "cuda:0",
+      "caller_device": 1,
+      "device_name": "Tesla V100S-PCIE-32GB",
+      "capability": [
+        7,
+        0
+      ],
+      "shape": {
+        "layers": 28,
+        "heads_per_rank": 2,
+        "head_dim": 128,
+        "dtype": "torch.float16",
+        "valid_tokens": 2159,
+        "page_size": 1,
+        "padded_rows": 2159
+      },
+      "fixture_scope": "current-launcher-page1-shape",
+      "source_bytes": 61902848,
+      "padded_rows": 2159,
+      "byte_gate": {
+        "equal_bytes": true,
+        "compared_bytes": 32768,
+        "groups": [
+          {
+            "layer": 0,
+            "global_head": 0,
+            "count": 1,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 0,
+            "global_head": 1,
+            "count": 3,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 0,
+            "count": 28,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 1,
+            "count": 32,
+            "contains_last_valid": true
+          }
+        ],
+        "metadata_bytes": 672,
+        "invalid_token_rejections": [
+          {
+            "mode": "torch",
+            "group": 0,
+            "token": 2159,
+            "reason": "out_of_range"
+          },
+          {
+            "mode": "triton",
+            "group": 0,
+            "token": 2159,
+            "reason": "out_of_range"
+          },
+          {
+            "mode": "torch",
+            "group": 3,
+            "token": 2159,
+            "reason": "out_of_range"
+          },
+          {
+            "mode": "triton",
+            "group": 3,
+            "token": 2159,
+            "reason": "out_of_range"
+          }
+        ],
+        "final_used_staging_bytes": 0
+      },
+      "byte_gate_memory": {
+        "allocated_bytes": 62914560,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 63014400,
+        "peak_reserved_bytes": 65011712
+      },
+      "memory_before": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 0,
+        "peak_allocated_bytes": 0,
+        "peak_reserved_bytes": 0
+      },
+      "memory_after": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 62945280,
+        "peak_reserved_bytes": 65011712
+      },
+      "retained_allocator_cache_bytes": 65011712,
+      "benchmark": [
+        {
+          "name": "layer0_1x3",
+          "token_counts": [
+            1,
+            3
+          ],
+          "staging_bytes": 2048,
+          "metadata_bytes": 112,
+          "budget_limit_bytes": 2160,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.769783,
+                "p95": 0.807158,
+                "minimum": 0.743158,
+                "maximum": 0.80757,
+                "observations": [
+                  0.765831,
+                  0.80757,
+                  0.766983,
+                  0.773165,
+                  0.757836,
+                  0.796899,
+                  0.752155,
+                  0.754579,
+                  0.774487,
+                  0.757134,
+                  0.763967,
+                  0.776461,
+                  0.772583,
+                  0.791029,
+                  0.760762,
+                  0.80288,
+                  0.775489,
+                  0.743158,
+                  0.750943,
+                  0.807158
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.753152,
+                "p95": 0.791552,
+                "minimum": 0.72704,
+                "maximum": 0.791552,
+                "observations": [
+                  0.748544,
+                  0.791552,
+                  0.750592,
+                  0.756736,
+                  0.741408,
+                  0.779264,
+                  0.73728,
+                  0.738304,
+                  0.756736,
+                  0.739328,
+                  0.74752,
+                  0.758784,
+                  0.755712,
+                  0.775168,
+                  0.744448,
+                  0.787456,
+                  0.75776,
+                  0.72704,
+                  0.735232,
+                  0.791552
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.1852045,
+                "p95": 1.258037,
+                "minimum": 1.165222,
+                "maximum": 1.342436,
+                "observations": [
+                  1.186502,
+                  1.342436,
+                  1.183907,
+                  1.175742,
+                  1.223532,
+                  1.177054,
+                  1.221759,
+                  1.172666,
+                  1.183456,
+                  1.179278,
+                  1.230234,
+                  1.220386,
+                  1.172937,
+                  1.258037,
+                  1.178658,
+                  1.223942,
+                  1.207783,
+                  1.172837,
+                  1.249611,
+                  1.165222
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.168912,
+                "p95": 1.23904,
+                "minimum": 1.148928,
+                "maximum": 1.326112,
+                "observations": [
+                  1.170432,
+                  1.326112,
+                  1.16736,
+                  1.159168,
+                  1.206272,
+                  1.161216,
+                  1.205248,
+                  1.15712,
+                  1.167392,
+                  1.16224,
+                  1.212416,
+                  1.204224,
+                  1.15712,
+                  1.23904,
+                  1.153024,
+                  1.207296,
+                  1.191904,
+                  1.154048,
+                  1.231872,
+                  1.148928
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer14_4x4",
+          "token_counts": [
+            4,
+            4
+          ],
+          "staging_bytes": 4096,
+          "metadata_bytes": 144,
+          "budget_limit_bytes": 4240,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.8974635,
+                "p95": 0.932775,
+                "minimum": 0.871058,
+                "maximum": 0.939307,
+                "observations": [
+                  0.917095,
+                  0.881729,
+                  0.920843,
+                  0.909341,
+                  0.880236,
+                  0.932775,
+                  0.919099,
+                  0.924058,
+                  0.879405,
+                  0.939307,
+                  0.885586,
+                  0.871058,
+                  0.874996,
+                  0.877671,
+                  0.877251,
+                  0.926483,
+                  0.875747,
+                  0.922676,
+                  0.922906,
+                  0.883112
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.880128,
+                "p95": 0.915456,
+                "minimum": 0.856064,
+                "maximum": 0.923648,
+                "observations": [
+                  0.90112,
+                  0.866304,
+                  0.902144,
+                  0.89088,
+                  0.863232,
+                  0.915456,
+                  0.903168,
+                  0.907232,
+                  0.864256,
+                  0.923648,
+                  0.869376,
+                  0.856064,
+                  0.86016,
+                  0.862208,
+                  0.862208,
+                  0.91136,
+                  0.861184,
+                  0.907264,
+                  0.907264,
+                  0.867328
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.201055,
+                "p95": 1.214105,
+                "minimum": 1.150694,
+                "maximum": 1.224543,
+                "observations": [
+                  1.205749,
+                  1.214105,
+                  1.207822,
+                  1.154693,
+                  1.197613,
+                  1.203414,
+                  1.166495,
+                  1.205958,
+                  1.159141,
+                  1.204536,
+                  1.199968,
+                  1.204055,
+                  1.197593,
+                  1.159662,
+                  1.202142,
+                  1.199186,
+                  1.224543,
+                  1.164941,
+                  1.150694,
+                  1.204066
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.184768,
+                "p95": 1.19808,
+                "minimum": 1.134592,
+                "maximum": 1.20832,
+                "observations": [
+                  1.190912,
+                  1.19808,
+                  1.191936,
+                  1.137664,
+                  1.180672,
+                  1.186816,
+                  1.149952,
+                  1.189888,
+                  1.143808,
+                  1.18784,
+                  1.183744,
+                  1.186816,
+                  1.181696,
+                  1.143808,
+                  1.185792,
+                  1.183744,
+                  1.20832,
+                  1.148928,
+                  1.134592,
+                  1.18784
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer27_28x32",
+          "token_counts": [
+            28,
+            32
+          ],
+          "staging_bytes": 30720,
+          "metadata_bytes": 560,
+          "budget_limit_bytes": 31280,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 2.6873055,
+                "p95": 2.72175,
+                "minimum": 2.622404,
+                "maximum": 3.609721,
+                "observations": [
+                  3.609721,
+                  2.706622,
+                  2.66829,
+                  2.717563,
+                  2.682797,
+                  2.651368,
+                  2.695562,
+                  2.72175,
+                  2.711671,
+                  2.709788,
+                  2.662089,
+                  2.624839,
+                  2.654775,
+                  2.622404,
+                  2.678349,
+                  2.691814,
+                  2.718555,
+                  2.664052,
+                  2.661828,
+                  2.711932
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 2.67008,
+                "p95": 2.705408,
+                "minimum": 2.60608,
+                "maximum": 3.588096,
+                "observations": [
+                  3.588096,
+                  2.688,
+                  2.651136,
+                  2.701312,
+                  2.666496,
+                  2.633728,
+                  2.678784,
+                  2.705408,
+                  2.695168,
+                  2.694144,
+                  2.646016,
+                  2.607104,
+                  2.637824,
+                  2.60608,
+                  2.659328,
+                  2.673664,
+                  2.702336,
+                  2.644992,
+                  2.644992,
+                  2.695168
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.238555,
+                "p95": 1.272624,
+                "minimum": 1.189648,
+                "maximum": 1.2916,
+                "observations": [
+                  1.256034,
+                  1.247568,
+                  1.191372,
+                  1.245854,
+                  1.239873,
+                  1.239381,
+                  1.235795,
+                  1.209576,
+                  1.2916,
+                  1.193886,
+                  1.272624,
+                  1.244903,
+                  1.237729,
+                  1.244651,
+                  1.189648,
+                  1.242618,
+                  1.191582,
+                  1.22293,
+                  1.196341,
+                  1.228442
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.221632,
+                "p95": 1.256448,
+                "minimum": 1.173504,
+                "maximum": 1.273856,
+                "observations": [
+                  1.238016,
+                  1.229824,
+                  1.174528,
+                  1.2288,
+                  1.221632,
+                  1.222656,
+                  1.219584,
+                  1.191936,
+                  1.273856,
+                  1.1776,
+                  1.256448,
+                  1.227776,
+                  1.221632,
+                  1.227776,
+                  1.173504,
+                  1.225728,
+                  1.175552,
+                  1.206272,
+                  1.179648,
+                  1.211392
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        }
+      ]
+    },
+    {
+      "rank": 1,
+      "device": "cuda:1",
+      "caller_device": 0,
+      "device_name": "Tesla V100S-PCIE-32GB",
+      "capability": [
+        7,
+        0
+      ],
+      "shape": {
+        "layers": 28,
+        "heads_per_rank": 2,
+        "head_dim": 128,
+        "dtype": "torch.float16",
+        "valid_tokens": 2159,
+        "page_size": 1,
+        "padded_rows": 2159
+      },
+      "fixture_scope": "current-launcher-page1-shape",
+      "source_bytes": 61902848,
+      "padded_rows": 2159,
+      "byte_gate": {
+        "equal_bytes": true,
+        "compared_bytes": 32768,
+        "groups": [
+          {
+            "layer": 0,
+            "global_head": 2,
+            "count": 1,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 0,
+            "global_head": 3,
+            "count": 3,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 2,
+            "count": 28,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 3,
+            "count": 32,
+            "contains_last_valid": true
+          }
+        ],
+        "metadata_bytes": 672,
+        "invalid_token_rejections": [
+          {
+            "mode": "torch",
+            "group": 0,
+            "token": 2159,
+            "reason": "out_of_range"
+          },
+          {
+            "mode": "triton",
+            "group": 0,
+            "token": 2159,
+            "reason": "out_of_range"
+          },
+          {
+            "mode": "torch",
+            "group": 3,
+            "token": 2159,
+            "reason": "out_of_range"
+          },
+          {
+            "mode": "triton",
+            "group": 3,
+            "token": 2159,
+            "reason": "out_of_range"
+          }
+        ],
+        "final_used_staging_bytes": 0
+      },
+      "byte_gate_memory": {
+        "allocated_bytes": 62914560,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 63014400,
+        "peak_reserved_bytes": 65011712
+      },
+      "memory_before": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 0,
+        "peak_allocated_bytes": 0,
+        "peak_reserved_bytes": 0
+      },
+      "memory_after": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 62945280,
+        "peak_reserved_bytes": 65011712
+      },
+      "retained_allocator_cache_bytes": 65011712,
+      "benchmark": [
+        {
+          "name": "layer0_1x3",
+          "token_counts": [
+            1,
+            3
+          ],
+          "staging_bytes": 2048,
+          "metadata_bytes": 112,
+          "budget_limit_bytes": 2160,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.766983,
+                "p95": 0.7919,
+                "minimum": 0.730214,
+                "maximum": 0.804744,
+                "observations": [
+                  0.786299,
+                  0.751353,
+                  0.771491,
+                  0.730214,
+                  0.7919,
+                  0.762475,
+                  0.745413,
+                  0.730795,
+                  0.804744,
+                  0.774698,
+                  0.783504,
+                  0.739452,
+                  0.741996,
+                  0.791479,
+                  0.781069,
+                  0.736646,
+                  0.742546,
+                  0.774948,
+                  0.772242,
+                  0.745402
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.75008,
+                "p95": 0.777184,
+                "minimum": 0.714752,
+                "maximum": 0.78848,
+                "observations": [
+                  0.769056,
+                  0.734208,
+                  0.754656,
+                  0.714752,
+                  0.77616,
+                  0.745504,
+                  0.72912,
+                  0.715776,
+                  0.78848,
+                  0.759776,
+                  0.768032,
+                  0.723968,
+                  0.725984,
+                  0.777184,
+                  0.76592,
+                  0.720928,
+                  0.72704,
+                  0.758752,
+                  0.757728,
+                  0.730112
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.1970269999999998,
+                "p95": 1.210067,
+                "minimum": 1.146277,
+                "maximum": 1.229273,
+                "observations": [
+                  1.147399,
+                  1.161085,
+                  1.196351,
+                  1.207983,
+                  1.203154,
+                  1.154131,
+                  1.229273,
+                  1.204216,
+                  1.210067,
+                  1.188576,
+                  1.149803,
+                  1.206219,
+                  1.197703,
+                  1.203394,
+                  1.188566,
+                  1.149553,
+                  1.199937,
+                  1.193806,
+                  1.146277,
+                  1.202102
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.1812,
+                "p95": 1.19504,
+                "minimum": 1.130528,
+                "maximum": 1.21552,
+                "observations": [
+                  1.132576,
+                  1.146848,
+                  1.180704,
+                  1.19296,
+                  1.18784,
+                  1.138656,
+                  1.21552,
+                  1.189856,
+                  1.19504,
+                  1.17248,
+                  1.134592,
+                  1.190912,
+                  1.181696,
+                  1.188864,
+                  1.172512,
+                  1.1336,
+                  1.184768,
+                  1.177632,
+                  1.130528,
+                  1.187872
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer14_4x4",
+          "token_counts": [
+            4,
+            4
+          ],
+          "staging_bytes": 4096,
+          "metadata_bytes": 144,
+          "budget_limit_bytes": 4240,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.8854614999999999,
+                "p95": 0.925601,
+                "minimum": 0.869025,
+                "maximum": 0.926614,
+                "observations": [
+                  0.869025,
+                  0.913509,
+                  0.917746,
+                  0.877371,
+                  0.875107,
+                  0.878773,
+                  0.884805,
+                  0.888422,
+                  0.919169,
+                  0.92509,
+                  0.883602,
+                  0.919159,
+                  0.926614,
+                  0.88251,
+                  0.886118,
+                  0.922335,
+                  0.882981,
+                  0.884154,
+                  0.925601,
+                  0.882781
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.869904,
+                "p95": 0.908256,
+                "minimum": 0.854048,
+                "maximum": 0.911328,
+                "observations": [
+                  0.854048,
+                  0.897056,
+                  0.903168,
+                  0.86224,
+                  0.859168,
+                  0.863232,
+                  0.869376,
+                  0.87248,
+                  0.902112,
+                  0.908256,
+                  0.868352,
+                  0.903168,
+                  0.911328,
+                  0.867328,
+                  0.870432,
+                  0.90624,
+                  0.868384,
+                  0.868352,
+                  0.908256,
+                  0.866336
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.205368,
+                "p95": 1.239142,
+                "minimum": 1.155885,
+                "maximum": 2.538606,
+                "observations": [
+                  1.16973,
+                  1.206049,
+                  1.220326,
+                  1.155885,
+                  2.538606,
+                  1.239142,
+                  1.226588,
+                  1.216819,
+                  1.209927,
+                  1.181352,
+                  1.183316,
+                  1.204687,
+                  1.200859,
+                  1.209395,
+                  1.163409,
+                  1.172966,
+                  1.209716,
+                  1.163639,
+                  1.226177,
+                  1.161365
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.1888800000000002,
+                "p95": 1.222656,
+                "minimum": 1.13872,
+                "maximum": 2.522144,
+                "observations": [
+                  1.151968,
+                  1.189888,
+                  1.204192,
+                  1.13872,
+                  2.522144,
+                  1.222656,
+                  1.209312,
+                  1.20016,
+                  1.193984,
+                  1.165312,
+                  1.166368,
+                  1.187872,
+                  1.182752,
+                  1.190912,
+                  1.147904,
+                  1.156096,
+                  1.193984,
+                  1.147904,
+                  1.209312,
+                  1.145888
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer27_28x32",
+          "token_counts": [
+            28,
+            32
+          ],
+          "staging_bytes": 30720,
+          "metadata_bytes": 560,
+          "budget_limit_bytes": 31280,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 2.6657355000000003,
+                "p95": 2.710269,
+                "minimum": 2.601945,
+                "maximum": 2.716931,
+                "observations": [
+                  2.643754,
+                  2.677678,
+                  2.601945,
+                  2.629206,
+                  2.636851,
+                  2.665345,
+                  2.682016,
+                  2.633976,
+                  2.671105,
+                  2.666126,
+                  2.657861,
+                  2.706802,
+                  2.610943,
+                  2.710269,
+                  2.716931,
+                  2.649856,
+                  2.706953,
+                  2.691875,
+                  2.707173,
+                  2.604721
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 2.650096,
+                "p95": 2.694144,
+                "minimum": 2.586624,
+                "maximum": 2.701344,
+                "observations": [
+                  2.627552,
+                  2.662368,
+                  2.586624,
+                  2.613248,
+                  2.62144,
+                  2.649088,
+                  2.66448,
+                  2.617344,
+                  2.656288,
+                  2.651104,
+                  2.641888,
+                  2.69104,
+                  2.594816,
+                  2.694144,
+                  2.701344,
+                  2.632672,
+                  2.69008,
+                  2.675744,
+                  2.691072,
+                  2.588672
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.2319624999999998,
+                "p95": 1.27589,
+                "minimum": 1.184538,
+                "maximum": 1.289977,
+                "observations": [
+                  1.23338,
+                  1.234282,
+                  1.21216,
+                  1.225676,
+                  1.194758,
+                  1.192283,
+                  1.230545,
+                  1.184538,
+                  1.265631,
+                  1.199537,
+                  1.221609,
+                  1.268417,
+                  1.258498,
+                  1.27589,
+                  1.25447,
+                  1.203614,
+                  1.289977,
+                  1.21167,
+                  1.251715,
+                  1.237999
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.2165279999999998,
+                "p95": 1.259552,
+                "minimum": 1.168352,
+                "maximum": 1.271808,
+                "observations": [
+                  1.217536,
+                  1.21856,
+                  1.195008,
+                  1.209344,
+                  1.178624,
+                  1.176576,
+                  1.21552,
+                  1.168352,
+                  1.247232,
+                  1.183744,
+                  1.206272,
+                  1.252352,
+                  1.242112,
+                  1.259552,
+                  1.23904,
+                  1.18784,
+                  1.271808,
+                  1.194976,
+                  1.234944,
+                  1.222656
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        }
+      ]
+    },
+    {
+      "rank": 0,
+      "device": "cuda:0",
+      "caller_device": 1,
+      "device_name": "Tesla V100S-PCIE-32GB",
+      "capability": [
+        7,
+        0
+      ],
+      "shape": {
+        "layers": 28,
+        "heads_per_rank": 2,
+        "head_dim": 128,
+        "dtype": "torch.float16",
+        "valid_tokens": 2159,
+        "page_size": 2,
+        "padded_rows": 2160
+      },
+      "fixture_scope": "additional-page2-partial-page-shape",
+      "source_bytes": 61931520,
+      "padded_rows": 2160,
+      "byte_gate": {
+        "equal_bytes": true,
+        "compared_bytes": 32768,
+        "groups": [
+          {
+            "layer": 0,
+            "global_head": 0,
+            "count": 1,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 0,
+            "global_head": 1,
+            "count": 3,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 0,
+            "count": 28,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 1,
+            "count": 32,
+            "contains_last_valid": true
+          }
+        ],
+        "metadata_bytes": 672,
+        "invalid_token_rejections": [
+          {
+            "mode": "torch",
+            "group": 0,
+            "token": 2159,
+            "reason": "padding"
+          },
+          {
+            "mode": "triton",
+            "group": 0,
+            "token": 2159,
+            "reason": "padding"
+          },
+          {
+            "mode": "torch",
+            "group": 3,
+            "token": 2159,
+            "reason": "padding"
+          },
+          {
+            "mode": "triton",
+            "group": 3,
+            "token": 2159,
+            "reason": "padding"
+          }
+        ],
+        "final_used_staging_bytes": 0
+      },
+      "byte_gate_memory": {
+        "allocated_bytes": 62914560,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 63014400,
+        "peak_reserved_bytes": 65011712
+      },
+      "memory_before": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 62945280,
+        "peak_reserved_bytes": 65011712
+      },
+      "memory_after": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 62945280,
+        "peak_reserved_bytes": 65011712
+      },
+      "retained_allocator_cache_bytes": 65011712,
+      "benchmark": [
+        {
+          "name": "layer0_1x3",
+          "token_counts": [
+            1,
+            3
+          ],
+          "staging_bytes": 2048,
+          "metadata_bytes": 112,
+          "budget_limit_bytes": 2160,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.7792859999999999,
+                "p95": 0.815224,
+                "minimum": 0.74966,
+                "maximum": 0.816396,
+                "observations": [
+                  0.810255,
+                  0.76544,
+                  0.815224,
+                  0.800206,
+                  0.75989,
+                  0.753398,
+                  0.816396,
+                  0.80748,
+                  0.762835,
+                  0.758156,
+                  0.805836,
+                  0.758667,
+                  0.761433,
+                  0.801848,
+                  0.798051,
+                  0.756944,
+                  0.793132,
+                  0.755922,
+                  0.798312,
+                  0.74966
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.761856,
+                "p95": 0.79872,
+                "minimum": 0.734208,
+                "maximum": 0.800768,
+                "observations": [
+                  0.792576,
+                  0.748544,
+                  0.79872,
+                  0.780288,
+                  0.742368,
+                  0.735232,
+                  0.800768,
+                  0.789504,
+                  0.746496,
+                  0.740352,
+                  0.789504,
+                  0.741376,
+                  0.745472,
+                  0.784384,
+                  0.782336,
+                  0.741376,
+                  0.775168,
+                  0.739328,
+                  0.781312,
+                  0.734208
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.2111185,
+                "p95": 1.255061,
+                "minimum": 1.167727,
+                "maximum": 1.399653,
+                "observations": [
+                  1.255061,
+                  1.175131,
+                  1.216759,
+                  1.208424,
+                  1.171383,
+                  1.245603,
+                  1.167727,
+                  1.399653,
+                  1.193685,
+                  1.233841,
+                  1.180932,
+                  1.176593,
+                  1.181563,
+                  1.210858,
+                  1.239331,
+                  1.170612,
+                  1.225566,
+                  1.211379,
+                  1.233221,
+                  1.214746
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.192944,
+                "p95": 1.235968,
+                "minimum": 1.150976,
+                "maximum": 1.383424,
+                "observations": [
+                  1.235968,
+                  1.15712,
+                  1.201152,
+                  1.19296,
+                  1.153024,
+                  1.227776,
+                  1.150976,
+                  1.383424,
+                  1.176576,
+                  1.215488,
+                  1.163264,
+                  1.159168,
+                  1.165312,
+                  1.191936,
+                  1.220608,
+                  1.154048,
+                  1.20832,
+                  1.192928,
+                  1.216512,
+                  1.19808
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer14_4x4",
+          "token_counts": [
+            4,
+            4
+          ],
+          "staging_bytes": 4096,
+          "metadata_bytes": 144,
+          "budget_limit_bytes": 4240,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.9352644999999999,
+                "p95": 0.954726,
+                "minimum": 0.893521,
+                "maximum": 0.961188,
+                "observations": [
+                  0.942844,
+                  0.94617,
+                  0.897028,
+                  0.938977,
+                  0.933346,
+                  0.893521,
+                  0.937183,
+                  0.925552,
+                  0.916164,
+                  0.910543,
+                  0.90346,
+                  0.895855,
+                  0.961188,
+                  0.947973,
+                  0.904111,
+                  0.946281,
+                  0.944647,
+                  0.895054,
+                  0.954726,
+                  0.949757
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.918528,
+                "p95": 0.939008,
+                "minimum": 0.876544,
+                "maximum": 0.946176,
+                "observations": [
+                  0.92672,
+                  0.929792,
+                  0.88064,
+                  0.922624,
+                  0.917504,
+                  0.876544,
+                  0.919552,
+                  0.90624,
+                  0.898048,
+                  0.891904,
+                  0.887808,
+                  0.879616,
+                  0.946176,
+                  0.930816,
+                  0.887808,
+                  0.928768,
+                  0.928768,
+                  0.877568,
+                  0.939008,
+                  0.93184
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.221483,
+                "p95": 1.261894,
+                "minimum": 1.167666,
+                "maximum": 1.281421,
+                "observations": [
+                  1.281421,
+                  1.179149,
+                  1.23264,
+                  1.235374,
+                  1.206219,
+                  1.235063,
+                  1.174229,
+                  1.239692,
+                  1.198424,
+                  1.235194,
+                  1.227129,
+                  1.220025,
+                  1.182535,
+                  1.261894,
+                  1.177055,
+                  1.222941,
+                  1.214765,
+                  1.167666,
+                  1.259129,
+                  1.168839
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.20472,
+                "p95": 1.242112,
+                "minimum": 1.152,
+                "maximum": 1.263616,
+                "observations": [
+                  1.263616,
+                  1.163264,
+                  1.216512,
+                  1.219584,
+                  1.18784,
+                  1.216544,
+                  1.159168,
+                  1.222656,
+                  1.180672,
+                  1.217536,
+                  1.211392,
+                  1.2032,
+                  1.166336,
+                  1.242112,
+                  1.159168,
+                  1.20624,
+                  1.19808,
+                  1.152,
+                  1.242112,
+                  1.152
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer27_28x32",
+          "token_counts": [
+            28,
+            32
+          ],
+          "staging_bytes": 30720,
+          "metadata_bytes": 560,
+          "budget_limit_bytes": 31280,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 2.709047,
+                "p95": 2.74256,
+                "minimum": 2.638574,
+                "maximum": 2.791131,
+                "observations": [
+                  2.73744,
+                  2.72114,
+                  2.696644,
+                  2.702875,
+                  2.677046,
+                  2.701813,
+                  2.735546,
+                  2.699158,
+                  2.791131,
+                  2.712784,
+                  2.669112,
+                  2.715519,
+                  2.638574,
+                  2.706652,
+                  2.738051,
+                  2.686454,
+                  2.662169,
+                  2.74256,
+                  2.740025,
+                  2.711442
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 2.692608,
+                "p95": 2.725888,
+                "minimum": 2.620416,
+                "maximum": 2.776064,
+                "observations": [
+                  2.721792,
+                  2.705408,
+                  2.680832,
+                  2.686976,
+                  2.661376,
+                  2.685952,
+                  2.71872,
+                  2.68288,
+                  2.776064,
+                  2.696192,
+                  2.653184,
+                  2.699264,
+                  2.620416,
+                  2.689024,
+                  2.721792,
+                  2.669568,
+                  2.646016,
+                  2.725888,
+                  2.72384,
+                  2.696192
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.202267,
+                "p95": 1.251515,
+                "minimum": 1.189307,
+                "maximum": 1.411064,
+                "observations": [
+                  1.203474,
+                  1.251515,
+                  1.197714,
+                  1.225756,
+                  1.197232,
+                  1.189307,
+                  1.194618,
+                  1.189708,
+                  1.232539,
+                  1.190169,
+                  1.20106,
+                  1.230605,
+                  1.20643,
+                  1.411064,
+                  1.20662,
+                  1.200318,
+                  1.237619,
+                  1.237088,
+                  1.200759,
+                  1.198715
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.186288,
+                "p95": 1.232896,
+                "minimum": 1.173504,
+                "maximum": 1.394688,
+                "observations": [
+                  1.187808,
+                  1.232896,
+                  1.181696,
+                  1.207296,
+                  1.181696,
+                  1.173504,
+                  1.1776,
+                  1.173504,
+                  1.21648,
+                  1.173504,
+                  1.184768,
+                  1.21344,
+                  1.189888,
+                  1.394688,
+                  1.191936,
+                  1.184768,
+                  1.220608,
+                  1.220608,
+                  1.184768,
+                  1.181696
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        }
+      ]
+    },
+    {
+      "rank": 1,
+      "device": "cuda:1",
+      "caller_device": 0,
+      "device_name": "Tesla V100S-PCIE-32GB",
+      "capability": [
+        7,
+        0
+      ],
+      "shape": {
+        "layers": 28,
+        "heads_per_rank": 2,
+        "head_dim": 128,
+        "dtype": "torch.float16",
+        "valid_tokens": 2159,
+        "page_size": 2,
+        "padded_rows": 2160
+      },
+      "fixture_scope": "additional-page2-partial-page-shape",
+      "source_bytes": 61931520,
+      "padded_rows": 2160,
+      "byte_gate": {
+        "equal_bytes": true,
+        "compared_bytes": 32768,
+        "groups": [
+          {
+            "layer": 0,
+            "global_head": 2,
+            "count": 1,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 0,
+            "global_head": 3,
+            "count": 3,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 2,
+            "count": 28,
+            "contains_last_valid": true
+          },
+          {
+            "layer": 27,
+            "global_head": 3,
+            "count": 32,
+            "contains_last_valid": true
+          }
+        ],
+        "metadata_bytes": 672,
+        "invalid_token_rejections": [
+          {
+            "mode": "torch",
+            "group": 0,
+            "token": 2159,
+            "reason": "padding"
+          },
+          {
+            "mode": "triton",
+            "group": 0,
+            "token": 2159,
+            "reason": "padding"
+          },
+          {
+            "mode": "torch",
+            "group": 3,
+            "token": 2159,
+            "reason": "padding"
+          },
+          {
+            "mode": "triton",
+            "group": 3,
+            "token": 2159,
+            "reason": "padding"
+          }
+        ],
+        "final_used_staging_bytes": 0
+      },
+      "byte_gate_memory": {
+        "allocated_bytes": 62914560,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 63014400,
+        "peak_reserved_bytes": 65011712
+      },
+      "memory_before": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 62945280,
+        "peak_reserved_bytes": 65011712
+      },
+      "memory_after": {
+        "allocated_bytes": 0,
+        "reserved_bytes": 65011712,
+        "peak_allocated_bytes": 62945280,
+        "peak_reserved_bytes": 65011712
+      },
+      "retained_allocator_cache_bytes": 65011712,
+      "benchmark": [
+        {
+          "name": "layer0_1x3",
+          "token_counts": [
+            1,
+            3
+          ],
+          "staging_bytes": 2048,
+          "metadata_bytes": 112,
+          "budget_limit_bytes": 2160,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.7680295,
+                "p95": 0.803441,
+                "minimum": 0.738579,
+                "maximum": 0.806888,
+                "observations": [
+                  0.755532,
+                  0.802751,
+                  0.797761,
+                  0.74958,
+                  0.751133,
+                  0.803441,
+                  0.79204,
+                  0.738579,
+                  0.753107,
+                  0.798563,
+                  0.790557,
+                  0.778594,
+                  0.757465,
+                  0.748258,
+                  0.806888,
+                  0.791439,
+                  0.742637,
+                  0.750201,
+                  0.755902,
+                  0.793603
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.752624,
+                "p95": 0.788448,
+                "minimum": 0.723968,
+                "maximum": 0.791584,
+                "observations": [
+                  0.74032,
+                  0.787488,
+                  0.780256,
+                  0.733184,
+                  0.736256,
+                  0.788448,
+                  0.776192,
+                  0.723968,
+                  0.736256,
+                  0.782336,
+                  0.775168,
+                  0.763904,
+                  0.740384,
+                  0.734208,
+                  0.791584,
+                  0.776192,
+                  0.727072,
+                  0.735232,
+                  0.741344,
+                  0.779296
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.175532,
+                "p95": 1.235213,
+                "minimum": 1.155925,
+                "maximum": 1.245193,
+                "observations": [
+                  1.205729,
+                  1.187224,
+                  1.235213,
+                  1.16384,
+                  1.20107,
+                  1.199346,
+                  1.200809,
+                  1.209044,
+                  1.156926,
+                  1.160273,
+                  1.161014,
+                  1.155925,
+                  1.23267,
+                  1.161154,
+                  1.163398,
+                  1.159251,
+                  1.163058,
+                  1.245193,
+                  1.162968,
+                  1.196662
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.1592,
+                "p95": 1.21856,
+                "minimum": 1.13968,
+                "maximum": 1.228832,
+                "observations": [
+                  1.189888,
+                  1.16944,
+                  1.21856,
+                  1.14896,
+                  1.184736,
+                  1.183776,
+                  1.183744,
+                  1.1848,
+                  1.14176,
+                  1.144832,
+                  1.145856,
+                  1.13968,
+                  1.215488,
+                  1.145856,
+                  1.147904,
+                  1.143776,
+                  1.1448,
+                  1.228832,
+                  1.147904,
+                  1.181664
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer14_4x4",
+          "token_counts": [
+            4,
+            4
+          ],
+          "staging_bytes": 4096,
+          "metadata_bytes": 144,
+          "budget_limit_bytes": 4240,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 0.8977485000000001,
+                "p95": 0.936412,
+                "minimum": 0.869226,
+                "maximum": 0.94097,
+                "observations": [
+                  0.869226,
+                  0.884894,
+                  0.896527,
+                  0.897358,
+                  0.877531,
+                  0.94097,
+                  0.923157,
+                  0.877771,
+                  0.932434,
+                  0.925822,
+                  0.878984,
+                  0.892459,
+                  0.898139,
+                  0.917135,
+                  0.871961,
+                  0.936412,
+                  0.914601,
+                  0.877812,
+                  0.934207,
+                  0.921123
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 0.8811359999999999,
+                "p95": 0.921568,
+                "minimum": 0.854016,
+                "maximum": 0.925696,
+                "observations": [
+                  0.854016,
+                  0.869376,
+                  0.879616,
+                  0.880608,
+                  0.862208,
+                  0.925696,
+                  0.907264,
+                  0.862208,
+                  0.917504,
+                  0.911392,
+                  0.864224,
+                  0.875552,
+                  0.881664,
+                  0.901088,
+                  0.857088,
+                  0.921568,
+                  0.899104,
+                  0.863264,
+                  0.91952,
+                  0.906208
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.1967265,
+                "p95": 1.245854,
+                "minimum": 1.157307,
+                "maximum": 1.246856,
+                "observations": [
+                  1.170311,
+                  1.245854,
+                  1.166504,
+                  1.213042,
+                  1.192093,
+                  1.164611,
+                  1.230966,
+                  1.165002,
+                  1.224074,
+                  1.19068,
+                  1.157758,
+                  1.220056,
+                  1.176453,
+                  1.215126,
+                  1.207652,
+                  1.17427,
+                  1.246856,
+                  1.157307,
+                  1.223081,
+                  1.20136
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.181168,
+                "p95": 1.228832,
+                "minimum": 1.141792,
+                "maximum": 1.229824,
+                "observations": [
+                  1.154048,
+                  1.228832,
+                  1.150944,
+                  1.19808,
+                  1.176576,
+                  1.146912,
+                  1.214432,
+                  1.149984,
+                  1.208288,
+                  1.175552,
+                  1.141792,
+                  1.202144,
+                  1.160192,
+                  1.199072,
+                  1.191968,
+                  1.15712,
+                  1.229824,
+                  1.141792,
+                  1.20832,
+                  1.18576
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        },
+        {
+          "name": "layer27_28x32",
+          "token_counts": [
+            28,
+            32
+          ],
+          "staging_bytes": 30720,
+          "metadata_bytes": 560,
+          "budget_limit_bytes": 31280,
+          "aggregate": {
+            "torch": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 2.6770965,
+                "p95": 2.697806,
+                "minimum": 2.621352,
+                "maximum": 2.708566,
+                "observations": [
+                  2.697806,
+                  2.640628,
+                  2.621352,
+                  2.688729,
+                  2.687937,
+                  2.622895,
+                  2.688829,
+                  2.682136,
+                  2.648814,
+                  2.693918,
+                  2.676395,
+                  2.690742,
+                  2.628295,
+                  2.708566,
+                  2.67384,
+                  2.677798,
+                  2.633665,
+                  2.649234,
+                  2.68938,
+                  2.634046
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 2.658832,
+                "p95": 2.682912,
+                "minimum": 2.60608,
+                "maximum": 2.69312,
+                "observations": [
+                  2.682912,
+                  2.625504,
+                  2.60608,
+                  2.673664,
+                  2.67264,
+                  2.607104,
+                  2.672672,
+                  2.666528,
+                  2.632704,
+                  2.678816,
+                  2.658304,
+                  2.675744,
+                  2.61328,
+                  2.69312,
+                  2.658304,
+                  2.65936,
+                  2.618336,
+                  2.632704,
+                  2.673696,
+                  2.619424
+                ]
+              }
+            },
+            "triton": {
+              "host_wall_ms": {
+                "count": 20,
+                "median": 1.2552165,
+                "p95": 1.283995,
+                "minimum": 1.20102,
+                "maximum": 1.306067,
+                "observations": [
+                  1.247687,
+                  1.260953,
+                  1.217822,
+                  1.267195,
+                  1.256694,
+                  1.2646,
+                  1.244221,
+                  1.225315,
+                  1.283995,
+                  1.20113,
+                  1.257226,
+                  1.24942,
+                  1.267465,
+                  1.253739,
+                  1.20102,
+                  1.306067,
+                  1.215477,
+                  1.262154,
+                  1.252256,
+                  1.268447
+                ]
+              },
+              "cuda_event_span_ms": {
+                "count": 20,
+                "median": 1.237488,
+                "p95": 1.267712,
+                "minimum": 1.183712,
+                "maximum": 1.28,
+                "observations": [
+                  1.228832,
+                  1.244128,
+                  1.201184,
+                  1.250336,
+                  1.237984,
+                  1.248256,
+                  1.227744,
+                  1.207296,
+                  1.267712,
+                  1.183712,
+                  1.241088,
+                  1.232896,
+                  1.251328,
+                  1.236992,
+                  1.184736,
+                  1.28,
+                  1.19808,
+                  1.245184,
+                  1.235968,
+                  1.25232
+                ]
+              }
+            }
+          },
+          "final_used_staging_bytes": 0
+        }
+      ]
+    }
+  ]
+}

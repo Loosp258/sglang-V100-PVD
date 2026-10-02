@@ -1,0 +1,8 @@
+{
+  "plan": "81db9b537",
+  "implementation": "b61c671a4",
+  "baseline": "c9512e4c0",
+  "io": "fixed false in all arms",
+  "host_query_validation": "fixed false in all arms",
+  "single_knob": "existing experimental Triton sparse KV packing; same metadata-UNKNOWN lease repair in both arms"
+}

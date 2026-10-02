@@ -1,0 +1,347 @@
+{
+  "aggregate": {
+    "baseline": {
+      "search_rpc_count": 3136,
+      "search_ms": {
+        "prepare": 0.309,
+        "encode": 0.068,
+        "http": 11.423,
+        "validate": 0.049,
+        "total": 11.8585
+      },
+      "service_outside_rpc_ms": 2.437097951769829,
+      "no_remote_miss_layers": 22,
+      "no_remote_miss_rpc_ms": 12.155853968579322,
+      "remote_miss_layers": 1546,
+      "remote_miss_rpc_ms": 34.264945483300835,
+      "worker_utilization": 0.9975725562644575,
+      "io": [
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        },
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        },
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        },
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      ]
+    },
+    "optimized": {
+      "search_rpc_count": 3136,
+      "search_ms": {
+        "prepare": 0.31,
+        "encode": 0.07,
+        "http": 12.4295,
+        "validate": 0.049,
+        "total": 12.868500000000001
+      },
+      "service_outside_rpc_ms": 2.4693125160411,
+      "no_remote_miss_layers": 22,
+      "no_remote_miss_rpc_ms": 12.776179995853454,
+      "remote_miss_layers": 1546,
+      "remote_miss_rpc_ms": 37.91280696168542,
+      "worker_utilization": 0.9976866019341609,
+      "io": [
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        },
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        },
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        },
+        {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      ]
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 14.97859559499193,
+        "worker_window_seconds": 7.509009592002258,
+        "worker_utilization": 0.9973749141927735,
+        "service_floor_seconds": 7.489297797495965,
+        "window_above_service_floor_seconds": 0.01971179450629279,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.055678344098851,
+        "worker_window_seconds": 7.5442712070653215,
+        "worker_utilization": 0.9978219188355123,
+        "service_floor_seconds": 7.5278391720494255,
+        "window_above_service_floor_seconds": 0.016432035015895963,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.77958327671513,
+        "worker_window_seconds": 7.909477883949876,
+        "worker_utilization": 0.997511056244021,
+        "service_floor_seconds": 7.889791638357565,
+        "window_above_service_floor_seconds": 0.019686245592311025,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 16.494534986675717,
+        "worker_window_seconds": 8.264936707913876,
+        "worker_utilization": 0.9978621476243008,
+        "service_floor_seconds": 8.247267493337858,
+        "window_above_service_floor_seconds": 0.01766921457601711,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 15.856329975300469,
+        "worker_window_seconds": 7.950225509004667,
+        "worker_utilization": 0.9972251703641052,
+        "service_floor_seconds": 7.928164987650234,
+        "window_above_service_floor_seconds": 0.02206052135443315,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 16.45175777003169,
+        "worker_window_seconds": 8.242417042027228,
+        "worker_utilization": 0.9979935306686065,
+        "service_floor_seconds": 8.225878885015845,
+        "window_above_service_floor_seconds": 0.016538157011382282,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 14.839246537070721,
+        "worker_window_seconds": 7.43838243605569,
+        "worker_utilization": 0.9974780582093495,
+        "service_floor_seconds": 7.419623268535361,
+        "window_above_service_floor_seconds": 0.018759167520329356,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 770,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      },
+      {
+        "case": 99402,
+        "consumed_layers": 392,
+        "search_rpcs": 784,
+        "workers": 2,
+        "service_seconds": 14.340353556210175,
+        "worker_window_seconds": 7.186943526961841,
+        "worker_utilization": 0.9976670543195654,
+        "service_floor_seconds": 7.170176778105088,
+        "window_above_service_floor_seconds": 0.01676674885675311,
+        "io": {
+          "reuse_io": false,
+          "job_count": 420,
+          "worker_loops_created": 420,
+          "search_clients_created": 840,
+          "control_clients_created": 840,
+          "search_sessions_created": 840,
+          "control_sessions_created": 772,
+          "manager_io_loop_reused": false,
+          "shared_close_submitted": false,
+          "closing": true,
+          "closed": true
+        }
+      }
+    ]
+  },
+  "scope": "exact ordered completed RPC blocks; warmups/bootstrap excluded; miss groups differ and are not causal subtraction"
+}

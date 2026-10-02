@@ -1,0 +1,107 @@
+{
+  "base_a_v_rank0_health.json": {
+    "bytes": 2035,
+    "sha256": "bbb48e2d59c4feffa053be965c1d6e2a25ac002416b3ce75f7204ec8b06ec268",
+    "normalization": "lf"
+  },
+  "base_a_v_rank1_health.json": {
+    "bytes": 2034,
+    "sha256": "a61487256911488534a7148b8a7962bedee70c492c8f4c2154db8419839fcae9",
+    "normalization": "lf"
+  },
+  "base_b_v_rank0_health.json": {
+    "bytes": 2032,
+    "sha256": "26c1ead9c1c2595fab0ef738da206caa5f9b81205842d680dcfb588caa6a7998",
+    "normalization": "lf"
+  },
+  "base_b_v_rank1_health.json": {
+    "bytes": 2032,
+    "sha256": "a68ac5e97028916cb6253ac125fa3d0eddf5c2134bd383547dfdacd95513f64f",
+    "normalization": "lf"
+  },
+  "checkout_heads.json": {
+    "bytes": 155,
+    "sha256": "09c99da40edde41cdd45f8d52153f129cef4f3f25615e060d5bdd9124c2919f6",
+    "normalization": "lf"
+  },
+  "comparison.json": {
+    "bytes": 140,
+    "sha256": "c94a9c3aef953f24008cd0be58961bc0016e284a96a87ba3983b043455b979e2",
+    "normalization": "lf"
+  },
+  "final_gpu_memory.json": {
+    "bytes": 95,
+    "sha256": "e326837c4b37f3a1f96887927bbadc6bb26dd2db868e8b4e4fe85eea906ff587",
+    "normalization": "lf"
+  },
+  "implementation.json": {
+    "bytes": 291,
+    "sha256": "e39c0b7899eb3a54d020d54bc0c85699037db0b1fa0a0945c00f16e65cd7a9b9",
+    "normalization": "lf"
+  },
+  "native.tar.gz": {
+    "bytes": 147643,
+    "sha256": "743977d9c959ae7814aa9eaef8e8042c72ce45f94d4a1c2706a6a33e7ee86aa0",
+    "normalization": "raw"
+  },
+  "native_summary.json": {
+    "bytes": 56136,
+    "sha256": "83414a9046f2f732ee5e13090870ff96b554e3ee8af12f5f0c5148fa5c9c2ca6",
+    "normalization": "lf"
+  },
+  "opt_a_v_rank0_health.json": {
+    "bytes": 2036,
+    "sha256": "20aed7e9658aa35bf7a9f234b20f49fc8611580bffab2c6c1822e801244dd124",
+    "normalization": "lf"
+  },
+  "opt_a_v_rank1_health.json": {
+    "bytes": 2035,
+    "sha256": "88b8bf9eec0919bea0e9255bae364f5e14ed00cd93e4db33c071f088c1338f49",
+    "normalization": "lf"
+  },
+  "opt_b_v_rank0_health.json": {
+    "bytes": 2035,
+    "sha256": "b75c63311477ee5406023f12e647b044fb1b864de78969df4f27d6c3e880d07b",
+    "normalization": "lf"
+  },
+  "opt_b_v_rank1_health.json": {
+    "bytes": 2034,
+    "sha256": "551a633e8d108f3447a81ff0f3ee1b54ede231d64e5a320fece3c6f771e5073d",
+    "normalization": "lf"
+  },
+  "pack_modes.json": {
+    "bytes": 2192,
+    "sha256": "755d2606025c4459b1fc4814f41b363c45f1afa202a68703ad8c79d78396fd68",
+    "normalization": "lf"
+  },
+  "raw.tar.gz": {
+    "bytes": 2439089,
+    "sha256": "8ed81a2ebee9ee1161f5138452858017863f351cce7f585d3b2e3605cf46f8ea",
+    "normalization": "raw"
+  },
+  "rpc_summary.json": {
+    "bytes": 11199,
+    "sha256": "da45d0723b1e25f5f878c0b65d569522c7536d80624fbbbe0cf62a0726ffd699",
+    "normalization": "lf"
+  },
+  "source_hashes.json": {
+    "bytes": 3609,
+    "sha256": "4947aad8b753de496f5c47142d2a453f8f706887e1a2c842bdb71664d02d0183",
+    "normalization": "lf"
+  },
+  "summary.json": {
+    "bytes": 29066,
+    "sha256": "6434df4ec7d37d53498817113e832f620bb6124e052b0939e6b419eec0ec8791",
+    "normalization": "lf"
+  },
+  "unit.txt": {
+    "bytes": 751,
+    "sha256": "7efe0859c11e65879b3bbdc7eb81258902cc29b7804cb4dc6d07f6ef27ea928f",
+    "normalization": "lf"
+  },
+  "v_search_summary.json": {
+    "bytes": 9952,
+    "sha256": "5b4e540e999a95c362f719ccbbbb489a8df031163ba50dd4ac8e10be7785ceb0",
+    "normalization": "lf"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "base_a": {
+    "source": "GET /internal/health from both V rank endpoints; full responses saved",
+    "ranks": [
+      {
+        "rank": 0,
+        "sparse_pack_kernel": "torch",
+        "device": "cuda:0",
+        "health_file": "base_a_v_rank0_health.json",
+        "url": "http://10.10.1.2:9300/internal/health"
+      },
+      {
+        "rank": 1,
+        "sparse_pack_kernel": "torch",
+        "device": "cuda:1",
+        "health_file": "base_a_v_rank1_health.json",
+        "url": "http://10.10.1.2:9301/internal/health"
+      }
+    ]
+  },
+  "opt_a": {
+    "source": "GET /internal/health from both V rank endpoints; full responses saved",
+    "ranks": [
+      {
+        "rank": 0,
+        "sparse_pack_kernel": "triton",
+        "device": "cuda:0",
+        "health_file": "opt_a_v_rank0_health.json",
+        "url": "http://10.10.1.2:9300/internal/health"
+      },
+      {
+        "rank": 1,
+        "sparse_pack_kernel": "triton",
+        "device": "cuda:1",
+        "health_file": "opt_a_v_rank1_health.json",
+        "url": "http://10.10.1.2:9301/internal/health"
+      }
+    ]
+  },
+  "opt_b": {
+    "source": "GET /internal/health from both V rank endpoints; full responses saved",
+    "ranks": [
+      {
+        "rank": 0,
+        "sparse_pack_kernel": "triton",
+        "device": "cuda:0",
+        "health_file": "opt_b_v_rank0_health.json",
+        "url": "http://10.10.1.2:9300/internal/health"
+      },
+      {
+        "rank": 1,
+        "sparse_pack_kernel": "triton",
+        "device": "cuda:1",
+        "health_file": "opt_b_v_rank1_health.json",
+        "url": "http://10.10.1.2:9301/internal/health"
+      }
+    ]
+  },
+  "base_b": {
+    "source": "GET /internal/health from both V rank endpoints; full responses saved",
+    "ranks": [
+      {
+        "rank": 0,
+        "sparse_pack_kernel": "torch",
+        "device": "cuda:0",
+        "health_file": "base_b_v_rank0_health.json",
+        "url": "http://10.10.1.2:9300/internal/health"
+      },
+      {
+        "rank": 1,
+        "sparse_pack_kernel": "torch",
+        "device": "cuda:1",
+        "health_file": "base_b_v_rank1_health.json",
+        "url": "http://10.10.1.2:9301/internal/health"
+      }
+    ]
+  }
+}
