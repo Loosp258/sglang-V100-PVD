@@ -805,3 +805,80 @@ benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
   real native failure injection, long Decode, TP2 or multi-request load was
   performed. Evidence is in pvd_oasis_workers_cloudlab_20261003; owned={},
   cleanup_errors=[] and all six GPUs returned to 0 MiB.
+
+#### Balance ready-KV Decode with V prefetch: authorized order (2026-10-03)
+
+The user authorized implementing and measuring the following steps in order.
+After completing each step, commit it locally on codex/pvd-oasiskv and then
+proceed to the next step. Do not push to GitHub. Root owns CloudLab/GPU runs
+and commits; delegated independent reviews must not start other GPU jobs.
+Preserve unrelated working-tree changes. Keep all generated temporary outputs
+in this worktree or the corresponding remote checkout's artifacts directory.
+
+1. Measure the true ready-KV D baseline before changing serving behavior.
+   Capture two live 2159-token, 16-output requests using the current SGLang
+   Qwen2.5-7B/EAGLE3 paired target. Retain the exact actual/predicted token,
+   positions, per-step/per-layer resident PromptBank contents/IDs/valid mask,
+   and sufficient draft/feature state for replay. Capture is untimed diagnostic
+   work; do not mix its D2H copies into performance observations. Replay the
+   same token/bank trajectory with every bank on D and proven READY before
+   timing; no V query, transfer or future backlog may run in this replay.
+   Keep the actual loaded SGLang target kernels, causal current/lookahead mask,
+   actual-only history, EAGLE proposal semantics, 28 formal KV writes, fences
+   and ordinary sampler. Reject mismatched outputs/positions/bank identities.
+   Separate target-only and full foreground wall/event time and record timing
+   scope explicitly. Use warmed repeated/reverse-order runs, identical input
+   trajectories and source identities. GPU event readings must be deferred;
+   do not add a synchronize at every layer to measure a different pipeline.
+   The previous total-minus-consumer-wait residual is a comparator, not pure
+   model compute or proof of a no-wait run. Preserve capture/replay identity,
+   memory admission and drainage, all logs, outcomes and GPU cleanup. Commit
+   this measurement and its evidence before implementing step 2.
+
+2. Implement default-off V sparse batch PUT from the existing registered
+   immutable Prompt Entry. Derive checked component-major K/V row slices and
+   compact destination offsets from the validated SparseDeliveryManifest;
+   do not assume source rows are contiguous across heads/components. Preserve
+   Entry/index reader pins, sender/receiver epochs, exact destination generation,
+   authorization, aggregate expected bytes, terminal proof, ACK, cancellation,
+   quarantine and UNKNOWN retention. Keep the existing source/RDMA ordering
+   fences initially; direct batch PUT does not itself prove they are redundant.
+   Compare source staging/registration and batch descriptor/small-write costs,
+   not just CAGRA kernel time. Cover final partial pages, changed/stale/replayed
+   manifests, overlapping/out-of-bounds spans, abort/close and native UNKNOWN.
+   Prove exact bytes with native Mooncake and run fair full-path ABBA with only
+   this option differing, same fast graph/Q/Top4/cap32/max_new16/workers2 and
+   current delivery options fixed. Report negative results; keep default off
+   unless the relevant gates pass. Commit code and complete measured evidence.
+
+3. Implement and independently test D GPU receive-to-bank installation.
+   Use terminal-success private GPU destinations to populate the next bounded
+   bank without making CPU cache D2H then H2D a dependency of bank READY.
+   Preserve the CPU historical cache policy with owned asynchronous backup;
+   mark cache rows valid only after its copy is proven complete. Carry events,
+   exact source/destination generations and owners through both GPU use and
+   backup/retirement. Pending backup, UNKNOWN, cancellation or failed ordering
+   must never recycle physical receive memory or publish an unproven cache row.
+   Keep actual/lookahead causality, capacity/missing-row limits and budgets.
+   Test the native lifecycle and compare one variable at a time using the same
+   complete path and output/traffic gates. Commit before starting step 4.
+
+4. Separate bounded search, delivery and bank-install stages so one worker is
+   not occupied through the whole chain. Use persistent stage resources and
+   explicit per-layer stream/event dependencies, retaining deadline, handoff,
+   exact ticket and joined retirement rules. Benchmark sustained completion
+   intervals and each layer's publish-to-consume deadline; matching one search
+   to a whole token is insufficient. Preserve shared RMM/workspace ownership;
+   do not delete locks or GPUDirect fences without replacement proof. Reuse
+   bounded D attention workspaces and evaluate graph-safe GPU subsegments with
+   fixed shapes/owners; leave HTTP/future waits outside captured CUDA graphs.
+   Verify logits/actual tokens, publication order and native owners before
+   fair end-to-end timing. Keep unsupported capture paths disabled and preserve
+   the actual failure evidence. Commit each completed implementation/experiment.
+
+For every comparison, derive dates from formal timestamps in UTC+8, record
+warmup/order and actual token events, and distinguish arithmetic means from
+medians. Keep initial graph-gated P->V->D KV/private EAGLE seed charged; P->D
+direct KV remains off. Do not add gains from separately measured experiments.
+Defaults remain unchanged until measured gates support the change. Capacity
+calculations from service/workers are diagnostic and not latency guarantees.
