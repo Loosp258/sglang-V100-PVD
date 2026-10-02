@@ -587,3 +587,27 @@ Next sparse-pack ablation fixes reuse_io=false, pooled host candidates and GPU
 finite-Q proof, so one knob changes and gains are not added across runs.
 Report benchmark/results/pvd_oasis_io_reuse_cloudlab_20261002.md preserves
 all raw configs/logs/IDs/session counters/source hashes and6-GPU clean exit.
+
+#### Measure existing fused sparse KV packing on V (2026-10-02)
+
+1. Keep the current fast immutable four-head graph and pooled host candidates
+   with GPU finite-Q proof. Fix reuse_io=false and all P/D/search budgets, Q
+   counts, worker counts and initial P->V->D graph gate. Only the existing
+   experimental-triton-sparse-packing flag varies; defaults stay disabled.
+2. Prove old Torch copies and fused byte gather produce identical staging on
+   both V100S GPUs with the other GPU current. Cover full FP16 Entry shape
+   (28 layers, 2 heads/rank, dim128, 2159 valid tokens plus page padding),
+   first/last layer/head, unordered unequal selections and final valid token.
+   Reject padding before any destination write. Charge workspace metadata;
+   retain source/destination/metadata until a successful device fence.
+3. Report warm wall and GPU event microbenchmarks with metadata construction
+   and release included. These do not include registration/RDMA/Decode and
+   cannot by themselves demonstrate reduced D waits. Preserve test failures.
+4. Deploy only the isolated checked-out sources after hashes match. Run live
+   base/opt/opt/base with identical per-arm role restarts and warmups. Verify
+   actual sparse_pack_kernel on both ranks, output IDs, byte traffic, exact
+   search counts/path, close proof and owned-process/6-GPU cleanup.
+5. Report V search separately from D search+delivery/consumer wait and client
+   wall. Packing is outside the V batch search timer; never call its gain a
+   CAGRA search-kernel improvement. Preserve full evidence and commit each
+   completed gate. Do not add gains from independent experiments.
