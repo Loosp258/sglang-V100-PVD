@@ -63,7 +63,7 @@ for arm, requests in summary['requests'].items():
             expected_path = 'grouped_cagra_partial_batched_host' + ('_hostq' if arm.startswith('opt') else '')
             assert all(row[0] == expected_path for row in steady), 'unexpected host Q search fallback/path'
         if comparison == 'v-io':
-            assert all(row[0] == 'grouped_cagra_partial_batched_host_hostq' for row in steady), 'IO comparison changed V path'
+            assert all(row[0] == 'grouped_cagra_partial_batched_host' for row in steady), 'IO comparison changed V path'
         mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io') else (
             'overlap' if arm.startswith('overlap') else 'serial')
         mode_rows.setdefault(mode, []).extend(steady)

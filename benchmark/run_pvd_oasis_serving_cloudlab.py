@@ -98,7 +98,7 @@ def start(role, arm):
         args.comparison == 'v-search' and arm.startswith('opt')))
     env['PVD_HOST_CANDIDATES'] = int(args.comparison in ('v-host-query', 'v-io') or (args.comparison == 'v-latency' and arm.startswith('opt')))
     env['PVD_NATIVE_POOL'] = int(args.comparison in ('v-host-query', 'v-io') or (args.comparison == 'v-latency' and arm.startswith('opt')))
-    env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-io' or (args.comparison == 'v-host-query' and arm.startswith('opt')))
+    env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-host-query' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash /tmp/' + args.tag + '_launcher.sh ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
