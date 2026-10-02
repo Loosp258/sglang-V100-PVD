@@ -734,3 +734,35 @@ benchmark/results/pvd_oasis_v_sparse_pack_cloudlab_20261002.md.
   drained, cleanup_errors=[] and all six GPUs are zero. Options stay default
   off pending broader shapes, load and failure gates. Both requested independent
   fixed-cost experiments are complete and their local reductions are measured.
+
+#### Independently test two versus four background workers (2026-10-03)
+
+1. The user authorized continuing with the next proposed fair experiment.
+   Test workers=2 versus workers=4 using the existing bounded serving config;
+   no serving algorithm changes. Keep combine_reserve_start=false,
+   reuse_receive_slots=false and reuse_io=false on both arms. Keep the fast
+   four-head degree16/ring2 graph, GPU finite-Q proof, pooled host candidates,
+   Top4/capacity32/max_new16 and graph-gated initial P->V->D KV identical.
+   Triton sparse packing and direct P->D remain off. Keep memory budgets,
+   epochs, exact native byte proofs, ACK and UNKNOWN retirement unchanged.
+2. Audit four-worker admission and per-layer handoffs before deployment. Add
+   v-workers to the bounded runner and evidence gates as the only differing
+   config key. Check actual serving source hashes against the same native gate
+   image; do not redeploy or mix source changes while a timed arm is running.
+3. Run clean base_a/opt_a/opt_b/base_b with all-role restarts, the same two
+   warmups per arm, two 2159-token Prompts and 16 actual output tokens. Record
+   source/config/launch identities, all events, queries, native deliveries,
+   output IDs and final owned-process/six-GPU cleanup. Freeze query and traffic
+   caps but allow native candidate jitter; do not fake a cached selection.
+4. Report client TPOT from actual first-to-last token timestamps divided by
+   the 15 output intervals, plus the 14 later steady intervals separately.
+   Report actual arithmetic mean D KV wait/token, cumulative request waiting,
+   layer service and queue times, ready-before-consume and actual callback
+   overlap. Compute workload windows using each arm's actual worker count.
+   Callback slot occupancy includes blocking RPC and is not CPU/GPU usage.
+5. More workers can increase V lock contention or full-device synchronization.
+   Treat fixed-service four-worker capacity calculations as diagnostic only,
+   never predict waiting will halve. Compare actual V query/delivery and D
+   waiting/client timing; preserve any negative result or failed gate. Keep
+   the existing default and commit the completed fair evidence. Independent
+   prior RPC/registration gains cannot be added to this new experiment.
