@@ -1,0 +1,11 @@
+........................................................................ [ 48%]
+........................................................................ [ 96%]
+......                                                                   [100%]
+=============================== warnings summary ===============================
+../../../../../proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/site-packages/_pytest/config/__init__.py:1464
+  /proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/conda-envs/sglang-v100/lib/python3.12/site-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+150 passed, 1 warning in 9.30s

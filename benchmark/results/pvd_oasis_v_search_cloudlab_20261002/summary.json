@@ -1,0 +1,1112 @@
+{
+  "aggregate": {
+    "baseline": {
+      "requests": 4,
+      "wall_seconds": 13.596631908498239,
+      "first_event_seconds": 2.8019789294921793,
+      "stream_seconds": 10.803249252523528,
+      "initialization_seconds": 1.7166795000000001,
+      "first_decode_ms": 40.6745,
+      "steady_forward_ms": 764.654,
+      "steady_layer_wait_sum_ms": 687.8885,
+      "steady_foreground_except_wait_ms": 79.30399999999997,
+      "steady_draft_ms": 2.8085,
+      "layer_rpc_ms": 50.56685698218644,
+      "layer_queue_ms": 733.3657125127502,
+      "layer_service_ms": 54.30652599898167,
+      "layer_consumer_wait_ms": 21.631323994370177,
+      "network_sparse_bytes_per_request": 2563072.0,
+      "startup_full_kv_bytes_per_request": 123805696.0,
+      "actual_forward_count": 60,
+      "layer_consume_count": 1568
+    },
+    "optimized": {
+      "requests": 4,
+      "wall_seconds": 11.994777697516838,
+      "first_event_seconds": 2.67079738152097,
+      "stream_seconds": 9.220145609491738,
+      "initialization_seconds": 1.5842550000000002,
+      "first_decode_ms": 39.032,
+      "steady_forward_ms": 650.54,
+      "steady_layer_wait_sum_ms": 554.7004999999999,
+      "steady_foreground_except_wait_ms": 91.65549999999996,
+      "steady_draft_ms": 3.1950000000000003,
+      "layer_rpc_ms": 43.58966596191749,
+      "layer_queue_ms": 617.8694070258643,
+      "layer_service_ms": 46.72389599727467,
+      "layer_consumer_wait_ms": 21.0758765169885,
+      "network_sparse_bytes_per_request": 2562816.0,
+      "startup_full_kv_bytes_per_request": 123805696.0,
+      "actual_forward_count": 60,
+      "layer_consume_count": 1568
+    }
+  },
+  "output_identity": {
+    "99401": {
+      "prompt_identical": true,
+      "output_ids_identical": true,
+      "text_identical": true,
+      "arms": [
+        "base_a",
+        "opt_a",
+        "opt_b",
+        "base_b"
+      ]
+    },
+    "99402": {
+      "prompt_identical": true,
+      "output_ids_identical": true,
+      "text_identical": true,
+      "arms": [
+        "base_a",
+        "opt_a",
+        "opt_b",
+        "base_b"
+      ]
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "rid": "cdb144d726e34305958d66e4e208c25a",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 13.480344854993746,
+        "first_event_seconds": 2.7729258129838854,
+        "stream_seconds": 10.70741904200986,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 39.957,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 708.17,
+            "wait_ms": 628.813
+          },
+          {
+            "step": 2,
+            "total_ms": 765.168,
+            "wait_ms": 687.177
+          },
+          {
+            "step": 3,
+            "total_ms": 860.992,
+            "wait_ms": 777.88
+          },
+          {
+            "step": 4,
+            "total_ms": 779.908,
+            "wait_ms": 702.978
+          },
+          {
+            "step": 5,
+            "total_ms": 719.214,
+            "wait_ms": 640.284
+          },
+          {
+            "step": 6,
+            "total_ms": 743.567,
+            "wait_ms": 660.928
+          },
+          {
+            "step": 7,
+            "total_ms": 783.581,
+            "wait_ms": 705.613
+          },
+          {
+            "step": 8,
+            "total_ms": 832.397,
+            "wait_ms": 761.049
+          },
+          {
+            "step": 9,
+            "total_ms": 809.567,
+            "wait_ms": 742.394
+          },
+          {
+            "step": 10,
+            "total_ms": 730.399,
+            "wait_ms": 650.284
+          },
+          {
+            "step": 11,
+            "total_ms": 708.123,
+            "wait_ms": 629.555
+          },
+          {
+            "step": 12,
+            "total_ms": 703.028,
+            "wait_ms": 622.8
+          },
+          {
+            "step": 13,
+            "total_ms": 793.349,
+            "wait_ms": 720.213
+          },
+          {
+            "step": 14,
+            "total_ms": 704.871,
+            "wait_ms": 630.734
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.712247,
+        "draft_ms": [
+          24.279,
+          2.817,
+          2.638,
+          2.658,
+          2.641,
+          2.647,
+          5.087,
+          4.071,
+          2.627,
+          2.674,
+          2.66,
+          3.603,
+          2.67,
+          4.137,
+          3.151
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "b217e0cd343c4b57af8e00d764544144",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 13.418656469031703,
+        "first_event_seconds": 2.7901183600188233,
+        "stream_seconds": 10.62853810901288,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 46.656,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 641.371,
+            "wait_ms": 556.955
+          },
+          {
+            "step": 2,
+            "total_ms": 757.616,
+            "wait_ms": 677.355
+          },
+          {
+            "step": 3,
+            "total_ms": 708.295,
+            "wait_ms": 626.292
+          },
+          {
+            "step": 4,
+            "total_ms": 793.091,
+            "wait_ms": 710.614
+          },
+          {
+            "step": 5,
+            "total_ms": 803.38,
+            "wait_ms": 723.151
+          },
+          {
+            "step": 6,
+            "total_ms": 702.544,
+            "wait_ms": 625.068
+          },
+          {
+            "step": 7,
+            "total_ms": 1092.347,
+            "wait_ms": 1014.72
+          },
+          {
+            "step": 8,
+            "total_ms": 725.876,
+            "wait_ms": 636.142
+          },
+          {
+            "step": 9,
+            "total_ms": 748.249,
+            "wait_ms": 668.998
+          },
+          {
+            "step": 10,
+            "total_ms": 684.605,
+            "wait_ms": 603.816
+          },
+          {
+            "step": 11,
+            "total_ms": 634.537,
+            "wait_ms": 550.303
+          },
+          {
+            "step": 12,
+            "total_ms": 788.748,
+            "wait_ms": 704.61
+          },
+          {
+            "step": 13,
+            "total_ms": 735.423,
+            "wait_ms": 655.031
+          },
+          {
+            "step": 14,
+            "total_ms": 742.755,
+            "wait_ms": 675.462
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.716526,
+        "draft_ms": [
+          24.814,
+          8.817,
+          2.578,
+          2.609,
+          2.629,
+          4.879,
+          2.664,
+          2.633,
+          2.684,
+          5.72,
+          4.207,
+          5.684,
+          3.1,
+          2.726,
+          2.995
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "rid": "3495a4c0c62e415783033baecf9e2db5",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 12.150915311998688,
+        "first_event_seconds": 2.8654438750236295,
+        "stream_seconds": 9.285471436975058,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 38.532,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 671.55,
+            "wait_ms": 580.143
+          },
+          {
+            "step": 2,
+            "total_ms": 734.131,
+            "wait_ms": 652.577
+          },
+          {
+            "step": 3,
+            "total_ms": 718.056,
+            "wait_ms": 635.805
+          },
+          {
+            "step": 4,
+            "total_ms": 694.382,
+            "wait_ms": 602.478
+          },
+          {
+            "step": 5,
+            "total_ms": 660.973,
+            "wait_ms": 569.625
+          },
+          {
+            "step": 6,
+            "total_ms": 654.137,
+            "wait_ms": 553.412
+          },
+          {
+            "step": 7,
+            "total_ms": 651.055,
+            "wait_ms": 555.617
+          },
+          {
+            "step": 8,
+            "total_ms": 680.068,
+            "wait_ms": 585.056
+          },
+          {
+            "step": 9,
+            "total_ms": 651.613,
+            "wait_ms": 563.258
+          },
+          {
+            "step": 10,
+            "total_ms": 633.365,
+            "wait_ms": 547.095
+          },
+          {
+            "step": 11,
+            "total_ms": 570.922,
+            "wait_ms": 475.335
+          },
+          {
+            "step": 12,
+            "total_ms": 619.936,
+            "wait_ms": 532.06
+          },
+          {
+            "step": 13,
+            "total_ms": 655.231,
+            "wait_ms": 562.929
+          },
+          {
+            "step": 14,
+            "total_ms": 622.531,
+            "wait_ms": 539.469
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.59027,
+        "draft_ms": [
+          24.428,
+          3.018,
+          2.61,
+          2.579,
+          2.557,
+          3.037,
+          2.605,
+          2.904,
+          2.542,
+          2.611,
+          4.015,
+          11.108,
+          4.926,
+          3.76,
+          2.751
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "415509c44041462fa3f2553bd837b6df",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 12.245667049020994,
+        "first_event_seconds": 2.657774462015368,
+        "stream_seconds": 9.587892587005626,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 38.879,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 679.882,
+            "wait_ms": 591.463
+          },
+          {
+            "step": 2,
+            "total_ms": 712.483,
+            "wait_ms": 628.759
+          },
+          {
+            "step": 3,
+            "total_ms": 702.08,
+            "wait_ms": 612.353
+          },
+          {
+            "step": 4,
+            "total_ms": 697.315,
+            "wait_ms": 605.945
+          },
+          {
+            "step": 5,
+            "total_ms": 684.843,
+            "wait_ms": 585.19
+          },
+          {
+            "step": 6,
+            "total_ms": 628.388,
+            "wait_ms": 528.229
+          },
+          {
+            "step": 7,
+            "total_ms": 661.402,
+            "wait_ms": 575.981
+          },
+          {
+            "step": 8,
+            "total_ms": 650.247,
+            "wait_ms": 555.126
+          },
+          {
+            "step": 9,
+            "total_ms": 959.148,
+            "wait_ms": 871.773
+          },
+          {
+            "step": 10,
+            "total_ms": 644.51,
+            "wait_ms": 546.615
+          },
+          {
+            "step": 11,
+            "total_ms": 596.063,
+            "wait_ms": 510.098
+          },
+          {
+            "step": 12,
+            "total_ms": 623.245,
+            "wait_ms": 540.994
+          },
+          {
+            "step": 13,
+            "total_ms": 660.299,
+            "wait_ms": 568.162
+          },
+          {
+            "step": 14,
+            "total_ms": 619.743,
+            "wait_ms": 533.252
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.57824,
+        "draft_ms": [
+          24.481,
+          9.01,
+          2.632,
+          3.278,
+          4.665,
+          2.671,
+          2.625,
+          2.624,
+          3.204,
+          2.665,
+          5.239,
+          4.473,
+          3.536,
+          2.845,
+          2.883
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "rid": "7122d5ea654e43a48b4760159c533ad6",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 11.838640083034988,
+        "first_event_seconds": 2.6838203010265715,
+        "stream_seconds": 9.154819782008417,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 39.185,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 676.459,
+            "wait_ms": 577.093
+          },
+          {
+            "step": 2,
+            "total_ms": 721.552,
+            "wait_ms": 613.117
+          },
+          {
+            "step": 3,
+            "total_ms": 697.093,
+            "wait_ms": 602.385
+          },
+          {
+            "step": 4,
+            "total_ms": 687.468,
+            "wait_ms": 593.001
+          },
+          {
+            "step": 5,
+            "total_ms": 667.248,
+            "wait_ms": 577.434
+          },
+          {
+            "step": 6,
+            "total_ms": 620.32,
+            "wait_ms": 534.958
+          },
+          {
+            "step": 7,
+            "total_ms": 658.888,
+            "wait_ms": 561.531
+          },
+          {
+            "step": 8,
+            "total_ms": 644.706,
+            "wait_ms": 547.516
+          },
+          {
+            "step": 9,
+            "total_ms": 637.732,
+            "wait_ms": 554.275
+          },
+          {
+            "step": 10,
+            "total_ms": 620.379,
+            "wait_ms": 526.609
+          },
+          {
+            "step": 11,
+            "total_ms": 563.437,
+            "wait_ms": 482.507
+          },
+          {
+            "step": 12,
+            "total_ms": 613.364,
+            "wait_ms": 523.337
+          },
+          {
+            "step": 13,
+            "total_ms": 650.833,
+            "wait_ms": 567.479
+          },
+          {
+            "step": 14,
+            "total_ms": 626.012,
+            "wait_ms": 536.325
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.603694,
+        "draft_ms": [
+          24.59,
+          5.147,
+          2.656,
+          3.789,
+          6.754,
+          3.374,
+          3.155,
+          4.879,
+          4.932,
+          2.57,
+          2.95,
+          3.231,
+          4.374,
+          2.946,
+          2.924
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "0f6680f205644001a811075cd30ccbc9",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 11.433267590007745,
+        "first_event_seconds": 2.600905171013437,
+        "stream_seconds": 8.832362418994308,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 44.067,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 590.24,
+            "wait_ms": 493.588
+          },
+          {
+            "step": 2,
+            "total_ms": 633.143,
+            "wait_ms": 534.011
+          },
+          {
+            "step": 3,
+            "total_ms": 631.026,
+            "wait_ms": 536.352
+          },
+          {
+            "step": 4,
+            "total_ms": 655.708,
+            "wait_ms": 558.64
+          },
+          {
+            "step": 5,
+            "total_ms": 687.316,
+            "wait_ms": 595.945
+          },
+          {
+            "step": 6,
+            "total_ms": 584.059,
+            "wait_ms": 491.123
+          },
+          {
+            "step": 7,
+            "total_ms": 613.093,
+            "wait_ms": 506.301
+          },
+          {
+            "step": 8,
+            "total_ms": 634.748,
+            "wait_ms": 540.693
+          },
+          {
+            "step": 9,
+            "total_ms": 888.101,
+            "wait_ms": 793.254
+          },
+          {
+            "step": 10,
+            "total_ms": 579.552,
+            "wait_ms": 497.26
+          },
+          {
+            "step": 11,
+            "total_ms": 528.394,
+            "wait_ms": 437.706
+          },
+          {
+            "step": 12,
+            "total_ms": 543.77,
+            "wait_ms": 443.98
+          },
+          {
+            "step": 13,
+            "total_ms": 594.158,
+            "wait_ms": 497.871
+          },
+          {
+            "step": 14,
+            "total_ms": 596.455,
+            "wait_ms": 511.194
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.521858,
+        "draft_ms": [
+          24.732,
+          8.335,
+          6.793,
+          3.301,
+          2.977,
+          2.597,
+          4.242,
+          7.703,
+          6.752,
+          3.658,
+          3.186,
+          6.533,
+          3.922,
+          2.829,
+          3.126
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "rid": "70011a1ee10c47e2b64fbc7caaca897c",
+        "prompt_sha256": "b1be16d568b18b2021bd236e2eb670a42c324c58d0d3c26d8eee791b86db6dbb",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 13.712918962002732,
+        "first_event_seconds": 2.8138394989655353,
+        "stream_seconds": 10.899079463037197,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 41.392,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 834.141,
+            "wait_ms": 756.776
+          },
+          {
+            "step": 2,
+            "total_ms": 801.3,
+            "wait_ms": 718.026
+          },
+          {
+            "step": 3,
+            "total_ms": 764.14,
+            "wait_ms": 686.25
+          },
+          {
+            "step": 4,
+            "total_ms": 838.243,
+            "wait_ms": 770.119
+          },
+          {
+            "step": 5,
+            "total_ms": 775.905,
+            "wait_ms": 697.218
+          },
+          {
+            "step": 6,
+            "total_ms": 818.496,
+            "wait_ms": 743.054
+          },
+          {
+            "step": 7,
+            "total_ms": 857.967,
+            "wait_ms": 777.929
+          },
+          {
+            "step": 8,
+            "total_ms": 728.441,
+            "wait_ms": 649.225
+          },
+          {
+            "step": 9,
+            "total_ms": 795.346,
+            "wait_ms": 715.301
+          },
+          {
+            "step": 10,
+            "total_ms": 705.543,
+            "wait_ms": 622.253
+          },
+          {
+            "step": 11,
+            "total_ms": 647.048,
+            "wait_ms": 572.034
+          },
+          {
+            "step": 12,
+            "total_ms": 707.241,
+            "wait_ms": 620.162
+          },
+          {
+            "step": 13,
+            "total_ms": 786.366,
+            "wait_ms": 707.72
+          },
+          {
+            "step": 14,
+            "total_ms": 768.797,
+            "wait_ms": 689.247
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.716833,
+        "draft_ms": [
+          24.703,
+          3.061,
+          2.692,
+          2.912,
+          2.676,
+          2.725,
+          2.627,
+          2.693,
+          4.293,
+          5.698,
+          2.677,
+          2.716,
+          3.422,
+          2.839,
+          2.8
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      },
+      {
+        "case": 99402,
+        "rid": "529c25db45b9461e8d5f3b576785675d",
+        "prompt_sha256": "f35a86c58427b6274db3bb64bbfd79931947ed6a34ef99957cb696005a1be8b1",
+        "output_ids": [
+          16,
+          13,
+          3070,
+          28301,
+          1437,
+          279,
+          2661,
+          1995,
+          25,
+          1019,
+          256,
+          481,
+          576,
+          3084,
+          315,
+          279
+        ],
+        "output_sha256": "18ea4b8f5b9d807a65b0608bff67e83d3ecf0057f4c57f78813c9cc1cc200269",
+        "completion_tokens": 16,
+        "cached_tokens": 0,
+        "wall_seconds": 14.066676415037364,
+        "first_event_seconds": 2.8331890479894355,
+        "stream_seconds": 11.233487367047928,
+        "forward": [
+          {
+            "step": 0,
+            "total_ms": 39.151,
+            "wait_ms": 0.0
+          },
+          {
+            "step": 1,
+            "total_ms": 776.705,
+            "wait_ms": 692.279
+          },
+          {
+            "step": 2,
+            "total_ms": 724.752,
+            "wait_ms": 636.092
+          },
+          {
+            "step": 3,
+            "total_ms": 808.507,
+            "wait_ms": 729.841
+          },
+          {
+            "step": 4,
+            "total_ms": 853.906,
+            "wait_ms": 775.913
+          },
+          {
+            "step": 5,
+            "total_ms": 741.36,
+            "wait_ms": 660.686
+          },
+          {
+            "step": 6,
+            "total_ms": 1092.985,
+            "wait_ms": 1011.013
+          },
+          {
+            "step": 7,
+            "total_ms": 804.078,
+            "wait_ms": 723.086
+          },
+          {
+            "step": 8,
+            "total_ms": 818.052,
+            "wait_ms": 747.182
+          },
+          {
+            "step": 9,
+            "total_ms": 759.475,
+            "wait_ms": 678.742
+          },
+          {
+            "step": 10,
+            "total_ms": 805.588,
+            "wait_ms": 727.848
+          },
+          {
+            "step": 11,
+            "total_ms": 709.347,
+            "wait_ms": 635.328
+          },
+          {
+            "step": 12,
+            "total_ms": 754.303,
+            "wait_ms": 688.6
+          },
+          {
+            "step": 13,
+            "total_ms": 789.238,
+            "wait_ms": 704.375
+          },
+          {
+            "step": 14,
+            "total_ms": 730.517,
+            "wait_ms": 653.872
+          }
+        ],
+        "prompt_tokens": 2159,
+        "initialization_seconds": 1.75251,
+        "draft_ms": [
+          24.728,
+          3.41,
+          2.753,
+          2.66,
+          2.706,
+          2.735,
+          2.741,
+          2.893,
+          2.887,
+          2.886,
+          2.927,
+          2.924,
+          2.946,
+          4.181,
+          7.261
+        ],
+        "trace_counts": {
+          "layers": 392,
+          "transport": 420
+        }
+      }
+    ]
+  },
+  "comparison_scope": "live overlapped paired with baseline vs partial-head cached V search; full initial KV retained",
+  "full_trace_location": "raw.tar.gz: oasis_v_search_abba01/summary.json and *_d.log"
+}

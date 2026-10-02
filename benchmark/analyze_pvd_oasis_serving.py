@@ -16,6 +16,9 @@ if configs:
     comparison_config = {k: v for k, v in configs[0].items() if k != 'overlap'}
     assert all({k: v for k, v in config.items() if k != 'overlap'} == comparison_config
                for config in configs), 'comparison has configuration differences beyond overlap'
+    if a.comparison == 'v-search':
+        assert all(config == configs[0] and config['overlap'] is True for config in configs), (
+            'V search comparison requires identical overlapped Decode configs')
 summary, modes = {}, ({'serial': [], 'overlap': []} if a.comparison == 'pipeline'
                      else {'baseline': [], 'optimized': []})
 for arm, rows in online.items():

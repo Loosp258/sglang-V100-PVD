@@ -1,0 +1,163 @@
+{
+  "aggregate": {
+    "baseline": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.3105,
+        "thread_wait": 0.331,
+        "query_tensor": 0.017,
+        "manager_total": 18.71,
+        "json_parse": 0.527,
+        "batch_total": 20.039
+      }
+    },
+    "optimized": {
+      "batches": 3136,
+      "paths": [
+        "grouped_cagra_partial_batched"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.295,
+        "thread_wait": 0.2575,
+        "query_tensor": 0.017,
+        "manager_total": 12.646,
+        "json_parse": 0.453,
+        "batch_total": 13.995000000000001
+      }
+    }
+  },
+  "requests": {
+    "base_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.297,
+          "thread_wait": 0.295,
+          "query_tensor": 0.017,
+          "manager_total": 18.953000000000003,
+          "json_parse": 0.541,
+          "batch_total": 20.265
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.299,
+          "thread_wait": 0.3475,
+          "query_tensor": 0.016,
+          "manager_total": 17.939999999999998,
+          "json_parse": 0.54,
+          "batch_total": 19.1975
+        }
+      }
+    ],
+    "opt_a": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.308,
+          "thread_wait": 0.2945,
+          "query_tensor": 0.018,
+          "manager_total": 13.272,
+          "json_parse": 0.4665,
+          "batch_total": 14.549
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.296,
+          "thread_wait": 0.282,
+          "query_tensor": 0.018,
+          "manager_total": 13.3615,
+          "json_parse": 0.466,
+          "batch_total": 14.8545
+        }
+      }
+    ],
+    "opt_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.296,
+          "thread_wait": 0.28200000000000003,
+          "query_tensor": 0.016,
+          "manager_total": 12.6645,
+          "json_parse": 0.4515,
+          "batch_total": 14.023499999999999
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.284,
+          "thread_wait": 0.158,
+          "query_tensor": 0.014,
+          "manager_total": 11.785,
+          "json_parse": 0.412,
+          "batch_total": 13.004000000000001
+        }
+      }
+    ],
+    "base_b": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.321,
+          "thread_wait": 0.3585,
+          "query_tensor": 0.017,
+          "manager_total": 18.788,
+          "json_parse": 0.5045,
+          "batch_total": 20.274
+        }
+      },
+      {
+        "case": 99402,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.354,
+          "thread_wait": 0.326,
+          "query_tensor": 0.017,
+          "manager_total": 19.1755,
+          "json_parse": 0.529,
+          "batch_total": 20.6535
+        }
+      }
+    ]
+  },
+  "scope": "ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings"
+}

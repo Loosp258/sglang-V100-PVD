@@ -114,3 +114,15 @@ The initial full KV and one private seed Prompt pass remain separately charged.
 Default-off TP1/single-request restrictions remain; broader quality, memory and
 failure-under-load gates are open. Full report/raw evidence:
 `benchmark/results/pvd_oasis_formal_cloudlab_20261002.md`.
+
+## V partial-head search follow-up
+
+The original complete-four-head search cache did not apply to per-layer two-head
+requests. The default-off partial-group option now reuses the Entry's graph
+workspace for already-arrived heads, preserving width/ID mapping and avoiding
+cross-layer waiting. Same overlapped paired Decode on both arms, ABBA with
+four requests/mode: V batch20.039→13.995 ms, foreground KV wait687.889→554.700 ms,
+client13.5966→11.9948 s. Two synthetic fixtures' actual IDs/text match.
+This is the V cache's measured benefit, not a new serial-versus-overlap result.
+Native candidate jitter occurs in both paths; quality equivalence is unproven.
+Report: `benchmark/results/pvd_oasis_v_search_cloudlab_20261002.md`.

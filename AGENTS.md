@@ -187,7 +187,17 @@ shape. One rank0 layer showed CAGRA candidate jitter; 100 measurements/mode on
 that layer reproduced it in both baseline and cache (union Top4 mean coverage
 0.9893/0.9879, single-observation minimum 0.8571 in both). Do not claim exact
 candidate equivalence or a production recall guarantee. Online seven-row
-ABBA validation follows; full graph/width/arrival/Decode settings stay fixed.
+ABBA evidence follows below; full graph/width/arrival/Decode settings stay fixed.
+
+The live seven-row trial now completed (`oasis_v_search_abba01`, implementation
+`005f874cc`): same two2159-token Prompts,16 output tokens, four requests/mode,
+base/opt/opt/base, identical actual IDs/text. V per-rank layer batch median
+20.039→13.995 ms, D foreground layer-wait sum687.889→554.700 ms, client
+13.5966→11.9948 s (11.78% reduction), with gains in both orders. Both modes use
+overlap=true; this isolates the V cache, not the gain from Decode overlap.
+150 tests passed; all GPUs drained to0 MiB. Report and native jitter evidence:
+`benchmark/results/pvd_oasis_v_search_cloudlab_20261002.md`. Keep defaults off,
+budget/width unchanged and broader quality/concurrency/pressure gates open.
 
 ### User-requested paper alignment (2026-10-02)
 

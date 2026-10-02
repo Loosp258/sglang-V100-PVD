@@ -18,6 +18,9 @@ root = a.directory
 summary = json.loads((root / 'summary.json').read_text())
 result = {}
 shared_offset = 0
+mode_rows = {}
+comparison = (json.loads((root / 'comparison.json').read_text())['comparison']
+    if (root / 'comparison.json').exists() else 'pipeline')
 for arm, requests in summary['requests'].items():
     path = root / f'{arm}_v.log'
     if not path.exists():
@@ -44,6 +47,9 @@ for arm, requests in summary['requests'].items():
         offset += 56 + expected
         assert len(steady) == expected, (arm, request['case'], len(steady), expected)
         assert all(row[1:3] == (2, 14) for row in steady)
+        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison == 'v-search' else (
+            'overlap' if arm.startswith('overlap') else 'serial')
+        mode_rows.setdefault(mode, []).extend(steady)
         selected.append(dict(case=request['case'], batches=len(steady),
             paths=sorted({row[0] for row in steady}),
             median_stage_ms={name: median([row[3][name] for row in steady])
@@ -51,5 +57,10 @@ for arm, requests in summary['requests'].items():
     result[arm] = selected
 if shared_offset:
     assert len(batches) == shared_offset, (len(batches), shared_offset)
+aggregate = {mode: dict(batches=len(rows), paths=sorted({row[0] for row in rows}),
+    median_stage_ms={name: median([row[3][name] for row in rows]) for name in rows[0][3]})
+    for mode, rows in mode_rows.items()}
+result = dict(aggregate=aggregate, requests=result,
+    scope='ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings')
 (root / 'v_search_summary.json').write_text(json.dumps(result, indent=2))
 print(json.dumps(result, indent=2))
