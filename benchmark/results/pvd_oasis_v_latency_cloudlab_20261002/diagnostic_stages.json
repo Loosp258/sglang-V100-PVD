@@ -1,0 +1,64 @@
+{
+  "aggregate": {
+    "optimized": {
+      "batches": 784,
+      "paths": [
+        "grouped_cagra_partial_batched"
+      ],
+      "median_stage_ms": {
+        "request_validate": 0.306,
+        "thread_wait": 0.303,
+        "query_tensor": 0.017,
+        "manager_total": 13.216999999999999,
+        "manager_lock": 0.001,
+        "identity_lease": 0.044,
+        "query_place": 0.5285,
+        "workspace_lock": 0.003,
+        "finite_proof": 1.1205,
+        "native_scope": 0.047,
+        "native_submit": 2.554,
+        "native_completion": 0.117,
+        "candidate_mapping": 5.214,
+        "score_restore": 0.368,
+        "backend_enqueue": 0.001,
+        "host_materialize": 0.304,
+        "manager_completion": 0.172,
+        "json_parse": 0.478,
+        "batch_total": 14.773499999999999
+      }
+    }
+  },
+  "requests": {
+    "opt_profile": [
+      {
+        "case": 99401,
+        "batches": 784,
+        "paths": [
+          "grouped_cagra_partial_batched"
+        ],
+        "median_stage_ms": {
+          "request_validate": 0.306,
+          "thread_wait": 0.303,
+          "query_tensor": 0.017,
+          "manager_total": 13.216999999999999,
+          "manager_lock": 0.001,
+          "identity_lease": 0.044,
+          "query_place": 0.5285,
+          "workspace_lock": 0.003,
+          "finite_proof": 1.1205,
+          "native_scope": 0.047,
+          "native_submit": 2.554,
+          "native_completion": 0.117,
+          "candidate_mapping": 5.214,
+          "score_restore": 0.368,
+          "backend_enqueue": 0.001,
+          "host_materialize": 0.304,
+          "manager_completion": 0.172,
+          "json_parse": 0.478,
+          "batch_total": 14.773499999999999
+        }
+      }
+    ]
+  },
+  "scope": "ordered completed single-request pilots; exact two-rank RPC counts; V host wall timings"
+}

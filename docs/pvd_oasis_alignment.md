@@ -126,3 +126,29 @@ client13.5966→11.9948 s. Two synthetic fixtures' actual IDs/text match.
 This is the V cache's measured benefit, not a new serial-versus-overlap result.
 Native candidate jitter occurs in both paths; quality equivalence is unproven.
 Report: `benchmark/results/pvd_oasis_v_search_cloudlab_20261002.md`.
+
+## V allocation and candidate handling follow-up
+
+Default-off `--prompt-index-cagra-native-pool` reuses CUDA scratch within the
+existing640 MiB native reservation; `--prompt-index-host-candidate-processing`
+downloads bounded candidates after native completion and maps IDs on CPU. GPU
+float32 score restoration, filtered native CAGRA, query count, width and layer
+arrival remain unchanged. Fixed native candidates preserve IDs/pages/scores
+and ordering on both ranks; independent native candidate jitter remains.
+
+Implementation `c9512e4c0`, 196 passing checks (2 explicit native opt-in cases
+skipped), plus real cuVS25.10/V100S probes and formal native Gateway/P/V/D.
+The fair base/opt/opt/base pilot uses the prior partial-head cache as baseline,
+same overlapped Decode and four measured requests/config: V batch14.374→7.526
+ms, D foreground KV wait556.487→422.846 ms, client11.9547→10.1937 s (14.73%).
+All actual IDs/text match on two synthetic fixtures. This validates a V change,
+not serial-versus-overlap performance or broad output quality.
+
+ID mapping is now about62 μs, but total V processing remains7.526 ms. Native
+submission and completion combined per observation take1.993 ms: pooling
+moves implicit allocator waits into the explicit fence. D still spends about
+80% of its529 ms execution interval waiting for layer KV. The two Python layer
+workers, private banks and GPUDirect device fence remain. Pool capacity320 MiB/
+rank was retained in the probe within the640 MiB bound; this is not a physical
+peak-memory result. Defaults and open gates remain unchanged. Full report:
+`benchmark/results/pvd_oasis_v_latency_cloudlab_20261002.md`.

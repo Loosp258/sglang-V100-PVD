@@ -193,6 +193,29 @@ gain from isolated kernel timings or reduce recall/budgets to manufacture one.
    D wait and client time independently; commit completed stages. Broader
    concurrency/quality/memory gates remain open and defaults stay off.
 
+Completed latency follow-up (`c9512e4c0`): bounded per-rank RMM pool under the
+existing640 MiB reservation, plus bounded candidate download/CPU mapping with
+unchanged GPU float32 mean-score restoration and native filters. 196 tests
+passed (2 explicit native opt-in cases skipped); real V100S/cuVS25.10 probes
+verified identical IDs/pages/scores/ordering for fixed native candidates on all
+28 layers/both ranks. Independent native calls retain rank0 candidate jitter:
+pooled old/new mean Top4 union coverage0.999575/0.999150, worst0.857143 in both;
+rank1 all1.0. Pool retains320 MiB/rank in this probe within its640 MiB physical
+maximum; Entry close drains native live allocations but retains pool capacity.
+
+Formal `oasis_v_latency_abba01` compares the prior two-head cache against the
+two new flags, base/opt/opt/base, four2159-token/16-output requests per mode,
+identical overlapped P/D configs and actual output IDs/text. V batch14.374→7.526
+ms (1.91x), ID mapping5.119→0.062 ms, D layer-wait sum556.487→422.846 ms,
+client11.9547→10.1937 s (14.73% reduction). Native submit+completion must be
+combined per observation:2.729→1.993 ms; pooling shifts implicit waits into the
+explicit fence. Complete queries remain millisecond-scale; no overall tenfold
+or submillisecond claim. Both orders/cases improve; no sparse-only admission,
+Q-count reduction, pure-kernel timing or serial/overlap gain is inferred.
+All services drained, owned/cleanup_errors empty, all GPUs0 MiB. Full evidence:
+`benchmark/results/pvd_oasis_v_latency_cloudlab_20261002.md`. Keep the new flags
+default-off and retain the broader quality/concurrency/pressure gates.
+
 Keep the selected fast graph, CAGRA `itopk_size=2048`, Top4, 32-token bank and
 the current paired Decode/arrival schedule fixed. Current Oasis sends two
 head items per rank/layer, so the existing complete-four-head search cache

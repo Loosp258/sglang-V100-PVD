@@ -1,0 +1,474 @@
+[
+  {
+    "probe": "native",
+    "ranks": [
+      {
+        "rank": 0,
+        "fixture_sha256": "97eb92e92f181564aab78475265ab96e74c7037ca015b47a38b54f4831397f81",
+        "graph_sha256": "c155a9ae3ff7c92af899fc68e53841a7f6fbc789bea23c892fed370d63a078e1",
+        "all_native_ids_identical": false,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "879295d46b7251f579fe7662e7eb4e10f0356ceca26ebd598275fd7e80ee73fc",
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 3.139421489322558,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {}
+          },
+          "optimized": {
+            "median_two_head_ms": 2.3864899994805455,
+            "mean_recall_union_top4": 0.9995748299319727,
+            "worst_recall_union_top4": 0.8571428571428571,
+            "stage_ms": {
+              "backend_enqueue": 0.0002709566615521908,
+              "candidate_mapping": 0.467820034828037,
+              "finite_proof": 0.08675298886373639,
+              "host_materialize": 0.08471347973681986,
+              "identity_lease": 0.015303987311199307,
+              "manager_completion": 0.025162473320961,
+              "manager_lock": 0.00035105040296912193,
+              "native_completion": 0.015558995073661208,
+              "native_scope": 0.013811048120260239,
+              "native_submit": 1.3381874887272716,
+              "query_place": 0.03925900091417134,
+              "score_restore": 0.09214846068061888,
+              "workspace_lock": 0.000700994860380888
+            }
+          }
+        }
+      },
+      {
+        "rank": 1,
+        "fixture_sha256": "d52507acd8e71567429953872dca87fa1a018b54b687d609da3709e01d32f21c",
+        "graph_sha256": "b5e39048704152f9f6b6fad2e372e9a6f66616020a2a6db7c9064ca6850f25ff",
+        "all_native_ids_identical": true,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "37bff8b216e4b253d29a1c090805af81644c5caa512ed4f59dc257a1bbe8d702",
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 3.138780011795461,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {}
+          },
+          "optimized": {
+            "median_two_head_ms": 2.381219994276762,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.0002809683792293072,
+              "candidate_mapping": 0.45665455400012434,
+              "finite_proof": 0.0859465217217803,
+              "host_materialize": 0.08642699685879052,
+              "identity_lease": 0.015128985978662968,
+              "manager_completion": 0.02584402682259679,
+              "manager_lock": 0.00036100391298532486,
+              "native_completion": 0.015989993698894978,
+              "native_scope": 0.013760523870587349,
+              "native_submit": 1.3475599989760667,
+              "query_place": 0.03922850009985268,
+              "score_restore": 0.09043447789736092,
+              "workspace_lock": 0.000700994860380888
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "probe": "host_nopool",
+    "ranks": [
+      {
+        "rank": 0,
+        "fixture_sha256": "97eb92e92f181564aab78475265ab96e74c7037ca015b47a38b54f4831397f81",
+        "graph_sha256": "c155a9ae3ff7c92af899fc68e53841a7f6fbc789bea23c892fed370d63a078e1",
+        "all_native_ids_identical": false,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "879295d46b7251f579fe7662e7eb4e10f0356ceca26ebd598275fd7e80ee73fc",
+        "comparison": "host",
+        "native_pool": false,
+        "pool_bytes": 0,
+        "native_live_after_close": 0,
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 2.3095899960026145,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.0002809683792293072,
+              "candidate_mapping": 0.4637270176317543,
+              "finite_proof": 0.08611701196059585,
+              "host_materialize": 0.0855049875099212,
+              "identity_lease": 0.015403988072648644,
+              "manager_completion": 0.025788991479203105,
+              "manager_lock": 0.0003809982445091009,
+              "native_completion": 0.01567401341162622,
+              "native_scope": 0.014316989108920097,
+              "native_submit": 1.2665829854086041,
+              "query_place": 0.03882299643009901,
+              "score_restore": 0.0913914991542697,
+              "workspace_lock": 0.0007110065780580044
+            }
+          },
+          "optimized": {
+            "median_two_head_ms": 1.969339995412156,
+            "mean_recall_union_top4": 0.9991496598639455,
+            "worst_recall_union_top4": 0.8571428571428571,
+            "stage_ms": {
+              "backend_enqueue": 0.00024097971618175507,
+              "candidate_download": 0.1671049976721406,
+              "candidate_mapping": 0.14988650218583643,
+              "finite_proof": 0.08706902735866606,
+              "host_materialize": 0.003998051397502422,
+              "identity_lease": 0.01540902303531766,
+              "manager_completion": 0.02905449946410954,
+              "manager_lock": 0.0003909808583557606,
+              "native_completion": 0.015644502127543092,
+              "native_scope": 0.014277000445872545,
+              "native_submit": 1.2556275178212672,
+              "query_place": 0.04073098534718156,
+              "score_restore": 0.00031999661587178707,
+              "workspace_lock": 0.0007209600880742073
+            }
+          }
+        }
+      },
+      {
+        "rank": 1,
+        "fixture_sha256": "d52507acd8e71567429953872dca87fa1a018b54b687d609da3709e01d32f21c",
+        "graph_sha256": "b5e39048704152f9f6b6fad2e372e9a6f66616020a2a6db7c9064ca6850f25ff",
+        "all_native_ids_identical": true,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "37bff8b216e4b253d29a1c090805af81644c5caa512ed4f59dc257a1bbe8d702",
+        "comparison": "host",
+        "native_pool": false,
+        "pool_bytes": 0,
+        "native_live_after_close": 0,
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 2.287162496941164,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.00027101486921310425,
+              "candidate_mapping": 0.44994152267463505,
+              "finite_proof": 0.08382750093005598,
+              "host_materialize": 0.08239599992521107,
+              "identity_lease": 0.01541399979032576,
+              "manager_completion": 0.0255129998549819,
+              "manager_lock": 0.0003809982445091009,
+              "native_completion": 0.015483994502574205,
+              "native_scope": 0.01415150472894311,
+              "native_submit": 1.2660775100812316,
+              "query_place": 0.0384019804187119,
+              "score_restore": 0.08896697545424104,
+              "workspace_lock": 0.0007065245881676674
+            }
+          },
+          "optimized": {
+            "median_two_head_ms": 1.972139987628907,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.0002500019036233425,
+              "candidate_download": 0.16295650857500732,
+              "candidate_mapping": 0.15269697178155184,
+              "finite_proof": 0.08468452142551541,
+              "host_materialize": 0.003956956788897514,
+              "identity_lease": 0.01549901207908988,
+              "manager_completion": 0.028763985028490424,
+              "manager_lock": 0.0003809691406786442,
+              "native_completion": 0.015434023225679994,
+              "native_scope": 0.014137011021375656,
+              "native_submit": 1.264588994672522,
+              "query_place": 0.039940496208146214,
+              "score_restore": 0.00032049138098955154,
+              "workspace_lock": 0.0007409835234284401
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "probe": "host_pool",
+    "ranks": [
+      {
+        "rank": 0,
+        "fixture_sha256": "97eb92e92f181564aab78475265ab96e74c7037ca015b47a38b54f4831397f81",
+        "graph_sha256": "c155a9ae3ff7c92af899fc68e53841a7f6fbc789bea23c892fed370d63a078e1",
+        "all_native_ids_identical": false,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "879295d46b7251f579fe7662e7eb4e10f0356ceca26ebd598275fd7e80ee73fc",
+        "comparison": "host",
+        "native_pool": true,
+        "pool_bytes": 335544320,
+        "native_live_after_close": 0,
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 1.938832487212494,
+            "mean_recall_union_top4": 0.9995748299319727,
+            "worst_recall_union_top4": 0.8571428571428571,
+            "stage_ms": {
+              "backend_enqueue": 0.00029994407668709755,
+              "candidate_mapping": 0.45626345672644675,
+              "finite_proof": 0.08458900265395641,
+              "host_materialize": 0.08377799531444907,
+              "identity_lease": 0.015274010365828872,
+              "manager_completion": 0.025463028578087687,
+              "manager_lock": 0.00037101563066244125,
+              "native_completion": 0.283528002910316,
+              "native_scope": 0.014476943761110306,
+              "native_submit": 0.6322090048342943,
+              "query_place": 0.040075508877635,
+              "score_restore": 0.09156254236586392,
+              "workspace_lock": 0.0007409835234284401
+            }
+          },
+          "optimized": {
+            "median_two_head_ms": 1.6033365100156516,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.00022997846826910973,
+              "candidate_download": 0.16574648907408118,
+              "candidate_mapping": 0.1502679951954633,
+              "finite_proof": 0.08533548680134118,
+              "host_materialize": 0.004018016625195742,
+              "identity_lease": 0.015293480828404427,
+              "manager_completion": 0.028433481929823756,
+              "manager_lock": 0.0003804743755608797,
+              "native_completion": 0.2841294917743653,
+              "native_scope": 0.014406978152692318,
+              "native_submit": 0.627871515462175,
+              "query_place": 0.041543011320754886,
+              "score_restore": 0.00033594551496207714,
+              "workspace_lock": 0.0007110065780580044
+            }
+          }
+        }
+      },
+      {
+        "rank": 1,
+        "fixture_sha256": "d52507acd8e71567429953872dca87fa1a018b54b687d609da3709e01d32f21c",
+        "graph_sha256": "b5e39048704152f9f6b6fad2e372e9a6f66616020a2a6db7c9064ca6850f25ff",
+        "all_native_ids_identical": true,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "37bff8b216e4b253d29a1c090805af81644c5caa512ed4f59dc257a1bbe8d702",
+        "comparison": "host",
+        "native_pool": true,
+        "pool_bytes": 335544320,
+        "native_live_after_close": 0,
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 1.9351559749338776,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.000300002284348011,
+              "candidate_mapping": 0.4504020034801215,
+              "finite_proof": 0.08368751150555909,
+              "host_materialize": 0.08242944022640586,
+              "identity_lease": 0.015403988072648644,
+              "manager_completion": 0.02623401815071702,
+              "manager_lock": 0.00038999132812023163,
+              "native_completion": 0.2915685181505978,
+              "native_scope": 0.014512479538097978,
+              "native_submit": 0.6315580103546381,
+              "query_place": 0.04020048072561622,
+              "score_restore": 0.0900799932423979,
+              "workspace_lock": 0.0007720082066953182
+            }
+          },
+          "optimized": {
+            "median_two_head_ms": 1.6146525158546865,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.0002309971023350954,
+              "candidate_download": 0.16305700410157442,
+              "candidate_mapping": 0.15112000983208418,
+              "finite_proof": 0.08440902456641197,
+              "host_materialize": 0.003938504960387945,
+              "identity_lease": 0.015268975403159857,
+              "manager_completion": 0.02883397974073887,
+              "manager_lock": 0.00038102734833955765,
+              "native_completion": 0.2921499835792929,
+              "native_scope": 0.01442700158804655,
+              "native_submit": 0.6269949954003096,
+              "query_place": 0.04114699549973011,
+              "score_restore": 0.0003300374373793602,
+              "workspace_lock": 0.0007365015335381031
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "probe": "host_pool_final",
+    "ranks": [
+      {
+        "rank": 0,
+        "fixture_sha256": "97eb92e92f181564aab78475265ab96e74c7037ca015b47a38b54f4831397f81",
+        "graph_sha256": "c155a9ae3ff7c92af899fc68e53841a7f6fbc789bea23c892fed370d63a078e1",
+        "all_native_ids_identical": false,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "879295d46b7251f579fe7662e7eb4e10f0356ceca26ebd598275fd7e80ee73fc",
+        "comparison": "host",
+        "native_pool": true,
+        "pool_bytes": 335544320,
+        "same_native_candidates_semantics_identical": true,
+        "native_live_after_close": 0,
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 1.9348495115991682,
+            "mean_recall_union_top4": 0.9995748299319727,
+            "worst_recall_union_top4": 0.8571428571428571,
+            "stage_ms": {
+              "backend_enqueue": 0.00027997884899377823,
+              "candidate_mapping": 0.44989201705902815,
+              "finite_proof": 0.08462398545816541,
+              "host_materialize": 0.08333649020642042,
+              "identity_lease": 0.015368510503321886,
+              "manager_completion": 0.02489701728336513,
+              "manager_lock": 0.00038102734833955765,
+              "native_completion": 0.2848959993571043,
+              "native_scope": 0.014582503354176879,
+              "native_submit": 0.6328810122795403,
+              "query_place": 0.03868798376061022,
+              "score_restore": 0.0907855574041605,
+              "workspace_lock": 0.0007519847713410854
+            }
+          },
+          "optimized": {
+            "median_two_head_ms": 1.4664790069218725,
+            "mean_recall_union_top4": 0.9991496598639455,
+            "worst_recall_union_top4": 0.8571428571428571,
+            "stage_ms": {
+              "backend_enqueue": 0.0002200249582529068,
+              "candidate_download": 0.1645249722059816,
+              "candidate_mapping": 0.02594399848021567,
+              "finite_proof": 0.08626701310276985,
+              "host_materialize": 0.0028659706003963947,
+              "identity_lease": 0.015113473637029529,
+              "manager_completion": 0.026890513254329562,
+              "manager_lock": 0.00041100429370999336,
+              "native_completion": 0.28124896925874054,
+              "native_scope": 0.014541990822181106,
+              "native_submit": 0.6324144778773189,
+              "query_place": 0.03865300095640123,
+              "score_restore": 0.00029001967050135136,
+              "workspace_lock": 0.0007515191100537777
+            }
+          }
+        }
+      },
+      {
+        "rank": 1,
+        "fixture_sha256": "d52507acd8e71567429953872dca87fa1a018b54b687d609da3709e01d32f21c",
+        "graph_sha256": "b5e39048704152f9f6b6fad2e372e9a6f66616020a2a6db7c9064ca6850f25ff",
+        "all_native_ids_identical": true,
+        "original_query_shape": [
+          56,
+          2,
+          128
+        ],
+        "focus_layer": null,
+        "query_sha256": "37bff8b216e4b253d29a1c090805af81644c5caa512ed4f59dc257a1bbe8d702",
+        "comparison": "host",
+        "native_pool": true,
+        "pool_bytes": 335544320,
+        "same_native_candidates_semantics_identical": true,
+        "native_live_after_close": 0,
+        "cached_bytes": 64064,
+        "stats": {
+          "baseline": {
+            "median_two_head_ms": 1.9294500234536827,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.0002809683792293072,
+              "candidate_mapping": 0.44514701585285366,
+              "finite_proof": 0.0834219972603023,
+              "host_materialize": 0.08207448991015553,
+              "identity_lease": 0.015268975403159857,
+              "manager_completion": 0.0253980397246778,
+              "manager_lock": 0.00038102734833955765,
+              "native_completion": 0.2905715082306415,
+              "native_scope": 0.01457749749533832,
+              "native_submit": 0.6359665130730718,
+              "query_place": 0.038241996662691236,
+              "score_restore": 0.0898195430636406,
+              "workspace_lock": 0.0007610069587826729
+            }
+          },
+          "optimized": {
+            "median_two_head_ms": 1.461665000533685,
+            "mean_recall_union_top4": 1.0,
+            "worst_recall_union_top4": 1.0,
+            "stage_ms": {
+              "backend_enqueue": 0.0002200249582529068,
+              "candidate_download": 0.1619545219000429,
+              "candidate_mapping": 0.02544251037761569,
+              "finite_proof": 0.08504997822456062,
+              "host_materialize": 0.0027554924599826336,
+              "identity_lease": 0.015008001355454326,
+              "manager_completion": 0.027171510737389326,
+              "manager_lock": 0.0004099856596440077,
+              "native_completion": 0.2871704928111285,
+              "native_scope": 0.01451201387681067,
+              "native_submit": 0.629384012427181,
+              "query_place": 0.038426980609074235,
+              "score_restore": 0.00029098009690642357,
+              "workspace_lock": 0.0007515191100537777
+            }
+          }
+        }
+      }
+    ]
+  }
+]

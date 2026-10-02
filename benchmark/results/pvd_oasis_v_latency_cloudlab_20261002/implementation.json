@@ -1,0 +1,6 @@
+{
+  "plan": "087e6c643",
+  "stage_profiling": "dcbcd1374",
+  "measured_implementation": "c9512e4c0",
+  "scope": "cached V baseline vs bounded RMM pool and host candidate processing; same overlapped Decode"
+}

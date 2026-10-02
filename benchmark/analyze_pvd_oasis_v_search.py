@@ -29,6 +29,15 @@ for arm, requests in summary['requests'].items():
     batches = [(path, int(items), int(nqueries), ast.literal_eval(stages))
         for path, items, nqueries, stages in re.findall(
         r'PVD V search-batch path=(\S+) items=(\d+) query_rows=(\d+) stage_ms=(\{[^\n]+\})', log)]
+    for _, _, _, stages in batches:
+        if 'native_submit' in stages:
+            # Combine adjacent stages per observation *before* aggregating.
+            # Pooling moves implicit allocator waits into the explicit fence;
+            # submission time alone is not a native-search speedup metric.
+            stages['native_submit_and_completion'] = stages['native_submit'] + stages['native_completion']
+            stages['candidate_handling'] = sum(stages.get(name, 0.0) for name in (
+                'candidate_mapping', 'score_restore', 'host_materialize',
+                'backend_enqueue', 'candidate_download'))
     warmups = json.loads((root / f'{arm}_warmup.json').read_text())
     warm_count = sum((r['completion_tokens'] - 1) * 28 * 2 for r in warmups)
     formal_count = sum((r['completion_tokens'] - 1) * 28 * 2 for r in requests)
@@ -47,6 +56,9 @@ for arm, requests in summary['requests'].items():
         offset += 56 + expected
         assert len(steady) == expected, (arm, request['case'], len(steady), expected)
         assert all(row[1:3] == (2, 14) for row in steady)
+        if comparison == 'v-latency':
+            expected_path = 'grouped_cagra_partial_batched' + ('_host' if arm.startswith('opt') else '')
+            assert all(row[0] == expected_path for row in steady), 'unexpected V search fallback/path'
         mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency') else (
             'overlap' if arm.startswith('overlap') else 'serial')
         mode_rows.setdefault(mode, []).extend(steady)

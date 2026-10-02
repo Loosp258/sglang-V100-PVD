@@ -10,6 +10,8 @@ p.add_argument('directory', type=Path)
 p.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency'), default='pipeline')
 a = p.parse_args()
 root = a.directory
+if (root / 'comparison.json').exists():
+    assert json.loads((root / 'comparison.json').read_text())['comparison'] == a.comparison
 online = json.loads((root / 'online.json').read_text())
 configs = [json.loads(path.read_text()) for path in sorted(root.glob('*_config.json'))]
 if configs:
