@@ -18,9 +18,10 @@ tag="${PVD_RUN_TAG:-acceptance}"
 log_dir="$root/validation/logs"
 context_tokens="${PVD_CONTEXT_TOKENS:-2304}"
 fanin_max_slices="${PVD_FANIN_MAX_SLICES:-262144}"
-fanin_max_records="${PVD_FANIN_MAX_RECORDS:-1024}"
 d_staging_bytes="${PVD_D_STAGING_BYTES:-268435456}"
 v_total_pages="${PVD_V_TOTAL_PAGES:-8192}"
+# group: one process for both GPUs; 0/1: start only that rank on its GPU.
+v_rank="${PVD_V_RANK:-group}"
 probe_scratch_bytes="${PVD_PROBE_SCRATCH_BYTES:-536870912}"
 draft_scratch_bytes="${PVD_DRAFT_SCRATCH_BYTES:-268435456}"
 retrieval_bank_bytes="${PVD_RETRIEVAL_BANK_BYTES:-268435456}"
@@ -48,6 +49,10 @@ python="$CONDA_PREFIX/bin/python"
 
 if [[ ! "$tag" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo 'PVD_RUN_TAG must be filename-safe' >&2
+  exit 2
+fi
+if [[ ! "$v_rank" =~ ^(group|0|1)$ ]]; then
+  echo 'PVD_V_RANK must be group, 0 or 1' >&2
   exit 2
 fi
 if [[ ! "$cagra_extend25" =~ ^[01]$ ]] ||
@@ -85,8 +90,6 @@ if [[ ! "$context_tokens" =~ ^[1-9][0-9]{3,4}$ ]] ||
    (( context_tokens < 2304 || context_tokens > 20480 )) ||
    [[ ! "$fanin_max_slices" =~ ^[1-9][0-9]{5,7}$ ]] ||
    (( fanin_max_slices < 262144 || fanin_max_slices > 2097152 )) ||
-   [[ ! "$fanin_max_records" =~ ^[1-9][0-9]{3,4}$ ]] ||
-   (( fanin_max_records < 1024 || fanin_max_records > 16384 )) ||
    [[ ! "$d_staging_bytes" =~ ^[1-9][0-9]{8,9}$ ]] ||
    (( d_staging_bytes < 268435456 || d_staging_bytes > 4294967296 )) ||
    [[ ! "$v_total_pages" =~ ^[1-9][0-9]{3,4}$ ]] ||
@@ -115,10 +118,6 @@ fi
 export MC_DISABLE_METACACHE=1
 export PYTHONPATH="$checkout/python${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$log_dir"
-radix_args=()
-if [[ "${PVD_DISABLE_RADIX_CACHE:-0}" == 1 ]]; then
-  radix_args=(--disable-radix-cache)
-fi
 
 require_free_port() {
   local port="$1"
@@ -170,12 +169,23 @@ case "$role" in
       --max-total-tokens "$context_tokens" --max-running-requests 4 \
       --max-prefill-tokens "$context_tokens" \
       --chunked-prefill-size "$prefill_chunk_tokens" --disable-cuda-graph \
-      "${radix_args[@]}" \
       --disable-overlap-schedule --log-level info \
       >"$log_dir/p-$tag.log" 2>&1 </dev/null &
     ;;
   v)
-    require_free_port 9100
+    rank_args=()
+    if [[ "$v_rank" == group ]]; then
+      require_free_port 9100
+      require_free_port 9300
+      require_free_port 9301
+    else
+      require_free_port "$((9300 + v_rank))"
+      rank_args=(--rank "$v_rank" --local-rank "$v_rank")
+      if [[ "$v_rank" == 0 ]]; then
+        require_free_port 9100
+        rank_args+=(--rank1-shard-url "http://$v_ip:9301")
+      fi
+    fi
     # This lease caps model context at 2304. A cold native CAGRA build for a
     # 2095-row, one-shot Entry took >20 s end-to-end; exact search returned
     # the same answer in <4 s. Keep CAGRA selectable via an explicit lower
@@ -217,6 +227,52 @@ case "$role" in
       exit 2
     fi
     export PYTHONPATH="$checkout/python:$cuvs_site"
+    nogil_args=()
+    if [[ "${PVD_CAGRA_NOGIL_EXTEND:-0}" == 1 ]]; then
+      export PYTHONPATH="$PYTHONPATH:$root/deps/pvd-cagra-nogil25"
+      nogil_args=(--prompt-index-cagra-nogil-extend)
+    fi
+    kv_edge_args=()
+    if [[ "${PVD_CAGRA_KV_EDGE_UPDATE:-0}" == 1 ]]; then
+      export PYTHONPATH="$root/deps/pvd-cagra-joint25:$PYTHONPATH"
+      kv_edge_args=(--prompt-index-cagra-kv-edge-update --prompt-index-cagra-kv-routing-edges "${PVD_CAGRA_KV_ROUTING_EDGES:-0}" --prompt-index-cagra-small-tail-max-rows "${PVD_CAGRA_SMALL_TAIL_MAX_ROWS:-0}")
+      if [[ "${PVD_CAGRA_FUSED_PREPARE:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-fused-prepare)
+      fi
+      if [[ "${PVD_BATCHED_GROUP_SEARCH:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-batched-group-search)
+      fi
+      if [[ "${PVD_BATCHED_K_EXTRACTION:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-batched-k-extraction)
+      fi
+      if [[ "${PVD_PROFILE_CHUNK_STAGES:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-profile-chunk-stages)
+      fi
+      if [[ "${PVD_FUSED_K_CENTERING:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-fused-k-centering)
+      fi
+      if [[ "${PVD_PLANNED_TAIL:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-planned-tail)
+      fi
+      if [[ "${PVD_REUSE_SCORES:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-reuse-scores)
+      fi
+      if [[ "${PVD_PROFILE_GPU:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-profile-gpu)
+      fi
+      if [[ "${PVD_EARLY_FINAL_UPDATE:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-early-final-update)
+      fi
+      if [[ "${PVD_FUSED_EDGE_WRITE:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-fused-edge-write)
+      fi
+      if [[ "${PVD_NEW_TOP16:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-new-top16)
+      fi
+      if [[ "${PVD_STREAM_COMPLETION:-0}" == "1" ]]; then
+        kv_edge_args+=(--prompt-index-cagra-stream-completion)
+      fi
+    fi
     nvidia_site="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia"
     export LD_LIBRARY_PATH="$nvidia_site/cublas/lib:$nvidia_site/cusolver/lib:$nvidia_site/cusparse/lib:$nvidia_site/nvjitlink/lib:$nvidia_site/cuda_runtime/lib:$cuvs_site/libcuvs/lib64:$cuvs_site/libraft/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     pack_args=()
@@ -224,6 +280,7 @@ case "$role" in
       pack_args+=(--experimental-triton-sparse-packing)
     fi
     nohup setsid "$python" -m sglang.srt.disaggregation.pvd.server \
+      "${rank_args[@]}" \
       --world-size 2 --host 0.0.0.0 --advertise-host "$v_ip" \
       --coordinator-port 9100 --shard-port-base 9300 \
       --entry-ttl-secs 300 --pvd-rank-devices 0,1 \
@@ -241,10 +298,13 @@ case "$role" in
       --prompt-index-group-heads "$group_heads" \
       "${index_mode_args[@]}" "${chunked_args[@]}" "${exact_seed_args[@]}" \
       --prompt-index-cagra-itopk-size "$itopk_size" \
+      --prompt-index-cagra-extend-concurrency "${PVD_CAGRA_EXTEND_CONCURRENCY:-1}" \
+      "${nogil_args[@]}" \
+      "${kv_edge_args[@]}" \
       --experimental-cuda-sparse-packing "${pack_args[@]}" \
       --full-kv-fanin-max-slices "$fanin_max_slices" \
       --full-kv-fanin-max-inflight 2 \
-      --full-kv-fanin-max-records "$fanin_max_records" \
+      --full-kv-fanin-max-records 1024 \
       --full-kv-fanin-native-batch \
       >"$log_dir/v-$tag.log" 2>&1 </dev/null &
     ;;
@@ -299,6 +359,7 @@ case "$role" in
       fi
     fi
     predictive_args=()
+    d_max_requests=4
     case "${PVD_MODE:-predictive}" in
       predictive)
         require_model "$draft"
@@ -329,7 +390,15 @@ case "$role" in
         )
         ;;
       full) ;;
-      *) echo 'PVD_MODE must be predictive or full' >&2; exit 2 ;;
+      oasis)
+        if [[ ! -s "${PVD_OASIS_CONFIG:-}" ]]; then
+          echo 'Oasis requires PVD_OASIS_CONFIG with explicit EAGLE3 pins/bounds' >&2
+          exit 2
+        fi
+        predictive_args=(--pvd-oasis-config "$PVD_OASIS_CONFIG")
+        d_max_requests=1
+        ;;
+      *) echo 'PVD_MODE must be predictive, full or oasis' >&2; exit 2 ;;
     esac
     nohup setsid "$python" -m sglang.launch_server \
       --model-path "$model" --device cuda --dtype float16 \
@@ -349,7 +418,7 @@ case "$role" in
       --num-reserved-decode-tokens "$reserved_tokens" \
       "${predictive_args[@]}" \
       --mem-fraction-static 0.5 --context-length "$context_tokens" \
-      --max-total-tokens "$context_tokens" --max-running-requests 4 \
+      --max-total-tokens "$context_tokens" --max-running-requests "$d_max_requests" \
       --max-prefill-tokens "$context_tokens" --disable-cuda-graph \
       --disable-overlap-schedule --log-level info \
       >"$log_dir/d-$tag.log" 2>&1 </dev/null &

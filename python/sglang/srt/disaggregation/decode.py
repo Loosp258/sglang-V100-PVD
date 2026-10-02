@@ -1654,7 +1654,9 @@ class SchedulerDisaggregationDecodeMixin:
 
     def refresh_pvd_running_batch(self: Scheduler, batch: ScheduleBatch):
         manager = self.disagg_decode_prealloc_queue.kv_manager
-        failures = manager.decode_refresher.refresh(batch.reqs)
+        oasis = getattr(self, "pvd_oasis_binding", None)
+        reqs = batch.reqs if oasis is None else [req for req in batch.reqs if not oasis.owns(req)]
+        failures = manager.decode_refresher.refresh(reqs) if reqs else []
         for req, error in failures:
             logger.error("PVD refresh failed for %s: %s", req.rid, error)
             prepare_abort(
@@ -1667,6 +1669,8 @@ class SchedulerDisaggregationDecodeMixin:
         if failures:
             batch.filter_batch()
             manager.decode_refresher.cleanup_finished()
+        if oasis is not None and not batch.is_empty():
+            oasis.prepare(batch.reqs)
 
     @torch.no_grad()
     def event_loop_normal_disagg_decode(self: Scheduler):

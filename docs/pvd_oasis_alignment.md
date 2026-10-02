@@ -2,7 +2,7 @@
 
 User requirement: align this branch with OasisKV's Decode method. Work in the
 isolated `codex/pvd-oasiskv` checkout; commit each completed stage. Existing
-whole-prefix target probes must not be used by an Oasis-mode request.
+whole-prefix target probes must not be used during Oasis Decode/refresh.
 
 Paper: https://arxiv.org/html/2608.08097v1, sections 4.2 and 4.4.
 
@@ -22,8 +22,12 @@ Paper: https://arxiv.org/html/2608.08097v1, sections 4.2 and 4.4.
 6. Retain predicted/resident intersections, cap replacement per KV head, and
    send only D CPU-cache misses. Keep a bounded per-request cache and preserve
    request/incarnation/step/layer identity through transfer and retirement.
-7. Initial admission receives sparse working sets plus draft initialization
-   state, not a complete Prompt KV replica on D. P/V keeps the immutable full KV.
+7. The paper's initial admission receives sparse working sets plus draft seed.
+   The formal pilot in this branch retains the existing complete P->V->D
+   bootstrap because the user's selected scope is Decode execution. D performs
+   one private actual-Prompt pass to initialize EAGLE features/root Q. Charge
+   both costs to startup and label this admission difference in every report;
+   never report it as paper-equivalent sparse-only admission. P->D stays off.
 
 ## Selector scope
 
@@ -58,3 +62,33 @@ D-side summaries. The latest 1.01-second-Q formal Decode measurement was made
 on the separate `codex/pvd-search-opt` branch's ordinary probe mode. It cannot
 be reported as OasisKV performance. Existing report:
 `benchmark/results/pvd_oasis_cloudlab_20261002.md`.
+
+## Formal pilot implementation
+
+`--pvd-oasis-config /absolute/config.json` installs a fail-closed, single-request
+TP1 Qwen2.5-7B binding. The normal Scheduler sampler and result processor commit
+only one actual token. Both candidate/actual target rows share existing weights.
+The native per-layer path snapshots/publishes Q before waiting for its incoming
+bank; bank selection/retention receives a separate foreground handoff. A bounded
+two-future slot per layer permits current and next layer work to coexist.
+
+The pilot keeps P->V->D initial full KV and separately charges one private actual
+Prompt pass for EAGLE initialization. Steady Decode has no whole-prefix target
+probe. Native sparse Mooncake misses arrive in private D GPU staging, pass the
+existing conservative GPUDirect device fence, then fill a monotonic D CPU cache.
+Resident intersections are copied on GPU; H2D transfers use CPU cached rows.
+The retained device fence is an overlap limitation to measure explicitly.
+
+The selected V source files match the actual source snapshot from the prior
+fast-graph/search comparison: 14 four-head graphs/rank, degree16 ring2, prefix2048,
+exact immutable KV tail update, itopk2048. Commit `80a91419c` brings that snapshot
+into this branch. Per-layer partial groups use existing filtered CAGRA search;
+they never wait for another layer to fill a grouped search batch.
+
+Admission JSON has exactly these keys (no inferred budgets or model paths):
+`eagle_source`, `eagle_checkpoint`, `eagle_manifest`, `vector_space`, `capacity`,
+`max_new`, `top_k`, `workers`, `timeout_seconds`, `max_sequence_tokens`,
+`max_decode_steps`, `request_budget_bytes`, `request_scratch_bytes`,
+`bootstrap_budget_bytes`, `bootstrap_transient_bytes`, `overlap`.
+`overlap=false` is the serialized paired control; both use identical layer KV
+selection/replacement/transport. Online Scheduler validation is still pending.

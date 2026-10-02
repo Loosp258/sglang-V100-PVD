@@ -659,6 +659,9 @@ class PVDDecodeRefresher:
 
     def release_request(self, req):
         """Also used when a queued request is removed without finished_reason."""
+        oasis = getattr(self.manager.scheduler, "pvd_oasis_binding", None)
+        if oasis is not None and oasis.release(req):
+            return
         prompt_prewarm = getattr(self.manager, "cuda_prompt_prewarm", None)
         if prompt_prewarm is not None:
             prompt_prewarm.cancel(req)

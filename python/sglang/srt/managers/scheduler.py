@@ -571,6 +571,11 @@ class Scheduler(
             # Configuration-only PVD keeps the existing full-Prompt path.
             maybe_install_cuda_predictive_serving(self)
 
+        if self.server_args.pvd_oasis_config:
+            from sglang.srt.disaggregation.pvd.oasis_startup import maybe_install_oasis
+
+            maybe_install_oasis(self)
+
         maybe_revert_pr_fix()
 
         self.is_initializing = False
@@ -3137,9 +3142,13 @@ class Scheduler(
                     else {}
                 )
                 resolve_forward_inputs(batch, self.future_map)
-                batch_result = self.model_worker.forward_batch_generation(
-                    batch, **kwargs
-                )
+                oasis = getattr(self, "pvd_oasis_binding", None)
+                if oasis is not None and batch.forward_mode.is_decode():
+                    batch_result = oasis.forward(batch)
+                else:
+                    batch_result = self.model_worker.forward_batch_generation(
+                        batch, **kwargs
+                    )
                 if isinstance(batch_result.next_token_ids, torch.Tensor):
                     if self.spec_algorithm.is_none():
                         # Non-spec: relay via future_map, gathered next iter.

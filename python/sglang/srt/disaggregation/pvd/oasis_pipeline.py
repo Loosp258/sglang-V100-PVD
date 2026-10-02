@@ -68,11 +68,15 @@ def select_resident(candidates, resident, *, capacity, max_new):
 class LayerLookahead:
     """Publish (t+1, layer) during t; wait only when that layer is consumed."""
 
-    def __init__(self, request_id, incarnation, *, layers, workers=2, timeout=60):
+    def __init__(self, request_id, incarnation, *, layers, workers=2, timeout=60,
+                 max_pending_per_layer=1):
         if not request_id or not incarnation or layers <= 0 or workers <= 0 or timeout <= 0:
             raise ValueError("explicit request, incarnation and positive bounds required")
         self.request_id, self.incarnation = request_id, incarnation
         self.layers, self.timeout = layers, timeout
+        if max_pending_per_layer not in (1, 2):
+            raise ValueError("one or two bounded layer futures required")
+        self.max_pending_per_layer = max_pending_per_layer
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="oasis-layer")
         self._lock = Lock()
         self._closed = False
@@ -87,7 +91,8 @@ class LayerLookahead:
         with self._lock:
             if self._closed:
                 raise RuntimeError("lookahead closed")
-            if step != self._published[layer] + 1 or layer in self._pending:
+            if (step != self._published[layer] + 1
+                    or sum(t.layer == layer for t, _, _ in self._pending.values()) >= self.max_pending_per_layer):
                 raise RuntimeError("duplicate, gap or unconsumed layer prediction")
             ticket = LayerTicket(self.request_id, self.incarnation, step, layer)
             published = monotonic()
@@ -100,7 +105,7 @@ class LayerLookahead:
                 return reply, started, monotonic()
 
             future = self._pool.submit(work)
-            self._pending[layer] = (ticket, future, published)
+            self._pending[step, layer] = (ticket, future, published)
             self._published[layer] = step
             return ticket
 
@@ -108,7 +113,7 @@ class LayerLookahead:
         with self._lock:
             if self._closed:
                 raise RuntimeError("lookahead closed")
-            item = self._pending.get(layer)
+            item = self._pending.get((step, layer))
             if item is None or item[0].step != step or step != self._consumed[layer] + 1:
                 raise RuntimeError("missing, replayed or out-of-order layer consume")
         ticket, future, published = item
@@ -120,9 +125,9 @@ class LayerLookahead:
         reply, started, completed = future.result(timeout=remaining)
         consumed = monotonic()
         with self._lock:
-            if self._closed or self._pending.get(layer) is not item:
+            if self._closed or self._pending.get((step, layer)) is not item:
                 raise RuntimeError("layer ownership changed during consumption")
-            del self._pending[layer]
+            del self._pending[step, layer]
             self._consumed[layer] = step
             self.trace.append({"step": step, "layer": layer, "published": published,
                 "worker_start": started, "ready": completed, "consumed": consumed,

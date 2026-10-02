@@ -18,6 +18,33 @@ pipeline = sys.modules["sglang.srt.disaggregation.pvd.oasis_pipeline"]
 
 
 class RequestTest(unittest.TestCase):
+    def test_native_query_is_prepared_before_bank_consume(self):
+        order = []
+        class Decoder:
+            layers, supports_early_publication = 2, True
+            owner = SimpleNamespace(active=None, quarantined=False)
+            def step(self, actual, predicted, position, banks, *, publish, project):
+                for layer in range(2):
+                    project(layer, (predicted, layer))
+                    order.append(("consume", layer))
+                    bank = banks(layer)
+                    publish(layer, (predicted, layer), bank)
+                return "logits", actual
+        def transport(query, handoff):
+            order.append(("project", query[1]))
+            return lambda ticket: pipeline.LayerReply(ticket, handoff())
+        owner = request.OasisRequestDecoder("r", "e", decoder=Decoder(),
+            initial_banks=("a", "b"), predict_one=lambda current, features: 9,
+            fetch_layer=transport, current_token=7, position=8, max_steps=3)
+        try:
+            owner.forward(7, 8)
+            self.assertEqual(order, [("project", 0), ("consume", 0), ("project", 1), ("consume", 1)])
+            owner.actual_committed(19)
+            owner.forward(19, 9)
+            self.assertEqual(len(owner.pipeline.trace), 2)
+        finally:
+            self.assertEqual(owner.close(), ())
+
     def make(self, *, foreign=False, fail_layer=False):
         visits, fetched, draft = [], [], []
         class Decoder:

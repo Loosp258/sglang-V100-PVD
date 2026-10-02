@@ -595,6 +595,16 @@ class SchedulerBatchResultProcessor:
         batch: ScheduleBatch,
         result: GenerationBatchResult,
     ):
+        oasis = getattr(batch, "pvd_oasis_result_bridge", None)
+        if oasis is not None:
+            from sglang.srt.disaggregation.pvd.oasis_scheduler import OasisSchedulerBinding
+
+            if (not isinstance(oasis, OasisSchedulerBinding)
+                    or getattr(batch, "pvd_cuda_result_bridge", None) is not None
+                    or getattr(batch, "pvd_cpu_result_bridge", None) is not None):
+                raise TypeError("invalid or competing Oasis result bridge")
+            with oasis.processing(self, batch, result):
+                return self._process_batch_result_decode(batch, result)
         cuda_bridge = getattr(batch, "pvd_cuda_result_bridge", None)
         if cuda_bridge is not None:
             from sglang.srt.disaggregation.pvd.cuda_schedule_bridge import (

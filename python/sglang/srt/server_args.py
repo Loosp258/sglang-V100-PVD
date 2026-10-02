@@ -848,6 +848,8 @@ class ServerArgs:
     # Runtime construction still has to validate the loaded model and pools.
     pvd_cuda_predictive_serving: bool = False
     pvd_cuda_serving_config: Optional[str] = None
+    # Explicit single-request TP1 Oasis Decode pilot, with pinned EAGLE3.
+    pvd_oasis_config: Optional[str] = None
     pvd_retrieval_vector_space: Optional[str] = None
     pvd_retrieval_metric: str = "ip"
     pvd_retrieval_top_k: Optional[int] = None
@@ -7123,6 +7125,12 @@ class ServerArgs:
             help="Path to the explicit JSON bounds required by "
             "--pvd-cuda-predictive-serving (lead window, attention chunk, timeouts, "
             "pending limits and transient byte ceilings). No runtime defaults are guessed.",
+        )
+        parser.add_argument(
+            "--pvd-oasis-config", type=str, default=ServerArgs.pvd_oasis_config,
+            help="Explicit bounded Oasis Decode JSON: paired target rows, per-layer "
+            "V/CAGRA prefetch and native CPU-cache misses. TP1, one live request, "
+            "torch_native, no CUDA graph/overlap Scheduler. Retains initial full KV.",
         )
         parser.add_argument(
             "--pvd-retrieval-vector-space",

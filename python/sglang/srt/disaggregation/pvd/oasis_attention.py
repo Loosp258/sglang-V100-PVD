@@ -10,13 +10,14 @@ import torch.nn.functional as F
 
 class PairedLayerAttention:
     def __init__(self, history, banks, *, q_heads, kv_heads, head_dim,
-                 feature_layers, publish=None, capture=None):
+                 feature_layers, publish=None, capture=None, project=None):
         if q_heads <= 0 or kv_heads <= 0 or q_heads % kv_heads or head_dim <= 0:
             raise ValueError("valid GQA dimensions required")
         self.history, self.banks = history, banks
         self.q_heads, self.kv_heads, self.head_dim = q_heads, kv_heads, head_dim
         self.feature_layers = tuple(feature_layers)
         self.publish, self.capture = publish, capture
+        self.project = project
         self.pending, self.features, self.owners = [], [], []
         self._committed = False
 
@@ -27,6 +28,8 @@ class PairedLayerAttention:
         k = k.reshape(2, self.kv_heads, self.head_dim)
         v = v.reshape(2, self.kv_heads, self.head_dim)
         self.owners.extend((q, k, v))
+        if self.project is not None:
+            self.project(layer, q[1])
         # Calling this provider may wait for this layer only. Later layers are
         # not consumed or awaited until their own QKV projection is complete.
         bank = self.banks(layer) if callable(self.banks) else self.banks[layer]
