@@ -75,18 +75,26 @@ class OasisServingOwner(OasisRequestDecoder):
     def __init__(self, *args, transport, resources, reservation, **kwargs):
         super().__init__(*args, **kwargs)
         self.transport, self.resources, self.reservation = transport, resources, reservation
+        self._retired, self._retirement_error = False, ()
 
     def close(self):
-        if self.state == "closed":
+        if self._retired:
             return ()
+        if self._retirement_error:
+            return self._retirement_error
         errors = super().close()
         if errors:
             # Keep transport caches/draft state and charge until worker exit.
             return errors
-        self.transport.close()
+        try:
+            self.transport.close()
+        except BaseException as error:
+            self._retirement_error = (error,)
+            return self._retirement_error
         self.predict_one = self.fetch_layer = None
         self.resources.budget.release(self.reservation)
         self.resources.owners.remove(self)
+        self._retired = True
         logger.info("PVD Oasis retired rid=%s cache_rows=%s layer_wait_ms=%.3f",
             self.request_id, sum(t["remote_rows"] for t in self.transport.trace),
             sum(t["consumer_wait_seconds"] for t in self.pipeline.trace) * 1000)

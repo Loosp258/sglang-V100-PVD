@@ -43,11 +43,24 @@ tests passed on CloudLab (10 total). Native smoke entry:
 The smoke precedes the final retention-only hardening; that hardening changes
 owner lifetimes and completion validation, not attention or model arithmetic.
 
-## Remaining serving stage
+## Formal wiring stage (separate from the model smoke above)
 
-This stage is an explicit native target adapter. Formal Scheduler admission,
-request-owned layer bank replacement, EAGLE startup/seed routing and ordinary
-Scheduler sampler/result handling still need wiring and online validation.
-It must not be reported as a completed serving conversion or a latency gain.
-Existing ordinary predictive mode still uses its original probe; it is not an
-Oasis mode. Keep defaults unchanged while the explicit Oasis mode is installed.
+The explicit `--pvd-oasis-config` pilot now wires admission, the native paired
+adapter, pinned EAGLE3, request-owned layer banks, ordinary Scheduler sampling
+and actual-only result commits. Its Q is submitted before that layer's bank
+consume; two bounded layer futures permit current and next work to coexist.
+Only native terminal-success GPU destinations may populate the D CPU cache.
+The existing GPUDirect device fence remains, followed by owned D2H/cache/H2D.
+V/CAGRA is the selected two-rank fast graph (14 graphs/rank), carried in commit
+`80a91419c`. Partial per-layer groups use existing filtered native search.
+
+117 tests passed on CloudLab: paired causality, request/future ownership,
+foreign commits, deferred consumer release, actual CPU terminal/ACK cache
+copy over localhost control, Prompt index and chunks. These tests do not prove
+real RDMA, live Scheduler admission or client latency; online validation follows.
+
+This pilot retains the existing full P->V->D initial KV, then performs one
+separately charged private Prompt pass for EAGLE initialization. It does not
+claim the paper's sparse-only admission. Steady Decode/refresh cannot invoke
+that probe. Existing ordinary predictive mode still uses its original probe;
+it is not an Oasis mode. Defaults remain unchanged.

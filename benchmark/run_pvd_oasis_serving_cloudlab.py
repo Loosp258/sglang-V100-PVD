@@ -1,0 +1,197 @@
+"""WSL: fair full Gateway/P/V/D serialized-paired vs overlap-paired pilot.
+
+Only recorded process groups are terminated. Fresh tagged artifacts preserve
+config, raw outputs, argv, service logs and deployed source identities.
+"""
+import argparse
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import tarfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+HOSTS = {'p': ('130.127.134.34', 'clgpu020.clemson.cloudlab.us', 0),
+         'v': ('130.127.134.35', 'clgpu021.clemson.cloudlab.us', 1),
+         'd': ('130.127.134.33', 'clgpu019.clemson.cloudlab.us', 2)}
+KEY = '/home/loosp/.ssh/cloudlab_pub_wsl'
+parser = argparse.ArgumentParser()
+parser.add_argument('--tag', required=True)
+parser.add_argument('--arms', default='serial_a,overlap_a,overlap_b,serial_b')
+parser.add_argument('--cases', default='99401,99402,99403,99404')
+parser.add_argument('--tokens', type=int, default=16)
+args = parser.parse_args()
+if not re.fullmatch(r'[a-z0-9_]+', args.tag):
+    raise ValueError('filename-safe fresh tag required')
+OUT = ROOT / 'artifacts' / args.tag
+OUT.mkdir(parents=True, exist_ok=False)
+OWNED, CHECKOUTS, HEADS = {}, {}, {}
+
+
+def call(role, command, *, data=None, timeout=240):
+    ip, host, _ = HOSTS[role]
+    result = subprocess.run(['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o',
+        'ConnectTimeout=15', '-o', 'HostKeyAlias=' + host, '-i', KEY,
+        'Yizhzhu@' + ip, command], input=data, capture_output=True, timeout=timeout)
+    if result.returncode:
+        raise RuntimeError(f'{role}: {result.stdout.decode(errors="replace")}\n{result.stderr.decode(errors="replace")}')
+    return result.stdout.decode()
+
+
+def upload(role, path, data):
+    call(role, 'cat > ' + shlex.quote(path), data=data)
+
+
+def collect(role, arm):
+    remote = 'v' if role == 'gateway' else role
+    node = HOSTS[remote][2]
+    path = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/logs/{role}-{args.tag}_{arm}.log'
+    (OUT / f'{arm}_{role}.log').write_text(call(remote, 'cat ' + path + ' || true'))
+
+
+def stop(role):
+    if role not in OWNED:
+        return
+    remote = 'v' if role == 'gateway' else role
+    pid = OWNED[role]
+    call(remote, f'kill -TERM -- -{pid} 2>/dev/null || true')
+    if role != 'gateway':
+        for _ in range(20):
+            memory = call(remote, 'nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits')
+            if all(int(x) == 0 for x in memory.split()):
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError('owned service did not drain: ' + role)
+    del OWNED[role]
+    (OUT / 'owned.json').write_text(json.dumps(OWNED))
+
+
+def start(role, arm):
+    remote = 'v' if role == 'gateway' else role
+    env = dict(PVD_CHECKOUT=CHECKOUTS[remote], PVD_EXPECTED_COMMIT=HEADS[remote],
+        PVD_RUN_TAG=args.tag + '_' + arm, PVD_CAGRA_EXTEND25=1,
+        PVD_CHUNKED_CAGRA_UPLOAD=1, PVD_CAGRA_GROUP_HEADS=4,
+        PVD_CAGRA_EXACT_HEAD_SEED=1, PVD_CAGRA_ITOPK_SIZE=2048,
+        PVD_GATE_INITIAL_FANIN_ON_INDEX=1, PVD_DIRECT_PD_BOOTSTRAP=0,
+        PVD_PREFILL_CHUNK_TOKENS=256, PVD_MODE='oasis',
+        PVD_OASIS_CONFIG='/tmp/' + args.tag + '_' + arm + '.json',
+        PVD_CAGRA_KV_EDGE_UPDATE=1, PVD_CAGRA_KV_ROUTING_EDGES=2,
+        PVD_CAGRA_SMALL_TAIL_MAX_ROWS=512, PVD_CAGRA_FUSED_PREPARE=1,
+        PVD_BATCHED_K_EXTRACTION=1, PVD_FUSED_K_CENTERING=1,
+        PVD_PLANNED_TAIL=1, PVD_REUSE_SCORES=1, PVD_EARLY_FINAL_UPDATE=1,
+        PVD_CAGRA_EXTEND_CONCURRENCY=1, PVD_CAGRA_NOGIL_EXTEND=1,
+        PVD_NEW_TOP16=0, PVD_FUSED_EDGE_WRITE=0, PVD_STREAM_COMPLETION=0,
+        PVD_PROFILE_GPU=1, PVD_PROFILE_CHUNK_STAGES=1,
+        PVD_PROFILE_V_SEARCH=1, PVD_PROFILE_D_SEARCH_BATCH=1,
+        PVD_PROFILE_REFRESH_TIMELINE=1, PVD_GROUPED_EXACT_SEARCH=1,
+        PVD_BATCHED_GROUP_SEARCH=1, PVD_SPLIT_POLICY_FILE='/tmp/' + args.tag + '_split.json')
+    command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
+    command += '; bash /tmp/' + args.tag + '_launcher.sh ' + role
+    (OUT / f'{arm}_{role}.launch').write_text(command)
+    result = call(remote, command)
+    match = re.search(r'PID (\d+)', result)
+    if not match:
+        raise RuntimeError('no owned PID: ' + result)
+    OWNED[role] = int(match.group(1))
+    (OUT / 'owned.json').write_text(json.dumps(OWNED))
+    ip = {'p': '10.10.1.1', 'v': '10.10.1.2', 'd': '10.10.1.3', 'gateway': '10.10.1.2'}[role]
+    port = {'p': 30002, 'v': 9100, 'd': 30003, 'gateway': 8001}[role]
+    for attempt in range(75):
+        status = call(remote, f'curl -s --max-time 2 -o /dev/null -w "%{{http_code}}" http://{ip}:{port}/health || true').strip()
+        if status == '200':
+            (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
+            print('healthy', role, arm, OWNED[role], flush=True)
+            return
+        if attempt % 15 == 0:
+            print('waiting', role, arm, status, flush=True)
+        if call(remote, f'ps -p {OWNED[role]} -o stat= || true').strip() in ('', 'Z', 'Zs'):
+            collect(role, arm)
+            raise RuntimeError('service exited; see ' + str(OUT / f'{arm}_{role}.log'))
+        time.sleep(2)
+    collect(role, arm)
+    raise RuntimeError('health timeout: ' + role)
+
+
+def probe(arm, warm=False):
+    rows = []
+    cases = [99991, 99992] if warm else [int(x) for x in args.cases.split(',')]
+    for case in cases:
+        data = call('v', '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/bin/python '
+            f'/tmp/{args.tag}_probe.py --case {case} --tokens {args.tokens}', timeout=300)
+        row = json.loads(data.strip())
+        rows.append(row)
+        (OUT / (arm + ('_warmup' if warm else '') + '.json')).write_text(json.dumps(rows, indent=2))
+        print('request', arm, 'warm' if warm else 'formal', case,
+            row.get('completion_tokens'), round(row['wall_seconds'], 3), flush=True)
+        if row['status'] != 200 or row['error'] or row['completion_tokens'] != args.tokens:
+            raise RuntimeError('formal Decode failed: ' + data)
+    return rows
+
+
+def main():
+    arm_running = None
+    try:
+        for role, (_, _, node) in HOSTS.items():
+            memory = call(role, 'nvidia-smi --query-gpu=index,memory.used --format=csv,noheader')
+            (OUT / (role + '_initial_gpu.txt')).write_text(memory)
+            if any(int(line.split(',')[1].strip().split()[0]) for line in memory.splitlines()):
+                raise RuntimeError('GPU occupied: ' + role)
+            CHECKOUTS[role] = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/pvd-direct-20260929'
+        CHECKOUTS['v'] = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/pvd-search-decode-20261002'
+        CHECKOUTS['d'] = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002'
+        # This named isolated archive was created by deploy_pvd_oasis_stage;
+        # give its actual source tree an immutable launch-gate commit.
+        d = CHECKOUTS['d']
+        call('d', f'git -C {d} init >/dev/null && git -C {d} add python test benchmark docs AGENTS.md && '
+            f'git -C {d} -c user.name=PVD-validation -c user.email=pvd-validation@localhost commit --allow-empty -m Oasis-serving-validation >/dev/null')
+        for role in HOSTS:
+            HEADS[role] = call(role, 'git -C ' + CHECKOUTS[role] + ' rev-parse HEAD').strip()
+            launcher = (ROOT / 'test/registered/disaggregation/cloudlab_pvd_new_lease.sh').read_bytes().replace(b'\r\n', b'\n')
+            upload(role, '/tmp/' + args.tag + '_launcher.sh', launcher)
+            upload(role, '/tmp/' + args.tag + '_split.json', b'{"schema":"pvd-exact16-split-policy-v1","choices":{"2159":{"prefix":2048}}}\n')
+        (OUT / 'checkout_heads.json').write_text(json.dumps(HEADS, indent=2))
+        upload('v', '/tmp/' + args.tag + '_probe.py', (ROOT / 'benchmark/pvd_search_decode_probe.py').read_bytes())
+        start('v', 'shared'); start('p', 'shared')
+        eagle_root = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/oasiskv-20261001'
+        results = {}
+        for arm in args.arms.split(','):
+            arm_running = arm
+            config = dict(eagle_source=eagle_root + '/EAGLE', eagle_checkpoint=eagle_root + '/checkpoint',
+                eagle_manifest=eagle_root + '/checkpoint.json', vector_space='qwen25-7b-pvd',
+                capacity=32, max_new=16, top_k=4, workers=2, timeout_seconds=60,
+                max_sequence_tokens=2304, max_decode_steps=32, request_budget_bytes=268435456,
+                request_scratch_bytes=33554432, bootstrap_budget_bytes=536870912,
+                bootstrap_transient_bytes=268435456, overlap=arm.startswith('overlap'))
+            encoded = json.dumps(config, indent=2).encode()
+            (OUT / (arm + '_config.json')).write_bytes(encoded)
+            upload('d', '/tmp/' + args.tag + '_' + arm + '.json', encoded)
+            start('d', arm); start('gateway', arm)
+            probe(arm, True)
+            results[arm] = probe(arm)
+            (OUT / 'online.json').write_text(json.dumps(results, indent=2))
+            collect('d', arm); collect('gateway', arm)
+            stop('gateway'); stop('d')
+        collect('v', 'shared'); collect('p', 'shared')
+    finally:
+        if 'd' in OWNED and arm_running:
+            collect('d', arm_running)
+        if 'gateway' in OWNED and arm_running:
+            collect('gateway', arm_running)
+        if 'v' in OWNED:
+            collect('v', 'shared')
+        if 'p' in OWNED:
+            collect('p', 'shared')
+        for role in ('gateway', 'p', 'd', 'v'):
+            stop(role)
+        checks = {r: call(r, 'nvidia-smi --query-gpu=index,memory.used --format=csv,noheader') for r in HOSTS}
+        (OUT / 'final_gpu_memory.json').write_text(json.dumps(checks, indent=2))
+        print('final GPU', checks, flush=True)
+
+
+if __name__ == '__main__':
+    main()

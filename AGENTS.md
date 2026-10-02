@@ -170,6 +170,20 @@ user selected Decode-pipeline alignment while retaining V-side CAGRA and the
 current fast graph. Do not migrate selection to D-side block summaries. Keep
 the selector adaptation explicit in measurements and documentation.
 
+The new formal pilot is a separate explicit `--pvd-oasis-config` mode. The
+user's clarified scope aligns Decode and retains the existing fast-graph PVD
+bootstrap: initial full P->V->D KV plus one charged private actual-Prompt pass
+seeding EAGLE/root Q. This is an admission difference from the paper. Never
+hide it, call it sparse-only admission, or use a prefix probe during steady
+Decode/refresh. The original sparse-seed standalone experiment remains separate.
+
+Completed stages: `32f3971f0` existing-weight paired target; `706f2fb0e`
+request-local actual commits/layer futures; `80a91419c` measured fast V source
+snapshot; `033b9974e` opt-in formal Scheduler sampler/result integration and
+native layer misses. 117 bounded causal/protocol/index checks passed in the
+isolated CloudLab checkout. Full online validation and latency/quality evidence
+are still required before declaring serving conversion validated.
+
 Work only on `codex/pvd-oasiskv` in its isolated worktree. Commit each completed
 stage. This branch first provides an explicit experimental P/V/D runner; it does
 not enable the existing Scheduler automatically. Existing whole-forward bank

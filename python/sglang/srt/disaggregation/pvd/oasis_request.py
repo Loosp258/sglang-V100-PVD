@@ -47,6 +47,7 @@ class OasisRequestDecoder:
         self.features = None
         self.predicted = None
         self._published = set()
+        self._close_errors = ()
         if type(overlap) is not bool:
             raise ValueError("explicit paired prefetch overlap mode required")
         self.overlap, self._deferred = overlap, []
@@ -127,13 +128,14 @@ class OasisRequestDecoder:
 
     def close(self):
         if self.state == "closed":
-            return ()
+            return self._close_errors
         if self.state == "executing":
             raise RuntimeError("cannot retire an executing target forward")
         owner = getattr(self.decoder, "owner", None)
         if owner is not None and (owner.active is not None or owner.quarantined):
             raise RuntimeError("retain request until target completion is proved")
         errors = self.pipeline.close()
+        self._close_errors = errors
         self.banks.clear()
         self._deferred.clear()
         self.features = None

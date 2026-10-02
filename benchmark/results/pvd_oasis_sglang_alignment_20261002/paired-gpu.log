@@ -1,0 +1,33 @@
+SM70 (V100) detected but the marlin_v100 MoE kernel was not found. The stock JIT Marlin kernel is an empty stub on SM70, so routed-expert output will be ZERO (incorrect). Build it with: `bash scripts/setup_v100_marlin.sh`. Searched: []
+Cuda graph is disabled because of using torch native attention backend
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+Ignore import error when loading sglang.srt.models.mimo_audio: Can not import FA3 in sgl_kernel. Please check your installation.
+Ignore import error when loading sglang.srt.models.mimo_v2: Can not import FA3 in sgl_kernel. Please check your installation.
+Ignore import error when loading sglang.srt.models.mimo_v2_nextn: Can not import FA3 in sgl_kernel. Please check your installation.
+Multi-thread loading shards:   0% Completed | 0/4 [00:00<?, ?it/s]Multi-thread loading shards:  25% Completed | 1/4 [00:04<00:12,  4.03s/it]Multi-thread loading shards:  50% Completed | 2/4 [00:08<00:08,  4.06s/it]Multi-thread loading shards:  75% Completed | 3/4 [00:12<00:04,  4.06s/it]Multi-thread loading shards: 100% Completed | 4/4 [00:16<00:00,  3.97s/it]Multi-thread loading shards: 100% Completed | 4/4 [00:16<00:00,  4.00s/it]
+{
+  "schema": "pvd-oasis-sglang-paired-v1",
+  "status": "passed",
+  "fixture": "checkpoint at /proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/models/Qwen2.5-7B-Instruct",
+  "production_gpu_rdma_validated": false,
+  "performance_validated": false,
+  "evidence": {
+    "shared_qkv_and_mlp_calls": 28,
+    "rows_per_call": 2,
+    "actual_logit_max_abs_error": 0.0234375,
+    "actual_feature_max_abs_error": 0.125,
+    "actual_argmax_equal": true,
+    "candidate_isolation_bitwise": true,
+    "actual_rows_committed_per_layer": 1,
+    "formal_pools_unchanged": true,
+    "per_layer_published_and_consumed": true,
+    "formal_scheduler_admission_validated": false
+  },
+  "device": "Tesla V100S-PCIE-32GB",
+  "dtype": "float16",
+  "torch": "2.9.1+cu128",
+  "cuda": "12.8"
+}
+[rank0]:[W1002 09:24:27.811365339 ProcessGroupNCCL.cpp:1524] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
