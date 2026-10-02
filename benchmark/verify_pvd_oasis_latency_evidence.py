@@ -8,6 +8,11 @@ from pathlib import Path
 import subprocess
 import tarfile
 
+from pvd_oasis_delivery_validation import (
+    DELIVERY_COMPARISONS, delivery_flags, validate_delivery_profiles,
+    validate_delivery_snapshot, validate_io_snapshot,
+)
+
 
 def canonical(data, mode):
     if mode == 'lf':
@@ -45,7 +50,8 @@ def verify(folder, *, check_git=False):
     comparison = json.loads((folder / 'comparison.json').read_text(encoding='utf-8'))
     is_io = comparison['comparison'] == 'v-io'
     is_pack = comparison['comparison'] == 'v-pack'
-    if is_io or is_pack:
+    is_delivery = comparison['comparison'] in DELIVERY_COMPARISONS
+    if is_io or is_pack or is_delivery:
         expected_arms = ['base_a', 'opt_a', 'opt_b', 'base_b']
         assert comparison['arms'] == expected_arms, 'comparison requires the recorded ABBA order'
         assert type(comparison['tokens']) is int and comparison['tokens'] == 16
@@ -87,32 +93,16 @@ def verify(folder, *, check_git=False):
             assert row['completion_tokens'] == 16 and row['cached_tokens'] == 0
             assert row['trace_counts']['layers'] == 392
             assert row['trace_counts']['transport'] == 420
-            if is_io or is_pack:
+            if is_io or is_pack or is_delivery:
                 # Keep this request snapshot in the compact summary as well as
                 # the complete raw D trace. Counts prove actual reuse, not just
                 # a launch flag or the presence of one shared client object.
                 snapshot = row.get('io')
-                assert isinstance(snapshot, dict), (arm, row['case'], 'missing IO snapshot')
                 reuse = is_io and arm.startswith('opt')
-                assert snapshot['reuse_io'] is reuse
-                assert snapshot['manager_io_loop_reused'] is reuse
-                assert snapshot['shared_close_submitted'] is reuse
-                assert snapshot['closed'] is True and snapshot['closing'] is True
-                for name in ('job_count', 'worker_loops_created',
-                             'search_clients_created', 'control_clients_created',
-                             'search_sessions_created', 'control_sessions_created'):
-                    assert type(snapshot[name]) is int, (arm, row['case'], name)
-                assert snapshot['job_count'] == snapshot['worker_loops_created'] == 420
-                clients = 2 if reuse else 840
-                assert snapshot['search_clients_created'] == clients
-                assert snapshot['control_clients_created'] == clients
-                assert snapshot['search_sessions_created'] == clients
-                if reuse:
-                    assert snapshot['control_sessions_created'] == 2
-                else:
-                    # Cache hits create no control HTTP session on that rank;
-                    # baseline control clients are still created for every job.
-                    assert 0 < snapshot['control_sessions_created'] <= 840
+                validate_io_snapshot(snapshot, reuse_io=reuse, jobs=420)
+                if is_delivery:
+                    assert row['prompt_tokens'] == 2159
+                    validate_delivery_snapshot(snapshot, comparison=comparison['comparison'], arm=arm)
     assert all(all(int(line.split(',')[1].split()[0]) == 0 for line in text.splitlines())
                for text in json.loads((folder / 'final_gpu_memory.json').read_text()).values())
     with tarfile.open(folder / 'raw.tar.gz', 'r:gz') as archive:
@@ -121,6 +111,42 @@ def verify(folder, *, check_git=False):
         cleanup = next(name for name in names if name.endswith('/cleanup_errors.json'))
         assert json.loads(archive.extractfile(names[owned]).read()) == {}
         assert json.loads(archive.extractfile(names[cleanup]).read()) == []
+        if is_delivery:
+            summary_names = [name for name in names if name.endswith('/summary.json')]
+            assert len(summary_names) == 1, 'one complete raw summary is required'
+            full = json.loads(archive.extractfile(names[summary_names[0]]).read())
+            assert list(full['requests']) == expected_arms
+            configs = {}
+            for arm in expected_arms:
+                config_names = [name for name in names if name.endswith('/' + arm + '_config.json')]
+                assert len(config_names) == 1
+                config = json.loads(archive.extractfile(names[config_names[0]]).read())
+                configs[arm] = config
+                combine, slots = delivery_flags(comparison['comparison'], arm)
+                assert config['combine_reserve_start'] is combine and config['reuse_receive_slots'] is slots
+                assert config['reuse_io'] is False and config['overlap'] is True
+                assert config['workers'] == 2 and config['capacity'] == 32 and config['top_k'] == 4
+                assert [row['case'] for row in full['requests'][arm]] == cases
+                for complete, compact in zip(full['requests'][arm], summary['requests'][arm]):
+                    assert complete['rid'] == compact['rid']
+                    trace = complete['trace']
+                    assert len(trace['layers']) == 392 and len(trace['transport']) == 420
+                    assert trace['io'] == compact['io'], 'compact counters differ from complete raw trace'
+                    validate_io_snapshot(trace['io'], reuse_io=False, jobs=420)
+                    proof = validate_delivery_profiles(trace, comparison=comparison['comparison'], arm=arm)
+                    if 'delivery_validation' in compact:
+                        assert compact['delivery_validation'] == proof
+            allowed = 'combine_reserve_start' if comparison['comparison'] == 'v-combine' else 'reuse_receive_slots'
+            fixed = {name: value for name, value in configs[expected_arms[0]].items() if name != allowed}
+            assert all({name: value for name, value in config.items() if name != allowed} == fixed
+                       for config in configs.values()), 'unrelated configuration changes in raw evidence'
+            for filename in ('v_search_summary.json', 'rpc_summary.json', 'source_hashes.json', 'comparison.json'):
+                assert filename in manifest, (filename, 'delivery evidence must be hashed')
+            search = json.loads((folder / 'v_search_summary.json').read_text(encoding='utf-8'))
+            rpc = json.loads((folder / 'rpc_summary.json').read_text(encoding='utf-8'))
+            for mode in ('baseline', 'optimized'):
+                assert search['aggregate'][mode]['batches'] == rpc['aggregate'][mode]['search_rpc_count'] == 3136
+                assert search['aggregate'][mode]['paths'] == ['grouped_cagra_partial_batched_host']
     return dict(passed=True, files=len(manifest), formal_requests=8, git_blobs_checked=check_git)
 
 

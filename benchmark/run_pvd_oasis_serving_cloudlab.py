@@ -16,6 +16,9 @@ import tarfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+DELIVERY_COMPARISONS = ('v-combine', 'v-slots')
+V_COMPARISONS = ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') + DELIVERY_COMPARISONS
+FAST_V_COMPARISONS = ('v-host-query', 'v-io', 'v-pack') + DELIVERY_COMPARISONS
 HOSTS = {'p': ('130.127.134.34', 'clgpu020.clemson.cloudlab.us', 0),
          'v': ('130.127.134.35', 'clgpu021.clemson.cloudlab.us', 1),
          'd': ('130.127.134.33', 'clgpu019.clemson.cloudlab.us', 2)}
@@ -25,13 +28,18 @@ parser.add_argument('--tag', required=True)
 parser.add_argument('--arms', default='serial_a,overlap_a,overlap_b,serial_b')
 parser.add_argument('--cases', default='99401,99402,99403,99404')
 parser.add_argument('--tokens', type=int, default=16)
-parser.add_argument('--comparison', choices=('pipeline', 'v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'), default='pipeline')
+parser.add_argument('--comparison', choices=('pipeline',) + V_COMPARISONS, default='pipeline')
 args = parser.parse_args()
 if not re.fullmatch(r'[a-z0-9_]+', args.tag):
     raise ValueError('filename-safe fresh tag required')
 OUT = ROOT / 'artifacts' / args.tag
+assert OUT.resolve().is_relative_to(ROOT.resolve() / 'artifacts')
+if args.comparison in DELIVERY_COMPARISONS:
+    assert args.arms.split(',') == ['base_a', 'opt_a', 'opt_b', 'base_b'], 'delivery comparison requires ABBA'
+    cases = [int(value) for value in args.cases.split(',')]
+    assert len(cases) == len(set(cases)) == 2 and args.tokens == 16, 'delivery comparison requires two cases and 16 tokens'
 OUT.mkdir(parents=True, exist_ok=False)
-OWNED, CHECKOUTS, HEADS = {}, {}, {}
+OWNED, CHECKOUTS, HEADS, ASSETS = {}, {}, {}, {}
 
 
 def call(role, command, *, data=None, timeout=240, binary=False):
@@ -51,8 +59,7 @@ def upload(role, path, data):
 
 def collect(role, arm):
     remote = 'v' if role == 'gateway' else role
-    node = HOSTS[remote][2]
-    path = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/logs/{role}-{args.tag}_{arm}.log'
+    path = f'{ASSETS[remote]}/logs/{role}-{args.tag}_{arm}.log'
     compressed = call(remote, 'gzip -c -- ' + shlex.quote(path), binary=True)
     (OUT / f'{arm}_{role}.log').write_bytes(gzip.decompress(compressed))
 
@@ -83,7 +90,8 @@ def start(role, arm):
         PVD_CAGRA_EXACT_HEAD_SEED=1, PVD_CAGRA_ITOPK_SIZE=2048,
         PVD_GATE_INITIAL_FANIN_ON_INDEX=1, PVD_DIRECT_PD_BOOTSTRAP=0,
         PVD_PREFILL_CHUNK_TOKENS=256, PVD_MODE='oasis',
-        PVD_OASIS_CONFIG='/tmp/' + args.tag + '_' + arm + '.json',
+        PVD_OASIS_CONFIG=ASSETS['d'] + '/' + arm + '_config.json',
+        PVD_LOG_DIR=ASSETS[remote] + '/logs',
         PVD_CAGRA_KV_EDGE_UPDATE=1, PVD_CAGRA_KV_ROUTING_EDGES=2,
         PVD_CAGRA_SMALL_TAIL_MAX_ROWS=512, PVD_CAGRA_FUSED_PREPARE=1,
         PVD_BATCHED_K_EXTRACTION=1, PVD_FUSED_K_CENTERING=1,
@@ -93,15 +101,15 @@ def start(role, arm):
         PVD_PROFILE_GPU=1, PVD_PROFILE_CHUNK_STAGES=1,
         PVD_PROFILE_V_SEARCH=1, PVD_PROFILE_D_SEARCH_BATCH=1,
         PVD_PROFILE_REFRESH_TIMELINE=1, PVD_GROUPED_EXACT_SEARCH=1,
-        PVD_BATCHED_GROUP_SEARCH=1, PVD_SPLIT_POLICY_FILE='/tmp/' + args.tag + '_split.json')
-    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison in ('v-latency', 'v-host-query', 'v-io', 'v-pack') or (
+        PVD_BATCHED_GROUP_SEARCH=1, PVD_SPLIT_POLICY_FILE=ASSETS[remote] + '/split.json')
+    env['PVD_PARTIAL_GROUP_SEARCH'] = int(args.comparison in ('v-latency',) + FAST_V_COMPARISONS or (
         args.comparison == 'v-search' and arm.startswith('opt')))
-    env['PVD_HOST_CANDIDATES'] = int(args.comparison in ('v-host-query', 'v-io', 'v-pack') or (args.comparison == 'v-latency' and arm.startswith('opt')))
-    env['PVD_NATIVE_POOL'] = int(args.comparison in ('v-host-query', 'v-io', 'v-pack') or (args.comparison == 'v-latency' and arm.startswith('opt')))
+    env['PVD_HOST_CANDIDATES'] = int(args.comparison in FAST_V_COMPARISONS or (args.comparison == 'v-latency' and arm.startswith('opt')))
+    env['PVD_NATIVE_POOL'] = int(args.comparison in FAST_V_COMPARISONS or (args.comparison == 'v-latency' and arm.startswith('opt')))
     env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-host-query' and arm.startswith('opt'))
     env['PVD_TRITON_SPARSE_PACKING'] = int(args.comparison == 'v-pack' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
-    command += '; bash /tmp/' + args.tag + '_launcher.sh ' + role
+    command += '; bash ' + shlex.quote(ASSETS[remote] + '/launcher.sh') + ' ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
     result = call(remote, command)
     match = re.search(r'PID (\d+)', result)
@@ -156,8 +164,8 @@ def probe(arm, warm=False):
     rows = []
     cases = [99991, 99992] if warm else [int(x) for x in args.cases.split(',')]
     for case in cases:
-        data = call('v', '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/bin/python '
-            f'/tmp/{args.tag}_probe.py --case {case} --tokens {args.tokens}', timeout=300)
+        data = call('v', '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/conda-envs/sglang-v100/bin/python ' +
+            shlex.quote(ASSETS['v'] + '/probe.py') + f' --case {case} --tokens {args.tokens}', timeout=300)
         row = json.loads(data.strip())
         rows.append(row)
         (OUT / (arm + ('_warmup' if warm else '') + '.json')).write_text(json.dumps(rows, indent=2))
@@ -178,8 +186,11 @@ def main():
                 raise RuntimeError('GPU occupied: ' + role)
             CHECKOUTS[role] = f'/proj/llm-course-PG0/Yizhzhu-node{node}-sglang-pvd/validation/pvd-direct-20260929'
         CHECKOUTS['v'] = '/proj/llm-course-PG0/Yizhzhu-node1-sglang-pvd/validation/' + (
-            'pvd-oasis-v-search-20261002' if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') else 'pvd-search-decode-20261002')
+            'pvd-oasis-v-search-20261002' if args.comparison in V_COMPARISONS else 'pvd-search-decode-20261002')
         CHECKOUTS['d'] = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/pvd-oasis-alignment-20261002'
+        for role in HOSTS:
+            ASSETS[role] = CHECKOUTS[role] + '/artifacts/' + args.tag
+            call(role, 'test ! -e ' + shlex.quote(ASSETS[role]) + ' && mkdir -p ' + shlex.quote(ASSETS[role] + '/logs'))
         # This named isolated archive was created by deploy_pvd_oasis_stage;
         # give its actual source tree an immutable launch-gate commit.
         d = CHECKOUTS['d']
@@ -188,8 +199,8 @@ def main():
         for role in HOSTS:
             HEADS[role] = call(role, 'git -C ' + CHECKOUTS[role] + ' rev-parse HEAD').strip()
             launcher = (ROOT / 'test/registered/disaggregation/cloudlab_pvd_new_lease.sh').read_bytes().replace(b'\r\n', b'\n')
-            upload(role, '/tmp/' + args.tag + '_launcher.sh', launcher)
-            upload(role, '/tmp/' + args.tag + '_split.json', b'{"schema":"pvd-exact16-split-policy-v1","choices":{"2159":{"prefix":2048}}}\n')
+            upload(role, ASSETS[role] + '/launcher.sh', launcher)
+            upload(role, ASSETS[role] + '/split.json', b'{"schema":"pvd-exact16-split-policy-v1","choices":{"2159":{"prefix":2048}}}\n')
         sources = {}
         for role, relative in (('d', ['python/sglang/srt/server_args.py', 'python/sglang/srt/models/qwen2.py',
             'python/sglang/srt/managers/scheduler.py', 'python/sglang/srt/managers/scheduler_components/batch_result_processor.py',
@@ -201,6 +212,12 @@ def main():
               'cagra_kv_update.py', 'cagra_kv_prepare.py', 'cagra_search_batch.py', 'index_search.py') +
              (('sparse_copy.py', 'sparse_pack_plan.py', 'sparse_payload.py', 'sparse_delivery.py',
                'sparse_receiver.py', 'triton_sparse_pack.py') if args.comparison == 'v-pack' else ())])):
+            if args.comparison in DELIVERY_COMPARISONS:
+                relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
+                             ('client.py', 'sparse_receiver.py', 'cuda_sparse_receiver.py',
+                              'protocol.py', 'control_server.py', 'vector_store.py',
+                              'mooncake_engine.py', 'transfer_engine.py', 'oasis_receive_slots.py')]
+                relative = list(dict.fromkeys(relative))
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
             sources[role] = {}
             for line in output.splitlines():
@@ -214,7 +231,7 @@ def main():
         (OUT / 'checkout_heads.json').write_text(json.dumps(HEADS, indent=2))
         (OUT / 'comparison.json').write_text(json.dumps(dict(comparison=args.comparison,
             arms=args.arms.split(','), cases=args.cases, tokens=args.tokens), indent=2))
-        upload('v', '/tmp/' + args.tag + '_probe.py', (ROOT / 'benchmark/pvd_search_decode_probe.py').read_bytes())
+        upload('v', ASSETS['v'] + '/probe.py', (ROOT / 'benchmark/pvd_search_decode_probe.py').read_bytes())
         if args.comparison == 'pipeline':
             start('v', 'shared'); start('p', 'shared')
         eagle_root = '/proj/llm-course-PG0/Yizhzhu-node2-sglang-pvd/validation/oasiskv-20261001'
@@ -227,15 +244,19 @@ def main():
                 max_sequence_tokens=2304, max_decode_steps=32, request_budget_bytes=268435456,
                 request_scratch_bytes=33554432, bootstrap_budget_bytes=536870912,
                 bootstrap_transient_bytes=268435456,
-                overlap=args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') or arm.startswith('overlap'))
+                overlap=args.comparison in V_COMPARISONS or arm.startswith('overlap'))
             if args.comparison == 'v-io':
                 config['reuse_io'] = arm.startswith('opt')
             elif args.comparison == 'v-pack':
                 config['reuse_io'] = False
+            elif args.comparison in DELIVERY_COMPARISONS:
+                config.update(reuse_io=False,
+                    combine_reserve_start=args.comparison == 'v-combine' and arm.startswith('opt'),
+                    reuse_receive_slots=args.comparison == 'v-slots' and arm.startswith('opt'))
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
-            upload('d', '/tmp/' + args.tag + '_' + arm + '.json', encoded)
-            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'):
+            upload('d', ASSETS['d'] + '/' + arm + '_config.json', encoded)
+            if args.comparison in V_COMPARISONS:
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
@@ -243,7 +264,7 @@ def main():
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)
             stop('gateway'); stop('d')
-            if args.comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack'):
+            if args.comparison in V_COMPARISONS:
                 collect('v', arm); collect('p', arm)
                 stop('p'); stop('v')
         if args.comparison == 'pipeline':

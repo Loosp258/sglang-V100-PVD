@@ -9,6 +9,7 @@ an untrusted network peer. No finalizer releases possibly-live registrations.
 
 import asyncio
 import threading
+import time
 import uuid
 
 import torch
@@ -39,12 +40,15 @@ class SparseReceiveRegistry:
     external proof; there is deliberately no force-free method.
     """
 
-    def __init__(self, engine, budget, *, receiver_epoch):
+    def __init__(self, engine, budget, *, receiver_epoch, combine_reserve_start=False):
         if not isinstance(budget, TransferBudget):
             raise SparseReceiveError("an explicit receive budget is required")
         if not isinstance(receiver_epoch, str) or not receiver_epoch.strip():
             raise SparseReceiveError("explicit receiver epoch required")
+        if type(combine_reserve_start) is not bool:
+            raise SparseReceiveError("explicit boolean combined submission required")
         self.engine, self.budget, self.receiver_epoch = engine, budget, receiver_epoch
+        self.combine_reserve_start = combine_reserve_start
         self._thread = threading.get_ident()
         self._records = {}
 
@@ -76,6 +80,7 @@ class SparseReceiveRegistry:
         client,
         owner_scope=None,
     ):
+        started = time.perf_counter()
         self._owner()
         if not isinstance(manifest, SparseDeliveryManifest):
             raise SparseReceiveError("explicit sparse manifest required")
@@ -105,7 +110,9 @@ class SparseReceiveRegistry:
         self.budget.reserve(record.owner, manifest.nbytes, 1)
         self._records[delivery_id] = record
         try:
+            tick = time.perf_counter()
             record._buffer = self._allocate_buffer(manifest.nbytes)
+            record.profile["allocate_seconds"] = time.perf_counter() - tick
         except BaseException:
             self.budget.release(record.owner)
             del self._records[delivery_id]
@@ -114,6 +121,8 @@ class SparseReceiveRegistry:
         self._before_register(record)
         # A raising register_memory may have entered native code. Preserve its
         # backing storage rather than guessing that registration never happened.
+        tick = time.perf_counter()
+        record.profile["physical_register_calls"] += 1
         record._registration = self.engine.register_memory(
             record._buffer,
             endpoint=endpoint,
@@ -125,6 +134,7 @@ class SparseReceiveRegistry:
                 SPARSE_DELIVERY_KEY: manifest.to_dict(),
             },
         )
+        record.profile["register_seconds"] = time.perf_counter() - tick
         descriptor = record._registration.descriptor
         record.identity = WriteIdentity(
             **{**identity.__dict__, "region_id": descriptor.region_id}
@@ -134,6 +144,7 @@ class SparseReceiveRegistry:
             raise SparseReceiveError("registration extent differs from manifest")
         self._after_register(record)
         record._registration_unknown = False
+        record.profile["prepare_seconds"] = time.perf_counter() - started
         return record
 
     def snapshot(self, *, owner_scope=None):
@@ -171,6 +182,23 @@ class SparseReceiveRecord:
         self._group = self._receipt = None
         self._installed = False
         self._lock = asyncio.Lock()
+        self.profile = dict(
+            combine_reserve_start=registry.combine_reserve_start,
+            reuse_receive_slots=False, prepare_seconds=0.0, allocate_seconds=0.0,
+            register_seconds=0.0, reserve_seconds=0.0, start_seconds=0.0,
+            combined_seconds=0.0, poll_seconds=0.0, ack_seconds=0.0,
+            close_seconds=0.0, physical_register_calls=0,
+            physical_unregister_calls=0, reserve_calls=0, start_calls=0,
+            combined_calls=0, poll_calls=0, ack_calls=0,
+        )
+
+    async def _timed_rpc(self, name, awaitable):
+        started = time.perf_counter()
+        self.profile[name + "_calls"] += 1
+        try:
+            return await awaitable
+        finally:
+            self.profile[name + "_seconds"] += time.perf_counter() - started
 
     def _live(self):
         self._registry._owner()
@@ -221,15 +249,17 @@ class SparseReceiveRecord:
                     "destination already published; poll or fence it"
                 )
             self._published = True  # BEFORE the first await, including lost replies
-            reply = await self._client.reserve_delivery(
-                self.identity.key,
-                self.identity.transfer_id,
-                self._registration.descriptor,
-            )
-            self._observe(reply)
-            reply = await self._client.start_delivery(
-                self.identity.key, self.identity.transfer_id
-            )
+            if self._registry.combine_reserve_start:
+                reply = await self._timed_rpc("combined", self._client.reserve_and_start_delivery(
+                    self.identity.key, self.identity.transfer_id,
+                    self._registration.descriptor))
+            else:
+                reply = await self._timed_rpc("reserve", self._client.reserve_delivery(
+                    self.identity.key, self.identity.transfer_id,
+                    self._registration.descriptor))
+                self._observe(reply)
+                reply = await self._timed_rpc("start", self._client.start_delivery(
+                    self.identity.key, self.identity.transfer_id))
             ready = self._observe(reply)
             # The response comes from V only after start_delivery has entered
             # its source-submission path. A lost reply does not prove this.
@@ -247,9 +277,9 @@ class SparseReceiveRecord:
             if not self._published:
                 raise SparseReceiveError("destination has not been published")
             return self._observe(
-                await self._client.poll_delivery(
+                await self._timed_rpc("poll", self._client.poll_delivery(
                     self.identity.key, self.identity.transfer_id
-                )
+                ))
             )
 
     def stage(self, group, epoch):
@@ -274,9 +304,9 @@ class SparseReceiveRecord:
         async with self._lock:
             self._live()
             self.confirm_install()
-            reply = await self._client.ack_delivery(
+            reply = await self._timed_rpc("ack", self._client.ack_delivery(
                 self.identity.key, self.identity.transfer_id
-            )
+            ))
             self._observe(reply)
             if reply.get("state") != "released":
                 raise SparseReceiveError("delivery ACK was not confirmed")
@@ -310,10 +340,15 @@ class SparseReceiveRecord:
                     return False
             # No concurrent CPU reader: stage() is synchronous on this owner
             # thread and rejects while this RPC/cleanup scope is held.
-            self._release_destination()
+            started = time.perf_counter()
+            try:
+                self._release_destination()
+            finally:
+                self.profile["close_seconds"] += time.perf_counter() - started
             return self._closed
 
     def _release_destination(self):
+        self.profile["physical_unregister_calls"] += 1
         self._registry.engine.release_memory(self._registration)
         self._registration = self._buffer = None
         self._finish_close()

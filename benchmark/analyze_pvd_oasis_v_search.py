@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 from statistics import median
 
+from pvd_oasis_delivery_validation import DELIVERY_COMPARISONS
+
 p = argparse.ArgumentParser()
 p.add_argument('directory', type=Path)
 a = p.parse_args()
@@ -62,9 +64,9 @@ for arm, requests in summary['requests'].items():
         if comparison == 'v-host-query':
             expected_path = 'grouped_cagra_partial_batched_host' + ('_hostq' if arm.startswith('opt') else '')
             assert all(row[0] == expected_path for row in steady), 'unexpected host Q search fallback/path'
-        if comparison in ('v-io', 'v-pack'):
-            assert all(row[0] == 'grouped_cagra_partial_batched_host' for row in steady), 'IO/packing comparison changed V path'
-        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') else (
+        if comparison in ('v-io', 'v-pack') + DELIVERY_COMPARISONS:
+            assert all(row[0] == 'grouped_cagra_partial_batched_host' for row in steady), 'IO/packing/delivery comparison changed V path'
+        mode = ('optimized' if arm.startswith('opt') else 'baseline') if comparison in ('v-search', 'v-latency', 'v-host-query', 'v-io', 'v-pack') + DELIVERY_COMPARISONS else (
             'overlap' if arm.startswith('overlap') else 'serial')
         mode_rows.setdefault(mode, []).extend(steady)
         selected.append(dict(case=request['case'], batches=len(steady),

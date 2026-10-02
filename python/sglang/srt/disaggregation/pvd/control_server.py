@@ -289,6 +289,28 @@ class HttpShardClient(ShardClient):
             {"key": key.to_dict(), "delivery_id": delivery_id},
         )
 
+    async def reserve_and_start_delivery(
+        self,
+        key: KVEntryKey,
+        delivery_id: str,
+        destination: RemoteRegionDescriptor,
+    ) -> Mapping:
+        """Reserve the exact destination and start its write in one RPC.
+
+        A lost reply can mean the native write already started. The caller
+        must retain the destination and use its existing identity-bound fence
+        protocol, just as it does for the separate reserve/start calls.
+        """
+        return await self._request(
+            "POST",
+            "/internal/v1/deliveries/reserve-and-start",
+            {
+                "key": key.to_dict(),
+                "delivery_id": delivery_id,
+                "destination": destination.to_dict(),
+            },
+        )
+
     async def reserve_fanin_delivery(
         self, manifest, *, expected_sender_epoch=None
     ) -> Mapping:
@@ -554,6 +576,22 @@ def create_shard_app(
                 RemoteRegionDescriptor.from_dict(data["destination"]),
             ).to_dict()
         )
+
+    async def reserve_and_start_delivery(request):
+        data = await _payload(request)
+        key = _key(data)
+        delivery_id = str(data["delivery_id"])
+        destination = RemoteRegionDescriptor.from_dict(data["destination"])
+
+        def reserve_then_start():
+            # The existing store methods retain their identity, replay,
+            # cancellation and submission gates. Keep both calls in the same
+            # worker invocation without awaiting between them, while native
+            # packing/registration/PUT work stays off the HTTP event loop.
+            store.reserve_delivery(key, delivery_id, destination)
+            return store.start_delivery(key, delivery_id).to_dict()
+
+        return web.json_response(await asyncio.to_thread(reserve_then_start))
 
     async def reserve_fanin(request):
         data = await _payload(request)
@@ -953,6 +991,10 @@ def create_shard_app(
             web.post("/internal/v1/chunks/begin", begin_chunk),
             web.post("/internal/v1/chunks/commit", commit_chunk),
             web.post("/internal/v1/deliveries", reserve_delivery),
+            web.post(
+                "/internal/v1/deliveries/reserve-and-start",
+                reserve_and_start_delivery,
+            ),
             web.post("/internal/v1/fanin/reserve", reserve_fanin),
             web.post("/internal/v1/fanin/fence", fence_fanin),
             web.post("/internal/v1/deliveries/start", start_delivery),

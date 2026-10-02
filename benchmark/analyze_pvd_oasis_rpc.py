@@ -5,16 +5,23 @@ from pathlib import Path
 import re
 from statistics import median
 
+from pvd_oasis_delivery_validation import (
+    DELIVERY_COMPARISONS, DELIVERY_COUNTS, DELIVERY_TIMINGS,
+    validate_delivery_profiles,
+)
+
 p=argparse.ArgumentParser()
 p.add_argument('directory',type=Path)
 a=p.parse_args()
 root=a.directory
 summary=json.loads((root/'summary.json').read_text())
+comparison=(json.loads((root/'comparison.json').read_text())['comparison']
+            if (root/'comparison.json').exists() else None)
 per_mode={}
 requests={}
 for arm, rows in summary['requests'].items():
     mode='optimized' if arm.startswith('opt') else 'baseline'
-    samples=per_mode.setdefault(mode,dict(search=[],delivery=[],without_miss=[],with_miss=[],workers=[],io=[]))
+    samples=per_mode.setdefault(mode,dict(search=[],delivery=[],without_miss=[],with_miss=[],workers=[],io=[],rank_deliveries=[]))
     raw=(root/f'{arm}_d.log').read_text()
     matches=re.findall(r'PVD D search-batch items=(\d+) query_rows=(\d+) bytes=(\d+) prepare_ms=([\d.]+) encode_ms=([\d.]+) http_ms=([\d.]+) validate_ms=([\d.]+) total_ms=([\d.]+)',raw)
     profiles=[]
@@ -50,6 +57,15 @@ for arm, rows in summary['requests'].items():
         if 'io' in trace:
             item['io']=trace['io']
             samples['io'].append(trace['io'])
+        if comparison in DELIVERY_COMPARISONS:
+            item['delivery_validation']=validate_delivery_profiles(trace, comparison=comparison, arm=arm)
+            # Full snapshots above include initial-bank priming and retirement.
+            # Stage medians below use the same steady scope as the D RPCs.
+            deliveries=[delivery for transport_item in transport for delivery in transport_item['deliveries']]
+            item['steady_rank_deliveries']=len(deliveries)
+            item['steady_delivery_stage_ms']={name.removesuffix('_seconds'):median(t[name]*1000 for t in deliveries)
+                                              for name in DELIVERY_TIMINGS} if deliveries else {}
+            samples['rank_deliveries'].extend(deliveries)
         requests[arm].append(item)
         samples['workers'].append(item)
 out={}
@@ -63,6 +79,15 @@ for mode, s in per_mode.items():
                   remote_miss_rpc_ms=median(s['with_miss']) if s['with_miss'] else None,
                   worker_utilization=median(t['worker_utilization'] for t in s['workers']),
                   io=s['io'])
+    if comparison in DELIVERY_COMPARISONS:
+        deliveries=s['rank_deliveries']
+        out[mode]['steady_sparse_delivery']=dict(rank_deliveries=len(deliveries),
+            median_bytes=median(t['nbytes'] for t in deliveries) if deliveries else None,
+            median_remote_rows=median(t['remote_rows'] for t in deliveries) if deliveries else None,
+            stage_ms={name.removesuffix('_seconds'):median(t[name]*1000 for t in deliveries)
+                      for name in DELIVERY_TIMINGS} if deliveries else {},
+            actual_calls={name:sum(t[name] for t in deliveries) for name in DELIVERY_COUNTS},
+            scope='per-rank completed steady sparse deliveries; warmups and 28 initial-bank jobs excluded; final slot retirement is in full IO snapshots')
 result=dict(aggregate=out,requests=requests,
             scope='exact ordered completed RPC blocks; warmups/bootstrap excluded; miss groups differ and are not causal subtraction')
 (root/'rpc_summary.json').write_text(json.dumps(result,indent=2)+'\n')

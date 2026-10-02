@@ -116,7 +116,8 @@ class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
 
 class OasisLayerTransport:
     def __init__(self, manager, selected, *, request_id, incarnation, device,
-                 vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False):
+                 vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False,
+                 combine_reserve_start=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -125,7 +126,7 @@ class OasisLayerTransport:
                 or tuple(route.rank for route in selected.shards) != (0, 1)
                 or not 1 <= capacity <= 2048 or not 0 <= max_new <= capacity
                 or not 1 <= top_k <= 512 or timeout <= 0
-                or type(reuse_io) is not bool):
+                or type(reuse_io) is not bool or type(combine_reserve_start) is not bool):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         self.manager, self.selected = manager, selected
         self.request_id, self.incarnation = request_id, incarnation
@@ -133,6 +134,7 @@ class OasisLayerTransport:
         self.capacity, self.max_new, self.top_k = capacity, max_new, top_k
         self.timeout, self.vector_space = timeout, vector_space
         self.reuse_io = reuse_io
+        self.combine_reserve_start = combine_reserve_start
         self._shared_clients = None
         self._shared_close_future = None
         self._closing = False
@@ -206,7 +208,7 @@ class OasisLayerTransport:
                     owner_thread=threading.get_ident(),
                     registry=OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
                         self.manager.transfer_budget, receiver_epoch=self.manager.worker_epoch,
-                        device=self.device))
+                        device=self.device, combine_reserve_start=self.combine_reserve_start))
                 self.local.state = state
                 self.workers.append(state)
                 self._io_counts["job_count"] += 1
@@ -249,12 +251,22 @@ class OasisLayerTransport:
 
     def io_snapshot(self):
         with self.lock:
-            return dict(reuse_io=self.reuse_io, **self._io_counts,
+            deliveries = [d for row in self.trace for d in row.get("deliveries", ())]
+            sums = {name: sum(d[field] for d in deliveries) for name, field in (
+                ("registration_count", "physical_register_calls"),
+                ("unregistration_count", "physical_unregister_calls"),
+                ("reserve_rpc_count", "reserve_calls"), ("start_rpc_count", "start_calls"),
+                ("combined_rpc_count", "combined_calls"), ("poll_rpc_count", "poll_calls"),
+                ("ack_rpc_count", "ack_calls"))}
+            return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
+                combine_reserve_start=self.combine_reserve_start, reuse_receive_slots=False,
+                delivery_count=len(deliveries),
                 manager_io_loop_reused=self.reuse_io,
                 shared_close_submitted=self._shared_close_future is not None,
                 closing=self._closing, closed=self.closed)
 
     async def _select_and_fetch(self, state, ticket, query, bank, bootstrap):
+        state["delivery_profiles"] = []
         layer_cache = self.cache[ticket.layer]
         selected_ids = [None] * 4
         started = time.perf_counter()
@@ -308,11 +320,16 @@ class OasisLayerTransport:
                         raise TimeoutError("Oasis native layer delivery expired")
                     await asyncio.sleep(0.001)
                     ready = await record.poll()
+                tick = time.perf_counter()
                 record.copy_to_cache(layer_cache)
+                cache_copy_seconds = time.perf_counter() - tick
                 await record.ack()
                 if not await record.close():
                     raise RuntimeError("terminal layer destination did not retire")
                 remote_rows += sum(len(s.token_ids) for s in specs)
+                state["delivery_profiles"].append(dict(record.profile, rank=route.rank,
+                    nbytes=wire.nbytes, remote_rows=sum(len(s.token_ids) for s in specs),
+                    cache_copy_seconds=cache_copy_seconds))
             except BaseException:
                 # Drain or retain all native destinations. Never infer success
                 # from an HTTP cancellation, timeout, or receiver destruction.
@@ -378,7 +395,8 @@ class OasisLayerTransport:
                     complete.synchronize()
                 with self.lock:
                     self.trace.append(dict(step=ticket.step, layer=ticket.layer,
-                        remote_rows=remote_rows, rpc_seconds=rpc_seconds))
+                        remote_rows=remote_rows, rpc_seconds=rpc_seconds,
+                        deliveries=state.get("delivery_profiles", [])))
                 return LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
             except BaseException:
                 try:

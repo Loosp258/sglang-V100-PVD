@@ -22,8 +22,9 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import ResourceGuard
 
 
 class CUDASparseReceiveRegistry(SparseReceiveRegistry):
-    def __init__(self, engine, budget, *, receiver_epoch, device):
-        super().__init__(engine, budget, receiver_epoch=receiver_epoch)
+    def __init__(self, engine, budget, *, receiver_epoch, device, combine_reserve_start=False):
+        super().__init__(engine, budget, receiver_epoch=receiver_epoch,
+                         combine_reserve_start=combine_reserve_start)
         self.device = torch.device(device)
         self.ordering = CUDAReceiveOrdering(self.device)
         if not torch.cuda.is_available():
@@ -120,6 +121,7 @@ class CUDASparseReceiveRecord(SparseReceiveRecord):
 
     def _unregister_destination(self):
         self._registry._owner()
+        self.profile["physical_unregister_calls"] += 1
         self._registry.engine.release_memory(self._registration)
         self._registration = self._buffer = None
 
