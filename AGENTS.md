@@ -514,3 +514,29 @@ until output quality reaches the reference gate.
    every extend, `STORED`, `INDEX_READY`, first search, TTFT and total latency.
    Report cold cases, repeated cases, memory, query latency and real-Q recall;
    enable the path only for shapes/arrival gaps that show an end-to-end gain.
+
+#### Verify pooled host candidates and move finite-Q proof to host (2026-10-02)
+
+Use c9512e4c0/33a81091e as the measured baseline, with both bounded native pool
+and host candidates enabled. Keep the selected fast immutable KV graph,
+itopk2048, Top4, resident/traffic budget, Q counts, P/D and paired per-layer
+Oasis Decode unchanged. Work only in the codex/pvd-oasiskv isolated worktree.
+
+1. Recheck saved evidence and lifecycle/selection tests; diagnose the remaining
+   finite-Q GPU wait and D search/delivery interval. Preserve negative findings.
+2. Add a default-off host_query_validation path for already-host-resident Q.
+   The native workspace must own a private float32 CPU snapshot, validate its
+   finite values before copying, and submit exactly that snapshot. Do not trust
+   a caller boolean/proof or disable device/shape/head/identity validation.
+   GPU callers retain the original finite proof. Keep snapshots, copies, native
+   results, reader and scratch budget until proven completion; unknown work
+   retains owners and quarantines. Restore mean scores with identical GPU math.
+3. Test malformed/nonfinite Q, caller-alias mutation, reversed subsets, close,
+   native failure/unknown fences and budget refund. Run real two-rank immutable
+   K/Q probes with identical graphs/queries; record exact union coverage and
+   candidate jitter. Commit each completed stage.
+4. Compare latest baseline/new/new/latest baseline on CloudLab: identical
+   services/resources/warmups/live requests/search parameters and P/D configs.
+   Save full raw logs, actual output IDs, source hashes, traffic and cleanup.
+   Report V processing, D wait and client timing separately. Retain default-off
+   until broader quality, concurrency, cancellation and memory gates pass.
