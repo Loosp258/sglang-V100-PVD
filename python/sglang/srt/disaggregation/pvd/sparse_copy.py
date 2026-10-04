@@ -12,6 +12,7 @@ import torch
 from sglang.srt.disaggregation.pvd.sparse_delivery import SparseDeliveryManifest
 from sglang.srt.disaggregation.pvd.sparse_payload import SparsePayloadError, _views
 from sglang.srt.disaggregation.pvd.sparse_token_runs import consecutive_token_runs
+from sglang.srt.disaggregation.pvd.protocol import KVShardManifest
 
 
 def copy_sparse_kv_into(
@@ -27,6 +28,7 @@ def copy_sparse_kv_into(
     allow_cuda=False,
     fused_workspace=None,
     contiguous_runs=False,
+    selected_component_views=False,
 ):
     """Validate every group BEFORE writing any bytes, then copy K and V rows.
 
@@ -36,9 +38,13 @@ def copy_sparse_kv_into(
     Even non-overlapping slices of the same allocation are refused, because the
     authoritative Entry must never double as output staging.
     """
+    if type(selected_component_views) is not bool or selected_component_views and (
+        fused_workspace is not None or contiguous_runs
+    ):
+        raise SparsePayloadError("selected component views require ordinary Torch packing")
     if type(contiguous_runs) is not bool or contiguous_runs and fused_workspace is not None:
         raise SparsePayloadError("contiguous copies require an explicit boolean and no fused workspace")
-    outputs, source_groups = _validated_sparse_copy(
+    outputs, source_groups, source_component_views = _validated_sparse_copy(
         packed,
         destination,
         manifest=manifest,
@@ -48,6 +54,7 @@ def copy_sparse_kv_into(
         index_version=index_version,
         id_mapping_version=id_mapping_version,
         allow_cuda=allow_cuda,
+        selected_component_views=selected_component_views,
     )
     try:
         if fused_workspace is not None:
@@ -80,7 +87,7 @@ def copy_sparse_kv_into(
                     2 * layout.head_dim * sum(len(s.token_ids) for s in manifest.specs)
                 ),
             )
-            return
+            return source_component_views
         with torch.no_grad():
             for payload, (keys, values, head) in zip(
                 outputs, source_groups, strict=True
@@ -97,6 +104,8 @@ def copy_sparse_kv_into(
                         continue
                     for row, token in enumerate(payload.spec.token_ids):
                         payload.tensor[kind, row].copy_(source[token, head])
+        # Diagnostic count only; returning is still NOT a completion fence.
+        return source_component_views
     finally:
         for payload in outputs:
             payload.close()  # drop local views, NEVER retire caller's allocation
@@ -113,11 +122,20 @@ def _validated_sparse_copy(
     index_version,
     id_mapping_version,
     allow_cuda,
+    selected_component_views=False,
 ):
     """Build every source/destination view before either implementation writes."""
     if not isinstance(manifest, SparseDeliveryManifest) or type(allow_cuda) is not bool:
         raise SparsePayloadError("explicit manifest and boolean CUDA opt-in required")
-    views, dtype, valid_tokens = _views(packed, layout, shard, allow_cuda=allow_cuda)
+    selected_layers = None
+    if selected_component_views:
+        if not isinstance(shard, KVShardManifest):
+            raise SparsePayloadError("explicit storage shard manifest required")
+        selected_layers = tuple(s.layer - shard.layer_start for s in manifest.specs)
+    views, dtype, valid_tokens = _views(
+        packed, layout, shard, allow_cuda=allow_cuda, selected_layers=selected_layers,
+    )
+    layers = shard.layer_end - shard.layer_start
     if (
         not isinstance(destination, torch.Tensor)
         or destination.device != packed.device
@@ -146,11 +164,11 @@ def _validated_sparse_copy(
     for spec in manifest.specs:
         layer = spec.layer - shard.layer_start
         head = spec.kv_head - shard.rank * layout.kv_heads_per_rank
-        if not 0 <= layer < len(views) // 2 or not 0 <= head < layout.kv_heads_per_rank:
+        if not 0 <= layer < layers or not 0 <= head < layout.kv_heads_per_rank:
             raise SparsePayloadError("selected layer/head is not owned by this shard")
         if any(token >= valid_tokens for token in spec.token_ids):
             raise SparsePayloadError("selected token is outside Prompt or in padding")
-        source_groups.append((views[layer], views[layer + len(views) // 2], head))
+        source_groups.append((views[layer], views[layer + layers], head))
     # Also construct ALL destination views before the first copy: byte alignment
     # errors in a later view must not expose a partly updated valid-looking bank.
     try:
@@ -159,4 +177,4 @@ def _validated_sparse_copy(
         raise SparsePayloadError(
             "destination cannot form aligned typed KV views"
         ) from exc
-    return outputs, source_groups
+    return outputs, source_groups, len(views)

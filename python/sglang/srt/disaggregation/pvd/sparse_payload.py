@@ -92,7 +92,7 @@ class SparseKVPayload:
         self._tensor = None
 
 
-def _views(packed, layout, shard, *, allow_cuda=False):
+def _views(packed, layout, shard, *, allow_cuda=False, selected_layers=None):
     if not isinstance(layout, KVLayoutSignature) or not isinstance(
         shard, KVShardManifest
     ):
@@ -152,10 +152,19 @@ def _views(packed, layout, shard, *, allow_cuda=False):
     span = rows * per_token
     if packed.numel() != count * span or shard.expected_bytes != count * span:
         raise SparsePayloadError("source byte count disagrees with manifest/layout")
-    views = tuple(
-        packed[i * span : (i + 1) * span].view(dtype).reshape(rows, *expected_shape)
-        for i in range(count)
-    )
+    # Validate ALL component metadata above, including unselected layers.
+    # View preparation alone can use just the selected K/V components.
+    def component_view(i):
+        return packed[i * span : (i + 1) * span].view(dtype).reshape(rows, *expected_shape)
+
+    if selected_layers is None:
+        views = tuple(component_view(i) for i in range(count))
+    else:
+        if (not isinstance(selected_layers, tuple) or not selected_layers
+                or any(type(i) is not int or not 0 <= i < layers for i in selected_layers)):
+            raise SparsePayloadError("selected layer components are not owned by this shard")
+        indices = sorted(set(selected_layers) | {i + layers for i in selected_layers})
+        views = {i: component_view(i) for i in indices}
     valid_tokens = (
         shard.page_count - 1
     ) * layout.page_size + shard.last_page_valid_tokens

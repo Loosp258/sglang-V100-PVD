@@ -516,6 +516,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--reaper-interval-secs", type=float, default=1.0)
     parser.add_argument(
+        "--experimental-selected-sparse-component-views", action="store_true",
+        help="Prepare only selected layer K/V tensor views while validating all "
+        "source components. Requires ordinary CUDA staging; default off.",
+    )
+    parser.add_argument(
         "--allow-fake-transport",
         action="store_true",
         help="development only; fake transport is process-local and is not RDMA",
@@ -734,6 +739,15 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         raise ValueError("sparse pack fence reuse requires ordinary Torch CUDA staging")
     if args.reaper_interval_secs <= 0:
         raise ValueError("--reaper-interval-secs must be positive")
+    if getattr(args, "experimental_selected_sparse_component_views", False) and (
+        args.transfer_backend != "mooncake" or args.allow_cpu_for_tests
+        or not getattr(args, "experimental_cuda_sparse_packing", False)
+        or any(getattr(args, name, False) for name in (
+            "experimental_triton_sparse_packing", "experimental_contiguous_sparse_packing",
+            "experimental_direct_sparse_batch_put", "experimental_reuse_sparse_pack_fence",
+        ))
+    ):
+        raise ValueError("selected component views require isolated ordinary CUDA staging")
     if args.rank1_startup_timeout_secs <= 0:
         raise ValueError("--rank1-startup-timeout-secs must be positive")
     return rails
@@ -1065,6 +1079,7 @@ def _create_store(
             args, "experimental_contiguous_sparse_packing", False
         ),
         reuse_sparse_pack_fence=getattr(args, "experimental_reuse_sparse_pack_fence", False),
+        selected_sparse_component_views=getattr(args, "experimental_selected_sparse_component_views", False),
     )
     return store, preflight
 

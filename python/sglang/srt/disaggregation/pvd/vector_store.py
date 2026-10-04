@@ -357,6 +357,7 @@ class VectorKVStore:
         direct_sparse_batch_put: bool = False,
         contiguous_sparse_packing: bool = False,
         reuse_sparse_pack_fence: bool = False,
+        selected_sparse_component_views: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -401,6 +402,11 @@ class VectorKVStore:
             raise ValueError("allow_cuda_sparse_packing must be a boolean")
         if type(direct_sparse_batch_put) is not bool:
             raise ValueError("direct_sparse_batch_put must be a boolean")
+        if type(selected_sparse_component_views) is not bool or selected_sparse_component_views and (
+            fused_cuda_sparse_packing or direct_sparse_batch_put or contiguous_sparse_packing
+            or reuse_sparse_pack_fence or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
+        ):
+            raise ValueError("selected component views require isolated Torch staging")
         if type(reuse_sparse_pack_fence) is not bool or reuse_sparse_pack_fence and (
             not allow_cuda_sparse_packing or fused_cuda_sparse_packing
             or direct_sparse_batch_put or contiguous_sparse_packing
@@ -486,6 +492,7 @@ class VectorKVStore:
         self.direct_sparse_batch_put = direct_sparse_batch_put
         self.contiguous_sparse_packing = contiguous_sparse_packing
         self.reuse_sparse_pack_fence = reuse_sparse_pack_fence
+        self.selected_sparse_component_views = selected_sparse_component_views
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1319,6 +1326,7 @@ class VectorKVStore:
                     kernel=("triton" if self.fused_cuda_sparse_packing else
                             "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"),
                     reuse_pack_fence=self.reuse_sparse_pack_fence,
+                    selected_component_views=self.selected_sparse_component_views,
                 )
             # The reservation already pins Entry pages. Packing and native
             # calls deliberately run without the store's business lock.
@@ -1634,7 +1642,7 @@ class VectorKVStore:
                 )
                 delivery.packing_workspace = workspace
             with profile.measure("pack") if profile else nullcontext():
-                copy_sparse_kv_into(
+                component_views = copy_sparse_kv_into(
                     source,
                     staging,
                     manifest=manifest,
@@ -1646,7 +1654,10 @@ class VectorKVStore:
                     allow_cuda=self.allow_cuda_sparse_packing,
                     fused_workspace=workspace,
                     contiguous_runs=self.contiguous_sparse_packing,
+                    selected_component_views=self.selected_sparse_component_views,
                 )
+                if profile is not None and type(component_views) is int:
+                    profile.record_component_views(component_views)
         except SparsePackCompletionUnknown:
             metadata_completion_unknown = True
             with self._lock:
@@ -2313,6 +2324,7 @@ class VectorKVStore:
                 },
                 "page_bytes": self.page_bytes,
                 "reuse_sparse_pack_fence": self.reuse_sparse_pack_fence,
+                "selected_sparse_component_views": self.selected_sparse_component_views,
                 "worker_epoch": self.worker_epoch,
                 "full_kv_fanin": {
                     "enabled": self._fanin_max_slices is not None,

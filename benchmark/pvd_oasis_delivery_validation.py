@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -211,10 +211,16 @@ def validate_v_source_profile(profile, *, reuse, nbytes):
         if expected == 0: assert seconds == 0
 
 
+def validate_selected_source_profile(profile, *, selected, nbytes):
+    validate_v_source_profile(profile, reuse=False, nbytes=nbytes)
+    assert profile['selected_component_views'] is selected
+    assert integer(profile['source_component_views'], 'source_component_views') == (2 if selected else 56)
+
+
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
-    if comparison == 'v-pack-fence':
+    if comparison in ('v-pack-fence', 'v-selected-views'):
         assert snapshot['batched_cache_install'] is snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
         assert trace['attention_workspace'] is None
         validate_gpu_backup(snapshot, enabled=False)
@@ -282,6 +288,9 @@ def validate_delivery_profiles(trace, *, comparison, arm):
             if comparison == 'v-pack-fence':
                 assert item.get('v_source_profile_invalid', False) is False
                 validate_v_source_profile(item['v_source'], reuse=arm.startswith('opt'), nbytes=item['nbytes'])
+            if comparison == 'v-selected-views':
+                assert item.get('v_source_profile_invalid', False) is False
+                validate_selected_source_profile(item['v_source'], selected=arm.startswith('opt'), nbytes=item['nbytes'])
             if comparison == 'v-contiguous':
                 assert item['sort_missing_tokens'] is arm.startswith('opt')
                 assert 1 <= integer(item['wire_runs'], 'wire_runs') <= rows

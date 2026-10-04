@@ -125,6 +125,8 @@ def start(role, arm):
         args.comparison == 'v-contiguous' and role == 'v' and arm.startswith('opt'))
     env['PVD_REUSE_SPARSE_PACK_FENCE'] = int(
         args.comparison == 'v-pack-fence' and role == 'v' and arm.startswith('opt'))
+    env['PVD_SELECTED_SPARSE_COMPONENT_VIEWS'] = int(
+        args.comparison == 'v-selected-views' and role == 'v' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash ' + shlex.quote(ASSETS[remote] + '/launcher.sh') + ' ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -141,7 +143,7 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
-            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence'):
+            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views'):
                 prove_pack_modes(arm)
             if role == 'v' and args.comparison == 'v-direct-sparse':
                 sparse_batch_health(arm, 'before')
@@ -179,6 +181,9 @@ def prove_pack_modes(arm):
         assert state.get('sparse_pack_kernel') == expected, 'actual V packing kernel differs from arm'
         if args.comparison == 'v-pack-fence':
             assert state.get('reuse_sparse_pack_fence') is arm.startswith('opt')
+        if args.comparison == 'v-selected-views':
+            assert state.get('selected_sparse_component_views') is arm.startswith('opt')
+            assert state.get('reuse_sparse_pack_fence') is False
 
 
 def probe(arm, warm=False):
@@ -211,6 +216,9 @@ def sparse_batch_health(arm, phase):
             enabled=args.comparison == 'v-direct-sparse' and arm.startswith('opt'), max_slices=128)
         if args.comparison == 'v-pack-fence':
             assert state['reuse_sparse_pack_fence'] is arm.startswith('opt')
+        if args.comparison == 'v-selected-views':
+            assert state['selected_sparse_component_views'] is arm.startswith('opt')
+            assert state['reuse_sparse_pack_fence'] is False
         assert state['isolated_reason'] is None
 
 
@@ -269,6 +277,9 @@ def main():
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
                              ('sparse_token_runs.py', 'sparse_copy.py', 'sparse_payload.py',
                               'sparse_delivery.py', 'transfer_lifecycle.py')]
+            if args.comparison == 'v-selected-views' and role in ('v', 'd'):
+                relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
+                             ('sparse_copy.py', 'sparse_payload.py', 'sparse_delivery.py')]
             if args.comparison == 'd-gpu-bank' and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/oasis_gpu_backup.py']
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
@@ -325,7 +336,7 @@ def main():
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,
                                   batched_bank_install=False, batched_cache_install=arm.startswith('opt'))
-                if args.comparison == 'v-pack-fence':
+                if args.comparison in ('v-pack-fence', 'v-selected-views'):
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,
                                   batched_bank_install=False, batched_cache_install=False)
@@ -336,10 +347,10 @@ def main():
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
-            if args.comparison in ('v-direct-sparse', 'v-pack-fence'):
+            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views'):
                 sparse_batch_health(arm, 'warmed')
             results[arm] = probe(arm)
-            if args.comparison in ('v-direct-sparse', 'v-pack-fence'):
+            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views'):
                 sparse_batch_health(arm, 'after')
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)
