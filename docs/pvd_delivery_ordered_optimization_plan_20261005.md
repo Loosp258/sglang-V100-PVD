@@ -64,3 +64,7 @@ ABBA，并以 D wait、TPOT、实际输出和 cleanup 判断采用，不能默�
   逐层 `_select_and_fetch`。CPU 双逻辑 rank/HTTP/字节/重放/失败 gate 通过；
   默认关闭，GPU/native/full-path 待测。详见
   `benchmark/results/pvd_fused_search_delivery_local_20261005.md`。
+
+五步实现已分别推送至 GitHub。最终实现提交 `873fb2c20` 上跨步骤回归
+279 passed/16 CUDA skipped；171 个文件 hash 与 Git blob 一致。总报告与
+证据索引：`benchmark/results/pvd_ordered_delivery_local_20261005.md` 及同名 JSON。
