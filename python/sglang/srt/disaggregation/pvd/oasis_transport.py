@@ -19,6 +19,9 @@ from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
 from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
 from sglang.srt.disaggregation.pvd.oasis_gpu_backup import OasisGPUBackupPool
 from sglang.srt.disaggregation.pvd.oasis_bank_install import install_batched_bank, install_tensor_bound
+from sglang.srt.disaggregation.pvd.oasis_cache_install import (
+    cache_install_tensor_bound, install_cpu_payloads, row_cache_profile,
+)
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient, SearchScope
@@ -58,13 +61,19 @@ class OasisCPUReceiveRecord(SparseReceiveRecord):
             raise RuntimeError("one exact terminal-success CPU receive required")
         views = self.manifest.payload_views(self._buffer)
         try:
-            for payload in views:
-                head = payload.spec.kv_head
-                for offset, token in enumerate(payload.spec.token_ids):
-                    if token in cache[head]:
-                        raise RuntimeError("duplicate remote cache row")
-                    # The synchronous clone owns its bytes before V is ACKed.
-                    cache[head][token] = payload.tensor[:, offset].clone()
+            if self._registry.batched_cache_install:
+                profile = install_cpu_payloads(views, cache,
+                    capacity=self._registry.cache_capacity, retained=[])
+            else:
+                for payload in views:
+                    head = payload.spec.kv_head
+                    for offset, token in enumerate(payload.spec.token_ids):
+                        if token in cache[head]:
+                            raise RuntimeError("duplicate remote cache row")
+                        # The synchronous clone owns its bytes before V is ACKed.
+                        cache[head][token] = payload.tensor[:, offset].clone()
+                profile = row_cache_profile(views)
+            self.profile.update(profile, cache_install_complete=True, cache_d2h_fenced=False)
         finally:
             for payload in views:
                 payload.close()
@@ -72,6 +81,13 @@ class OasisCPUReceiveRecord(SparseReceiveRecord):
 
 
 class OasisCPUReceiveRegistry(SparseReceiveRegistry):
+    def __init__(self, *args, batched_cache_install=False, cache_capacity=2048, **kwargs):
+        if type(batched_cache_install) is not bool:
+            raise ValueError('explicit boolean batched cache install required')
+        cache_install_tensor_bound(cache_capacity)
+        super().__init__(*args, **kwargs)
+        self.batched_cache_install, self.cache_capacity = batched_cache_install, cache_capacity
+
     def _new_record(self, manifest, identity, client):
         return OasisCPUReceiveRecord(self, manifest, identity, client)
 
@@ -140,13 +156,19 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
             torch.cuda.current_stream(self._registry.device).synchronize()
             cpu_views = self.manifest.payload_views(host)
             self._cache_copy_owners.extend(cpu_views)
-            for payload in cpu_views:
-                head = payload.spec.kv_head
-                for offset, token in enumerate(payload.spec.token_ids):
-                    if token in cache[head]:
-                        raise RuntimeError("duplicate remote cache row")
-                    cache[head][token] = payload.tensor[:, offset].clone()
+            if self._registry.batched_cache_install:
+                profile = install_cpu_payloads(cpu_views, cache,
+                    capacity=self._registry.cache_capacity, retained=self._cache_copy_owners)
+            else:
+                for payload in cpu_views:
+                    head = payload.spec.kv_head
+                    for offset, token in enumerate(payload.spec.token_ids):
+                        if token in cache[head]:
+                            raise RuntimeError("duplicate remote cache row")
+                        cache[head][token] = payload.tensor[:, offset].clone()
+                profile = row_cache_profile(cpu_views)
             self._installed = True
+            self.profile.update(profile, cache_install_complete=True, cache_d2h_fenced=True)
         except BaseException:
             try:
                 torch.cuda.current_stream(self._registry.device).synchronize()
@@ -159,8 +181,13 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
 
 
 class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
-    def __init__(self, *args, receive_pool=None, **kwargs):
+    def __init__(self, *args, receive_pool=None, batched_cache_install=False,
+                 cache_capacity=2048, **kwargs):
+        if type(batched_cache_install) is not bool:
+            raise ValueError('explicit boolean batched cache install required')
+        cache_install_tensor_bound(cache_capacity)
         super().__init__(*args, **kwargs)
+        self.batched_cache_install, self.cache_capacity = batched_cache_install, cache_capacity
         if receive_pool is not None and (
                 receive_pool.engine is not self.engine
                 or receive_pool.budget is not self.budget
@@ -197,7 +224,8 @@ class OasisLayerTransport:
                  combine_reserve_start=False, reuse_receive_slots=False, workers=2,
                  gpu_receive_to_bank=False, backup_budget_bytes=33554432,
                  staged_transport=False, sort_missing_tokens=False,
-                 batched_bank_install=False, install_scratch_bytes=33554432):
+                 batched_bank_install=False, install_scratch_bytes=33554432,
+                 batched_cache_install=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -212,6 +240,7 @@ class OasisLayerTransport:
                 or type(staged_transport) is not bool
                 or type(sort_missing_tokens) is not bool
                 or type(batched_bank_install) is not bool
+                or type(batched_cache_install) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if staged_transport and (reuse_io or combine_reserve_start or reuse_receive_slots
@@ -221,6 +250,10 @@ class OasisLayerTransport:
                 or type(install_scratch_bytes) is not int
                 or install_scratch_bytes < workers * install_tensor_bound(capacity)):
             raise ValueError('batched install requires isolated mode and admitted request scratch')
+        if batched_cache_install and (gpu_receive_to_bank or staged_transport or batched_bank_install
+                or type(install_scratch_bytes) is not int
+                or install_scratch_bytes < workers * cache_install_tensor_bound(capacity)):
+            raise ValueError('batched cache install requires isolated mode and admitted request scratch')
         self.manager, self.selected = manager, selected
         self.request_id, self.incarnation = request_id, incarnation
         self.device = torch.device(device)
@@ -233,6 +266,7 @@ class OasisLayerTransport:
         self.staged_transport = staged_transport
         self.sort_missing_tokens = sort_missing_tokens
         self.batched_bank_install = batched_bank_install
+        self.batched_cache_install = batched_cache_install
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
@@ -322,6 +356,7 @@ class OasisLayerTransport:
                     registry=OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
                         self.manager.transfer_budget, receiver_epoch=self.manager.worker_epoch,
                         device=self.device, combine_reserve_start=self.combine_reserve_start,
+                        batched_cache_install=self.batched_cache_install, cache_capacity=self.capacity,
                         receive_pool=self.receive_pool))
                 self.local.state = state
                 self.workers.append(state)
@@ -383,6 +418,7 @@ class OasisLayerTransport:
                 gpu_receive_to_bank=self.gpu_receive_to_bank,
                 sort_missing_tokens=self.sort_missing_tokens,
                 batched_bank_install=self.batched_bank_install,
+                batched_cache_install=self.batched_cache_install,
                 gpu_backup=self.gpu_backups.snapshot() if self.gpu_backups else None,
                 combine_reserve_start=self.combine_reserve_start,
                 reuse_receive_slots=self.reuse_receive_slots, receive_pool=pool,

@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -177,9 +177,35 @@ def validate_bank_install_profile(profile, *, batched):
         assert miss_scatter == 2 * upload
 
 
+def validate_cache_install_profile(profile, *, batched):
+    assert profile['cache_install_mode'] == ('batched' if batched else 'rows')
+    assert profile['cache_install_complete'] is profile['cache_d2h_fenced'] is True
+    rows = integer(profile['cache_installed_rows'], 'cache_installed_rows', minimum=1)
+    groups = integer(profile['cache_groups'], 'cache_groups', minimum=1)
+    assert groups <= min(2, rows) and rows <= 64
+    assert integer(profile['cache_kv_bytes'], 'cache_kv_bytes') == profile['nbytes'] == rows * 512
+    assert profile['remote_rows'] == rows
+    clones = integer(profile['cache_row_clones'], 'cache_row_clones')
+    copies = integer(profile['cache_kv_copy_calls'], 'cache_kv_copy_calls')
+    valid = integer(profile['cache_valid_write_calls'], 'cache_valid_write_calls')
+    metadata = integer(profile['cache_index_bytes'], 'cache_index_bytes')
+    if batched:
+        assert clones == 0 and copies == valid == groups and metadata == rows * 8
+        assert integer(profile['cache_tensor_bound_bytes'], 'cache_tensor_bound_bytes', minimum=1) * 2 <= 32 << 20
+    else:
+        assert clones == copies == valid == rows and metadata == 0
+
+
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'd-cache-install':
+        assert snapshot['batched_cache_install'] is arm.startswith('opt')
+        assert snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
+        assert trace['attention_workspace'] is None
+        validate_gpu_backup(snapshot, enabled=False)
+        for row in trace['transport']:
+            validate_bank_install_profile(row['bank_install'], batched=False)
     if comparison == 'd-batch-install':
         assert snapshot['batched_bank_install'] is arm.startswith('opt')
         assert snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
@@ -232,6 +258,8 @@ def validate_delivery_profiles(trace, *, comparison, arm):
             assert item["reuse_receive_slots"] is slots
             if comparison == 'd-gpu-bank':
                 assert item['gpu_receive_to_bank'] is arm.startswith('opt')
+            if comparison == 'd-cache-install':
+                validate_cache_install_profile(item, batched=arm.startswith('opt'))
             if comparison == 'v-contiguous':
                 assert item['sort_missing_tokens'] is arm.startswith('opt')
                 assert 1 <= integer(item['wire_runs'], 'wire_runs') <= rows

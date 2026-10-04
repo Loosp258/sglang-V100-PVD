@@ -377,7 +377,7 @@ def test_reuse_requires_running_manager_loop_and_strict_bool(monkeypatch, backgr
 
 
 @pytest.mark.parametrize("reuse_io", [None, False, True, 0])
-@pytest.mark.parametrize("option", ["reuse_io", "sort_missing_tokens", "batched_bank_install"])
+@pytest.mark.parametrize("option", ["reuse_io", "sort_missing_tokens", "batched_bank_install", "batched_cache_install"])
 def test_json_option_is_optional_and_requires_an_actual_bool(monkeypatch, tmp_path, reuse_io, option):
     import sglang.srt.disaggregation.pvd.oasis_startup as startup
 
