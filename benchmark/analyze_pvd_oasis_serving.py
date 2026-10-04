@@ -29,6 +29,7 @@ if configs:
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
                           'd-workspace': 'attention_workspace',
+                          'd-batch-install': 'batched_bank_install',
                           'v-contiguous': 'sort_missing_tokens'}.get(a.comparison, 'overlap')
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
     assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
@@ -63,6 +64,9 @@ if configs:
             if a.comparison == 'v-contiguous':
                 assert config['sort_missing_tokens'] is arm.startswith('opt')
                 assert config['staged_transport'] is config['gpu_receive_to_bank'] is config['attention_workspace'] is False
+            if a.comparison == 'd-batch-install':
+                assert config['batched_bank_install'] is arm.startswith('opt')
+                assert config['staged_transport'] is config['gpu_receive_to_bank'] is config['attention_workspace'] is config['sort_missing_tokens'] is False
         declared = json.loads((root / 'comparison.json').read_text())
         assert list(online) == declared['arms'] == ['base_a', 'opt_a', 'opt_b', 'base_b']
         cases = [int(value) for value in declared['cases'].split(',')]
@@ -96,12 +100,14 @@ if configs:
                 if a.comparison == 'v-contiguous':
                     assert env['PVD_CONTIGUOUS_SPARSE_PACKING'] == str(int(
                         role == 'v' and arm.startswith('opt')))
+                if a.comparison == 'd-batch-install':
+                    assert env['PVD_CONTIGUOUS_SPARSE_PACKING'] == env['PVD_DIRECT_SPARSE_BATCH_PUT'] == '0'
             assert all(env == launch_envs[0] for env in launch_envs), (role, 'unrelated launch difference')
-if a.comparison in ('v-pack', 'v-contiguous'):
+if a.comparison in ('v-pack', 'v-contiguous', 'd-batch-install'):
     pack_modes = json.loads((root / 'pack_modes.json').read_text())
     assert set(pack_modes) == set(online), 'missing/extra actual packing mode arms'
     for arm, proof in pack_modes.items():
-        expected = ('torch_contiguous_runs' if a.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') else 'torch'
+        expected = ('torch_contiguous_runs' if a.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') and a.comparison != 'd-batch-install' else 'torch'
         assert len(proof['ranks']) == 2 and {r['rank'] for r in proof['ranks']} == {0, 1}
         for rank in proof['ranks']:
             assert rank['sparse_pack_kernel'] == expected
@@ -111,6 +117,10 @@ if a.comparison in ('v-pack', 'v-contiguous'):
             assert raw['device'] == rank['device'] == f"cuda:{rank['rank']}"
             assert raw['sparse_pack_kernel'] == expected
             assert raw['sparse_packing_mode'] == 'cuda_synchronous_experimental'
+if a.comparison == 'd-batch-install':
+    sources = json.loads((root / 'source_hashes.json').read_text())
+    helper = 'python/sglang/srt/disaggregation/pvd/oasis_bank_install.py'
+    assert re.fullmatch('[0-9a-f]{64}', sources['d'][helper]), 'missing deployed install source proof'
 summary, modes = {}, ({'serial': [], 'overlap': []} if a.comparison == 'pipeline'
                      else {'baseline': [], 'optimized': []})
 for arm, rows in online.items():
@@ -221,6 +231,16 @@ for mode, rows in modes.items():
         startup_full_kv_bytes_per_request=median([r['prompt_tokens'] * 28 * 4 * 128 * 2 * 2 for r in rows]),
         actual_forward_count=sum(len(r['forward']) for r in rows),
         layer_consume_count=len(layers))
+    if a.comparison == 'd-batch-install':
+        installs = [t['bank_install'] for t in transport]
+        aggregate[mode].update(
+            layer_install_mean_ms=mean([p['install_seconds'] * 1000 for p in installs]),
+            layer_install_median_ms=median([p['install_seconds'] * 1000 for p in installs]),
+            steady_kv_h2d_bytes=sum(p['kv_h2d_bytes'] for p in installs),
+            steady_kv_h2d_calls=sum(p['kv_h2d_calls'] for p in installs),
+            steady_resident_gather_calls=sum(p['resident_gather_calls'] for p in installs),
+            steady_resident_scatter_calls=sum(p['resident_scatter_calls'] for p in installs),
+            steady_cpu_scatter_calls=sum(p['cpu_scatter_calls'] for p in installs))
 
 by_case = {}
 for arm, rows in summary.items():
@@ -231,6 +251,14 @@ output_identity = {case: dict(
     output_ids_identical=len({tuple(r['output_ids']) for _, r in rows}) == 1,
     text_identical=len({r['output_sha256'] for _, r in rows}) == 1,
     arms=[arm for arm, _ in rows]) for case, rows in by_case.items()}
+if a.comparison == 'd-batch-install':
+    # Fewer returned/installed rows must not masquerade as an installation win.
+    for case, items in by_case.items():
+        signatures = [[(t['remote_rows'], t['bank_install']['selected_rows'],
+                        t['bank_install']['resident_rows'], t['bank_install']['cpu_rows'],
+                        t['bank_install']['kv_h2d_bytes']) for t in r['trace']['transport']]
+                      for _, r in items]
+        assert all(s == signatures[0] for s in signatures), (case, 'candidate or byte budgets changed')
 scope = {
     'pipeline': 'live paired serial vs live paired per-layer overlap',
     'v-search': 'live overlapped paired with baseline vs partial-head cached V search',
@@ -245,6 +273,8 @@ scope = {
     'd-gpu-bank': 'live overlapped paired with identical packed-PUT V; CPU cache round trip vs direct GPU bank rows with owned asynchronous historical backup',
     'd-stages': 'live overlapped paired with identical packed-PUT V and CPU historical cache; full-chain callbacks vs bounded persistent search/delivery/install stages',
     'd-workspace': 'live overlapped paired with identical packed-PUT V and CPU history; original variable-span attention vs bounded preallocated workspace, no serving CUDA graphs',
+    'v-contiguous': 'live overlapped paired with identical fast V search and selected banks; row packing vs contiguous-run packing with wire-only miss sorting',
+    'd-batch-install': 'live overlapped paired with identical packed-PUT V and CPU cache; per-head vs bounded all-head KV bank installation',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']

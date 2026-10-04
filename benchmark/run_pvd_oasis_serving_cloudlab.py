@@ -139,7 +139,7 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
-            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous'):
+            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install'):
                 prove_pack_modes(arm)
             if role == 'v' and args.comparison == 'v-direct-sparse':
                 sparse_batch_health(arm, 'before')
@@ -159,7 +159,7 @@ def prove_pack_modes(arm):
     path = OUT / 'pack_modes.json'
     modes = json.loads(path.read_text()) if path.exists() else {}
     modes[arm] = dict(source='GET /internal/health from both V rank endpoints; full responses saved', ranks=[])
-    expected = ('torch_contiguous_runs' if args.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') else 'torch'
+    expected = ('torch_contiguous_runs' if args.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') and args.comparison != 'd-batch-install' else 'torch'
     for rank in (0, 1):
         url = f'http://10.10.1.2:{9300 + rank}/internal/health'
         response = call('v', 'curl -fsS --max-time 5 ' + shlex.quote(url))
@@ -310,6 +310,10 @@ def main():
                 if args.comparison == 'v-contiguous':
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=arm.startswith('opt'))
+                if args.comparison == 'd-batch-install':
+                    config.update(gpu_receive_to_bank=False, staged_transport=False,
+                                  attention_workspace=False, sort_missing_tokens=False,
+                                  batched_bank_install=arm.startswith('opt'))
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', ASSETS['d'] + '/' + arm + '_config.json', encoded)

@@ -18,6 +18,7 @@ from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerReply, select_resi
 from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
 from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
 from sglang.srt.disaggregation.pvd.oasis_gpu_backup import OasisGPUBackupPool
+from sglang.srt.disaggregation.pvd.oasis_bank_install import install_batched_bank, install_tensor_bound
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.prompt_vectors import ROPE_APPLIED
 from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient, SearchScope
@@ -195,7 +196,8 @@ class OasisLayerTransport:
                  vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False,
                  combine_reserve_start=False, reuse_receive_slots=False, workers=2,
                  gpu_receive_to_bank=False, backup_budget_bytes=33554432,
-                 staged_transport=False, sort_missing_tokens=False):
+                 staged_transport=False, sort_missing_tokens=False,
+                 batched_bank_install=False, install_scratch_bytes=33554432):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -209,11 +211,16 @@ class OasisLayerTransport:
                 or type(gpu_receive_to_bank) is not bool
                 or type(staged_transport) is not bool
                 or type(sort_missing_tokens) is not bool
+                or type(batched_bank_install) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if staged_transport and (reuse_io or combine_reserve_start or reuse_receive_slots
                                  or gpu_receive_to_bank or workers != 2):
             raise ValueError('staged experiment requires unchanged two-worker packed/cache baseline')
+        if batched_bank_install and (gpu_receive_to_bank or staged_transport
+                or type(install_scratch_bytes) is not int
+                or install_scratch_bytes < workers * install_tensor_bound(capacity)):
+            raise ValueError('batched install requires isolated mode and admitted request scratch')
         self.manager, self.selected = manager, selected
         self.request_id, self.incarnation = request_id, incarnation
         self.device = torch.device(device)
@@ -225,6 +232,7 @@ class OasisLayerTransport:
         self.gpu_receive_to_bank = gpu_receive_to_bank
         self.staged_transport = staged_transport
         self.sort_missing_tokens = sort_missing_tokens
+        self.batched_bank_install = batched_bank_install
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
@@ -374,6 +382,7 @@ class OasisLayerTransport:
                 stage_trace=list(self.stages.trace) if self.stages else None,
                 gpu_receive_to_bank=self.gpu_receive_to_bank,
                 sort_missing_tokens=self.sort_missing_tokens,
+                batched_bank_install=self.batched_bank_install,
                 gpu_backup=self.gpu_backups.snapshot() if self.gpu_backups else None,
                 combine_reserve_start=self.combine_reserve_start,
                 reuse_receive_slots=self.reuse_receive_slots, receive_pool=pool,
@@ -659,44 +668,68 @@ class OasisLayerTransport:
                     chosen, remote_rows, rpc_seconds = state["loop"].run_until_complete(
                         self._select_and_fetch(state, ticket, host_q.tolist(), bank, bootstrap))
                     resident = bank() if callable(bank) else bank
-                    width = max(map(len, chosen))
-                    keys = torch.zeros((4, width, 128), device=self.device, dtype=torch.float16)
-                    values, valid = torch.zeros_like(keys), torch.zeros((4, width),
-                        device=self.device, dtype=torch.bool)
-                    retained.extend((keys, values, valid))
-                    for head, ids in enumerate(chosen):
-                        old = {} if resident is None else {t: i for i, t in enumerate(resident.ids[head])}
-                        hits = [(i, old[t]) for i, t in enumerate(ids) if t in old]
-                        misses = [(i, t) for i, t in enumerate(ids) if t not in old]
-                        if hits:
-                            dst, src = zip(*hits)
-                            keys[head, list(dst)] = resident.keys[head, list(src)]
-                            values[head, list(dst)] = resident.values[head, list(src)]
-                        if misses:
-                            cpu_misses = []
-                            for dst, token in misses:
-                                row = state['fresh_gpu_rows'].get((head, token))
-                                if row is None and self.gpu_backups:
-                                    reader = self.gpu_backups.acquire(ticket.layer, head, token)
-                                    if reader is not None:
-                                        state['gpu_readers'].append(reader)
-                                        row = reader.rows[head, token]
-                                if row is None:
-                                    cpu_misses.append((dst, token))
-                                else:
-                                    keys[head, dst], values[head, dst] = row[0], row[1]
-                            if cpu_misses:
-                                host = torch.stack([self.cache[ticket.layer][head][t]
-                                                    for _, t in cpu_misses]).pin_memory()
-                                gpu = host.to(self.device, non_blocking=True)
-                                retained.extend((host, gpu))
-                                dst = [i for i, _ in cpu_misses]
-                                keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
-                        valid[head, :len(ids)] = True
+                    install_started = time.perf_counter()
+                    install_profile = None
+                    if self.batched_bank_install:
+                        keys, values, valid, install_profile = install_batched_bank(
+                            chosen, resident, self.cache[ticket.layer], device=self.device,
+                            capacity=self.capacity, prompt_tokens=self.prompt_tokens, retained=retained)
+                    else:
+                        if not self.gpu_receive_to_bank:
+                            install_profile = dict(mode='per_head', selected_rows=sum(map(len, chosen)),
+                                resident_rows=0, cpu_rows=0, kv_h2d_bytes=0, kv_h2d_calls=0,
+                                resident_gather_calls=0, resident_scatter_calls=0,
+                                cpu_scatter_calls=0, cuda=True)
+                        width = max(map(len, chosen))
+                        keys = torch.zeros((4, width, 128), device=self.device, dtype=torch.float16)
+                        values, valid = torch.zeros_like(keys), torch.zeros((4, width),
+                            device=self.device, dtype=torch.bool)
+                        retained.extend((keys, values, valid))
+                        for head, ids in enumerate(chosen):
+                            old = {} if resident is None else {t: i for i, t in enumerate(resident.ids[head])}
+                            hits = [(i, old[t]) for i, t in enumerate(ids) if t in old]
+                            misses = [(i, t) for i, t in enumerate(ids) if t not in old]
+                            if install_profile is not None:
+                                install_profile['resident_rows'] += len(hits)
+                                install_profile['cpu_rows'] += len(misses)
+                                install_profile['kv_h2d_bytes'] += len(misses) * 512
+                                install_profile['kv_h2d_calls'] += int(bool(misses))
+                                install_profile['resident_gather_calls'] += 2 * int(bool(hits))
+                                install_profile['resident_scatter_calls'] += 2 * int(bool(hits))
+                                install_profile['cpu_scatter_calls'] += 2 * int(bool(misses))
+                            if hits:
+                                dst, src = zip(*hits)
+                                keys[head, list(dst)] = resident.keys[head, list(src)]
+                                values[head, list(dst)] = resident.values[head, list(src)]
+                            if misses:
+                                cpu_misses = []
+                                for dst, token in misses:
+                                    row = state['fresh_gpu_rows'].get((head, token))
+                                    if row is None and self.gpu_backups:
+                                        reader = self.gpu_backups.acquire(ticket.layer, head, token)
+                                        if reader is not None:
+                                            state['gpu_readers'].append(reader)
+                                            row = reader.rows[head, token]
+                                    if row is None:
+                                        cpu_misses.append((dst, token))
+                                    else:
+                                        keys[head, dst], values[head, dst] = row[0], row[1]
+                                if cpu_misses:
+                                    host = torch.stack([self.cache[ticket.layer][head][t]
+                                                        for _, t in cpu_misses]).pin_memory()
+                                    gpu = host.to(self.device, non_blocking=True)
+                                    retained.extend((host, gpu))
+                                    dst = [i for i, _ in cpu_misses]
+                                    keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
+                            valid[head, :len(ids)] = True
                     complete = torch.cuda.Event()
+                    retained.append(complete)
                     complete.record()
                     # Source owners can retire only after the H2D/copy event.
                     complete.synchronize()
+                    if install_profile is not None:
+                        install_profile.update(completion_proven=True,
+                            install_seconds=time.perf_counter() - install_started)
                     # Borrowed row aliases must disappear before a reader's
                     # last unpin may drop storage and refund its byte charge.
                     state['fresh_gpu_rows'].clear()
@@ -707,6 +740,7 @@ class OasisLayerTransport:
                 with self.lock:
                     self.trace.append(dict(step=ticket.step, layer=ticket.layer,
                         remote_rows=remote_rows, rpc_seconds=rpc_seconds,
+                        bank_install=install_profile,
                         deliveries=state.get("delivery_profiles", [])))
                 return LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
             except BaseException:

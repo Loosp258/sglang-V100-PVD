@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -150,9 +150,43 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
         assert registrations == deliveries, "per-delivery registration mode changed"
 
 
+def validate_bank_install_profile(profile, *, batched):
+    """Actual fenced installation counters; a config flag alone is insufficient."""
+    assert profile['mode'] == ('batched' if batched else 'per_head')
+    assert profile['cuda'] is profile['completion_proven'] is True
+    selected = integer(profile['selected_rows'], 'selected_rows', minimum=1)
+    hits = integer(profile['resident_rows'], 'resident_rows')
+    misses = integer(profile['cpu_rows'], 'cpu_rows')
+    assert selected == hits + misses and selected <= 128
+    assert integer(profile['kv_h2d_bytes'], 'kv_h2d_bytes') == misses * 512
+    seconds = profile['install_seconds']
+    assert type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0
+    upload = integer(profile['kv_h2d_calls'], 'kv_h2d_calls')
+    gather = integer(profile['resident_gather_calls'], 'resident_gather_calls')
+    scatter = integer(profile['resident_scatter_calls'], 'resident_scatter_calls')
+    miss_scatter = integer(profile['cpu_scatter_calls'], 'cpu_scatter_calls')
+    if batched:
+        assert upload == int(bool(misses))
+        assert gather == scatter == 2 * int(bool(hits))
+        assert miss_scatter == 2 * int(bool(misses))
+        assert integer(profile['tensor_bound_bytes'], 'tensor_bound_bytes', minimum=1) * 2 <= 32 << 20
+        assert integer(profile['index_metadata_bytes'], 'index_metadata_bytes') == (2 * hits + misses) * 8
+    else:
+        assert int(bool(misses)) <= upload <= min(4, misses)
+        assert 2 * int(bool(hits)) <= gather == scatter <= 2 * min(4, hits)
+        assert miss_scatter == 2 * upload
+
+
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'd-batch-install':
+        assert snapshot['batched_bank_install'] is arm.startswith('opt')
+        assert snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
+        assert trace['attention_workspace'] is None
+        validate_gpu_backup(snapshot, enabled=False)
+        for row in trace['transport']:
+            validate_bank_install_profile(row['bank_install'], batched=arm.startswith('opt'))
     if comparison == 'v-contiguous':
         assert snapshot['sort_missing_tokens'] is arm.startswith('opt')
         assert snapshot['staged_transport'] is False
