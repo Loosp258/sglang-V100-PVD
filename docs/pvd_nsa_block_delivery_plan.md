@@ -58,3 +58,22 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
   equal token counts, payload bytes and delivery counts. No GPU timing claim.
 - See `benchmark/results/pvd_nsa_contiguous_kv_local_20261004.md` for exact
   scopes, earlier failed fixture, source proof and the pending live gates.
+
+## Next local experiment: batch D bank installation
+
+1. Keep selected IDs/order, resident intersections, CPU-cache misses, network
+   payload and Prompt-bank capacity identical. Aggregate four heads' resident
+   gathers/scatters and CPU-miss H2D into one bounded installation. Preserve
+   the caller's CUDA stream, completion fence and UNKNOWN owner retention.
+2. Add an explicit default-off `batched_bank_install` D option. Reject mixing
+   with GPU-backup, staged transport or attention workspace experiments; charge
+   a conservative allocation bound against existing request scratch admission.
+   The baseline install path stays unchanged.
+3. Validate the actual helper on CPU against an independent per-head oracle,
+   then replay the captured real banks, including resident hits and CPU-cache
+   reuse. Record exact KV bytes and planned Torch call counts, not GPU timing.
+   Add real CUDA tests for nondefault streams and failure-owner retention.
+4. Commit implementation and evidence locally. On new GPU resources, run the
+   CUDA gate and matched `d-batch-install` ABBA full-path comparison, changing
+   only this option. Require actual installation profiles, output/byte budgets,
+   D wait, TPOT and cleanup; do not infer a latency win from fewer calls.
