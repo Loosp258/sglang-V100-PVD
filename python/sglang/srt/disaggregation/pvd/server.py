@@ -525,6 +525,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Batch selected KV rows using owned index_select metadata. Requires "
         "selected component views and ordinary CUDA staging; default off.",
     )
+    parser.add_argument('--experimental-reuse-sparse-source-slots', action='store_true',
+        help='Reuse bounded V physical sending MRs for sparse staging; default off.')
+    parser.add_argument('--sparse-source-slots', type=int, default=2)
+    parser.add_argument('--sparse-source-slot-bytes', type=int, default=32768)
     parser.add_argument(
         "--allow-fake-transport",
         action="store_true",
@@ -765,6 +769,20 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         ))
     ):
         raise ValueError("indexed packing requires isolated selected CUDA staging")
+    if (not 1 <= getattr(args, 'sparse_source_slots', 2) <= 64
+            or not 1 <= getattr(args, 'sparse_source_slot_bytes', 32768) <= 1 << 30):
+        raise ValueError('bounded sparse source slot configuration required')
+    if getattr(args, 'experimental_reuse_sparse_source_slots', False) and (
+            args.transfer_backend != 'mooncake' or args.allow_cpu_for_tests
+            or not getattr(args, 'experimental_cuda_sparse_packing', False)
+            or any(getattr(args, name, False) for name in (
+                'experimental_triton_sparse_packing', 'experimental_contiguous_sparse_packing',
+                'experimental_direct_sparse_batch_put', 'experimental_reuse_sparse_pack_fence',
+                'experimental_indexed_sparse_packing'))):
+        raise ValueError('source slots require isolated ordinary CUDA staging')
+    if getattr(args, 'experimental_reuse_sparse_source_slots', False) and (
+            args.sparse_source_slots * args.sparse_source_slot_bytes > args.transfer_staging_budget_bytes):
+        raise ValueError('physical source slot bounds exceed transfer staging budget')
     return rails
 
 
@@ -1096,6 +1114,9 @@ def _create_store(
         reuse_sparse_pack_fence=getattr(args, "experimental_reuse_sparse_pack_fence", False),
         selected_sparse_component_views=getattr(args, "experimental_selected_sparse_component_views", False),
         indexed_sparse_packing=getattr(args, "experimental_indexed_sparse_packing", False),
+        reuse_sparse_source_slots=getattr(args, 'experimental_reuse_sparse_source_slots', False),
+        sparse_source_slots=getattr(args, 'sparse_source_slots', 2),
+        sparse_source_slot_bytes=getattr(args, 'sparse_source_slot_bytes', 32768),
     )
     return store, preflight
 

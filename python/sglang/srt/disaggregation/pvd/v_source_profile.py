@@ -19,6 +19,8 @@ class VSourceProfile:
         self.selected_component_views = selected_component_views
         self._source_component_views = 0
         self._copy_metrics = dict(row_copy_calls=0, index_select_calls=0, row_index_bytes=0)
+        self._source_slots = dict(reuse_source_slots=False, source_slot_reused=False,
+            source_slot_bytes=0, physical_allocate_calls=1, physical_register_calls=1)
         self._lock = threading.Lock()
         self._phases = {
             name: dict(calls=0, successes=0, seconds=0.0) for name in SOURCE_PHASES
@@ -50,6 +52,7 @@ class VSourceProfile:
                 selected_component_views=self.selected_component_views,
                 source_component_views=self._source_component_views,
                 **self._copy_metrics,
+                **self._source_slots,
                 phases={name: dict(record) for name, record in self._phases.items()},
             )
 
@@ -64,6 +67,12 @@ class VSourceProfile:
     def record_copy_metrics(self, metrics):
         with self._lock:
             self._copy_metrics = dict(metrics)
+
+    def record_source_slot_metrics(self, *, reused, slot_bytes, physical_allocate_calls, physical_register_calls):
+        with self._lock:
+            self._source_slots = dict(reuse_source_slots=True, source_slot_reused=reused,
+                source_slot_bytes=slot_bytes, physical_allocate_calls=physical_allocate_calls,
+                physical_register_calls=physical_register_calls)
 
 
 def copy_source_profile(value, *, nbytes):
@@ -88,6 +97,14 @@ def copy_source_profile(value, *, nbytes):
     metrics = {name:value.get(name, 0) for name in ('row_copy_calls', 'index_select_calls', 'row_index_bytes')}
     if any(type(n) is not int or not 0 <= n <= (1 << 32) for n in metrics.values()):
         raise ValueError("invalid V copy diagnostic")
+    slots = {name:value.get(name, default) for name, default in (
+        ('reuse_source_slots', False), ('source_slot_reused', False), ('source_slot_bytes', 0),
+        ('physical_allocate_calls', 1), ('physical_register_calls', 1))}
+    if (any(type(slots[n]) is not bool for n in ('reuse_source_slots','source_slot_reused'))
+            or type(slots['source_slot_bytes']) is not int or not 0 <= slots['source_slot_bytes'] <= 1 << 30
+            or any(type(slots[n]) is not int or not 0 <= slots[n] <= 1
+                for n in ('physical_allocate_calls','physical_register_calls'))):
+        raise ValueError('invalid V source slot diagnostics')
     phases = value.get("phases")
     if not isinstance(phases, dict) or set(phases) != set(SOURCE_PHASES):
         raise ValueError("invalid V source phases")
@@ -106,4 +123,4 @@ def copy_source_profile(value, *, nbytes):
     return dict(schema=1, nbytes=nbytes, cuda=value["cuda"], kernel=value["kernel"],
                 reuse_pack_fence=value["reuse_pack_fence"],
                 outer_fence_reused=value["outer_fence_reused"], phases=copied,
-                selected_component_views=selected, source_component_views=count, **metrics)
+                selected_component_views=selected, source_component_views=count, **metrics, **slots)

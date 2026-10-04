@@ -130,6 +130,8 @@ def start(role, arm):
                         args.comparison == 'v-selected-views' and arm.startswith('opt')))
     env['PVD_INDEXED_SPARSE_PACKING'] = int(
         args.comparison == 'v-indexed-pack' and role == 'v' and arm.startswith('opt'))
+    env['PVD_REUSE_SPARSE_SOURCE_SLOTS'] = int(
+        args.comparison == 'v-source-slots' and role == 'v' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash ' + shlex.quote(ASSETS[remote] + '/launcher.sh') + ' ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -146,7 +148,7 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
-            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
+            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
                 prove_pack_modes(arm)
             if role == 'v' and args.comparison == 'v-direct-sparse':
                 sparse_batch_health(arm, 'before')
@@ -192,6 +194,9 @@ def prove_pack_modes(arm):
             assert state.get('selected_sparse_component_views') is True
             assert state.get('indexed_sparse_packing') is arm.startswith('opt')
             assert state.get('reuse_sparse_pack_fence') is False
+        if args.comparison == 'v-source-slots':
+            assert state['sparse_source_slots']['enabled'] is arm.startswith('opt')
+            assert state['sparse_source_slots']['slots']==2 and state['sparse_source_slots']['capacity_bytes']==32768
 
 
 def probe(arm, warm=False):
@@ -231,6 +236,11 @@ def sparse_batch_health(arm, phase):
             assert state['selected_sparse_component_views'] is True
             assert state['indexed_sparse_packing'] is arm.startswith('opt')
             assert state['reuse_sparse_pack_fence'] is False
+        if args.comparison == 'v-source-slots':
+            assert state['sparse_source_slots']['enabled'] is arm.startswith('opt')
+            if arm.startswith('opt'):
+                assert state['sparse_source_slots'].get('leased_slots',0)==0
+                assert state['sparse_source_slots'].get('unknown_slots',0)==0
         assert state['isolated_reason'] is None
 
 
@@ -296,6 +306,9 @@ def main():
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
                              ('sparse_copy.py', 'sparse_payload.py', 'sparse_delivery.py',
                               'sparse_row_index.py', 'sparse_pack_plan.py', 'transfer_lifecycle.py')]
+            if args.comparison == 'v-source-slots' and role in ('v','d'):
+                relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
+                    ('sparse_source_slots.py','sparse_copy.py','transfer_lifecycle.py','vector_store.py')]
             if args.comparison == 'd-gpu-bank' and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/oasis_gpu_backup.py']
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
@@ -352,7 +365,7 @@ def main():
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,
                                   batched_bank_install=False, batched_cache_install=arm.startswith('opt'))
-                if args.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
+                if args.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,
                                   batched_bank_install=False, batched_cache_install=False)
@@ -363,10 +376,10 @@ def main():
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
-            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
+            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
                 sparse_batch_health(arm, 'warmed')
             results[arm] = probe(arm)
-            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
+            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
                 sparse_batch_health(arm, 'after')
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)

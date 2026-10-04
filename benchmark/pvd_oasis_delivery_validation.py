@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -235,7 +235,7 @@ def validate_indexed_source_profile(profile, *, indexed, nbytes, group_rows):
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
-    if comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
+    if comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
         assert snapshot['batched_cache_install'] is snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
         assert trace['attention_workspace'] is None
         validate_gpu_backup(snapshot, enabled=False)
@@ -310,6 +310,17 @@ def validate_delivery_profiles(trace, *, comparison, arm):
                 assert item.get('v_source_profile_invalid', False) is False
                 validate_indexed_source_profile(item['v_source'], indexed=arm.startswith('opt'),
                     nbytes=item['nbytes'], group_rows=item['wire_group_rows'])
+            if comparison == 'v-source-slots':
+                p=item['v_source']
+                validate_v_source_profile(p,reuse=False,nbytes=item['nbytes'])
+                pooled=arm.startswith('opt')
+                assert p['reuse_source_slots'] is pooled
+                assert p['selected_component_views'] is False and p['source_component_views']==56
+                if pooled:
+                    assert p['source_slot_bytes']==32768
+                    assert p['physical_allocate_calls']==p['physical_register_calls']==int(not p['source_slot_reused'])
+                else:
+                    assert p['physical_allocate_calls']==p['physical_register_calls']==1
             if comparison == 'v-contiguous':
                 assert item['sort_missing_tokens'] is arm.startswith('opt')
                 assert 1 <= integer(item['wire_runs'], 'wire_runs') <= rows

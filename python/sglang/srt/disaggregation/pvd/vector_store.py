@@ -74,6 +74,7 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
 )
 from sglang.srt.disaggregation.pvd.transfer_progress import PVD_TRANSFER_CAPABILITY
 from sglang.srt.disaggregation.pvd.v_source_profile import VSourceProfile
+from sglang.srt.disaggregation.pvd.sparse_source_slots import SparseSourceSlotPool, SparseSourceSlotUnknown
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,7 @@ class DeliveryShardRecord:
     source_profile: Optional[VSourceProfile] = field(default=None, repr=False)
     # Private proof for this preparation only. Remote profiles cannot set it.
     packing_completion_proven: bool = field(default=False, repr=False)
+    source_slot_lease: Optional[object] = field(default=None, repr=False)
 
     def to_dict(self):
         result = {
@@ -359,6 +361,9 @@ class VectorKVStore:
         reuse_sparse_pack_fence: bool = False,
         selected_sparse_component_views: bool = False,
         indexed_sparse_packing: bool = False,
+        reuse_sparse_source_slots: bool = False,
+        sparse_source_slots: int = 2,
+        sparse_source_slot_bytes: int = 32768,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -414,6 +419,13 @@ class VectorKVStore:
             or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
         ):
             raise ValueError("indexed packing requires isolated selected Torch staging")
+        if (type(reuse_sparse_source_slots) is not bool or type(sparse_source_slots) is not int
+                or not 1 <= sparse_source_slots <= 64 or type(sparse_source_slot_bytes) is not int
+                or not 1 <= sparse_source_slot_bytes <= 1 << 30 or reuse_sparse_source_slots and (
+                    not (allow_cuda_sparse_packing or allow_cpu_for_tests)
+                    or fused_cuda_sparse_packing or direct_sparse_batch_put
+                    or contiguous_sparse_packing or reuse_sparse_pack_fence or indexed_sparse_packing)):
+            raise ValueError('source slots require bounded isolated Torch staging')
         if type(reuse_sparse_pack_fence) is not bool or reuse_sparse_pack_fence and (
             not allow_cuda_sparse_packing or fused_cuda_sparse_packing
             or direct_sparse_batch_put or contiguous_sparse_packing
@@ -501,6 +513,10 @@ class VectorKVStore:
         self.reuse_sparse_pack_fence = reuse_sparse_pack_fence
         self.selected_sparse_component_views = selected_sparse_component_views
         self.indexed_sparse_packing = indexed_sparse_packing
+        self.reuse_sparse_source_slots = reuse_sparse_source_slots
+        self.sparse_source_slots, self.sparse_source_slot_bytes = sparse_source_slots, sparse_source_slot_bytes
+        self._sparse_source_pool = None
+        self._source_pool_lock = threading.Lock()
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1601,23 +1617,45 @@ class VectorKVStore:
         # readiness fences. UNKNOWN never drops this guard or the Entry pin.
         return plan
 
+    def _source_slot_pool(self):
+        with self._source_pool_lock:
+            if self._sparse_source_pool is None:
+                self._sparse_source_pool = SparseSourceSlotPool(self.transfer_engine,
+                    budget_of(self.transfer_engine), device=self.pool.device, rank=self.rank,
+                    rail=self.rail, slots=self.sparse_source_slots, capacity_bytes=self.sparse_source_slot_bytes)
+            return self._sparse_source_pool
+
     def _prepare_sparse_source(self, entry, delivery):
         manifest = delivery.sparse_manifest
         profile = delivery.source_profile
         budget = budget_of(self.transfer_engine)
         owner = f"v-sparse:{delivery.owner}"
-        with profile.measure("allocate") if profile else nullcontext():
-            budget.reserve(owner, manifest.nbytes, 0)
+        source_lease = None
+        if self.reuse_sparse_source_slots:
             try:
-                staging = torch.empty(
-                    manifest.nbytes, dtype=torch.uint8, device=self.pool.device
-                )
-            except BaseException:
-                budget.release(owner)
+                source_lease = self._source_slot_pool().acquire(owner, manifest.nbytes, profile=profile)
+            except SparseSourceSlotUnknown:
+                delivery.local_terminal = TransportState.UNKNOWN
                 raise
+            staging = source_lease.buffer
+            delivery.source_slot_lease = source_lease
+        else:
+            with profile.measure("allocate") if profile else nullcontext():
+                budget.reserve(owner, manifest.nbytes, 0)
+                try:
+                    staging = torch.empty(
+                        manifest.nbytes, dtype=torch.uint8, device=self.pool.device
+                    )
+                except BaseException:
+                    budget.release(owner)
+                    raise
         registered = [None]
 
         def release():
+            if source_lease is not None:
+                source_lease.release_after_proof()
+                delivery.source_slot_lease = None
+                return
             if registered[0] is not None:
                 self.transfer_engine.release_memory(registered[0])
             budget.release(owner)
@@ -1708,6 +1746,8 @@ class VectorKVStore:
             # A constructor failure already retained its workspace/charge in
             # the module quarantine. An incidental later successful fence must
             # not release this delivery's index reader or repair UNKNOWN.
+        if source_lease is not None:
+            return source_lease.local
         try:
             with profile.measure("register") if profile else nullcontext():
                 registration = self.transfer_engine.register_memory(
@@ -1777,6 +1817,8 @@ class VectorKVStore:
             with self._lock:
                 if terminal == TransportState.UNKNOWN:
                     self._isolated_reason = "V transport terminal state is unknown"
+                    if delivery.source_slot_lease is not None:
+                        delivery.source_slot_lease.quarantine(self._isolated_reason)
                 if delivery.state == DeliveryState.V_WRITING and handle is not None:
                     if (
                         terminal == TransportState.TERMINAL_SUCCESS
@@ -1836,10 +1878,13 @@ class VectorKVStore:
                         != GuardUnpinOutcome.RELEASE_IN_PROGRESS
                     )
                 if delivery.staging_guard is not None:
-                    staging_done = (
-                        delivery.staging_guard.unpin(delivery.owner)
-                        != GuardUnpinOutcome.RELEASE_IN_PROGRESS
-                    )
+                    # Reuse is stricter than retaining an MR pending unregister:
+                    # the adapter must have dropped its last native reader first.
+                    if delivery.source_slot_lease is None or handle is None or self.transfer_engine.cleanup_complete(handle):
+                        staging_done = (
+                            delivery.staging_guard.unpin(delivery.owner)
+                            != GuardUnpinOutcome.RELEASE_IN_PROGRESS
+                        )
                 else:
                     staging_done = True
             if (
@@ -2271,6 +2316,11 @@ class VectorKVStore:
                     "V allocation release retained resources: %s: %s", entry.key, exc
                 )
         if self._closed:
+            if self._sparse_source_pool is not None:
+                try:
+                    self._sparse_source_pool.close()
+                except Exception as exc:
+                    logger.warning('V source slots retain physical owners: %s', exc)
             try:
                 self._pool_guard.request_release()
             except Exception as exc:
@@ -2347,6 +2397,9 @@ class VectorKVStore:
                 "reuse_sparse_pack_fence": self.reuse_sparse_pack_fence,
                 "selected_sparse_component_views": self.selected_sparse_component_views,
                 "indexed_sparse_packing": self.indexed_sparse_packing,
+                "sparse_source_slots": (self._sparse_source_pool.snapshot() if self._sparse_source_pool else
+                    dict(enabled=self.reuse_sparse_source_slots, physical_slots=0, physical_bytes=0,
+                        slots=self.sparse_source_slots, capacity_bytes=self.sparse_source_slot_bytes)),
                 "worker_epoch": self.worker_epoch,
                 "full_kv_fanin": {
                     "enabled": self._fanin_max_slices is not None,
