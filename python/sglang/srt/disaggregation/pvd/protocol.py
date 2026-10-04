@@ -305,7 +305,14 @@ class KVLayoutSignature:
         return hashlib.sha256(payload).hexdigest()
 
     def to_dict(self) -> Dict[str, Any]:
-        result = dataclasses.asdict(self)
+        # extra has always been exported as a shallow dict below. Avoid making
+        # a recursive component-metadata copy that would immediately be lost.
+        result = {item.name: getattr(self, item.name) for item in dataclasses.fields(self)}
+        atomic_types = (str, int, float, bool, type(None))
+        if any(type(value) not in atomic_types for name, value in result.items() if name != "extra"):
+            # Preserve asdict conversion/deep-copy behavior for unusual field
+            # values and dataclass subclasses, rather than broadening semantics.
+            result = dataclasses.asdict(self)
         result["extra"] = dict(self.extra)
         return result
 
