@@ -1,0 +1,172 @@
+{
+  "schema": "pvd-oasis-batched-bank-local-v1",
+  "implementation_commit": "d6ac2fb61",
+  "branch": "codex/pvd-oasiskv",
+  "default_enabled": false,
+  "cpu_only": true,
+  "gate": {
+    "passed": 133,
+    "skipped_real_cuda": 14,
+    "existing_pytest_config_warnings": 1,
+    "pytest_seconds": 6.94,
+    "python": "3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]",
+    "torch": "2.14.0+cpu",
+    "package_bootstrap_only": true,
+    "tests_include_explicit_policy_transport_doubles": true,
+    "output": "artifacts/d_batch_install_20261004/gate02/unit.txt"
+  },
+  "real_replay": {
+    "schema": "pvd-batched-real-bank-equivalence-v1",
+    "cases": [
+      {
+        "case": 99401,
+        "source_sha256": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+        "phases": {
+          "bootstrap": {
+            "baseline": {
+              "bank_checks": 28,
+              "selected_rows": 1193,
+              "resident_rows": 0,
+              "cpu_rows": 1193,
+              "kv_h2d_bytes": 610816,
+              "kv_h2d_calls": 112,
+              "resident_gather_calls": 0,
+              "resident_scatter_calls": 0,
+              "cpu_scatter_calls": 224
+            },
+            "batched": {
+              "bank_checks": 28,
+              "selected_rows": 1193,
+              "resident_rows": 0,
+              "cpu_rows": 1193,
+              "kv_h2d_bytes": 610816,
+              "kv_h2d_calls": 28,
+              "resident_gather_calls": 0,
+              "resident_scatter_calls": 0,
+              "cpu_scatter_calls": 56
+            }
+          },
+          "steady": {
+            "baseline": {
+              "bank_checks": 392,
+              "selected_rows": 39399,
+              "resident_rows": 35254,
+              "cpu_rows": 4145,
+              "kv_h2d_bytes": 2122240,
+              "kv_h2d_calls": 1189,
+              "resident_gather_calls": 3136,
+              "resident_scatter_calls": 3136,
+              "cpu_scatter_calls": 2378
+            },
+            "batched": {
+              "bank_checks": 392,
+              "selected_rows": 39399,
+              "resident_rows": 35254,
+              "cpu_rows": 4145,
+              "kv_h2d_bytes": 2122240,
+              "kv_h2d_calls": 387,
+              "resident_gather_calls": 784,
+              "resident_scatter_calls": 784,
+              "cpu_scatter_calls": 774
+            }
+          }
+        },
+        "remote": {
+          "rows": 5008,
+          "payload_bytes": 2564096,
+          "deliveries": 770
+        },
+        "bank_bits_order_and_mask_exact": true,
+        "per_job_tensor_bound_bytes": 268416,
+        "two_worker_tensor_bound_bytes": 536832
+      },
+      {
+        "case": 99402,
+        "source_sha256": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9",
+        "phases": {
+          "bootstrap": {
+            "baseline": {
+              "bank_checks": 28,
+              "selected_rows": 1205,
+              "resident_rows": 0,
+              "cpu_rows": 1205,
+              "kv_h2d_bytes": 616960,
+              "kv_h2d_calls": 112,
+              "resident_gather_calls": 0,
+              "resident_scatter_calls": 0,
+              "cpu_scatter_calls": 224
+            },
+            "batched": {
+              "bank_checks": 28,
+              "selected_rows": 1205,
+              "resident_rows": 0,
+              "cpu_rows": 1205,
+              "kv_h2d_bytes": 616960,
+              "kv_h2d_calls": 28,
+              "resident_gather_calls": 0,
+              "resident_scatter_calls": 0,
+              "cpu_scatter_calls": 56
+            }
+          },
+          "steady": {
+            "baseline": {
+              "bank_checks": 392,
+              "selected_rows": 39599,
+              "resident_rows": 35476,
+              "cpu_rows": 4123,
+              "kv_h2d_bytes": 2110976,
+              "kv_h2d_calls": 1183,
+              "resident_gather_calls": 3136,
+              "resident_scatter_calls": 3136,
+              "cpu_scatter_calls": 2366
+            },
+            "batched": {
+              "bank_checks": 392,
+              "selected_rows": 39599,
+              "resident_rows": 35476,
+              "cpu_rows": 4123,
+              "kv_h2d_bytes": 2110976,
+              "kv_h2d_calls": 388,
+              "resident_gather_calls": 784,
+              "resident_scatter_calls": 784,
+              "cpu_scatter_calls": 776
+            }
+          }
+        },
+        "remote": {
+          "rows": 5001,
+          "payload_bytes": 2560512,
+          "deliveries": 772
+        },
+        "bank_bits_order_and_mask_exact": true,
+        "per_job_tensor_bound_bytes": 268416,
+        "two_worker_tensor_bound_bytes": 536832
+      }
+    ],
+    "cpu_only": true,
+    "cuda_native_online_tested": false,
+    "target_forward_run": false,
+    "latency_measured": false,
+    "call_counts_scope": "planned Torch-level KV gather/scatter/upload calls, not CUDA kernel counts",
+    "terminal_unused_prefetch_included": false,
+    "source_hashes": {
+      "benchmark/verify_pvd_batched_real_banks.py": "d0f478e11fb7862af37952627c91fcc441dbc86f8c26026f6dd5329fe835932c",
+      "python/sglang/srt/disaggregation/pvd/oasis_bank_install.py": "159a7e4d38c5b9c53d468554672a9d9774c335d06d808da5c74a1a536c871c72"
+    }
+  },
+  "source_proof": {
+    "implementation_commit": "d6ac2fb61",
+    "matched_git_blob_count": 155,
+    "hash_normalization": "LF"
+  },
+  "evidence": {
+    "path": "artifacts/d_batch_install_20261004/evidence.tar.gz",
+    "nbytes": 11716,
+    "sha256": "8fa43290b6d5eafdc80942526cbf17d44f48c0289488581555193d371a4cf36c"
+  },
+  "no_gpu_latency_recall_or_output_quality_claim": true,
+  "pending": [
+    "real CUDA packing and bank install including native terminal/fence",
+    "new CloudLab connection/checkouts, then d-batch-install fair ABBA P/V/D timing"
+  ]
+}

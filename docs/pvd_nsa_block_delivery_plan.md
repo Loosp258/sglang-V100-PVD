@@ -77,3 +77,15 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
    CUDA gate and matched `d-batch-install` ABBA full-path comparison, changing
    only this option. Require actual installation profiles, output/byte budgets,
    D wait, TPOT and cleanup; do not infer a latency win from fewer calls.
+
+### Batch-install local stages completed
+
+- Plan committed as `dff9c8a5b`; implementation as `d6ac2fb61`.
+- CPU gate:133passed,14real CUDA cases skipped,1existing config warning.
+- Two real trajectories:840distinct banks bitwise exact; resident/local KV
+  rows and bytes unchanged. Steady KV H2D submissions fall1189/1183 to387/388,
+  resident gather and scatter submissions each fall3136 to784 per case.
+- `d-batch-install` fair ABBA/proof entry is prepared. Native/CUDA tests,
+  allocator memory, live installation time, D wait and TPOT are still pending.
+- Evidence and reproduction scope:
+  `benchmark/results/pvd_oasis_batched_bank_local_20261004.md`.
