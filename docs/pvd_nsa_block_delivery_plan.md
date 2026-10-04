@@ -121,3 +121,31 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
 - `d-cache-install` full-path fair entry is prepared; default remains off.
 - See `benchmark/results/pvd_oasis_cache_install_local_20261004.md` for source
   proof, failed assertion fixture, evidence and native/CUDA pending gates.
+
+## Next local experiment: V sparse source fences
+
+1. Instrument bounded per-delivery source phases: owned staging allocation,
+   index pin, pack launch, pack completion fence, memory registration, outer
+   preparation fence and adapter submission. Use monotonic wall time; launch
+   time is not GPU execution time and adapter time includes its own CUDA fence.
+   Forward diagnostics to D without using them as native completion proof.
+   Commit this baseline instrumentation after CPU lifecycle/HTTP tests.
+2. Add default-off `reuse_sparse_pack_fence` for ordinary Torch CUDA staging.
+   Record a private completion marker only after this delivery's pack fence
+   succeeds. Skip only the outer store fence when that marker is valid and the
+   delivery is not UNKNOWN. Preserve pack/index/Entry ownership, cancellation,
+   registration quarantine and the Mooncake source-readiness fence. Keep dense,
+   direct batch, Triton and contiguous experiments outside this first pilot.
+3. Test exact payloads, two V ranks, repeat start, cancellation before native
+   submission, partly failed copies, both CUDA-fence failures, registration
+   uncertainty and metadata uncertainty using explicitly labelled CPU policy
+   doubles. Add actual CUDA byte/stream checks that skip when CUDA is absent.
+   Commit the implementation and scoped local evidence independently.
+4. Prepare a `v-pack-fence` matched ABBA pilot changing only the V option.
+   Require actual per-delivery fence counts and phase timings, identical D
+   configuration, fast CAGRA settings, wire/bank budgets and cleanup. On restored
+   GPU resources, qualify native RDMA and compare V service, D wait and TPOT.
+   CPU fence counts do not establish GPU savings; leave the option off meanwhile.
+5. Use the new phase measurements to decide whether V staging registration
+   reuse or narrower stream completion fences warrant a separate experiment.
+   Do not combine earlier pilots or presume their gains add together.
