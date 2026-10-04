@@ -192,3 +192,25 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
    fast V/CAGRA, Torch packing and budgets; only the new V option may differ.
    Commit implementation and scoped evidence locally. CUDA/native, live V
    service, D wait and TPOT qualification await new GPU resources.
+
+### Selected-component local stages completed
+
+- Plan `e80d93f1d`; implementation `dfa4c8f9e`; default remains off.
+- Final gate:333passed,34real CUDA cases skipped,1existing config warning.
+  Actual source-storage reshape calls verify56to2views for single-layer jobs;
+  unselected metadata still fails before writing. Original fences and UNKNOWN
+  source/index/staging/MR/budget retention remain intact.
+- Two matched real captures,840consumed banks:actual selected payload uint8
+  bytes and manifest order exact. The declared CPU source has uncaptured rows
+  poisoned and never selected; this is not native Entry/CAGRA qualification.
+- Five-round CPU ABBA:steady helper means1.063/1.054ms to0.487/0.480ms per
+  rank delivery; excludes source preparation,CUDA,registration,network,D wait.
+  GPU savings and TPOT improvement cannot be inferred or added to prior pilots.
+- Historical baseline extra polling is6calls in2860steady rank deliveries;
+  no wait-on-start change implemented. That scope is only the saved fixture.
+- `v-selected-views` independent full-path ABBA/proof entry is prepared.
+  First restore new GPU hosts/model paths, qualify actual CUDA/native, then
+  measure source phases,D wait and TPOT. Keep all other experiment flags off.
+- Further staging/MR reuse or stream/event work depends on measured phase
+  ownership and cost. Report and evidence:
+  `benchmark/results/pvd_v_selected_component_views_local_20261004.md`.
