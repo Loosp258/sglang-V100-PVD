@@ -166,3 +166,29 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
   stream completion, or native poll/retirement/control scheduling. Implement
   each as an isolated experiment, preserving the existing release proofs.
 - Report: `benchmark/results/pvd_v_sparse_pack_fence_local_20261004.md`.
+
+## Next local experiment: prepare only selected K/V component views
+
+1. Historical baseline has6extra polls in2860steady deliveries, so additional
+   terminal-wait RPC work has little demonstrated opportunity. The packed
+   source currently constructs56Torch component views for every28-layer Entry
+   delivery, although an Oasis layer job uses only its own K and V components.
+   Freeze this finding and the bounded implementation scope in a local commit.
+2. Keep validation of every component's dtype/shape/byte metadata on each call.
+   Add default-off selected component preparation to ordinary Torch packing:
+   construct only the unique selected K/V views, shared across local heads.
+   Keep per-request identity, layer/head/token bounds, destination nonaliasing,
+   full metadata validation, byte order, kernels, fences and budgets unchanged.
+   Do not cache mutable layout dictionaries or combine other experiment flags.
+3. Check both ranks, nonzero layer starts, multiple selected layers, partial
+   pages, all supported dtypes and independent uint8 byte oracles. Invalid
+   metadata in an unselected component must still fail before any write. Keep
+   the existing failed-copy and UNKNOWN ownership gates; add real CUDA cases.
+4. Replay selected bytes and timing on saved real Decode KV using the actual
+   helper with a declared reconstructed CPU source; identify uncaptured rows.
+   Record56-to2view preparation separately from CPU wall time. Preserve exact
+   Prompt-bank IDs, network rows/bytes and source immutability.
+5. Prepare an independent `v-selected-views` ABBA comparison with identical D,
+   fast V/CAGRA, Torch packing and budgets; only the new V option may differ.
+   Commit implementation and scoped evidence locally. CUDA/native, live V
+   service, D wait and TPOT qualification await new GPU resources.
