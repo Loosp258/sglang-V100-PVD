@@ -214,3 +214,29 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
 - Further staging/MR reuse or stream/event work depends on measured phase
   ownership and cost. Report and evidence:
   `benchmark/results/pvd_v_selected_component_views_local_20261004.md`.
+
+## Next local experiment: remove discarded layout metadata deep copies
+
+1. Profile the actual selected-layer CPU packing helper on the same frozen KV
+   capture. KVLayoutSignature.to_dict currently recursively copies extra using
+   dataclasses.asdict, then overwrites that copy with dict(self.extra). Record
+   this repeated work separately from instrumented timing; do not cache a
+   mutable layout or infer serving latency from cProfile cumulative time.
+2. For atomic top-level fields, construct the same dictionary directly and
+   retain the existing shallow extra copy. Preserve the original asdict path
+   for non-atomic/custom/subclass field values. Fingerprint JSON, hash, protocol,
+   live metadata reads, full validation and all device/transport proofs stay
+   unchanged. This equivalent serialization does not introduce a serving mode.
+3. Compare dictionary/wire/hash results against an independent old serializer:
+   nested metadata, mutation, tuple/list values, fallback dataclasses/custom
+   fields and subclass fields. Re-run affected protocol, HTTP, pack and UNKNOWN
+   lifecycle gates, plus saved real KV bytes with unchanged manifest and row
+   budgets. Commit implementation after these local gates pass.
+4. Run fresh CPU ABBA on both frozen captures using identical selected-layer
+   packing, preallocated jobs and Torch threads, changing only the serializer.
+   Report fingerprint time separately from actual helper wall time. This is
+   explicitly a controlled local monkeypatch reference, not a native V run.
+5. Commit evidence locally with source/input proofs. No GPU is available:
+   CUDA/native, full V service, D wait and TPOT remain pending. Future serving
+   comparison should pin the baseline and candidate commits with identical
+   launch options and inputs; no combined timing claims across earlier pilots.
