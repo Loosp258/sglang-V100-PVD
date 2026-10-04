@@ -28,6 +28,7 @@ if configs:
                           'v-direct-sparse': '__no_config_difference__',
                           'v-pack-fence': '__no_config_difference__',
                           'v-selected-views': '__no_config_difference__',
+                          'v-indexed-pack': '__no_config_difference__',
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
                           'd-workspace': 'attention_workspace',
@@ -73,7 +74,7 @@ if configs:
             if a.comparison == 'd-cache-install':
                 assert config['batched_cache_install'] is arm.startswith('opt')
                 assert config['batched_bank_install'] is config['staged_transport'] is config['gpu_receive_to_bank'] is config['attention_workspace'] is config['sort_missing_tokens'] is False
-            if a.comparison in ('v-pack-fence', 'v-selected-views'):
+            if a.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
                 assert config['batched_cache_install'] is config['batched_bank_install'] is config['staged_transport'] is config['gpu_receive_to_bank'] is config['attention_workspace'] is config['sort_missing_tokens'] is False
         declared = json.loads((root / 'comparison.json').read_text())
         assert list(online) == declared['arms'] == ['base_a', 'opt_a', 'opt_b', 'base_b']
@@ -105,7 +106,9 @@ if configs:
                                     and not (a.comparison == 'v-pack-fence'
                                              and role == 'v' and key == 'PVD_REUSE_SPARSE_PACK_FENCE')
                                     and not (a.comparison == 'v-selected-views'
-                                             and role == 'v' and key == 'PVD_SELECTED_SPARSE_COMPONENT_VIEWS')})
+                                             and role == 'v' and key == 'PVD_SELECTED_SPARSE_COMPONENT_VIEWS')
+                                    and not (a.comparison == 'v-indexed-pack'
+                                             and role == 'v' and key == 'PVD_INDEXED_SPARSE_PACKING')})
                 if a.comparison == 'v-direct-sparse':
                     assert env['PVD_DIRECT_SPARSE_BATCH_PUT'] == str(int(
                         role == 'v' and arm.startswith('opt')))
@@ -120,12 +123,17 @@ if configs:
                 if a.comparison == 'v-selected-views':
                     assert env['PVD_SELECTED_SPARSE_COMPONENT_VIEWS'] == str(int(role == 'v' and arm.startswith('opt')))
                     assert env['PVD_REUSE_SPARSE_PACK_FENCE'] == env['PVD_CONTIGUOUS_SPARSE_PACKING'] == env['PVD_DIRECT_SPARSE_BATCH_PUT'] == '0'
+                if a.comparison == 'v-indexed-pack':
+                    assert env['PVD_INDEXED_SPARSE_PACKING'] == str(int(role == 'v' and arm.startswith('opt')))
+                    assert env['PVD_SELECTED_SPARSE_COMPONENT_VIEWS'] == str(int(role == 'v'))
+                    assert env['PVD_REUSE_SPARSE_PACK_FENCE'] == env['PVD_CONTIGUOUS_SPARSE_PACKING'] == env['PVD_DIRECT_SPARSE_BATCH_PUT'] == '0'
             assert all(env == launch_envs[0] for env in launch_envs), (role, 'unrelated launch difference')
-if a.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views'):
+if a.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
     pack_modes = json.loads((root / 'pack_modes.json').read_text())
     assert set(pack_modes) == set(online), 'missing/extra actual packing mode arms'
     for arm, proof in pack_modes.items():
         expected = ('torch_contiguous_runs' if a.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') and a.comparison in ('v-pack', 'v-contiguous') else 'torch'
+        if a.comparison == 'v-indexed-pack' and arm.startswith('opt'): expected = 'torch_indexed_rows'
         assert len(proof['ranks']) == 2 and {r['rank'] for r in proof['ranks']} == {0, 1}
         for rank in proof['ranks']:
             assert rank['sparse_pack_kernel'] == expected
@@ -140,12 +148,19 @@ if a.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-instal
             if a.comparison == 'v-selected-views':
                 assert raw['selected_sparse_component_views'] is arm.startswith('opt')
                 assert raw['reuse_sparse_pack_fence'] is False
-if a.comparison in ('v-pack-fence', 'v-selected-views'):
+            if a.comparison == 'v-indexed-pack':
+                assert raw['selected_sparse_component_views'] is True
+                assert raw['indexed_sparse_packing'] is arm.startswith('opt')
+                assert raw['reuse_sparse_pack_fence'] is False
+if a.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
     sources = json.loads((root / 'source_hashes.json').read_text())
     for role in ('v', 'd'):
         assert re.fullmatch('[0-9a-f]{64}', sources[role]['python/sglang/srt/disaggregation/pvd/v_source_profile.py'])
         if a.comparison == 'v-selected-views':
             for name in ('sparse_copy.py', 'sparse_payload.py', 'sparse_delivery.py'):
+                assert re.fullmatch('[0-9a-f]{64}', sources[role]['python/sglang/srt/disaggregation/pvd/' + name])
+        if a.comparison == 'v-indexed-pack':
+            for name in ('sparse_copy.py','sparse_row_index.py','sparse_pack_plan.py','sparse_payload.py','sparse_delivery.py','transfer_lifecycle.py'):
                 assert re.fullmatch('[0-9a-f]{64}', sources[role]['python/sglang/srt/disaggregation/pvd/' + name])
 if a.comparison in ('d-batch-install', 'd-cache-install'):
     sources = json.loads((root / 'source_hashes.json').read_text())
@@ -215,7 +230,7 @@ for arm, rows in online.items():
         'optimized' if arm.startswith('opt') else 'baseline')
     modes[mode].extend(selected)
 
-if a.comparison in ('v-pack-fence', 'v-selected-views'):
+if a.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
     # Native adapter counters are process-wide, so include full bootstrap PUTs.
     # They supplement the per-delivery profiles and deployed adapter source hash.
     for arm, rows in summary.items():
@@ -229,6 +244,9 @@ if a.comparison in ('v-pack-fence', 'v-selected-views'):
                 assert state['reuse_sparse_pack_fence'] is (a.comparison == 'v-pack-fence' and arm.startswith('opt'))
                 if a.comparison == 'v-selected-views':
                     assert state['selected_sparse_component_views'] is arm.startswith('opt')
+                if a.comparison == 'v-indexed-pack':
+                    assert state['selected_sparse_component_views'] is True
+                    assert state['indexed_sparse_packing'] is arm.startswith('opt')
             first, last = before['transport']['submit_timing'], after['transport']['submit_timing']
             assert last['cuda_sync_calls'] - first['cuda_sync_calls'] >= sparse_count
             assert last['native_submit_calls'] - first['native_submit_calls'] >= sparse_count
@@ -299,12 +317,15 @@ for mode, rows in modes.items():
             steady_cache_row_clones=sum(p['cache_row_clones'] for p in deliveries),
             steady_cache_kv_copy_calls=sum(p['cache_kv_copy_calls'] for p in deliveries),
             steady_cache_valid_write_calls=sum(p['cache_valid_write_calls'] for p in deliveries))
-    if a.comparison in ('v-pack-fence', 'v-selected-views'):
+    if a.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
         source_profiles = [p['v_source'] for t in transport for p in t['deliveries']]
         aggregate[mode].update(
             steady_v_source_deliveries=len(source_profiles),
             steady_v_outer_fences_reused=sum(p['outer_fence_reused'] for p in source_profiles),
             steady_v_component_views=sum(p['source_component_views'] for p in source_profiles),
+            steady_v_row_copy_calls=sum(p.get('row_copy_calls',0) for p in source_profiles),
+            steady_v_index_select_calls=sum(p.get('index_select_calls',0) for p in source_profiles),
+            steady_v_row_index_bytes=sum(p.get('row_index_bytes',0) for p in source_profiles),
             steady_v_source_phases={name: dict(
                 calls=sum(p['phases'][name]['calls'] for p in source_profiles),
                 mean_ms=mean([p['phases'][name]['seconds'] * 1000 for p in source_profiles]),
@@ -321,7 +342,7 @@ output_identity = {case: dict(
     output_ids_identical=len({tuple(r['output_ids']) for _, r in rows}) == 1,
     text_identical=len({r['output_sha256'] for _, r in rows}) == 1,
     arms=[arm for arm, _ in rows]) for case, rows in by_case.items()}
-if a.comparison in ('d-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views'):
+if a.comparison in ('d-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
     # Fewer returned/installed rows must not masquerade as an installation win.
     for case, items in by_case.items():
         signatures = [[(t['remote_rows'], t['bank_install']['selected_rows'],
@@ -348,6 +369,7 @@ scope = {
     'd-cache-install': 'live overlapped paired with identical packed-PUT V and per-head GPU banks; per-token clone/copy vs grouped monotonic CPU-cache install after unchanged D2H fence',
     'v-pack-fence': 'live overlapped paired with identical fast V/CAGRA, D, Torch packed PUT and candidate/byte budgets; original store fences vs reuse of successful pack fence for outer preparation, mandatory adapter fence retained',
     'v-selected-views': 'live overlapped paired with identical fast V/CAGRA, D, Torch packed PUT, fences and candidate/byte budgets; prepare all source components vs only selected K/V layer components with full metadata validation',
+    'v-indexed-pack': 'live overlapped paired with identical fast V/CAGRA, D, selected source views, fences and candidate/byte budgets; per-row copies vs budgeted owned row indexes and exact-out gathers, singleton fallback',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']

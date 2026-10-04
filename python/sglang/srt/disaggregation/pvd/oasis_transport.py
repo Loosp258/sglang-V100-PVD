@@ -524,6 +524,7 @@ class OasisLayerTransport:
                     sort_missing_tokens=self.sort_missing_tokens,
                     wire_runs=sum(sum(1 for _ in consecutive_token_runs(s.token_ids)) for s in specs),
                     wire_ids_sorted=all(tuple(sorted(s.token_ids)) == s.token_ids for s in specs),
+                    wire_group_rows=[len(s.token_ids) for s in specs],
                 )
             except BaseException:
                 # Drain or retain all native destinations. Never infer success

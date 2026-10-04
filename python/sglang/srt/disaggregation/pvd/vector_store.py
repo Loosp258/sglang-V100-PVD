@@ -358,6 +358,7 @@ class VectorKVStore:
         contiguous_sparse_packing: bool = False,
         reuse_sparse_pack_fence: bool = False,
         selected_sparse_component_views: bool = False,
+        indexed_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -407,6 +408,12 @@ class VectorKVStore:
             or reuse_sparse_pack_fence or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
         ):
             raise ValueError("selected component views require isolated Torch staging")
+        if type(indexed_sparse_packing) is not bool or indexed_sparse_packing and (
+            not selected_sparse_component_views or fused_cuda_sparse_packing
+            or direct_sparse_batch_put or contiguous_sparse_packing or reuse_sparse_pack_fence
+            or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
+        ):
+            raise ValueError("indexed packing requires isolated selected Torch staging")
         if type(reuse_sparse_pack_fence) is not bool or reuse_sparse_pack_fence and (
             not allow_cuda_sparse_packing or fused_cuda_sparse_packing
             or direct_sparse_batch_put or contiguous_sparse_packing
@@ -493,6 +500,7 @@ class VectorKVStore:
         self.contiguous_sparse_packing = contiguous_sparse_packing
         self.reuse_sparse_pack_fence = reuse_sparse_pack_fence
         self.selected_sparse_component_views = selected_sparse_component_views
+        self.indexed_sparse_packing = indexed_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1324,7 +1332,8 @@ class VectorKVStore:
                 profile = delivery.source_profile = VSourceProfile(
                     nbytes=delivery.sparse_manifest.nbytes, cuda=self.pool.is_cuda,
                     kernel=("triton" if self.fused_cuda_sparse_packing else
-                            "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"),
+                            "torch_contiguous_runs" if self.contiguous_sparse_packing else
+                            "torch_indexed_rows" if self.indexed_sparse_packing else "torch"),
                     reuse_pack_fence=self.reuse_sparse_pack_fence,
                     selected_component_views=self.selected_sparse_component_views,
                 )
@@ -1642,6 +1651,13 @@ class VectorKVStore:
                 )
                 delivery.packing_workspace = workspace
             with profile.measure("pack") if profile else nullcontext():
+                if self.indexed_sparse_packing and any(len(s.token_ids) > 1 for s in manifest.specs):
+                    from sglang.srt.disaggregation.pvd.sparse_row_index import SparseRowIndexWorkspace
+                    workspace = SparseRowIndexWorkspace(manifest, layout=entry.layout,
+                        shard=entry.manifest, device=self.pool.device, budget=budget,
+                        owner=f"v-sparse-row-index:{delivery.owner}")
+                    delivery.packing_workspace = workspace
+                metrics = {}
                 component_views = copy_sparse_kv_into(
                     source,
                     staging,
@@ -1652,12 +1668,16 @@ class VectorKVStore:
                     index_version=descriptor.index_version,
                     id_mapping_version=descriptor.id_mapping_version,
                     allow_cuda=self.allow_cuda_sparse_packing,
-                    fused_workspace=workspace,
+                    fused_workspace=workspace if self.fused_cuda_sparse_packing else None,
                     contiguous_runs=self.contiguous_sparse_packing,
                     selected_component_views=self.selected_sparse_component_views,
+                    indexed_workspace=workspace if self.indexed_sparse_packing else None,
+                    copy_metrics=metrics,
                 )
                 if profile is not None and type(component_views) is int:
                     profile.record_component_views(component_views)
+                if profile is not None and metrics:
+                    profile.record_copy_metrics(metrics)
         except SparsePackCompletionUnknown:
             metadata_completion_unknown = True
             with self._lock:
@@ -2315,7 +2335,8 @@ class VectorKVStore:
                 ),
                 "sparse_pack_kernel": (
                     "triton" if self.fused_cuda_sparse_packing else
-                    "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"
+                    "torch_contiguous_runs" if self.contiguous_sparse_packing else
+                    "torch_indexed_rows" if self.indexed_sparse_packing else "torch"
                 ),
                 "direct_sparse_batch_put": {
                     # Sparse fence reuse never applies to this path.
@@ -2325,6 +2346,7 @@ class VectorKVStore:
                 "page_bytes": self.page_bytes,
                 "reuse_sparse_pack_fence": self.reuse_sparse_pack_fence,
                 "selected_sparse_component_views": self.selected_sparse_component_views,
+                "indexed_sparse_packing": self.indexed_sparse_packing,
                 "worker_epoch": self.worker_epoch,
                 "full_kv_fanin": {
                     "enabled": self._fanin_max_slices is not None,

@@ -29,6 +29,8 @@ def copy_sparse_kv_into(
     fused_workspace=None,
     contiguous_runs=False,
     selected_component_views=False,
+    indexed_workspace=None,
+    copy_metrics=None,
 ):
     """Validate every group BEFORE writing any bytes, then copy K and V rows.
 
@@ -38,6 +40,12 @@ def copy_sparse_kv_into(
     Even non-overlapping slices of the same allocation are refused, because the
     authoritative Entry must never double as output staging.
     """
+    if copy_metrics is not None and (type(copy_metrics) is not dict or copy_metrics):
+        raise SparsePayloadError("fresh caller-owned copy diagnostics required")
+    if indexed_workspace is not None and (
+        not selected_component_views or fused_workspace is not None or contiguous_runs
+    ):
+        raise SparsePayloadError("indexed copies require isolated selected component views")
     if type(selected_component_views) is not bool or selected_component_views and (
         fused_workspace is not None or contiguous_runs
     ):
@@ -56,7 +64,13 @@ def copy_sparse_kv_into(
         allow_cuda=allow_cuda,
         selected_component_views=selected_component_views,
     )
+    row_calls = indexed_calls = 0
     try:
+        if indexed_workspace is not None:
+            from sglang.srt.disaggregation.pvd.sparse_row_index import SparseRowIndexWorkspace
+            if not isinstance(indexed_workspace, SparseRowIndexWorkspace):
+                raise SparsePayloadError("explicit owned row-index workspace required")
+            indexed_workspace.check_matches(manifest, layout, shard, packed.device)
         if fused_workspace is not None:
             from sglang.srt.disaggregation.pvd.triton_sparse_pack import (
                 SparsePackWorkspace,
@@ -89,11 +103,17 @@ def copy_sparse_kv_into(
             )
             return source_component_views
         with torch.no_grad():
-            for payload, (keys, values, head) in zip(
-                outputs, source_groups, strict=True
-            ):
+            for group, (payload, (keys, values, head)) in enumerate(zip(outputs, source_groups, strict=True)):
+                ids = indexed_workspace.index_for(group) if indexed_workspace is not None else None
                 runs = tuple(consecutive_token_runs(payload.spec.token_ids)) if contiguous_runs else None
                 for kind, source in enumerate((keys, values)):
+                    if ids is not None:
+                        # Full validation formed an exact contiguous [N, dim] out
+                        # view; index_select must not resize/reallocate its storage.
+                        torch.index_select(source.view(-1, source.shape[-1]), 0, ids,
+                            out=payload.tensor[kind])
+                        indexed_calls += 1
+                        continue
                     if runs is not None:
                         for row, token, count in runs:
                             if count == 1:
@@ -101,9 +121,14 @@ def copy_sparse_kv_into(
                             else:
                                 payload.tensor[kind, row:row + count].copy_(
                                     source[token:token + count, head])
+                            row_calls += 1
                         continue
                     for row, token in enumerate(payload.spec.token_ids):
                         payload.tensor[kind, row].copy_(source[token, head])
+                        row_calls += 1
+        if copy_metrics is not None:
+            copy_metrics.update(row_copy_calls=row_calls, index_select_calls=indexed_calls,
+                row_index_bytes=indexed_workspace.index_bytes if indexed_workspace is not None else 0)
         # Diagnostic count only; returning is still NOT a completion fence.
         return source_component_views
     finally:

@@ -126,7 +126,10 @@ def start(role, arm):
     env['PVD_REUSE_SPARSE_PACK_FENCE'] = int(
         args.comparison == 'v-pack-fence' and role == 'v' and arm.startswith('opt'))
     env['PVD_SELECTED_SPARSE_COMPONENT_VIEWS'] = int(
-        args.comparison == 'v-selected-views' and role == 'v' and arm.startswith('opt'))
+        role == 'v' and (args.comparison == 'v-indexed-pack' or
+                        args.comparison == 'v-selected-views' and arm.startswith('opt')))
+    env['PVD_INDEXED_SPARSE_PACKING'] = int(
+        args.comparison == 'v-indexed-pack' and role == 'v' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash ' + shlex.quote(ASSETS[remote] + '/launcher.sh') + ' ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -143,7 +146,7 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
-            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views'):
+            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
                 prove_pack_modes(arm)
             if role == 'v' and args.comparison == 'v-direct-sparse':
                 sparse_batch_health(arm, 'before')
@@ -164,6 +167,7 @@ def prove_pack_modes(arm):
     modes = json.loads(path.read_text()) if path.exists() else {}
     modes[arm] = dict(source='GET /internal/health from both V rank endpoints; full responses saved', ranks=[])
     expected = ('torch_contiguous_runs' if args.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') and args.comparison in ('v-pack', 'v-contiguous') else 'torch'
+    if args.comparison == 'v-indexed-pack' and arm.startswith('opt'): expected = 'torch_indexed_rows'
     for rank in (0, 1):
         url = f'http://10.10.1.2:{9300 + rank}/internal/health'
         response = call('v', 'curl -fsS --max-time 5 ' + shlex.quote(url))
@@ -183,6 +187,10 @@ def prove_pack_modes(arm):
             assert state.get('reuse_sparse_pack_fence') is arm.startswith('opt')
         if args.comparison == 'v-selected-views':
             assert state.get('selected_sparse_component_views') is arm.startswith('opt')
+            assert state.get('reuse_sparse_pack_fence') is False
+        if args.comparison == 'v-indexed-pack':
+            assert state.get('selected_sparse_component_views') is True
+            assert state.get('indexed_sparse_packing') is arm.startswith('opt')
             assert state.get('reuse_sparse_pack_fence') is False
 
 
@@ -218,6 +226,10 @@ def sparse_batch_health(arm, phase):
             assert state['reuse_sparse_pack_fence'] is arm.startswith('opt')
         if args.comparison == 'v-selected-views':
             assert state['selected_sparse_component_views'] is arm.startswith('opt')
+            assert state['reuse_sparse_pack_fence'] is False
+        if args.comparison == 'v-indexed-pack':
+            assert state['selected_sparse_component_views'] is True
+            assert state['indexed_sparse_packing'] is arm.startswith('opt')
             assert state['reuse_sparse_pack_fence'] is False
         assert state['isolated_reason'] is None
 
@@ -280,6 +292,10 @@ def main():
             if args.comparison == 'v-selected-views' and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
                              ('sparse_copy.py', 'sparse_payload.py', 'sparse_delivery.py')]
+            if args.comparison == 'v-indexed-pack' and role in ('v', 'd'):
+                relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
+                             ('sparse_copy.py', 'sparse_payload.py', 'sparse_delivery.py',
+                              'sparse_row_index.py', 'sparse_pack_plan.py', 'transfer_lifecycle.py')]
             if args.comparison == 'd-gpu-bank' and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/oasis_gpu_backup.py']
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
@@ -336,7 +352,7 @@ def main():
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,
                                   batched_bank_install=False, batched_cache_install=arm.startswith('opt'))
-                if args.comparison in ('v-pack-fence', 'v-selected-views'):
+                if args.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,
                                   batched_bank_install=False, batched_cache_install=False)
@@ -347,10 +363,10 @@ def main():
                 start('v', arm); start('p', arm)
             start('d', arm); start('gateway', arm)
             probe(arm, True)
-            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views'):
+            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
                 sparse_batch_health(arm, 'warmed')
             results[arm] = probe(arm)
-            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views'):
+            if args.comparison in ('v-direct-sparse', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
                 sparse_batch_health(arm, 'after')
             (OUT / 'online.json').write_text(json.dumps(results, indent=2))
             collect('d', arm); collect('gateway', arm)

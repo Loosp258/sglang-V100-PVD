@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -196,10 +196,10 @@ def validate_cache_install_profile(profile, *, batched):
         assert clones == copies == valid == rows and metadata == 0
 
 
-def validate_v_source_profile(profile, *, reuse, nbytes):
+def validate_v_source_profile(profile, *, reuse, nbytes, kernel='torch'):
     """Source diagnostics supplement, never replace, native receipt validation."""
     assert profile['schema'] == 1 and profile['nbytes'] == nbytes
-    assert profile['cuda'] is True and profile['kernel'] == 'torch'
+    assert profile['cuda'] is True and profile['kernel'] == kernel
     assert profile['reuse_pack_fence'] is profile['outer_fence_reused'] is reuse
     phases = profile['phases']
     assert set(phases) == {'allocate', 'pin_index', 'pack', 'pack_fence', 'register', 'outer_fence', 'submit'}
@@ -217,10 +217,25 @@ def validate_selected_source_profile(profile, *, selected, nbytes):
     assert integer(profile['source_component_views'], 'source_component_views') == (2 if selected else 56)
 
 
+def validate_indexed_source_profile(profile, *, indexed, nbytes, group_rows):
+    validate_v_source_profile(profile, reuse=False, nbytes=nbytes,
+        kernel='torch_indexed_rows' if indexed else 'torch')
+    assert profile['selected_component_views'] is True and profile['source_component_views'] == 2
+    assert isinstance(group_rows, list) and 1 <= len(group_rows) <= 2
+    assert all(type(n) is int and 1 <= n <= 32 for n in group_rows)
+    assert sum(group_rows) * 512 == nbytes
+    assert integer(profile['row_copy_calls'], 'row_copy_calls') == 2 * sum(
+        n for n in group_rows if not indexed or n == 1)
+    assert integer(profile['index_select_calls'], 'index_select_calls') == 2 * sum(
+        n > 1 for n in group_rows) * int(indexed)
+    assert integer(profile['row_index_bytes'], 'row_index_bytes') == 8 * sum(
+        n for n in group_rows if n > 1) * int(indexed)
+
+
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
-    if comparison in ('v-pack-fence', 'v-selected-views'):
+    if comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack'):
         assert snapshot['batched_cache_install'] is snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
         assert trace['attention_workspace'] is None
         validate_gpu_backup(snapshot, enabled=False)
@@ -291,6 +306,10 @@ def validate_delivery_profiles(trace, *, comparison, arm):
             if comparison == 'v-selected-views':
                 assert item.get('v_source_profile_invalid', False) is False
                 validate_selected_source_profile(item['v_source'], selected=arm.startswith('opt'), nbytes=item['nbytes'])
+            if comparison == 'v-indexed-pack':
+                assert item.get('v_source_profile_invalid', False) is False
+                validate_indexed_source_profile(item['v_source'], indexed=arm.startswith('opt'),
+                    nbytes=item['nbytes'], group_rows=item['wire_group_rows'])
             if comparison == 'v-contiguous':
                 assert item['sort_missing_tokens'] is arm.startswith('opt')
                 assert 1 <= integer(item['wire_runs'], 'wire_runs') <= rows

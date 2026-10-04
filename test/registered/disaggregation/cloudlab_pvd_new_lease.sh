@@ -303,6 +303,9 @@ case "$role" in
     if [[ "${PVD_SELECTED_SPARSE_COMPONENT_VIEWS:-0}" == 1 ]]; then
       pack_args+=(--experimental-selected-sparse-component-views)
     fi
+    if [[ "${PVD_INDEXED_SPARSE_PACKING:-0}" == 1 ]]; then
+      pack_args+=(--experimental-indexed-sparse-packing)
+    fi
     nohup setsid "$python" -m sglang.srt.disaggregation.pvd.server \
       "${rank_args[@]}" \
       --world-size 2 --host 0.0.0.0 --advertise-host "$v_ip" \

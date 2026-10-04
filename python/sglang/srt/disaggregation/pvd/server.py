@@ -521,6 +521,11 @@ def build_parser() -> argparse.ArgumentParser:
         "source components. Requires ordinary CUDA staging; default off.",
     )
     parser.add_argument(
+        "--experimental-indexed-sparse-packing", action="store_true",
+        help="Batch selected KV rows using owned index_select metadata. Requires "
+        "selected component views and ordinary CUDA staging; default off.",
+    )
+    parser.add_argument(
         "--allow-fake-transport",
         action="store_true",
         help="development only; fake transport is process-local and is not RDMA",
@@ -750,6 +755,16 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         raise ValueError("selected component views require isolated ordinary CUDA staging")
     if args.rank1_startup_timeout_secs <= 0:
         raise ValueError("--rank1-startup-timeout-secs must be positive")
+    if getattr(args, "experimental_indexed_sparse_packing", False) and (
+        args.transfer_backend != "mooncake" or args.allow_cpu_for_tests
+        or not getattr(args, "experimental_cuda_sparse_packing", False)
+        or not getattr(args, "experimental_selected_sparse_component_views", False)
+        or any(getattr(args, name, False) for name in (
+            "experimental_triton_sparse_packing", "experimental_contiguous_sparse_packing",
+            "experimental_direct_sparse_batch_put", "experimental_reuse_sparse_pack_fence",
+        ))
+    ):
+        raise ValueError("indexed packing requires isolated selected CUDA staging")
     return rails
 
 
@@ -1080,6 +1095,7 @@ def _create_store(
         ),
         reuse_sparse_pack_fence=getattr(args, "experimental_reuse_sparse_pack_fence", False),
         selected_sparse_component_views=getattr(args, "experimental_selected_sparse_component_views", False),
+        indexed_sparse_packing=getattr(args, "experimental_indexed_sparse_packing", False),
     )
     return store, preflight
 
