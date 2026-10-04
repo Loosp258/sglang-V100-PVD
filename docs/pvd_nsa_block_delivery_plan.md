@@ -261,3 +261,29 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
 - Next local probes:manifest hash/wire construction and per-row copy dispatch.
   Native/CUDA and fixed-revision full-path comparisons require new GPU hosts.
 - Report:`benchmark/results/pvd_layout_serialization_local_20261004.md`.
+
+## Next experiment: budgeted indexed Torch row packing
+
+1. Frozen-capture CPU probe:manifest fingerprint saves only2to3us; indexed
+   gather prototype reduces actual validated pack from244to248us to183to184us.
+   Prioritize row batching; no manifest serializer change in this experiment.
+2. Add a bounded CPU/CUDA index workspace per delivery. Flatten logical token
+   plus local head into source row IDs, preserving every original ID and wire
+   order. Single-row groups retain copy_; multi-row groups use two index_select
+   calls with exact preallocated out shapes. Retain host/device indexes and
+   budget through success/partial failure fences, quarantine constructor UNKNOWN.
+   No new KV gather buffers, stream switches, RDMA modes or completion proofs.
+3. Add default-off indexed packing to V, requiring the selected-component mode
+   on both baseline and candidate. Keep original store/native fences, Entry/index
+   leases and registration/PUT/ACK rules. Isolate from Triton/direct/contiguous/
+   fence-reuse experiments. Include index preparation in V pack wall time and
+   record actual copy/index calls plus index bytes, never as terminal proof.
+4. Validate exact uint8 bytes across both ranks/dtypes/layers/pages, all-group
+   pre-write rejection, output-storage preservation, singleton fallback, budget
+   and constructor/copy/fence/cancellation/registration/submit UNKNOWN lifetimes.
+   Real CUDA nondefault-stream cases remain skips without GPU. Commit locally.
+5. Fresh CPU ABBA includes actual index preparation, budget and release; same
+   captures/selected views/validation, no native or Decode claim. Prepare the
+   independent v-indexed-pack full-path comparison with identical D and selected
+   V views on all arms; only indexed option differs. Freeze source/input proofs
+   and commit reports. GPU/native/D wait/TPOT gates require new GPU resources.
