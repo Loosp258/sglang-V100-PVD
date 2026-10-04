@@ -149,3 +149,20 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
 5. Use the new phase measurements to decide whether V staging registration
    reuse or narrower stream completion fences warrant a separate experiment.
    Do not combine earlier pilots or presume their gains add together.
+
+### V source-fence local stages completed
+
+- Plan `56e689006`; source profiling `13c8f38ae`; isolated reuse pilot `05dec10f2`.
+- Final gate:233passed,22actual CUDA cases skipped,1existing config warning.
+- Both rank byte oracles and failure lifetimes passed. Ordinary store fences
+  fall2 to1 under explicit CPU CUDA-policy tests; the adapter fence stays1.
+  This does not measure GPU or live Decode savings.
+- Historical baseline adapter counters average0.183ms for its source fence and
+  1.880ms for single native submission, including startup fan-in. Those counters
+  do not cover the two store fences or justify subtracting unrelated medians.
+- `v-pack-fence` ABBA/proof entry is ready. Actual CUDA/native timing, profile
+  overhead, D wait and TPOT require new GPU resources; the option remains off.
+- Next decisions follow measured source phases: V staging/MR reuse, precise
+  stream completion, or native poll/retirement/control scheduling. Implement
+  each as an isolated experiment, preserving the existing release proofs.
+- Report: `benchmark/results/pvd_v_sparse_pack_fence_local_20261004.md`.

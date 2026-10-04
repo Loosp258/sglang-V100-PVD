@@ -1,0 +1,133 @@
+{
+  "schema": "pvd-v-sparse-pack-fence-local-v1",
+  "date": "2026-10-04",
+  "source_commit": "05dec10f2b3c0d9429062ce35c53aef70dd4d066",
+  "plan_commit": "56e689006",
+  "instrumentation_commit": "13c8f38ae",
+  "branch": "codex/pvd-oasiskv",
+  "local_gate": {
+    "passed": 233,
+    "real_cuda_skipped": 22,
+    "existing_config_warnings": 1,
+    "python": "3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]",
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "explicit_cuda_and_native_policy_doubles": true
+  },
+  "normal_source_fence_counts": {
+    "store_baseline": 2,
+    "store_reuse": 1,
+    "adapter_baseline": 1,
+    "adapter_reuse": 1,
+    "scope": "store counts checked with CPU CUDA-policy doubles; mandatory adapter fence checked independently using real adapter code and fake CUDA/native boundaries; not native GPU measurement"
+  },
+  "invariants": [
+    "selected KV bytes/order on both ranks",
+    "exact native bytes and terminal identity",
+    "ACK after install",
+    "Entry/index/staging retention through UNKNOWN",
+    "bounded budgets",
+    "idempotent start without stale completion reuse"
+  ],
+  "historical_adapter_counters": {
+    "scope": "historical baseline formal window, warmed->after; includes full bootstrap fan-in; process-wide adapter means, not steady per-layer medians",
+    "experiment": "oasis_direct_sparse_abba03",
+    "observations": [
+      {
+        "arm": "base_a",
+        "rank": 0,
+        "delta": {
+          "cuda_sync_calls": 789,
+          "cuda_sync_seconds": 0.15822763519827276,
+          "native_submit_calls": 787,
+          "native_submit_seconds": 1.4041374629596248,
+          "batch_submit_calls": 2,
+          "batch_submit_seconds": 0.005956436041742563
+        },
+        "mean_ms": {
+          "cuda_sync": 0.2005419964490149,
+          "native_submit": 1.7841645018546695,
+          "batch_submit": 2.9782180208712816
+        }
+      },
+      {
+        "arm": "base_a",
+        "rank": 1,
+        "delta": {
+          "cuda_sync_calls": 757,
+          "cuda_sync_seconds": 0.13956211565528065,
+          "native_submit_calls": 755,
+          "native_submit_seconds": 1.701801496790722,
+          "batch_submit_calls": 2,
+          "batch_submit_seconds": 0.006312035955488682
+        },
+        "mean_ms": {
+          "cuda_sync": 0.18436210786694934,
+          "native_submit": 2.2540417176036054,
+          "batch_submit": 3.156017977744341
+        }
+      },
+      {
+        "arm": "base_b",
+        "rank": 0,
+        "delta": {
+          "cuda_sync_calls": 789,
+          "cuda_sync_seconds": 0.1365421093069017,
+          "native_submit_calls": 787,
+          "native_submit_seconds": 1.3813943031709641,
+          "batch_submit_calls": 2,
+          "batch_submit_seconds": 0.005480541964061558
+        },
+        "mean_ms": {
+          "cuda_sync": 0.17305717275906424,
+          "native_submit": 1.7552659506619621,
+          "batch_submit": 2.740270982030779
+        }
+      },
+      {
+        "arm": "base_b",
+        "rank": 1,
+        "delta": {
+          "cuda_sync_calls": 757,
+          "cuda_sync_seconds": 0.13215124781709164,
+          "native_submit_calls": 755,
+          "native_submit_seconds": 1.3113553753355518,
+          "batch_submit_calls": 2,
+          "batch_submit_seconds": 0.006292037898674607
+        },
+        "mean_ms": {
+          "cuda_sync": 0.1745723220833443,
+          "native_submit": 1.7368945368682804,
+          "batch_submit": 3.1460189493373036
+        }
+      }
+    ],
+    "sources": {
+      "artifacts/oasis_direct_sparse_abba03/base_a_v_rank0_warmed_health.json": "b13afd6ced6fd28a8e2cb6f36471ba50d6a2651ed42cfdc4e9ed9017aaea50ce",
+      "artifacts/oasis_direct_sparse_abba03/base_a_v_rank0_after_health.json": "5e95c5263936fcad70d1c8fad17793e3ae01af808c8eb98c4dc249de0f756ab1",
+      "artifacts/oasis_direct_sparse_abba03/base_a_v_rank1_warmed_health.json": "8cc76d2b2db39d242a48a614e73049b5a55b5a89ead237986eb546f8e694b730",
+      "artifacts/oasis_direct_sparse_abba03/base_a_v_rank1_after_health.json": "66c2bc57dceb1c842759ab5c0b95ee93e1c02156a9717e8b77cdc5d0d76cc91d",
+      "artifacts/oasis_direct_sparse_abba03/base_b_v_rank0_warmed_health.json": "dd4f0107e13b17ae1639c47dea45192928ded517bd232eec2ac71661bb4532c6",
+      "artifacts/oasis_direct_sparse_abba03/base_b_v_rank0_after_health.json": "aafe0602ec9d26f40bc67ec52753e5d80510f7023ca49ea941ab051b6553a00a",
+      "artifacts/oasis_direct_sparse_abba03/base_b_v_rank1_warmed_health.json": "2d28ab3f7fa68d43ca92f23c48d585614044fb75da49bcdc53803d6e72702312",
+      "artifacts/oasis_direct_sparse_abba03/base_b_v_rank1_after_health.json": "7401013e47ee7f8623b2e759e1a8722c8aecfd7aa35f5d614bbfa2012d6b3156"
+    },
+    "weighted_mean_ms": {
+      "cuda_sync": 0.18320928459817165,
+      "native_submit": 1.8802492341948323,
+      "batch_submit": 3.0051314824959263
+    }
+  },
+  "pending": [
+    "actual CUDA byte/stream cases",
+    "native RDMA qualification",
+    "matched v-pack-fence ABBA full path on new GPU nodes",
+    "live V source phases, D wait and TPOT",
+    "profiling overhead and allocator memory under load"
+  ],
+  "fair_comparison": "v-pack-fence; base_a,opt_a,opt_b,base_b; same D/config/fast V/CAGRA/Top4/capacity32/workers2/tokens16; only V reuse flag differs",
+  "feature_default": false,
+  "live_speedup_demonstrated": false,
+  "source_proof_files": 160,
+  "raw_evidence": "artifacts/v_pack_fence_20261004/evidence.tar.gz"
+}
