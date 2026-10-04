@@ -44,3 +44,10 @@
 每步报告记录实际执行的测试和失败修复、源码/input hash、注册或 API 计数，
 以及尚未执行的 GPU/native/live gate。恢复 GPU 后按以上顺序做独立 full-path
 ABBA，并以 D wait、TPOT、实际输出和 cleanup 判断采用，不能默认启用全部选项。
+
+## 完成记录
+
+- 第 1 步实现 `58a147863` 已推送；CPU gate 334 passed/32 CUDA skipped。
+  真实捕获 KV 回放 840 bank 字节一致，注册次数从每份 770/772 降至 2。
+  GPU/native/full-path 尚未执行，保持默认关闭。见
+  `benchmark/results/pvd_v_source_slots_local_20261005.md` 及同名 JSON。
