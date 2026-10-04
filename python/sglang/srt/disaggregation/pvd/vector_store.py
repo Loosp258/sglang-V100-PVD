@@ -206,6 +206,8 @@ class DeliveryShardRecord:
     sparse_batch_slices: int = 0
     fanin_writer: Optional[FullKVFanInWriter] = field(default=None, repr=False)
     source_profile: Optional[VSourceProfile] = field(default=None, repr=False)
+    # Private proof for this preparation only. Remote profiles cannot set it.
+    packing_completion_proven: bool = field(default=False, repr=False)
 
     def to_dict(self):
         result = {
@@ -354,6 +356,7 @@ class VectorKVStore:
         fused_cuda_sparse_packing: bool = False,
         direct_sparse_batch_put: bool = False,
         contiguous_sparse_packing: bool = False,
+        reuse_sparse_pack_fence: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -398,6 +401,11 @@ class VectorKVStore:
             raise ValueError("allow_cuda_sparse_packing must be a boolean")
         if type(direct_sparse_batch_put) is not bool:
             raise ValueError("direct_sparse_batch_put must be a boolean")
+        if type(reuse_sparse_pack_fence) is not bool or reuse_sparse_pack_fence and (
+            not allow_cuda_sparse_packing or fused_cuda_sparse_packing
+            or direct_sparse_batch_put or contiguous_sparse_packing
+        ):
+            raise ValueError("sparse pack fence reuse requires ordinary Torch CUDA staging")
         if type(contiguous_sparse_packing) is not bool or contiguous_sparse_packing and (
             fused_cuda_sparse_packing or direct_sparse_batch_put
             or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
@@ -477,6 +485,7 @@ class VectorKVStore:
         self.fused_cuda_sparse_packing = fused_cuda_sparse_packing
         self.direct_sparse_batch_put = direct_sparse_batch_put
         self.contiguous_sparse_packing = contiguous_sparse_packing
+        self.reuse_sparse_pack_fence = reuse_sparse_pack_fence
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1301,14 +1310,16 @@ class VectorKVStore:
 
         attempted = False
         packing_safe = True
+        delivery.packing_completion_proven = False
         profile = None
-        if delivery.sparse_manifest is not None and not self.direct_sparse_batch_put:
-            profile = delivery.source_profile = VSourceProfile(
-                nbytes=delivery.sparse_manifest.nbytes, cuda=self.pool.is_cuda,
-                kernel=("triton" if self.fused_cuda_sparse_packing else
-                        "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"),
-            )
         try:
+            if delivery.sparse_manifest is not None and not self.direct_sparse_batch_put:
+                profile = delivery.source_profile = VSourceProfile(
+                    nbytes=delivery.sparse_manifest.nbytes, cuda=self.pool.is_cuda,
+                    kernel=("triton" if self.fused_cuda_sparse_packing else
+                            "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"),
+                    reuse_pack_fence=self.reuse_sparse_pack_fence,
+                )
             # The reservation already pins Entry pages. Packing and native
             # calls deliberately run without the store's business lock.
             try:
@@ -1319,8 +1330,23 @@ class VectorKVStore:
                 # before a NOT_SUBMITTED path may release their source pin.
                 if self.pool.is_cuda:
                     try:
-                        with profile.measure("outer_fence") if profile else nullcontext():
-                            torch.cuda.synchronize(self.pool.device)
+                        if (
+                            self.reuse_sparse_pack_fence
+                            and self.allow_cuda_sparse_packing
+                            and not (self.direct_sparse_batch_put
+                                     or self.fused_cuda_sparse_packing
+                                     or self.contiguous_sparse_packing)
+                            and delivery.sparse_manifest is not None
+                            and delivery.packing_completion_proven
+                            and delivery.local_terminal is not TransportState.UNKNOWN
+                        ):
+                            # The owned Torch pack has already drained under
+                            # its index/Entry leases; registration launches no
+                            # Torch kernels. Keep the adapter's GPUDirect fence.
+                            profile.record_outer_fence_reuse()
+                        else:
+                            with profile.measure("outer_fence") if profile else nullcontext():
+                                torch.cuda.synchronize(self.pool.device)
                     except Exception:
                         packing_safe = False
                         raise
@@ -1646,6 +1672,8 @@ class VectorKVStore:
                     delivery.packing_workspace = None
                 lease.close()
                 delivery.packing_index_lease = None
+                if self.pool.is_cuda:
+                    delivery.packing_completion_proven = True
             # A constructor failure already retained its workspace/charge in
             # the module quarantine. An incidental later successful fence must
             # not release this delivery's index reader or repair UNKNOWN.
@@ -2279,10 +2307,12 @@ class VectorKVStore:
                     "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"
                 ),
                 "direct_sparse_batch_put": {
+                    # Sparse fence reuse never applies to this path.
                     "enabled": self.direct_sparse_batch_put,
                     "max_slices": MAX_DIRECT_SPARSE_SLICES,
                 },
                 "page_bytes": self.page_bytes,
+                "reuse_sparse_pack_fence": self.reuse_sparse_pack_fence,
                 "worker_epoch": self.worker_epoch,
                 "full_kv_fanin": {
                     "enabled": self._fanin_max_slices is not None,

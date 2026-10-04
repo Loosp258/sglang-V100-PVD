@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -196,9 +196,28 @@ def validate_cache_install_profile(profile, *, batched):
         assert clones == copies == valid == rows and metadata == 0
 
 
+def validate_v_source_profile(profile, *, reuse, nbytes):
+    """Source diagnostics supplement, never replace, native receipt validation."""
+    assert profile['schema'] == 1 and profile['nbytes'] == nbytes
+    assert profile['cuda'] is True and profile['kernel'] == 'torch'
+    assert profile['reuse_pack_fence'] is profile['outer_fence_reused'] is reuse
+    phases = profile['phases']
+    assert set(phases) == {'allocate', 'pin_index', 'pack', 'pack_fence', 'register', 'outer_fence', 'submit'}
+    for name, phase in phases.items():
+        expected = 0 if name == 'outer_fence' and reuse else 1
+        assert integer(phase['calls'], name) == integer(phase['successes'], name) == expected
+        seconds = phase['seconds']
+        assert type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0
+        if expected == 0: assert seconds == 0
+
+
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'v-pack-fence':
+        assert snapshot['batched_cache_install'] is snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
+        assert trace['attention_workspace'] is None
+        validate_gpu_backup(snapshot, enabled=False)
     if comparison == 'd-cache-install':
         assert snapshot['batched_cache_install'] is arm.startswith('opt')
         assert snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
@@ -260,6 +279,9 @@ def validate_delivery_profiles(trace, *, comparison, arm):
                 assert item['gpu_receive_to_bank'] is arm.startswith('opt')
             if comparison == 'd-cache-install':
                 validate_cache_install_profile(item, batched=arm.startswith('opt'))
+            if comparison == 'v-pack-fence':
+                assert item.get('v_source_profile_invalid', False) is False
+                validate_v_source_profile(item['v_source'], reuse=arm.startswith('opt'), nbytes=item['nbytes'])
             if comparison == 'v-contiguous':
                 assert item['sort_missing_tokens'] is arm.startswith('opt')
                 assert 1 <= integer(item['wire_runs'], 'wire_runs') <= rows

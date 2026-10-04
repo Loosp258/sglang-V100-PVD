@@ -268,13 +268,15 @@ def test_fused_pack_metadata_budget_is_held_until_cuda_fence(
         store.close()
 
 
-def test_unknown_metadata_upload_isolates_v_even_if_later_sync_succeeds(monkeypatch):
+@pytest.mark.parametrize("reuse_fence", [False, True])
+def test_unknown_metadata_upload_isolates_v_even_if_later_sync_succeeds(monkeypatch, reuse_fence):
     from sglang.srt.disaggregation.pvd.sparse_pack_plan import (
         SparsePackCompletionUnknown,
     )
 
     store, entry, manifest, budget, target, delivery, _ = cuda_policy(monkeypatch)
     store.fused_cuda_sparse_packing = True
+    store.reuse_sparse_pack_fence = reuse_fence  # policy fault injection, not startup mode
     record = store.prompt_index._entries[entry.key.transfer_id]
     module = types.ModuleType("sglang.srt.disaggregation.pvd.triton_sparse_pack")
     module._QUARANTINED_WORKSPACES = []
@@ -367,7 +369,9 @@ def test_both_shard_creation_paths_forward_the_explicit_option(monkeypatch, rank
     not torch.cuda.is_available(), reason="real CUDA required; unverified"
 )
 @pytest.mark.parametrize("copy_failure", [False, True])
-def test_actual_cuda_store_pack_lifetime_and_bytes(monkeypatch, copy_failure):
+@pytest.mark.parametrize("reuse_fence", [False, True])
+@pytest.mark.parametrize("nondefault_stream", [False, True])
+def test_actual_cuda_store_pack_lifetime_and_bytes(monkeypatch, copy_failure, reuse_fence, nondefault_stream):
     """Actual CUDA packing, still a fake transfer engine -- never RDMA evidence."""
     from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
     from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
@@ -391,6 +395,7 @@ def test_actual_cuda_store_pack_lifetime_and_bytes(monkeypatch, copy_failure):
         transfer_engine=engine,
         prompt_index=index,
         allow_cuda_sparse_packing=True,
+        reuse_sparse_pack_fence=reuse_fence,
     )
     entry = store.create_entry(entry_manifest)
     store.begin_p_write(entry.key)
@@ -421,7 +426,13 @@ def test_actual_cuda_store_pack_lifetime_and_bytes(monkeypatch, copy_failure):
     try:
         if copy_failure:
             monkeypatch.setattr(vector_store, "copy_sparse_kv_into", fail_after_copy)
-        store.start_delivery(entry.key, delivery.delivery_id)
+        stream = torch.cuda.Stream(device=store.pool.device) if nondefault_stream else torch.cuda.current_stream(store.pool.device)
+        with torch.cuda.stream(stream):
+            store.start_delivery(entry.key, delivery.delivery_id)
+        profile = delivery.source_profile.snapshot()
+        assert profile["outer_fence_reused"] is reuse_fence
+        assert profile["phases"]["pack_fence"]["successes"] == 1
+        assert profile["phases"]["outer_fence"]["calls"] == int(not reuse_fence)
         assert delivery.packing_index_lease is None
         if copy_failure:
             assert delivery.state is DeliveryState.FAILED

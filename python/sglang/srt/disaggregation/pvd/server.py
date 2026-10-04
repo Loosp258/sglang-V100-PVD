@@ -508,6 +508,12 @@ def build_parser() -> argparse.ArgumentParser:
         "bytes, readiness fences and native completion proof.",
     )
     parser.add_argument("--rank1-startup-timeout-secs", type=float, default=300.0)
+    parser.add_argument(
+        "--experimental-reuse-sparse-pack-fence", action="store_true",
+        help="Reuse this delivery's successful Torch pack completion fence for "
+        "the outer V preparation fence. Retains Mooncake source readiness and "
+        "UNKNOWN quarantine. Requires ordinary CUDA staging; default off.",
+    )
     parser.add_argument("--reaper-interval-secs", type=float, default=1.0)
     parser.add_argument(
         "--allow-fake-transport",
@@ -717,6 +723,15 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
         importlib.util.find_spec("triton") is None
     ):
         raise ValueError("experimental Triton sparse packing requires Triton")
+    if getattr(args, "experimental_reuse_sparse_pack_fence", False) and (
+        args.transfer_backend != "mooncake" or args.allow_cpu_for_tests
+        or not getattr(args, "experimental_cuda_sparse_packing", False)
+        or any(getattr(args, name, False) for name in (
+            "experimental_triton_sparse_packing", "experimental_contiguous_sparse_packing",
+            "experimental_direct_sparse_batch_put",
+        ))
+    ):
+        raise ValueError("sparse pack fence reuse requires ordinary Torch CUDA staging")
     if args.reaper_interval_secs <= 0:
         raise ValueError("--reaper-interval-secs must be positive")
     if args.rank1_startup_timeout_secs <= 0:
@@ -1049,6 +1064,7 @@ def _create_store(
         contiguous_sparse_packing=getattr(
             args, "experimental_contiguous_sparse_packing", False
         ),
+        reuse_sparse_pack_fence=getattr(args, "experimental_reuse_sparse_pack_fence", False),
     )
     return store, preflight
 

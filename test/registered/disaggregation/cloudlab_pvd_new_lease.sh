@@ -297,6 +297,9 @@ case "$role" in
     if [[ "${PVD_CONTIGUOUS_SPARSE_PACKING:-0}" == 1 ]]; then
       pack_args+=(--experimental-contiguous-sparse-packing)
     fi
+    if [[ "${PVD_REUSE_SPARSE_PACK_FENCE:-0}" == 1 ]]; then
+      pack_args+=(--experimental-reuse-sparse-pack-fence)
+    fi
     nohup setsid "$python" -m sglang.srt.disaggregation.pvd.server \
       "${rank_args[@]}" \
       --world-size 2 --host 0.0.0.0 --advertise-host "$v_ip" \
