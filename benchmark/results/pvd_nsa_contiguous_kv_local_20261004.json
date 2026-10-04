@@ -1,0 +1,80 @@
+{
+  "schema": "pvd-nsa-contiguous-local-report-v1",
+  "code_commit": "28e223be6631c03e3342eb8c28b08bfeda4ce985",
+  "cpu_gate": {
+    "summary": "105 passed, 6 skipped, 1 warning in 3.89s",
+    "python": "3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]",
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "scope": "real CPU bytes, controlled transport/HTTP lifecycle; explicit policy doubles; no native GPU evidence"
+  },
+  "real_banks": {
+    "schema": "pvd-nsa-real-bank-equivalence-v1",
+    "cases": [
+      {
+        "case": 99401,
+        "source_sha256": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+        "observations": {
+          "baseline": {
+            "bank_checks": 420,
+            "received_token_checks": 5008,
+            "deliveries": 770,
+            "payload_bytes": 2564096,
+            "packing_calls": 10016
+          },
+          "contiguous": {
+            "bank_checks": 420,
+            "received_token_checks": 5008,
+            "deliveries": 770,
+            "payload_bytes": 2564096,
+            "packing_calls": 8652
+          }
+        },
+        "real_bank_bits_and_order_exact": true
+      },
+      {
+        "case": 99402,
+        "source_sha256": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9",
+        "observations": {
+          "baseline": {
+            "bank_checks": 420,
+            "received_token_checks": 5001,
+            "deliveries": 772,
+            "payload_bytes": 2560512,
+            "packing_calls": 10002
+          },
+          "contiguous": {
+            "bank_checks": 420,
+            "received_token_checks": 5001,
+            "deliveries": 772,
+            "payload_bytes": 2560512,
+            "packing_calls": 8628
+          }
+        },
+        "real_bank_bits_and_order_exact": true
+      }
+    ],
+    "status": "passed",
+    "cpu_only": true,
+    "cuda_native_online_tested": false,
+    "target_forward_run": false,
+    "original_storage_reconstructed_from_captured_known_rows_only": true,
+    "latency_measured": false,
+    "source_hashes": {
+      "benchmark/verify_pvd_nsa_real_banks.py": "9ea181fd61214175d9232be7cd6ca7670256da2af3eef53cc53dfef45624ec86",
+      "python/sglang/srt/disaggregation/pvd/sparse_copy.py": "25fc0236a4393841a2dc6ce42dce20ff19dec307d91f156e7646ea203eac572b",
+      "python/sglang/srt/disaggregation/pvd/sparse_token_runs.py": "7cbc3914bf53221095075ed3af8a96aed9379b0afca5f086bf60750303228301"
+    }
+  },
+  "source_proof": {
+    "source_files": 149,
+    "tested_sources_match_committed_blobs": true,
+    "code_commit": "28e223be6631c03e3342eb8c28b08bfeda4ce985"
+  },
+  "gpu_native_online_status": "not_run: user confirmed expired CloudLab lease and no GPU",
+  "earlier_gate03": {
+    "status": "failed test fixture",
+    "cause": "fixture selected token9 outside its smaller stored Entry; validation refused before write; repaired test uses valid0..5",
+    "formal_result_counted": false
+  }
+}

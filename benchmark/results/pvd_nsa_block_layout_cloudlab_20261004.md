@@ -52,5 +52,6 @@ selected bank IDs。根据D单调CPU缓存重建缺失token；bootstrap与后14�
 & C:/Python314/python.exe -X utf8 -B benchmark/analyze_pvd_nsa_blocks.py --capture artifacts/oasis_workspace_replay01/capture --output artifacts/nsa_blocks_fresh/layout.json
 ```
 
-CloudLab当前P/V/D均拒绝原项目SSH密钥，因此尚无新CUDA/native资格验证、
-线上TPOT或D等待结果。分析阶段完成，后续实现和测试单独记录。
+用户随后确认CloudLab租约到期且当前无GPU；没有新CUDA/native资格验证、
+线上TPOT或D等待结果。后续本地实现和测试记录于
+[连续KV打包报告](pvd_nsa_contiguous_kv_local_20261004.md)。

@@ -45,3 +45,16 @@ terminal, byte-count, identity, fence, ownership and UNKNOWN handling.
 The user confirmed that the CloudLab lease has expired and no GPU is currently
 available. Do not retry those nodes. Local implementation and evidence can
 proceed; CUDA qualification and fair live timing await new GPU resources.
+
+## Completed local stages
+
+- Layout analysis committed as `d1305209f`: bootstrap copy-call opportunity
+  about35%, steady opportunity about7%; whole-block4 expansion exceeds
+  capacity32 in about79% of captured banks.
+- Implementation committed as `28e223be6`: opt-in strided run packing plus
+  wire-only missing-token sorting; serving defaults remain off.
+- Final CPU gate:105passed,6actual CUDA cases skipped,1existing config warning.
+  Saved real-model KV verifies840distinct consumed layer banks bitwise, with
+  equal token counts, payload bytes and delivery counts. No GPU timing claim.
+- See `benchmark/results/pvd_nsa_contiguous_kv_local_20261004.md` for exact
+  scopes, earlier failed fixture, source proof and the pending live gates.
