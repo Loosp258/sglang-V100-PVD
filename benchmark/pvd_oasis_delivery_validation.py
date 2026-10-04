@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots', 'd-owned-cleanup')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots', 'd-owned-cleanup', 'v-scoped-completion')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",

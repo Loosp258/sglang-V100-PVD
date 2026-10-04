@@ -31,6 +31,7 @@ if configs:
                           'v-indexed-pack': '__no_config_difference__',
                           'v-source-slots': '__no_config_difference__',
                           'd-owned-cleanup': 'ready_before_cleanup',
+                          'v-scoped-completion': '__no_config_difference__',
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
                           'd-workspace': 'attention_workspace',
@@ -112,7 +113,9 @@ if configs:
                                     and not (a.comparison == 'v-indexed-pack'
                                              and role == 'v' and key == 'PVD_INDEXED_SPARSE_PACKING')
                                     and not (a.comparison == 'v-source-slots'
-                                             and role == 'v' and key == 'PVD_REUSE_SPARSE_SOURCE_SLOTS')})
+                                             and role == 'v' and key == 'PVD_REUSE_SPARSE_SOURCE_SLOTS')
+                                    and not (a.comparison == 'v-scoped-completion'
+                                             and role == 'v' and key == 'PVD_SCOPED_SPARSE_SOURCE_COMPLETION')})
                 if a.comparison == 'v-direct-sparse':
                     assert env['PVD_DIRECT_SPARSE_BATCH_PUT'] == str(int(
                         role == 'v' and arm.startswith('opt')))

@@ -54,3 +54,6 @@ ABBA，并以 D wait、TPOT、实际输出和 cleanup 判断采用，不能默�
 - 第 2 步：实现独立 READY future 与同线程 owned cleanup，64 个 CPU 测试
   通过；实际 CUDA/native/full-path 待测。详见
   `benchmark/results/pvd_owned_ready_cleanup_local_20261005.md`。
+- 第 3 步：scoped producer event 与 adapter 本地 capability 核对；128 CPU
+  测试通过、15 CUDA 测试跳过。见
+  `benchmark/results/pvd_scoped_source_completion_local_20261005.md`。

@@ -209,6 +209,8 @@ class DeliveryShardRecord:
     source_profile: Optional[VSourceProfile] = field(default=None, repr=False)
     # Private proof for this preparation only. Remote profiles cannot set it.
     packing_completion_proven: bool = field(default=False, repr=False)
+    packing_stream: object = field(default=None, repr=False)
+    packing_event: object = field(default=None, repr=False)
     source_slot_lease: Optional[object] = field(default=None, repr=False)
 
     def to_dict(self):
@@ -359,6 +361,7 @@ class VectorKVStore:
         direct_sparse_batch_put: bool = False,
         contiguous_sparse_packing: bool = False,
         reuse_sparse_pack_fence: bool = False,
+        scoped_sparse_source_completion: bool = False,
         selected_sparse_component_views: bool = False,
         indexed_sparse_packing: bool = False,
         reuse_sparse_source_slots: bool = False,
@@ -431,6 +434,11 @@ class VectorKVStore:
             or direct_sparse_batch_put or contiguous_sparse_packing
         ):
             raise ValueError("sparse pack fence reuse requires ordinary Torch CUDA staging")
+        if type(scoped_sparse_source_completion) is not bool or scoped_sparse_source_completion and (
+                not allow_cuda_sparse_packing or any((fused_cuda_sparse_packing,
+                    direct_sparse_batch_put, contiguous_sparse_packing, indexed_sparse_packing,
+                    reuse_sparse_pack_fence, reuse_sparse_source_slots))):
+            raise ValueError('scoped source completion requires isolated Torch CUDA staging')
         if type(contiguous_sparse_packing) is not bool or contiguous_sparse_packing and (
             fused_cuda_sparse_packing or direct_sparse_batch_put
             or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
@@ -511,6 +519,7 @@ class VectorKVStore:
         self.direct_sparse_batch_put = direct_sparse_batch_put
         self.contiguous_sparse_packing = contiguous_sparse_packing
         self.reuse_sparse_pack_fence = reuse_sparse_pack_fence
+        self.scoped_sparse_source_completion = scoped_sparse_source_completion
         self.selected_sparse_component_views = selected_sparse_component_views
         self.indexed_sparse_packing = indexed_sparse_packing
         self.reuse_sparse_source_slots = reuse_sparse_source_slots
@@ -1364,7 +1373,7 @@ class VectorKVStore:
                 if self.pool.is_cuda:
                     try:
                         if (
-                            self.reuse_sparse_pack_fence
+                            (self.reuse_sparse_pack_fence or self.scoped_sparse_source_completion)
                             and self.allow_cuda_sparse_packing
                             and not (self.direct_sparse_batch_put
                                      or self.fused_cuda_sparse_packing
@@ -1673,6 +1682,10 @@ class VectorKVStore:
         delivery.packing_index_lease = lease
         workspace = None
         metadata_completion_unknown = False
+        if self.scoped_sparse_source_completion and self.pool.is_cuda:
+            # Ordinary Torch packing launches on this exact current stream.
+            # Source Entry is immutable after native upload terminal proof.
+            delivery.packing_stream = torch.cuda.current_stream(self.pool.device)
         try:
             if self.fused_cuda_sparse_packing:
                 from sglang.srt.disaggregation.pvd.triton_sparse_pack import (
@@ -1729,7 +1742,12 @@ class VectorKVStore:
             try:
                 if self.pool.is_cuda:
                     with profile.measure("pack_fence") if profile else nullcontext():
-                        torch.cuda.synchronize(self.pool.device)
+                        if delivery.packing_stream is not None:
+                            delivery.packing_event = torch.cuda.Event()
+                            delivery.packing_event.record(delivery.packing_stream)
+                            delivery.packing_event.synchronize()
+                        else:
+                            torch.cuda.synchronize(self.pool.device)
             except BaseException:
                 with self._lock:
                     delivery.local_terminal = TransportState.UNKNOWN
@@ -1768,6 +1786,11 @@ class VectorKVStore:
                 self._isolated_reason = "sparse staging registration outcome unknown"
             raise
         registered[0] = registration
+        if delivery.packing_event is not None:
+            from sglang.srt.disaggregation.pvd.transfer_engine import CudaSourceReady
+            proof = CudaSourceReady(registration, staging, 0, manifest.nbytes,
+                delivery.packing_event, delivery.packing_stream)
+            return MemorySlice(registration, 0, manifest.nbytes, source_ready=proof)
         return MemorySlice(registration, 0, manifest.nbytes)
 
     def _progress_delivery(self, entry, delivery) -> None:
@@ -2395,6 +2418,7 @@ class VectorKVStore:
                 },
                 "page_bytes": self.page_bytes,
                 "reuse_sparse_pack_fence": self.reuse_sparse_pack_fence,
+                "scoped_sparse_source_completion": self.scoped_sparse_source_completion,
                 "selected_sparse_component_views": self.selected_sparse_component_views,
                 "indexed_sparse_packing": self.indexed_sparse_packing,
                 "sparse_source_slots": (self._sparse_source_pool.snapshot() if self._sparse_source_pool else

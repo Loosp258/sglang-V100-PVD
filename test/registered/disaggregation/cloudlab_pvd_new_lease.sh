@@ -300,6 +300,9 @@ case "$role" in
     if [[ "${PVD_REUSE_SPARSE_PACK_FENCE:-0}" == 1 ]]; then
       pack_args+=(--experimental-reuse-sparse-pack-fence)
     fi
+    if [[ "${PVD_SCOPED_SPARSE_SOURCE_COMPLETION:-0}" == 1 ]]; then
+      pack_args+=(--experimental-scoped-sparse-source-completion)
+    fi
     if [[ "${PVD_SELECTED_SPARSE_COMPONENT_VIEWS:-0}" == 1 ]]; then
       pack_args+=(--experimental-selected-sparse-component-views)
     fi

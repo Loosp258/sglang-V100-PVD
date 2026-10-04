@@ -34,12 +34,41 @@ class MemorySlice:
     registration: RegisteredMemory
     offset: int
     length: int
+    source_ready: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.offset < 0 or self.length <= 0:
             raise ValueError("memory slice offset/length is invalid")
         if self.offset + self.length > self.registration.descriptor.length:
             raise ValueError("memory slice exceeds registered region")
+
+
+@dataclass(frozen=True)
+class CudaSourceReady:
+    """Local producer capability; never constructed from a wire descriptor.
+
+    The store owns immutable staging until terminal cleanup. The recorded
+    producer event includes every packing write and is waited on by the CPU
+    before native RDMA submission, independently of business completion.
+    """
+    registration: RegisteredMemory
+    buffer: Any = field(repr=False)
+    offset: int
+    length: int
+    event: Any = field(repr=False)
+    stream: Any = field(repr=False)
+
+    def wait(self, local):
+        if (local.registration is not self.registration
+                or self.registration.buffer is not self.buffer
+                or (local.offset, local.length) != (self.offset, self.length)
+                or not self.buffer.is_cuda
+                or not isinstance(self.event, torch.cuda.Event)
+                or not isinstance(self.stream, torch.cuda.Stream)
+                or self.event.device != self.buffer.device
+                or self.stream.device != self.buffer.device):
+            raise ValueError('CUDA source proof does not match exact physical slice')
+        self.event.synchronize()
 
 
 @dataclass

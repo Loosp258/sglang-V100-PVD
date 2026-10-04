@@ -343,7 +343,13 @@ class MooncakePVDTransferEngine(TransferEngine):
             # GPUDirect reads are not ordered behind PyTorch packing kernels.
             sync_started = time.perf_counter()
             try:
-                torch.cuda.synchronize(local.registration.buffer.device)
+                if local.source_ready is None:
+                    torch.cuda.synchronize(local.registration.buffer.device)
+                else:
+                    from sglang.srt.disaggregation.pvd.transfer_engine import CudaSourceReady
+                    if type(local.source_ready) is not CudaSourceReady:
+                        raise ValueError('invalid local source readiness capability')
+                    local.source_ready.wait(local)
             finally:
                 self._record_submit_timing(
                     "cuda_sync", time.perf_counter() - sync_started

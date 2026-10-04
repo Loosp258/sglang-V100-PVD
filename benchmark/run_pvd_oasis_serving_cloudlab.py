@@ -118,6 +118,7 @@ def start(role, arm):
     env['PVD_HOST_CANDIDATES'] = int(args.comparison in FAST_V_COMPARISONS or (args.comparison == 'v-latency' and arm.startswith('opt')))
     env['PVD_NATIVE_POOL'] = int(args.comparison in FAST_V_COMPARISONS or (args.comparison == 'v-latency' and arm.startswith('opt')))
     env['PVD_HOST_QUERY_VALIDATION'] = int(args.comparison == 'v-host-query' and arm.startswith('opt'))
+    env['PVD_SCOPED_SPARSE_SOURCE_COMPLETION'] = int(args.comparison == 'v-scoped-completion' and role == 'v' and arm.startswith('opt'))
     env['PVD_TRITON_SPARSE_PACKING'] = int(args.comparison == 'v-pack' and arm.startswith('opt'))
     env['PVD_DIRECT_SPARSE_BATCH_PUT'] = int(
         args.comparison == 'v-direct-sparse' and role == 'v' and arm.startswith('opt'))
