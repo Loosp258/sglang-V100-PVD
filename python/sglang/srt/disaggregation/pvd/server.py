@@ -500,6 +500,13 @@ def build_parser() -> argparse.ArgumentParser:
         "a separately budgeted metadata workspace, and a CUDA fence before PUT.",
     )
     parser.add_argument("--delivery-timeout-secs", type=float, default=300.0)
+    parser.add_argument(
+        "--experimental-contiguous-sparse-packing",
+        action="store_true",
+        help="Copy consecutive selected token ranges from strided KV views into "
+        "owned staging. Requires CUDA sparse packing; preserves payload order, "
+        "bytes, readiness fences and native completion proof.",
+    )
     parser.add_argument("--rank1-startup-timeout-secs", type=float, default=300.0)
     parser.add_argument("--reaper-interval-secs", type=float, default=1.0)
     parser.add_argument(
@@ -700,6 +707,12 @@ def _validate_args(args: argparse.Namespace) -> List[str]:
             "direct sparse batch requires Mooncake, CUDA and an indexed budget; "
             "cannot use Triton packing"
         )
+    if getattr(args, "experimental_contiguous_sparse_packing", False) and (
+        not getattr(args, "experimental_cuda_sparse_packing", False)
+        or getattr(args, "experimental_triton_sparse_packing", False)
+        or getattr(args, "experimental_direct_sparse_batch_put", False)
+    ):
+        raise ValueError("contiguous sparse packing requires CUDA staging without other packing modes")
     if getattr(args, "experimental_triton_sparse_packing", False) and (
         importlib.util.find_spec("triton") is None
     ):
@@ -1032,6 +1045,9 @@ def _create_store(
         ),
         direct_sparse_batch_put=getattr(
             args, "experimental_direct_sparse_batch_put", False
+        ),
+        contiguous_sparse_packing=getattr(
+            args, "experimental_contiguous_sparse_packing", False
         ),
     )
     return store, preflight

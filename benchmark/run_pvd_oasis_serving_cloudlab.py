@@ -121,6 +121,8 @@ def start(role, arm):
     env['PVD_TRITON_SPARSE_PACKING'] = int(args.comparison == 'v-pack' and arm.startswith('opt'))
     env['PVD_DIRECT_SPARSE_BATCH_PUT'] = int(
         args.comparison == 'v-direct-sparse' and role == 'v' and arm.startswith('opt'))
+    env['PVD_CONTIGUOUS_SPARSE_PACKING'] = int(
+        args.comparison == 'v-contiguous' and role == 'v' and arm.startswith('opt'))
     command = 'export ' + ' '.join(k + '=' + shlex.quote(str(v)) for k, v in env.items())
     command += '; bash ' + shlex.quote(ASSETS[remote] + '/launcher.sh') + ' ' + role
     (OUT / f'{arm}_{role}.launch').write_text(command)
@@ -137,7 +139,7 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
-            if role == 'v' and args.comparison == 'v-pack':
+            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous'):
                 prove_pack_modes(arm)
             if role == 'v' and args.comparison == 'v-direct-sparse':
                 sparse_batch_health(arm, 'before')
@@ -157,7 +159,7 @@ def prove_pack_modes(arm):
     path = OUT / 'pack_modes.json'
     modes = json.loads(path.read_text()) if path.exists() else {}
     modes[arm] = dict(source='GET /internal/health from both V rank endpoints; full responses saved', ranks=[])
-    expected = 'triton' if arm.startswith('opt') else 'torch'
+    expected = ('torch_contiguous_runs' if args.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') else 'torch'
     for rank in (0, 1):
         url = f'http://10.10.1.2:{9300 + rank}/internal/health'
         response = call('v', 'curl -fsS --max-time 5 ' + shlex.quote(url))
@@ -256,6 +258,10 @@ def main():
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
                              ('sparse_batch_plan.py', 'sparse_payload.py', 'sparse_delivery.py',
                               'transfer_lifecycle.py', 'sparse_copy.py', 'sparse_pack_plan.py')]
+            if args.comparison == 'v-contiguous' and role in ('v', 'd'):
+                relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
+                             ('sparse_token_runs.py', 'sparse_copy.py', 'sparse_payload.py',
+                              'sparse_delivery.py', 'transfer_lifecycle.py')]
             if args.comparison == 'd-gpu-bank' and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/oasis_gpu_backup.py']
             output = call(role, 'sha256sum ' + ' '.join(CHECKOUTS[role] + '/' + p for p in relative))
@@ -301,6 +307,9 @@ def main():
                 if args.comparison == 'd-workspace':
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=arm.startswith('opt'))
+                if args.comparison == 'v-contiguous':
+                    config.update(gpu_receive_to_bank=False, staged_transport=False,
+                                  attention_workspace=False, sort_missing_tokens=arm.startswith('opt'))
             encoded = json.dumps(config, indent=2).encode()
             (OUT / (arm + '_config.json')).write_bytes(encoded)
             upload('d', ASSETS['d'] + '/' + arm + '_config.json', encoded)

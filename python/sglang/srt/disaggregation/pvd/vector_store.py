@@ -350,6 +350,7 @@ class VectorKVStore:
         allow_cuda_sparse_packing: bool = False,
         fused_cuda_sparse_packing: bool = False,
         direct_sparse_batch_put: bool = False,
+        contiguous_sparse_packing: bool = False,
         full_kv_fanin_max_slices: Optional[int] = None,
         full_kv_fanin_max_inflight: Optional[int] = None,
         full_kv_fanin_native_batch: bool = False,
@@ -394,6 +395,11 @@ class VectorKVStore:
             raise ValueError("allow_cuda_sparse_packing must be a boolean")
         if type(direct_sparse_batch_put) is not bool:
             raise ValueError("direct_sparse_batch_put must be a boolean")
+        if type(contiguous_sparse_packing) is not bool or contiguous_sparse_packing and (
+            fused_cuda_sparse_packing or direct_sparse_batch_put
+            or not (allow_cuda_sparse_packing or allow_cpu_for_tests)
+        ):
+            raise ValueError("contiguous sparse packing requires owned staging and CUDA packing")
         if direct_sparse_batch_put:
             if (
                 fused_cuda_sparse_packing
@@ -467,6 +473,7 @@ class VectorKVStore:
         self.allow_cuda_sparse_packing = allow_cuda_sparse_packing
         self.fused_cuda_sparse_packing = fused_cuda_sparse_packing
         self.direct_sparse_batch_put = direct_sparse_batch_put
+        self.contiguous_sparse_packing = contiguous_sparse_packing
         self.entries: Dict[KVEntryKey, EntryShardRecord] = {}
         # A worker epoch retains all keys for replay refusal. Refuse new keys
         # at the bound rather than silently evicting a live protocol fence.
@@ -1596,6 +1603,7 @@ class VectorKVStore:
                 id_mapping_version=descriptor.id_mapping_version,
                 allow_cuda=self.allow_cuda_sparse_packing,
                 fused_workspace=workspace,
+                contiguous_runs=self.contiguous_sparse_packing,
             )
         except SparsePackCompletionUnknown:
             metadata_completion_unknown = True
@@ -2249,7 +2257,8 @@ class VectorKVStore:
                     else "cpu_reference_only"
                 ),
                 "sparse_pack_kernel": (
-                    "triton" if self.fused_cuda_sparse_packing else "torch"
+                    "triton" if self.fused_cuda_sparse_packing else
+                    "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"
                 ),
                 "direct_sparse_batch_put": {
                     "enabled": self.direct_sparse_batch_put,

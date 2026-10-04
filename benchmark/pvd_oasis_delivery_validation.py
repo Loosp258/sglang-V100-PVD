@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -153,6 +153,10 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'v-contiguous':
+        assert snapshot['sort_missing_tokens'] is arm.startswith('opt')
+        assert snapshot['staged_transport'] is False
+        validate_gpu_backup(snapshot, enabled=False)
     if comparison == 'd-workspace':
         assert snapshot['staged_transport'] is False
         validate_gpu_backup(snapshot, enabled=False)
@@ -194,6 +198,11 @@ def validate_delivery_profiles(trace, *, comparison, arm):
             assert item["reuse_receive_slots"] is slots
             if comparison == 'd-gpu-bank':
                 assert item['gpu_receive_to_bank'] is arm.startswith('opt')
+            if comparison == 'v-contiguous':
+                assert item['sort_missing_tokens'] is arm.startswith('opt')
+                assert 1 <= integer(item['wire_runs'], 'wire_runs') <= rows
+                if arm.startswith('opt'):
+                    assert item['wire_ids_sorted'] is True
             for name in DELIVERY_TIMINGS:
                 value = item[name]
                 assert type(value) in (int, float) and math.isfinite(value) and value >= 0, (name, value)

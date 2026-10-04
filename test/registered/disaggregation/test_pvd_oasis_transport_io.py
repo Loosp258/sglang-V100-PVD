@@ -377,7 +377,8 @@ def test_reuse_requires_running_manager_loop_and_strict_bool(monkeypatch, backgr
 
 
 @pytest.mark.parametrize("reuse_io", [None, False, True, 0])
-def test_json_option_is_optional_and_requires_an_actual_bool(monkeypatch, tmp_path, reuse_io):
+@pytest.mark.parametrize("option", ["reuse_io", "sort_missing_tokens"])
+def test_json_option_is_optional_and_requires_an_actual_bool(monkeypatch, tmp_path, reuse_io, option):
     import sglang.srt.disaggregation.pvd.oasis_startup as startup
 
     config = dict(eagle_source="source", eagle_checkpoint="checkpoint",
@@ -387,7 +388,7 @@ def test_json_option_is_optional_and_requires_an_actual_bool(monkeypatch, tmp_pa
         request_scratch_bytes=1024, bootstrap_budget_bytes=1024,
         bootstrap_transient_bytes=1024, overlap=True)
     if reuse_io is not None:
-        config["reuse_io"] = reuse_io
+        config[option] = reuse_io
     path = tmp_path / "oasis.json"
     path.write_text(json.dumps(config))
     scheduler = SimpleNamespace(server_args=SimpleNamespace(pvd_oasis_config=str(path)),
@@ -401,4 +402,4 @@ def test_json_option_is_optional_and_requires_an_actual_bool(monkeypatch, tmp_pa
             startup.maybe_install_oasis(scheduler)
     else:
         startup.maybe_install_oasis(scheduler)
-        assert scheduler.pvd_oasis_resources.config["reuse_io"] is (reuse_io is True)
+        assert scheduler.pvd_oasis_resources.config[option] is (reuse_io is True)

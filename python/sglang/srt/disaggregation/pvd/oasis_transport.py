@@ -24,6 +24,7 @@ from sglang.srt.disaggregation.pvd.search_client import PVDShardSearchClient, Se
 from sglang.srt.disaggregation.pvd.sparse_delivery import SparseDeliveryManifest
 from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
 from sglang.srt.disaggregation.pvd.sparse_receiver import SparseReceiveRecord, SparseReceiveRegistry
+from sglang.srt.disaggregation.pvd.sparse_token_runs import consecutive_token_runs
 
 
 class _HeadCPUCache:
@@ -194,7 +195,7 @@ class OasisLayerTransport:
                  vector_space, capacity, max_new, top_k, timeout=60, reuse_io=False,
                  combine_reserve_start=False, reuse_receive_slots=False, workers=2,
                  gpu_receive_to_bank=False, backup_budget_bytes=33554432,
-                 staged_transport=False):
+                 staged_transport=False, sort_missing_tokens=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -207,6 +208,7 @@ class OasisLayerTransport:
                 or type(reuse_receive_slots) is not bool
                 or type(gpu_receive_to_bank) is not bool
                 or type(staged_transport) is not bool
+                or type(sort_missing_tokens) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if staged_transport and (reuse_io or combine_reserve_start or reuse_receive_slots
@@ -222,6 +224,7 @@ class OasisLayerTransport:
         self.reuse_receive_slots = reuse_receive_slots
         self.gpu_receive_to_bank = gpu_receive_to_bank
         self.staged_transport = staged_transport
+        self.sort_missing_tokens = sort_missing_tokens
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
@@ -370,6 +373,7 @@ class OasisLayerTransport:
                 stages=self.stages.snapshot() if self.stages else None,
                 stage_trace=list(self.stages.trace) if self.stages else None,
                 gpu_receive_to_bank=self.gpu_receive_to_bank,
+                sort_missing_tokens=self.sort_missing_tokens,
                 gpu_backup=self.gpu_backups.snapshot() if self.gpu_backups else None,
                 combine_reserve_start=self.combine_reserve_start,
                 reuse_receive_slots=self.reuse_receive_slots, receive_pool=pool,
@@ -422,6 +426,10 @@ class OasisLayerTransport:
                     and not (self.gpu_backups and (t in old
                         or self.gpu_backups.contains(ticket.layer, head, t))))
                 if missing:
+                    # Only wire order changes. Chosen bank order and ranking
+                    # remain exact; cache installation keys each row by token.
+                    if self.sort_missing_tokens:
+                        missing = tuple(sorted(missing))
                     specs.append(SparseKVSpec(ticket.request_id, ticket.incarnation,
                         f"oasis:{'bootstrap' if bootstrap else 'lookahead'}:{ticket.step}:{ticket.layer}",
                         0 if bootstrap else ticket.step + 1,
@@ -467,6 +475,11 @@ class OasisLayerTransport:
                     nbytes=wire.nbytes, remote_rows=sum(len(s.token_ids) for s in specs),
                     cache_copy_seconds=cache_copy_seconds,
                     gpu_receive_to_bank=self.gpu_receive_to_bank))
+                state["delivery_profiles"][-1].update(
+                    sort_missing_tokens=self.sort_missing_tokens,
+                    wire_runs=sum(sum(1 for _ in consecutive_token_runs(s.token_ids)) for s in specs),
+                    wire_ids_sorted=all(tuple(sorted(s.token_ids)) == s.token_ids for s in specs),
+                )
             except BaseException:
                 # Drain or retain all native destinations. Never infer success
                 # from an HTTP cancellation, timeout, or receiver destruction.

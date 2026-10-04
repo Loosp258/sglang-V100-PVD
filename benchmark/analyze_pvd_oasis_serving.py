@@ -28,7 +28,8 @@ if configs:
                           'v-direct-sparse': '__no_config_difference__',
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
-                          'd-workspace': 'attention_workspace'}.get(a.comparison, 'overlap')
+                          'd-workspace': 'attention_workspace',
+                          'v-contiguous': 'sort_missing_tokens'}.get(a.comparison, 'overlap')
     comparison_config = {k: v for k, v in configs[0].items() if k != allowed_difference}
     assert all({k: v for k, v in config.items() if k != allowed_difference} == comparison_config
                for config in configs), 'comparison has unrelated configuration differences'
@@ -59,6 +60,9 @@ if configs:
             if a.comparison == 'd-workspace':
                 assert config['attention_workspace'] is arm.startswith('opt')
                 assert config['staged_transport'] is config['gpu_receive_to_bank'] is False
+            if a.comparison == 'v-contiguous':
+                assert config['sort_missing_tokens'] is arm.startswith('opt')
+                assert config['staged_transport'] is config['gpu_receive_to_bank'] is config['attention_workspace'] is False
         declared = json.loads((root / 'comparison.json').read_text())
         assert list(online) == declared['arms'] == ['base_a', 'opt_a', 'opt_b', 'base_b']
         cases = [int(value) for value in declared['cases'].split(',')]
@@ -83,16 +87,21 @@ if configs:
                 launch_envs.append({key: value for key, value in env.items()
                                     if key not in ('PVD_RUN_TAG', 'PVD_OASIS_CONFIG')
                                     and not (a.comparison == 'v-direct-sparse'
-                                             and role == 'v' and key == 'PVD_DIRECT_SPARSE_BATCH_PUT')})
+                                             and role == 'v' and key == 'PVD_DIRECT_SPARSE_BATCH_PUT')
+                                    and not (a.comparison == 'v-contiguous'
+                                             and role == 'v' and key == 'PVD_CONTIGUOUS_SPARSE_PACKING')})
                 if a.comparison == 'v-direct-sparse':
                     assert env['PVD_DIRECT_SPARSE_BATCH_PUT'] == str(int(
                         role == 'v' and arm.startswith('opt')))
+                if a.comparison == 'v-contiguous':
+                    assert env['PVD_CONTIGUOUS_SPARSE_PACKING'] == str(int(
+                        role == 'v' and arm.startswith('opt')))
             assert all(env == launch_envs[0] for env in launch_envs), (role, 'unrelated launch difference')
-if a.comparison == 'v-pack':
+if a.comparison in ('v-pack', 'v-contiguous'):
     pack_modes = json.loads((root / 'pack_modes.json').read_text())
     assert set(pack_modes) == set(online), 'missing/extra actual packing mode arms'
     for arm, proof in pack_modes.items():
-        expected = 'triton' if arm.startswith('opt') else 'torch'
+        expected = ('torch_contiguous_runs' if a.comparison == 'v-contiguous' else 'triton') if arm.startswith('opt') else 'torch'
         assert len(proof['ranks']) == 2 and {r['rank'] for r in proof['ranks']} == {0, 1}
         for rank in proof['ranks']:
             assert rank['sparse_pack_kernel'] == expected

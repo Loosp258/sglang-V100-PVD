@@ -212,19 +212,26 @@ def test_v_delivery_fits_exact_final_buffer_budget():
     reason="real CUDA unavailable; stream/copy behavior unverified",
 )
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
-def test_real_cuda_nondefault_stream_requires_opt_in_and_owned_completion(dtype):
+@pytest.mark.parametrize("contiguous_runs", [False, True])
+def test_real_cuda_nondefault_stream_requires_opt_in_and_owned_completion(dtype, contiguous_runs):
     pool, host, kwargs = setup(dtype=dtype)
+    if contiguous_runs:
+        manifest = kwargs['manifest']
+        kwargs['manifest'] = replace(manifest, specs=(
+            replace(manifest.specs[0], token_ids=(3, 4, 5, 9)),
+            replace(manifest.specs[1], token_ids=(0, 1, 8, 9)),
+        ))
     device = torch.device("cuda", 0)
     source = host.to(device)
     target = torch.empty(kwargs["manifest"].nbytes, dtype=torch.uint8, device=device)
     with pytest.raises(SparsePayloadError, match="explicit CUDA"):
-        copy_sparse_kv_into(source, target, **kwargs)
+        copy_sparse_kv_into(source, target, **kwargs, contiguous_runs=contiguous_runs)
     torch.cuda.synchronize(device)  # source placement precedes nondefault-stream copy
     stream = torch.cuda.Stream(device=device)
     event = torch.cuda.Event()
     try:
         with torch.cuda.stream(stream):
-            copy_sparse_kv_into(source, target, **kwargs, allow_cuda=True)
+            copy_sparse_kv_into(source, target, **kwargs, allow_cuda=True, contiguous_runs=contiguous_runs)
             event.record(stream)
         event.synchronize()  # caller holds BOTH buffers until real completion
         for payload, value in zip(

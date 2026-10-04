@@ -11,6 +11,7 @@ takes place here. Production CUDA serving is not enabled by this primitive.
 import torch
 from sglang.srt.disaggregation.pvd.sparse_delivery import SparseDeliveryManifest
 from sglang.srt.disaggregation.pvd.sparse_payload import SparsePayloadError, _views
+from sglang.srt.disaggregation.pvd.sparse_token_runs import consecutive_token_runs
 
 
 def copy_sparse_kv_into(
@@ -25,6 +26,7 @@ def copy_sparse_kv_into(
     id_mapping_version,
     allow_cuda=False,
     fused_workspace=None,
+    contiguous_runs=False,
 ):
     """Validate every group BEFORE writing any bytes, then copy K and V rows.
 
@@ -34,6 +36,8 @@ def copy_sparse_kv_into(
     Even non-overlapping slices of the same allocation are refused, because the
     authoritative Entry must never double as output staging.
     """
+    if type(contiguous_runs) is not bool or contiguous_runs and fused_workspace is not None:
+        raise SparsePayloadError("contiguous copies require an explicit boolean and no fused workspace")
     outputs, source_groups = _validated_sparse_copy(
         packed,
         destination,
@@ -81,7 +85,16 @@ def copy_sparse_kv_into(
             for payload, (keys, values, head) in zip(
                 outputs, source_groups, strict=True
             ):
+                runs = tuple(consecutive_token_runs(payload.spec.token_ids)) if contiguous_runs else None
                 for kind, source in enumerate((keys, values)):
+                    if runs is not None:
+                        for row, token, count in runs:
+                            if count == 1:
+                                payload.tensor[kind, row].copy_(source[token, head])
+                            else:
+                                payload.tensor[kind, row:row + count].copy_(
+                                    source[token:token + count, head])
+                        continue
                     for row, token in enumerate(payload.spec.token_ids):
                         payload.tensor[kind, row].copy_(source[token, head])
     finally:

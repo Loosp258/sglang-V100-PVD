@@ -42,6 +42,6 @@ terminal, byte-count, identity, fence, ownership and UNKNOWN handling.
 
 ## Current external dependency
 
-The previously used P/V/D nodes reject the existing project SSH key with
-`Permission denied (publickey)`. Local implementation and evidence can proceed;
-CUDA/native qualification and fair live timing require restored node access.
+The user confirmed that the CloudLab lease has expired and no GPU is currently
+available. Do not retry those nodes. Local implementation and evidence can
+proceed; CUDA qualification and fair live timing await new GPU resources.
