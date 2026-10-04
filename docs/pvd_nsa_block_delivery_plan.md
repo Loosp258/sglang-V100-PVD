@@ -287,3 +287,30 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
    independent v-indexed-pack full-path comparison with identical D and selected
    V views on all arms; only indexed option differs. Freeze source/input proofs
    and commit reports. GPU/native/D wait/TPOT gates require new GPU resources.
+
+### Indexed-row local stages completed
+
+- Plan `df4df2a83`; implementation `bcab18ac6`. Indexed packing stays default off,
+  with selected component views required on both arms. Singleton groups retain
+  copy_; owned/budgeted multi-row indexes feed exact preallocated index_select out.
+- Initial gate exposed indexed workspace forwarded as fused workspace; fixed
+  conditional forwarding, retained the failed log. Final gate:476passed,
+  46actual CUDA skipped,1existing warning. Twelve new nondefault-stream CUDA
+  cases remain unexecuted; CPU policy doubles are not CUDA qualification.
+- Same two frozen captures,840banks:actual uint8 payload, manifests, token order,
+  rows/bytes and source hash unchanged. Source views remain2per rank delivery;
+  uncaptured CPU reconstruction rows remain poison and never selected.
+- Fresh five-round CPU ABBA includes workspace admission/preparation/release.
+  Bootstrap606.39/638.55us to219.19/225.79us; steady235.70/246.76us to
+  217.49/217.91us. Final steady gain is7.7/11.7percent, below the simpler prototype.
+  Source preparation,staging/MR allocation,CUDA/H2D,native/network/D wait excluded.
+- Steady API calls7630/7592to2340/2338. Extra CPU index bytes28064/27944 over
+  each capture,peak scratch admission2368bytes per delivery. These are actual
+  Torch API counts and CPU metadata,not measured GPU kernels or H2D cost.
+- Original store/native fences and UNKNOWN Entry/index/staging/MR/budget retention
+  preserved. Source proof matches171files against the implementation commit.
+- Independent `v-indexed-pack` full-path ABBA/proof entry prepared,not executed.
+  Restore GPU hosts/model paths,run actual CUDA/native two-rank gates,then measure
+  index upload,V source phases,D wait and TPOT with identical budgets/outputs.
+- No inference of live savings or addition to earlier pilots. Report:
+  `benchmark/results/pvd_indexed_sparse_pack_local_20261004.md`.

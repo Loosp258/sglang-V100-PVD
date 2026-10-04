@@ -1,0 +1,915 @@
+{
+  "schema": "pvd-indexed-sparse-pack-local-v1",
+  "date": "2026-10-05",
+  "branch": "codex/pvd-oasiskv",
+  "plan_commit": "df4df2a83",
+  "implementation_commit": "bcab18ac67c2ea4897a0120c7d979bc06113a1c7",
+  "default_behavior": "indexed packing stays off; selected component views also stay off unless explicitly requested",
+  "enable": {
+    "v_flags": [
+      "--experimental-cuda-sparse-packing",
+      "--experimental-selected-sparse-component-views",
+      "--experimental-indexed-sparse-packing"
+    ],
+    "launcher_env": "PVD_INDEXED_SPARSE_PACKING=1",
+    "requires": "Mooncake and isolated ordinary CUDA staging; mutually exclusive with fused/direct/contiguous/fence-reuse experiments"
+  },
+  "local_gate": {
+    "passed": 476,
+    "real_cuda_skipped": 46,
+    "existing_config_warnings": 1,
+    "python": "3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]",
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "package_bootstrap_only": true,
+    "tests_include_explicit_cuda_transport_policy_doubles": true,
+    "new_actual_cuda_cases_skipped": 12,
+    "actual_cuda_logical_rank_cases_are_not_physical_tp2": true,
+    "tests": [
+      "test/registered/disaggregation/test_pvd_indexed_sparse_packing.py",
+      "test/registered/disaggregation/test_pvd_selected_component_views.py",
+      "test/registered/disaggregation/test_pvd_sparse_copy.py",
+      "test/registered/disaggregation/test_pvd_sparse_payload.py",
+      "test/registered/disaggregation/test_pvd_sparse_delivery.py",
+      "test/registered/disaggregation/test_pvd_sparse_pack_fence_reuse.py",
+      "test/registered/disaggregation/test_pvd_cuda_sparse_packing.py",
+      "test/registered/disaggregation/test_pvd_sparse_store_delivery.py",
+      "test/registered/disaggregation/test_pvd_sparse_receiver.py",
+      "test/registered/disaggregation/test_pvd_sparse_batch_delivery.py",
+      "test/registered/disaggregation/test_pvd_mooncake_lifecycle.py",
+      "test/registered/disaggregation/test_pvd_v_source_profile.py",
+      "test/registered/disaggregation/test_pvd_oasis_transport_io.py",
+      "test/registered/disaggregation/test_pvd_oasis_serving.py",
+      "test/registered/disaggregation/test_pvd_oasis_cache_install.py",
+      "test/registered/disaggregation/test_pvd_oasis_bank_install.py",
+      "test/registered/disaggregation/test_pvd_contiguous_sparse.py",
+      "test/registered/disaggregation/test_pvd_core.py"
+    ],
+    "output": "artifacts/v_manifest_rows_20261004/gate03/unit.txt"
+  },
+  "prior_failed_gate": {
+    "log": "artifacts/v_manifest_rows_20261004/gate01/unit.txt",
+    "result": "3 failed, 154 passed, 24 skipped",
+    "issue": "indexed workspace was also passed to old fused-workspace argument",
+    "correction": "only forward workspace as fused_workspace when the fused flag is enabled",
+    "subsequent_gates_passed": true
+  },
+  "exploratory_probe": {
+    "path": "artifacts/v_manifest_rows_20261004/probe.json",
+    "scope": "CPU opportunity selection only; prototype excluded final ownership/budget checks",
+    "manifest_fingerprint_gain_us": "approximately 2-3; no manifest change implemented",
+    "prototype_gain_not_used_as_final_result": true
+  },
+  "real_replay": {
+    "schema": "pvd-indexed-pack-real-kv-local-v1",
+    "cpu_only": true,
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "cpu_threads": 1,
+    "native_gpu_decode_tested": false,
+    "selected_views_identical_in_both_arms": true,
+    "source_is_declared_cpu_reconstruction": true,
+    "uncaptured_rows_poisoned_and_never_selected": true,
+    "live_speedup_demonstrated": false,
+    "timing_scope": "actual CPU helper+dispatch+index workspace creation/admission/host tensor/group views/release; preallocated source/manifest/destination excluded; no CUDA/H2D/native/network/D wait",
+    "cases": [
+      {
+        "case": 99401,
+        "input_path": "artifacts/oasis_workspace_replay01/capture/99401/trajectory.pt",
+        "input_sha256": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+        "consumed_banks": 420,
+        "known_prompt_rows": 5008,
+        "uncaptured_prompt_rows": 236800,
+        "source_bytes_unchanged": true,
+        "selected_wire_bytes_exact": true,
+        "observations": {
+          "baseline": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1193,
+              "bytes": 610816,
+              "wire_sha256": "0a11fd9272f62ae35dcbaf699210825c1fc4d0742eae29ca2b44cb116145dd17",
+              "manifest_sha256": "bb8453d3e5a53589dc7fdfd1e6a8a7751bd32108db0714369ec93071ec77d6c3",
+              "peak_index_budget_bytes": 0,
+              "source_component_views": 112,
+              "row_copy_calls": 2386,
+              "index_select_calls": 0,
+              "row_index_bytes": 0
+            },
+            "steady": {
+              "deliveries": 714,
+              "rows": 3815,
+              "bytes": 1953280,
+              "wire_sha256": "9d35f01e9ac15ecbf16faa5cdccf02076f59d7f1f62b78a6e67434f12d5fef88",
+              "manifest_sha256": "1659f157968118d83e202077ae0faf9ccba01008f6370d8f29c40bb694467d8b",
+              "peak_index_budget_bytes": 0,
+              "source_component_views": 1428,
+              "row_copy_calls": 7630,
+              "index_select_calls": 0,
+              "row_index_bytes": 0
+            }
+          },
+          "indexed": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1193,
+              "bytes": 610816,
+              "wire_sha256": "0a11fd9272f62ae35dcbaf699210825c1fc4d0742eae29ca2b44cb116145dd17",
+              "manifest_sha256": "bb8453d3e5a53589dc7fdfd1e6a8a7751bd32108db0714369ec93071ec77d6c3",
+              "peak_index_budget_bytes": 3520,
+              "source_component_views": 112,
+              "row_copy_calls": 0,
+              "index_select_calls": 224,
+              "row_index_bytes": 9544
+            },
+            "steady": {
+              "deliveries": 714,
+              "rows": 3815,
+              "bytes": 1953280,
+              "wire_sha256": "9d35f01e9ac15ecbf16faa5cdccf02076f59d7f1f62b78a6e67434f12d5fef88",
+              "manifest_sha256": "1659f157968118d83e202077ae0faf9ccba01008f6370d8f29c40bb694467d8b",
+              "peak_index_budget_bytes": 2368,
+              "source_component_views": 1428,
+              "row_copy_calls": 614,
+              "index_select_calls": 1726,
+              "row_index_bytes": 28064
+            }
+          }
+        },
+        "matched_cpu_timing": {
+          "rounds": 5,
+          "per_delivery_mean_us": {
+            "bootstrap": {
+              "baseline": 606.3914285732608,
+              "indexed": 219.19053571244666
+            },
+            "steady": {
+              "baseline": 235.70133053101057,
+              "indexed": 217.4899999999343
+            }
+          },
+          "trials": [
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04217890000290936,
+              "mean_us": 753.1946429090957
+            },
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.17277140000078361,
+              "mean_us": 241.97675070137763
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.01298059999680845,
+              "mean_us": 231.79642851443663
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.17224330000317423,
+              "mean_us": 241.23711485038407
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.01045979999616975,
+              "mean_us": 186.78214278874552
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.1420425999967847,
+              "mean_us": 198.9392156817713
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03909639999619685,
+              "mean_us": 698.1499999320866
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.1582146999935503,
+              "mean_us": 221.58921567724133
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.018880999996326864,
+              "mean_us": 337.16071422012254
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.13691009999456583,
+              "mean_us": 191.75084032852357
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.011508800002047792,
+              "mean_us": 205.51428575085342
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.14658659999986412,
+              "mean_us": 205.3033613443475
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.010844999997061677,
+              "mean_us": 193.66071423324425
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.14458529999683378,
+              "mean_us": 202.50042016363275
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.036120500000834,
+              "mean_us": 645.0089285863214
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.18717599999945378,
+              "mean_us": 262.1512605034367
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.02828080000472255,
+              "mean_us": 505.014285798617
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.19596440000168514,
+              "mean_us": 274.45994397995116
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.01578410000365693,
+              "mean_us": 281.8589286367309
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.1528044999940903,
+              "mean_us": 214.01190475362787
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.012457000004360452,
+              "mean_us": 222.44642864929378
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.15873219999775756,
+              "mean_us": 222.31400559910023
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.024827200002619065,
+              "mean_us": 443.34285718962616
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.17052820000390057,
+              "mean_us": 238.83501401106523
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.037718699997640215,
+              "mean_us": 673.5482142435752
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.12719769999966957,
+              "mean_us": 178.1480392152235
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.008960699997260235,
+              "mean_us": 160.01249995107563
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.1327986000032979,
+              "mean_us": 185.99243697940884
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.010068299998238217,
+              "mean_us": 179.791071397111
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.14936149999994086,
+              "mean_us": 209.18977591028133
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04278390000399668,
+              "mean_us": 763.9982143570835
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.19979439999588067,
+              "mean_us": 279.824089630085
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.027063599998655263,
+              "mean_us": 483.27857140455825
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.14990910000051372,
+              "mean_us": 209.95672268979513
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.014909100005752407,
+              "mean_us": 266.23392867415015
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.17011280000588158,
+              "mean_us": 238.2532212967529
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.014773299997614231,
+              "mean_us": 263.80892852882556
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.18361120000190567,
+              "mean_us": 257.158543420036
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.042628199997125193,
+              "mean_us": 761.2178570915213
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.18444150000141235,
+              "mean_us": 258.32142857340665
+            }
+          ]
+        }
+      },
+      {
+        "case": 99402,
+        "input_path": "artifacts/oasis_workspace_replay01/capture/99402/trajectory.pt",
+        "input_sha256": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9",
+        "consumed_banks": 420,
+        "known_prompt_rows": 5001,
+        "uncaptured_prompt_rows": 236807,
+        "source_bytes_unchanged": true,
+        "selected_wire_bytes_exact": true,
+        "observations": {
+          "baseline": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1205,
+              "bytes": 616960,
+              "wire_sha256": "95eb18cfddcfae620f4c48469a9951ffb092a797710f1b5cb977b4b74218899b",
+              "manifest_sha256": "55f1ca827340df3528f55d34a275d349c94b5e645f4bf2a5f11c036d9605186b",
+              "peak_index_budget_bytes": 0,
+              "source_component_views": 112,
+              "row_copy_calls": 2410,
+              "index_select_calls": 0,
+              "row_index_bytes": 0
+            },
+            "steady": {
+              "deliveries": 716,
+              "rows": 3796,
+              "bytes": 1943552,
+              "wire_sha256": "e6a4252ad789ac2a8cd65c567cbb75431321821de17c9e2f29ef4b4207e71620",
+              "manifest_sha256": "929a4b5d54310ef537847997d830742545c8af5c580d9f3dbd1cbcb1ff10cbff",
+              "peak_index_budget_bytes": 0,
+              "source_component_views": 1432,
+              "row_copy_calls": 7592,
+              "index_select_calls": 0,
+              "row_index_bytes": 0
+            }
+          },
+          "indexed": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1205,
+              "bytes": 616960,
+              "wire_sha256": "95eb18cfddcfae620f4c48469a9951ffb092a797710f1b5cb977b4b74218899b",
+              "manifest_sha256": "55f1ca827340df3528f55d34a275d349c94b5e645f4bf2a5f11c036d9605186b",
+              "peak_index_budget_bytes": 3520,
+              "source_component_views": 112,
+              "row_copy_calls": 0,
+              "index_select_calls": 224,
+              "row_index_bytes": 9640
+            },
+            "steady": {
+              "deliveries": 716,
+              "rows": 3796,
+              "bytes": 1943552,
+              "wire_sha256": "e6a4252ad789ac2a8cd65c567cbb75431321821de17c9e2f29ef4b4207e71620",
+              "manifest_sha256": "929a4b5d54310ef537847997d830742545c8af5c580d9f3dbd1cbcb1ff10cbff",
+              "peak_index_budget_bytes": 2368,
+              "source_component_views": 1432,
+              "row_copy_calls": 606,
+              "index_select_calls": 1732,
+              "row_index_bytes": 27944
+            }
+          }
+        },
+        "matched_cpu_timing": {
+          "rounds": 5,
+          "per_delivery_mean_us": {
+            "bootstrap": {
+              "baseline": 638.5508928750434,
+              "indexed": 225.78535712714907
+            },
+            "steady": {
+              "baseline": 246.7603910607159,
+              "indexed": 217.9148743004218
+            }
+          },
+          "trials": [
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.041222100000595674,
+              "mean_us": 736.1089285820656
+            },
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.18827969999983907,
+              "mean_us": 262.9604748601104
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.008929299998271745,
+              "mean_us": 159.45178568342402
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.1613714000050095,
+              "mean_us": 225.3790502863261
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.012283099997148383,
+              "mean_us": 219.3410713776497
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15035299999726703,
+              "mean_us": 209.99022345987015
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.02143929999874672,
+              "mean_us": 382.84464283476285
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.14441440000518924,
+              "mean_us": 201.6960893927224
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03015640000376152,
+              "mean_us": 538.5071429243128
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15147849999630125,
+              "mean_us": 211.56215083282297
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.009919500000250991,
+              "mean_us": 177.13392857591057
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15305559999978868,
+              "mean_us": 213.7648044689786
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.015058299999509472,
+              "mean_us": 268.8982142769549
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.14414369999576593,
+              "mean_us": 201.31801675386302
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04147640000155661,
+              "mean_us": 740.6500000277966
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.1788542999929632,
+              "mean_us": 249.79650837006034
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03135869999823626,
+              "mean_us": 559.9767856827904
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.167473900000914,
+              "mean_us": 233.90209497334357
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.013258200000564102,
+              "mean_us": 236.75357143864468
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15852610000001732,
+              "mean_us": 221.40516759778956
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.009233199998561759,
+              "mean_us": 164.87857140288855
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.18094519999431213,
+              "mean_us": 252.71675976859237
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.045538300000771414,
+              "mean_us": 813.1839285852038
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.19510599999921396,
+              "mean_us": 272.4944134067234
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04340370000136318,
+              "mean_us": 775.0660714529139
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.17607549999956973,
+              "mean_us": 245.91550279269515
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.014352399994095322,
+              "mean_us": 256.29285703741647
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15883069999836152,
+              "mean_us": 221.8305865898904
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.015240799999446608,
+              "mean_us": 272.15714284726084
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15515679999953136,
+              "mean_us": 216.6994413401276
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.036131100001512095,
+              "mean_us": 645.198214312716
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.1876466999965487,
+              "mean_us": 262.0763966432244
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.037589700004900806,
+              "mean_us": 671.2446429446572
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.21522109999932582,
+              "mean_us": 300.5881284906785
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.016318100002536085,
+              "mean_us": 291.39464290243006
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.15422699999908218,
+              "mean_us": 215.40083798754495
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.011846900000819005,
+              "mean_us": 211.5517857289108
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.14366100000188453,
+              "mean_us": 200.64385475123538
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.029272799998580012,
+              "mean_us": 522.7285714032145
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.16225430000486085,
+              "mean_us": 226.61215084477772
+            }
+          ]
+        }
+      }
+    ],
+    "source_hashes": {
+      "benchmark/verify_pvd_indexed_pack_real_kv.py": "4dbfe802667d512ba35f306fcbc87e96a73e59f9c740799ff7671172431dfd31",
+      "benchmark/verify_pvd_selected_views_real_kv.py": "02a95b5c1916166677a81475609e03d2d7e394df4488fda86b5293ebbec957b7",
+      "python/sglang/srt/disaggregation/pvd/sparse_copy.py": "3eac2dbbaaf6bfaf7d905215a37f9c626351e499e27d9232dcf9910189076889",
+      "python/sglang/srt/disaggregation/pvd/sparse_row_index.py": "b8b7f9ead44035328663e3d88be9397894453998db7df35458cd4d92906dacb1",
+      "python/sglang/srt/disaggregation/pvd/sparse_payload.py": "5df371fc3dffc1256ae146855a0729cd5752ed0488ddf37830a1cdc26ae031cd",
+      "python/sglang/srt/disaggregation/pvd/sparse_delivery.py": "5732335486496815935a0701fa1d7641fbaabfd40f70503e32264f0ce3258a33",
+      "python/sglang/srt/disaggregation/pvd/protocol.py": "1d19f65e6b8754738b43addbce6411ac6ea611e9b584997386e2aa973cbadcb0",
+      "python/sglang/srt/disaggregation/pvd/transfer_lifecycle.py": "20391522a8aedb2ca123ef19f36958ab10e8cd98de7d83fec87a2f327caae710"
+    }
+  },
+  "invariants": [
+    "same selected source views, full layout/group validation and exact uint8 KV bytes",
+    "unchanged token IDs, order, manifests, row/byte budgets, CAGRA, Q and Decode behavior",
+    "exact preallocated output storage and singleton copy fallback",
+    "budget admission before scratch allocation and original Entry/index/staging/MR ownership",
+    "original store/native fences and UNKNOWN retention until terminal proof"
+  ],
+  "diagnostics_scope": "actual Torch API call counts and CPU int64 index bytes; neither CUDA kernel counts nor measured H2D bytes",
+  "full_path_comparison": {
+    "name": "v-indexed-pack",
+    "executed": false,
+    "fixed_in_all_arms": "D settings, selected V component views, current fast CAGRA, budgets and original fences",
+    "only_candidate_change": "indexed packing",
+    "checks": [
+      "two-rank health mode, deployed source hashes, post-warm native counters",
+      "same outputs, token IDs, wire rows/bytes, H2D/install budgets",
+      "per-delivery original fences, views and row/index API counts"
+    ]
+  },
+  "pending": [
+    "actual CUDA output/storage/partial-failure cases on GPU",
+    "index upload, GPU packing time and allocator/stream cost under contention",
+    "physical two-rank native Mooncake lifecycle and cancellation/failure gates",
+    "new GPU hosts/model paths and fixed-revision full-path fair comparison",
+    "V source phases, D wait, TPOT and actual output quality"
+  ],
+  "live_speedup_demonstrated": false,
+  "source_proof_files": 171,
+  "raw_evidence": "artifacts/v_manifest_rows_20261004/evidence.tar.gz"
+}
