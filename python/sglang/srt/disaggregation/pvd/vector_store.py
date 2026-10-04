@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,6 +73,7 @@ from sglang.srt.disaggregation.pvd.transfer_lifecycle import (
     budget_of,
 )
 from sglang.srt.disaggregation.pvd.transfer_progress import PVD_TRANSFER_CAPABILITY
+from sglang.srt.disaggregation.pvd.v_source_profile import VSourceProfile
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,7 @@ class DeliveryShardRecord:
     packing_workspace: Optional[object] = field(default=None, repr=False)
     sparse_batch_slices: int = 0
     fanin_writer: Optional[FullKVFanInWriter] = field(default=None, repr=False)
+    source_profile: Optional[VSourceProfile] = field(default=None, repr=False)
 
     def to_dict(self):
         result = {
@@ -220,6 +222,7 @@ class DeliveryShardRecord:
             "packing_index_lease_held": self.packing_index_lease is not None,
             "packing_workspace_held": self.packing_workspace is not None,
             "sparse_batch_slices": self.sparse_batch_slices,
+            "source_profile": self.source_profile.snapshot() if self.source_profile else None,
             "write_identity": (
                 self.authorization.identity.to_dict() if self.authorization else None
             ),
@@ -1298,6 +1301,13 @@ class VectorKVStore:
 
         attempted = False
         packing_safe = True
+        profile = None
+        if delivery.sparse_manifest is not None and not self.direct_sparse_batch_put:
+            profile = delivery.source_profile = VSourceProfile(
+                nbytes=delivery.sparse_manifest.nbytes, cuda=self.pool.is_cuda,
+                kernel=("triton" if self.fused_cuda_sparse_packing else
+                        "torch_contiguous_runs" if self.contiguous_sparse_packing else "torch"),
+            )
         try:
             # The reservation already pins Entry pages. Packing and native
             # calls deliberately run without the store's business lock.
@@ -1309,7 +1319,8 @@ class VectorKVStore:
                 # before a NOT_SUBMITTED path may release their source pin.
                 if self.pool.is_cuda:
                     try:
-                        torch.cuda.synchronize(self.pool.device)
+                        with profile.measure("outer_fence") if profile else nullcontext():
+                            torch.cuda.synchronize(self.pool.device)
                     except Exception:
                         packing_safe = False
                         raise
@@ -1329,7 +1340,8 @@ class VectorKVStore:
                 self.metrics.increment("vector_sparse_batch_submissions")
                 self.metrics.increment("vector_sparse_batch_slices", len(local.slices))
             else:
-                handle = self.transfer_engine.submit_put(local, delivery.destination)
+                with profile.measure("submit") if profile else nullcontext():
+                    handle = self.transfer_engine.submit_put(local, delivery.destination)
             with self._lock:
                 delivery.transfer_handle = handle
         except Exception as exc:
@@ -1548,16 +1560,18 @@ class VectorKVStore:
 
     def _prepare_sparse_source(self, entry, delivery):
         manifest = delivery.sparse_manifest
+        profile = delivery.source_profile
         budget = budget_of(self.transfer_engine)
         owner = f"v-sparse:{delivery.owner}"
-        budget.reserve(owner, manifest.nbytes, 0)
-        try:
-            staging = torch.empty(
-                manifest.nbytes, dtype=torch.uint8, device=self.pool.device
-            )
-        except BaseException:
-            budget.release(owner)
-            raise
+        with profile.measure("allocate") if profile else nullcontext():
+            budget.reserve(owner, manifest.nbytes, 0)
+            try:
+                staging = torch.empty(
+                    manifest.nbytes, dtype=torch.uint8, device=self.pool.device
+                )
+            except BaseException:
+                budget.release(owner)
+                raise
         registered = [None]
 
         def release():
@@ -1573,7 +1587,8 @@ class VectorKVStore:
         offset = entry.allocation.start_page * self.page_bytes
         source = self.pool[offset : offset + entry.manifest.expected_bytes]
         lease = ExitStack()
-        descriptor = lease.enter_context(self.prompt_index.pin_selection(manifest))
+        with profile.measure("pin_index") if profile else nullcontext():
+            descriptor = lease.enter_context(self.prompt_index.pin_selection(manifest))
         delivery.packing_index_lease = lease
         workspace = None
         metadata_completion_unknown = False
@@ -1592,19 +1607,20 @@ class VectorKVStore:
                     owner=f"v-sparse-meta:{delivery.owner}",
                 )
                 delivery.packing_workspace = workspace
-            copy_sparse_kv_into(
-                source,
-                staging,
-                manifest=manifest,
-                layout=entry.layout,
-                shard=entry.manifest,
-                entry_transfer_id=entry.key.transfer_id,
-                index_version=descriptor.index_version,
-                id_mapping_version=descriptor.id_mapping_version,
-                allow_cuda=self.allow_cuda_sparse_packing,
-                fused_workspace=workspace,
-                contiguous_runs=self.contiguous_sparse_packing,
-            )
+            with profile.measure("pack") if profile else nullcontext():
+                copy_sparse_kv_into(
+                    source,
+                    staging,
+                    manifest=manifest,
+                    layout=entry.layout,
+                    shard=entry.manifest,
+                    entry_transfer_id=entry.key.transfer_id,
+                    index_version=descriptor.index_version,
+                    id_mapping_version=descriptor.id_mapping_version,
+                    allow_cuda=self.allow_cuda_sparse_packing,
+                    fused_workspace=workspace,
+                    contiguous_runs=self.contiguous_sparse_packing,
+                )
         except SparsePackCompletionUnknown:
             metadata_completion_unknown = True
             with self._lock:
@@ -1617,7 +1633,8 @@ class VectorKVStore:
             # for worker isolation; a later incidental synchronize is no repair.
             try:
                 if self.pool.is_cuda:
-                    torch.cuda.synchronize(self.pool.device)
+                    with profile.measure("pack_fence") if profile else nullcontext():
+                        torch.cuda.synchronize(self.pool.device)
             except BaseException:
                 with self._lock:
                     delivery.local_terminal = TransportState.UNKNOWN
@@ -1633,16 +1650,17 @@ class VectorKVStore:
             # the module quarantine. An incidental later successful fence must
             # not release this delivery's index reader or repair UNKNOWN.
         try:
-            registration = self.transfer_engine.register_memory(
-                staging,
-                endpoint="pvd-vector-sparse",
-                rank=self.rank,
-                rail=self.rail,
-                metadata={
-                    "delivery_id": delivery.delivery_id,
-                    "sparse_fingerprint": manifest.fingerprint,
-                },
-            )
+            with profile.measure("register") if profile else nullcontext():
+                registration = self.transfer_engine.register_memory(
+                    staging,
+                    endpoint="pvd-vector-sparse",
+                    rank=self.rank,
+                    rail=self.rail,
+                    metadata={
+                        "delivery_id": delivery.delivery_id,
+                        "sparse_fingerprint": manifest.fingerprint,
+                    },
+                )
         except BaseException:
             # Registration may have reached native before raising. No handle
             # means no safe unregister proof: quarantine, retain tensor/budget.

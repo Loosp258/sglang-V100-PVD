@@ -239,6 +239,17 @@ class SparseReceiveRecord:
             or reply["transferred_bytes"] != self.manifest.nbytes
         ):
             raise SparseReceiveError("delivery lacks exact successful terminal proof")
+        # Diagnostics never replace identity, exact-byte and terminal checks.
+        # Ignore malformed optional diagnostics; the benchmark will reject them.
+        if ready and reply.get("source_profile") is not None:
+            from sglang.srt.disaggregation.pvd.v_source_profile import copy_source_profile
+
+            try:
+                self.profile["v_source"] = copy_source_profile(
+                    reply["source_profile"], nbytes=self.manifest.nbytes,
+                )
+            except ValueError:
+                self.profile["v_source_profile_invalid"] = True
         self._safe |= safe
         self._ready |= ready
         if reply.get("state") in ("failed", "cancelled", "expired"):
