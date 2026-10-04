@@ -17,6 +17,7 @@ from sglang.srt.disaggregation.pvd.cuda_sparse_receiver import CUDASparseReceive
 from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerReply, select_resident
 from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
 from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
+from sglang.srt.disaggregation.pvd.oasis_ready_cleanup import OwnedReadyCleanup
 from sglang.srt.disaggregation.pvd.oasis_gpu_backup import OasisGPUBackupPool
 from sglang.srt.disaggregation.pvd.oasis_bank_install import install_batched_bank, install_tensor_bound
 from sglang.srt.disaggregation.pvd.oasis_cache_install import (
@@ -225,7 +226,7 @@ class OasisLayerTransport:
                  gpu_receive_to_bank=False, backup_budget_bytes=33554432,
                  staged_transport=False, sort_missing_tokens=False,
                  batched_bank_install=False, install_scratch_bytes=33554432,
-                 batched_cache_install=False):
+                 batched_cache_install=False, ready_before_cleanup=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -241,8 +242,13 @@ class OasisLayerTransport:
                 or type(sort_missing_tokens) is not bool
                 or type(batched_bank_install) is not bool
                 or type(batched_cache_install) is not bool
+                or type(ready_before_cleanup) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
+        if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
+                or reuse_receive_slots or combine_reserve_start or batched_bank_install
+                or batched_cache_install or workers != 2):
+            raise ValueError('READY cleanup experiment requires isolated two-worker baseline')
         if staged_transport and (reuse_io or combine_reserve_start or reuse_receive_slots
                                  or gpu_receive_to_bank or workers != 2):
             raise ValueError('staged experiment requires unchanged two-worker packed/cache baseline')
@@ -267,6 +273,8 @@ class OasisLayerTransport:
         self.sort_missing_tokens = sort_missing_tokens
         self.batched_bank_install = batched_bank_install
         self.batched_cache_install = batched_cache_install
+        self.ready_before_cleanup = ready_before_cleanup
+        self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if ready_before_cleanup else None
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
@@ -412,6 +420,8 @@ class OasisLayerTransport:
                 sums["registration_count"] = pool["physical_register_calls"]
                 sums["unregistration_count"] = pool["physical_release_calls"]
             return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
+                ready_before_cleanup=self.ready_before_cleanup,
+                owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 staged_transport=self.staged_transport,
                 stages=self.stages.snapshot() if self.stages else None,
                 stage_trace=list(self.stages.trace) if self.stages else None,
@@ -512,9 +522,12 @@ class OasisLayerTransport:
                 else:
                     record.copy_to_cache(layer_cache)
                 cache_copy_seconds = time.perf_counter() - tick
-                await record.ack()
-                if not await record.close():
-                    raise RuntimeError("terminal layer destination did not retire")
+                if self.ready_before_cleanup:
+                    state.setdefault('pending_cleanup', []).append(record)
+                else:
+                    await record.ack()
+                    if not await record.close():
+                        raise RuntimeError("terminal layer destination did not retire")
                 remote_rows += sum(len(s.token_ids) for s in specs)
                 state["delivery_profiles"].append(dict(record.profile, rank=route.rank,
                     nbytes=wire.nbytes, remote_rows=sum(len(s.token_ids) for s in specs),
@@ -542,6 +555,26 @@ class OasisLayerTransport:
             return dict(chosen=tuple(selected_ids), wires=plans,
                         search_seconds=time.perf_counter() - started)
         return tuple(selected_ids), remote_rows, time.perf_counter() - started
+
+    async def _finish_owned_cleanup(self, state):
+        errors = []
+        for record in state.get('pending_cleanup', ()):
+            try:
+                await record.ack()
+            except BaseException as exc:
+                errors.append(exc)
+            try:
+                if not await record.close():
+                    self.quarantined = True
+                    errors.append(RuntimeError('owned destination did not retire'))
+            except BaseException as exc:
+                self.quarantined = True
+                errors.append(exc)
+            for profile in state.get('delivery_profiles', ()):
+                if profile.get('rank') == record.identity.shard_rank:
+                    profile.update(record.profile)
+        if errors:
+            raise RuntimeError('owned ACK/receive cleanup failed') from errors[0]
 
     def _stage_worker(self, stage, index):
         # Each persistent loop/client/registry is created and retired on this
@@ -690,7 +723,7 @@ class OasisLayerTransport:
             return StagedCallback()
 
         @torch.inference_mode()
-        def run(ticket):
+        def run(ticket, publish_ready=None):
             if (ticket.request_id, ticket.incarnation) != (self.request_id, self.incarnation):
                 raise RuntimeError("foreign layer transport ticket")
             state = self._worker()
@@ -779,7 +812,10 @@ class OasisLayerTransport:
                         remote_rows=remote_rows, rpc_seconds=rpc_seconds,
                         bank_install=install_profile,
                         deliveries=state.get("delivery_profiles", [])))
-                return LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
+                reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
+                if publish_ready is not None:
+                    publish_ready(reply)
+                return reply
             except BaseException:
                 try:
                     state["stream"].synchronize()
@@ -793,11 +829,28 @@ class OasisLayerTransport:
             finally:
                 # Native registries remain job/thread-local. Request clients
                 # alone survive on the already-running background I/O loop.
-                self._retire_worker(state)
+                try:
+                    if self.ready_before_cleanup:
+                        state['loop'].run_until_complete(self._finish_owned_cleanup(state))
+                finally:
+                    self._retire_worker(state)
+
+        if self.cleanup is not None:
+            transport = self
+            class OwnedCallback:
+                def __call__(self, ticket):
+                    raise RuntimeError('owned callback requires bounded submission')
+
+                def submit_layer(self, ticket, *, published, timeout):
+                    return transport.cleanup.submit(lambda publish: run(ticket, publish),
+                        published=published, timeout=timeout)
+            return OwnedCallback()
 
         return run
 
     def close(self):
+        if self.cleanup is not None:
+            self.cleanup.close()
         if self.stages is not None:
             self.stages.close()
         if self.reuse_io:

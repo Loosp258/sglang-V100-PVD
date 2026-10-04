@@ -30,6 +30,7 @@ if configs:
                           'v-selected-views': '__no_config_difference__',
                           'v-indexed-pack': '__no_config_difference__',
                           'v-source-slots': '__no_config_difference__',
+                          'd-owned-cleanup': 'ready_before_cleanup',
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
                           'd-workspace': 'attention_workspace',

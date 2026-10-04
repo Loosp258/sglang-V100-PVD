@@ -51,3 +51,6 @@ ABBA，并以 D wait、TPOT、实际输出和 cleanup 判断采用，不能默�
   真实捕获 KV 回放 840 bank 字节一致，注册次数从每份 770/772 降至 2。
   GPU/native/full-path 尚未执行，保持默认关闭。见
   `benchmark/results/pvd_v_source_slots_local_20261005.md` 及同名 JSON。
+- 第 2 步：实现独立 READY future 与同线程 owned cleanup，64 个 CPU 测试
+  通过；实际 CUDA/native/full-path 待测。详见
+  `benchmark/results/pvd_owned_ready_cleanup_local_20261005.md`。

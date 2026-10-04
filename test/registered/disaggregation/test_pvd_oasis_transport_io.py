@@ -78,7 +78,8 @@ def echo_server():
     assert not thread.is_alive()
 
 
-def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", timeout=5):
+def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", timeout=5,
+              ready_before_cleanup=False):
     class Registry:
         def __init__(self, *args, **kwargs):
             self.owner_thread = threading.get_ident()
@@ -99,7 +100,8 @@ def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", 
         shards=tuple(SimpleNamespace(rank=rank, url=url, rail="rail") for rank in (0, 1)))
     return oasis.OasisLayerTransport(manager, selected, request_id="request",
         incarnation="incarnation", device="cpu", vector_space="target-Q",
-        capacity=4, max_new=2, top_k=4, timeout=timeout, reuse_io=reuse_io)
+        capacity=4, max_new=2, top_k=4, timeout=timeout, reuse_io=reuse_io,
+        ready_before_cleanup=ready_before_cleanup)
 
 
 @pytest.mark.parametrize("reuse_io", [False, True])
