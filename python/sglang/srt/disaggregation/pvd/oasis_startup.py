@@ -220,6 +220,7 @@ class OasisResources:
                 batched_bank_install=cfg.get('batched_bank_install', False),
                 batched_cache_install=cfg.get('batched_cache_install', False),
                 ready_before_cleanup=cfg.get('ready_before_cleanup', False),
+                binary_queries=cfg.get('binary_queries', False),
                 install_scratch_bytes=cfg['request_scratch_bytes'],
                 backup_budget_bytes=cfg['request_scratch_bytes'])
             pending["transport"] = transport
@@ -277,7 +278,7 @@ def maybe_install_oasis(scheduler):
     fields = {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "capacity",
         "max_new", "top_k", "workers", "timeout_seconds", "max_sequence_tokens", "max_decode_steps",
         "request_budget_bytes", "request_scratch_bytes", "bootstrap_budget_bytes", "bootstrap_transient_bytes", "overlap"}
-    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup'} != fields:
+    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries'} != fields:
         raise ValueError("Oasis config must contain exactly the documented bounds and pins")
     cfg.setdefault("reuse_io", False)
     cfg.setdefault("combine_reserve_start", False)
@@ -289,6 +290,7 @@ def maybe_install_oasis(scheduler):
     cfg.setdefault('batched_bank_install', False)
     cfg.setdefault('batched_cache_install', False)
     cfg.setdefault('ready_before_cleanup', False)
+    cfg.setdefault('binary_queries', False)
     for name in fields - {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "max_new", "overlap"}:
         if type(cfg[name]) is not int or cfg[name] <= 0:
             raise ValueError(f"positive integer Oasis {name} required")
@@ -302,6 +304,7 @@ def maybe_install_oasis(scheduler):
             or type(cfg['batched_bank_install']) is not bool
             or type(cfg['batched_cache_install']) is not bool
             or type(cfg['ready_before_cleanup']) is not bool
+            or type(cfg['binary_queries']) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]
             or cfg["workers"] > 4 or cfg["capacity"] > 2048 or cfg["top_k"] > 512
             or cfg["max_sequence_tokens"] > scheduler.tp_worker.model_runner.model_config.context_len):
@@ -310,6 +313,10 @@ def maybe_install_oasis(scheduler):
             ('reuse_io', 'combine_reserve_start', 'reuse_receive_slots', 'gpu_receive_to_bank',
              'staged_transport', 'attention_workspace', 'batched_bank_install', 'batched_cache_install'))):
         raise ValueError('READY cleanup requires isolated two-worker baseline')
+    if cfg['binary_queries'] and (cfg['workers'] != 2 or any(cfg[name] for name in
+            ('ready_before_cleanup','reuse_io','combine_reserve_start','reuse_receive_slots',
+             'gpu_receive_to_bank','staged_transport','attention_workspace','batched_bank_install','batched_cache_install'))):
+        raise ValueError('binary Q requires isolated two-worker baseline')
     if cfg['batched_bank_install']:
         from sglang.srt.disaggregation.pvd.oasis_bank_install import install_tensor_bound
         if (cfg['gpu_receive_to_bank'] or cfg['staged_transport'] or cfg['attention_workspace']

@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots', 'd-owned-cleanup', 'v-scoped-completion')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots', 'd-owned-cleanup', 'v-scoped-completion', 'd-binary-q')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -235,6 +235,13 @@ def validate_indexed_source_profile(profile, *, indexed, nbytes, group_rows):
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    if comparison == 'd-binary-q':
+        assert snapshot['binary_queries'] is arm.startswith('opt')
+    if comparison == 'd-owned-cleanup':
+        assert snapshot['ready_before_cleanup'] is arm.startswith('opt')
+        if arm.startswith('opt'):
+            assert snapshot['owned_cleanup']['live'] == snapshot['owned_cleanup']['failures'] == 0
+            assert snapshot['owned_cleanup']['closed'] is True
     if comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
         assert snapshot['batched_cache_install'] is snapshot['batched_bank_install'] is snapshot['staged_transport'] is snapshot['sort_missing_tokens'] is False
         assert trace['attention_workspace'] is None

@@ -815,7 +815,7 @@ def create_shard_app(
             logger.info("PVD V search stage_ms=%s", _stage_ms(timings))
         return web.json_response(result)
 
-    async def search_index_batch(request):
+    async def search_index_batch(request, decoded=None):
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_BATCH_PROTOCOL
 
         profile = os.environ.get("PVD_PROFILE_V_SEARCH") == "1"
@@ -823,7 +823,7 @@ def create_shard_app(
         decoder = (
             orjson.loads if os.environ.get("PVD_FAST_BATCH_JSON") == "1" else json.loads
         )
-        data = await _payload(request, loads=decoder)
+        data = await _payload(request, loads=decoder) if decoded is None else decoded
         json_parse = time.perf_counter() - parse_started if profile else 0.0
         if data.get("batch_protocol") != SEARCH_BATCH_PROTOCOL:
             raise ValueError("unsupported search batch protocol")
@@ -836,7 +836,7 @@ def create_shard_app(
         if any(not isinstance(item, dict) for item in items):
             raise ValueError("search batch items must be objects")
         def row_count(item):
-            if item.get("query_encoding") == PACKED_QUERY_ENCODING:
+            if item.get("query_encoding") in (PACKED_QUERY_ENCODING, 'f32le-binary-v1'):
                 if (
                     "queries" in item
                     or type(item.get("query_rows")) is not int
@@ -967,6 +967,12 @@ def create_shard_app(
             raise ValueError("search batch response exceeds 2 MiB")
         return web.json_response(reply)
 
+    async def search_index_batch_binary(request):
+        from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_batch, BINARY_QUERY_CONTENT_TYPE
+        if request.content_type != BINARY_QUERY_CONTENT_TYPE:
+            raise ValueError('binary Q content type required')
+        return await search_index_batch(request, unpack_binary_batch(await request.read()))
+
     async def health(_request):
         snapshot = await asyncio.to_thread(store.snapshot)
         snapshot["preflight"] = dict(preflight or {})
@@ -1007,6 +1013,7 @@ def create_shard_app(
             web.post("/internal/v1/indexes/progress", progress_indexes),
             web.post("/internal/v1/indexes/search", search_index),
             web.post("/internal/v1/indexes/search-batch", search_index_batch),
+            web.post('/internal/v1/indexes/search-batch-binary', search_index_batch_binary),
             web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/v1/capacity", capacity),
             web.post("/internal/v1/capacity", capacity_for_entry),

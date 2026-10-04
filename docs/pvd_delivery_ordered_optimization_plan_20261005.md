@@ -57,3 +57,6 @@ ABBA，并以 D wait、TPOT、实际输出和 cleanup 判断采用，不能默�
 - 第 3 步：scoped producer event 与 adapter 本地 capability 核对；128 CPU
   测试通过、15 CUDA 测试跳过。见
   `benchmark/results/pvd_scoped_source_completion_local_20261005.md`。
+- 第 4 步：直接 little-endian float32 envelope 与逐层 ndarray 发送，CPU
+  HTTP/精确 bytes 对照通过，默认关闭；详见
+  `benchmark/results/pvd_binary_queries_local_20261005.md`。

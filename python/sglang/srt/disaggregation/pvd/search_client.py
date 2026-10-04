@@ -19,10 +19,12 @@ from dataclasses import dataclass
 
 import aiohttp
 import orjson
+import numpy as np
 from sglang.srt.disaggregation.pvd.prompt_index import SearchRequestIdentity
 from sglang.srt.disaggregation.pvd.search_wire import (
     MAX_PACKED_QUERY_CELLS,
     pack_query_rows,
+    pack_binary_batch, BINARY_QUERY_CONTENT_TYPE,
 )
 
 SEARCH_PROTOCOL = "pvd.search.v1"
@@ -103,7 +105,11 @@ class PVDShardSearchClient:
         background_loop: asyncio.AbstractEventLoop | None = None,
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 2 * 1024 * 1024,
+        binary_queries: bool = False,
     ):
+        if type(binary_queries) is not bool:
+            raise ValueError('binary query option must be bool')
+        self.binary_queries = binary_queries
         if not isinstance(base_url, str) or not base_url.startswith(
             ("http://", "https://")
         ):
@@ -187,10 +193,18 @@ class PVDShardSearchClient:
         _positive("top_k", top_k)
         if top_k > min(512, scope.prompt_tokens):
             raise ValueError("top_k exceeds the request or protocol limit")
-        if not isinstance(queries, (list, tuple)) or not 1 <= len(queries) <= 64:
+        if self.binary_queries and isinstance(queries,np.ndarray):
+            if (queries.ndim != 2 or not 1 <= len(queries) <= 64
+                    or queries.shape[1] != scope.head_dim or queries.size > MAX_PACKED_QUERY_CELLS
+                    or queries.dtype.kind not in 'fi'):
+                raise ValueError('binary query shape/dtype invalid')
+            snapshot = np.array(queries,dtype='<f4',order='C',copy=True)
+            if not np.isfinite(snapshot).all(): raise ValueError('finite f32 queries required')
+        elif not isinstance(queries, (list, tuple)) or not 1 <= len(queries) <= 64:
             raise ValueError("queries must contain 1..64 host vectors")
-        snapshot = []
-        for row in queries:
+        else:
+            snapshot = []
+        for row in queries if isinstance(snapshot,list) else ():
             if not isinstance(row, (list, tuple)) or len(row) != scope.head_dim:
                 raise ValueError("query dimensions disagree with the trusted layout")
             if any(
@@ -216,15 +230,15 @@ class PVDShardSearchClient:
                 payload[name] = value
         return payload, search_id, len(snapshot)
 
-    async def _post_json(self, path, payload, *, encoded_payload=None):
+    async def _post_json(self, path, payload, *, encoded_payload=None, content_type='application/json'):
         if self._background_loop is None:
             return await self._post_json_on_loop(
-                path, payload, encoded_payload=encoded_payload
+                path, payload, encoded_payload=encoded_payload, content_type=content_type
             )
         if not self._background_loop.is_running():
             raise SearchTransportError("V search I/O loop stopped")
         coroutine = self._post_json_on_loop(
-            path, payload, encoded_payload=encoded_payload
+            path, payload, encoded_payload=encoded_payload, content_type=content_type
         )
         try:
             future = asyncio.run_coroutine_threadsafe(coroutine, self._background_loop)
@@ -240,7 +254,7 @@ class PVDShardSearchClient:
             if future.done():
                 self._background_inflight.discard(future)
 
-    async def _post_json_on_loop(self, path, payload, *, encoded_payload=None):
+    async def _post_json_on_loop(self, path, payload, *, encoded_payload=None, content_type='application/json'):
         timeline_started = (
             time.monotonic()
             if os.environ.get("PVD_PROFILE_REFRESH_TIMELINE") == "1"
@@ -256,7 +270,7 @@ class PVDShardSearchClient:
             if encoded_payload is None
             else {
                 "data": encoded_payload,
-                "headers": {"Content-Type": "application/json"},
+                "headers": {"Content-Type": content_type},
             }
         )
         try:
@@ -316,6 +330,8 @@ class PVDShardSearchClient:
         top_k: int,
         scope: SearchScope,
     ) -> ShardSearchResult:
+        if self.binary_queries:
+            return (await self.search_many([(identity, queries, top_k, scope)]))[0]
         payload, search_id, query_count = self._prepare_search(
             identity, queries=queries, top_k=top_k, scope=scope
         )
@@ -375,7 +391,7 @@ class PVDShardSearchClient:
             "batch_id": batch_id,
             "items": [item[3] for item in prepared],
         }
-        if os.environ.get("PVD_PACKED_QUERY_BATCH") == "1":
+        if not self.binary_queries and os.environ.get("PVD_PACKED_QUERY_BATCH") == "1":
             if (
                 sum(item[5] * item[1].head_dim for item in prepared)
                 > MAX_PACKED_QUERY_CELLS
@@ -385,15 +401,17 @@ class PVDShardSearchClient:
                 item.update(pack_query_rows(item.pop("queries")))
         if profile:
             prepared_at = time.perf_counter()
-        encoded = orjson.dumps(payload)
+        encoded = pack_binary_batch(payload) if self.binary_queries else orjson.dumps(payload)
         if len(encoded) > 3 * 1024 * 1024:
             raise ValueError("search batch request exceeds 3 MiB")
         if profile:
             encoded_at = time.perf_counter()
         try:
+            post_options = dict(encoded_payload=encoded)
+            if self.binary_queries: post_options['content_type'] = BINARY_QUERY_CONTENT_TYPE
             body = await self._post_json(
-                "/internal/v1/indexes/search-batch", payload, encoded_payload=encoded
-            )
+                '/internal/v1/indexes/search-batch-binary' if self.binary_queries else '/internal/v1/indexes/search-batch',
+                payload, **post_options)
         except SearchRefused as exc:
             if exc.code != "index_capacity" or len(requests) == 1:
                 raise
@@ -410,7 +428,7 @@ class PVDShardSearchClient:
                     answers.append(
                         (
                             await self.search(
-                                identity, queries=queries, top_k=top_k, scope=scope
+                                identity, queries=queries.tolist() if isinstance(queries,np.ndarray) else queries, top_k=top_k, scope=scope
                             ),
                         )
                     )

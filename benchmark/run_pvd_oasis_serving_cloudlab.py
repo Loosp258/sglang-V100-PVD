@@ -368,6 +368,8 @@ def main():
                                   batched_bank_install=False, batched_cache_install=arm.startswith('opt'))
                 if args.comparison == 'd-owned-cleanup':
                     config['ready_before_cleanup'] = arm.startswith('opt')
+                if args.comparison == 'd-binary-q':
+                    config['binary_queries'] = arm.startswith('opt')
                 if args.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,

@@ -226,7 +226,7 @@ class OasisLayerTransport:
                  gpu_receive_to_bank=False, backup_budget_bytes=33554432,
                  staged_transport=False, sort_missing_tokens=False,
                  batched_bank_install=False, install_scratch_bytes=33554432,
-                 batched_cache_install=False, ready_before_cleanup=False):
+                 batched_cache_install=False, ready_before_cleanup=False, binary_queries=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -243,6 +243,7 @@ class OasisLayerTransport:
                 or type(batched_bank_install) is not bool
                 or type(batched_cache_install) is not bool
                 or type(ready_before_cleanup) is not bool
+                or type(binary_queries) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -261,6 +262,10 @@ class OasisLayerTransport:
                 or install_scratch_bytes < workers * cache_install_tensor_bound(capacity)):
             raise ValueError('batched cache install requires isolated mode and admitted request scratch')
         self.manager, self.selected = manager, selected
+        if binary_queries and (ready_before_cleanup or staged_transport or gpu_receive_to_bank or reuse_io
+                or reuse_receive_slots or combine_reserve_start or batched_bank_install
+                or batched_cache_install or workers != 2):
+            raise ValueError('binary Q experiment requires isolated two-worker baseline')
         self.request_id, self.incarnation = request_id, incarnation
         self.device = torch.device(device)
         self.capacity, self.max_new, self.top_k = capacity, max_new, top_k
@@ -274,6 +279,7 @@ class OasisLayerTransport:
         self.batched_bank_install = batched_bank_install
         self.batched_cache_install = batched_cache_install
         self.ready_before_cleanup = ready_before_cleanup
+        self.binary_queries = binary_queries
         self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if ready_before_cleanup else None
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
@@ -336,6 +342,7 @@ class OasisLayerTransport:
     def _new_clients(self, *, background_loop=None, kinds=('search', 'control')):
         clients = dict(
             search={r.rank: PVDShardSearchClient(r.url, timeout_seconds=self.timeout,
+                        binary_queries=self.binary_queries,
                         background_loop=background_loop) for r in self.selected.shards
                     if 'search' in kinds},
             control={r.rank: HttpShardClient(r.rank, r.url, timeout_seconds=self.timeout,
@@ -421,6 +428,7 @@ class OasisLayerTransport:
                 sums["unregistration_count"] = pool["physical_release_calls"]
             return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
                 ready_before_cleanup=self.ready_before_cleanup,
+                binary_queries=self.binary_queries,
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 staged_transport=self.staged_transport,
                 stages=self.stages.snapshot() if self.stages else None,
@@ -736,7 +744,8 @@ class OasisLayerTransport:
                     host_q.copy_(query, non_blocking=True)
                     state["stream"].synchronize()
                     chosen, remote_rows, rpc_seconds = state["loop"].run_until_complete(
-                        self._select_and_fetch(state, ticket, host_q.tolist(), bank, bootstrap))
+                        self._select_and_fetch(state, ticket,
+                            host_q.float().numpy() if self.binary_queries else host_q.tolist(), bank, bootstrap))
                     resident = bank() if callable(bank) else bank
                     install_started = time.perf_counter()
                     install_profile = None

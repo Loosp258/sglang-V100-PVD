@@ -31,6 +31,7 @@ if configs:
                           'v-indexed-pack': '__no_config_difference__',
                           'v-source-slots': '__no_config_difference__',
                           'd-owned-cleanup': 'ready_before_cleanup',
+                          'd-binary-q': 'binary_queries',
                           'v-scoped-completion': '__no_config_difference__',
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
