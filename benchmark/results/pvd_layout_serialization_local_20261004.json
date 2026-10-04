@@ -1,0 +1,1198 @@
+{
+  "schema": "pvd-layout-serialization-local-v1",
+  "date": "2026-10-04",
+  "branch": "codex/pvd-oasiskv",
+  "plan_commit": "8334dc410",
+  "implementation_commit": "3da9d9ed8d1bf7cb1187bc02ed8877a97de612e5",
+  "default_behavior": "equivalent serializer used directly; no new mode or device option; previous selected-view experiment remains default off",
+  "local_gate": {
+    "passed": 612,
+    "subtests_passed": 5,
+    "real_cuda_skipped": 16,
+    "existing_config_warnings": 1,
+    "python": "3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]",
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "package_bootstrap_only": true,
+    "tests_include_explicit_cuda_and_transport_policy_doubles": true,
+    "tests": [
+      "test/registered/disaggregation/test_pvd_layout_serialization.py",
+      "test/registered/disaggregation/test_pvd_core.py",
+      "test/registered/disaggregation/test_pvd_prompt_vectors.py",
+      "test/registered/disaggregation/test_pvd_prompt_chunk_layout.py",
+      "test/registered/disaggregation/test_pvd_prompt_chunks.py",
+      "test/registered/disaggregation/test_pvd_chunked_runtime.py",
+      "test/registered/disaggregation/test_pvd_chunked_upload_lifecycle.py",
+      "test/registered/disaggregation/test_pvd_upload_lifecycle.py",
+      "test/registered/disaggregation/test_pvd_transfer_authorization.py",
+      "test/registered/disaggregation/test_pvd_fanin_mapping.py",
+      "test/registered/disaggregation/test_pvd_fanin_lifecycle.py",
+      "test/registered/disaggregation/test_pvd_fanin_client.py",
+      "test/registered/disaggregation/test_pvd_selected_component_views.py",
+      "test/registered/disaggregation/test_pvd_sparse_copy.py",
+      "test/registered/disaggregation/test_pvd_sparse_payload.py",
+      "test/registered/disaggregation/test_pvd_sparse_delivery.py",
+      "test/registered/disaggregation/test_pvd_sparse_store_delivery.py",
+      "test/registered/disaggregation/test_pvd_sparse_receiver.py",
+      "test/registered/disaggregation/test_pvd_sparse_batch_delivery.py",
+      "test/registered/disaggregation/test_pvd_mooncake_lifecycle.py",
+      "test/registered/disaggregation/test_pvd_v_source_profile.py",
+      "test/registered/disaggregation/test_pvd_sparse_pack_fence_reuse.py"
+    ],
+    "output": "artifacts/v_layout_serialization_20261004/gate03/unit.txt"
+  },
+  "excluded_gate": {
+    "test": "test/registered/disaggregation/test_pvd_direct_bootstrap.py",
+    "reason": "Windows cannot import Linux resource module; collection aborted before execution; requires Linux qualification",
+    "log": "artifacts/v_layout_serialization_20261004/gate02/unit.txt"
+  },
+  "real_replay": {
+    "schema": "pvd-layout-serialization-real-kv-local-v1",
+    "cpu_only": true,
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "cpu_threads": 1,
+    "selected_component_views": true,
+    "native_gpu_decode_tested": false,
+    "source_is_declared_cpu_reconstruction": true,
+    "uncaptured_rows_poisoned_and_never_selected": true,
+    "live_speedup_demonstrated": false,
+    "reference": {
+      "commit": "3df6cc9d6",
+      "path": "python/sglang/srt/disaggregation/pvd/protocol.py",
+      "normalized_lf_sha256": "897f62dd5b46b04468e3ba0f32beb6b2ae446dfeb478b40eec4a77b7a60aba45",
+      "reference_method_ast_matches": true
+    },
+    "timing_scope": "same actual CPU pack helper plus dispatch with selected views in both arms; changes only to_dict; source/manifest/destination preparation, CUDA, registration, native, network and D wait excluded",
+    "cases": [
+      {
+        "case": 99401,
+        "input_path": "artifacts/oasis_workspace_replay01/capture/99401/trajectory.pt",
+        "input_sha256": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+        "known_prompt_rows": 5008,
+        "uncaptured_prompt_rows": 236800,
+        "reconstructed_source_bytes": 123805696,
+        "source_bytes_unchanged": true,
+        "consumed_banks": 420,
+        "selected_wire_bytes_exact": true,
+        "observations": {
+          "baseline": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1193,
+              "bytes": 610816,
+              "source_component_views": 112,
+              "wire_sha256": "0a11fd9272f62ae35dcbaf699210825c1fc4d0742eae29ca2b44cb116145dd17",
+              "manifest_sha256": "bb8453d3e5a53589dc7fdfd1e6a8a7751bd32108db0714369ec93071ec77d6c3",
+              "layout_wire_sha256": "3d44846ea3625eb1096027a68337193a6dc7cc5b79318c82473bd387da542b4c"
+            },
+            "steady": {
+              "deliveries": 714,
+              "rows": 3815,
+              "bytes": 1953280,
+              "source_component_views": 1428,
+              "wire_sha256": "9d35f01e9ac15ecbf16faa5cdccf02076f59d7f1f62b78a6e67434f12d5fef88",
+              "manifest_sha256": "1659f157968118d83e202077ae0faf9ccba01008f6370d8f29c40bb694467d8b",
+              "layout_wire_sha256": "a7e191292ed859b0a2ce48e05b76d8a3cb133dbf0f9b5fbd47ff000f9798b92d"
+            }
+          },
+          "candidate": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1193,
+              "bytes": 610816,
+              "source_component_views": 112,
+              "wire_sha256": "0a11fd9272f62ae35dcbaf699210825c1fc4d0742eae29ca2b44cb116145dd17",
+              "manifest_sha256": "bb8453d3e5a53589dc7fdfd1e6a8a7751bd32108db0714369ec93071ec77d6c3",
+              "layout_wire_sha256": "3d44846ea3625eb1096027a68337193a6dc7cc5b79318c82473bd387da542b4c"
+            },
+            "steady": {
+              "deliveries": 714,
+              "rows": 3815,
+              "bytes": 1953280,
+              "source_component_views": 1428,
+              "wire_sha256": "9d35f01e9ac15ecbf16faa5cdccf02076f59d7f1f62b78a6e67434f12d5fef88",
+              "manifest_sha256": "1659f157968118d83e202077ae0faf9ccba01008f6370d8f29c40bb694467d8b",
+              "layout_wire_sha256": "a7e191292ed859b0a2ce48e05b76d8a3cb133dbf0f9b5fbd47ff000f9798b92d"
+            }
+          }
+        },
+        "matched_cpu_timing": {
+          "rounds": 5,
+          "trials": [
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04130350000195904,
+              "mean_us": 737.5625000349828
+            },
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.26212610000220593,
+              "mean_us": 367.12338935883184
+            },
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16555520000110846,
+              "mean_us": 82.77760000055423
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03708550000010291,
+              "mean_us": 662.2410714304091
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.20950660000380594,
+              "mean_us": 293.42661064958816
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07126090000383556,
+              "mean_us": 35.63045000191778
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.034597899997606874,
+              "mean_us": 617.8196428144084
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.2273633000004338,
+              "mean_us": 318.4359943983667
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.0704355999987456,
+              "mean_us": 35.2177999993728
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04561789999570465,
+              "mean_us": 814.6053570661544
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.27223940000112634,
+              "mean_us": 381.2876750716055
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.17537520000041695,
+              "mean_us": 87.68760000020848
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03693129999737721,
+              "mean_us": 659.4874999531645
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.2549931999965338,
+              "mean_us": 357.1333333284787
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16379999999480788,
+              "mean_us": 81.89999999740394
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03711299999849871,
+              "mean_us": 662.732142830334
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.23560440000437666,
+              "mean_us": 329.978151266634
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07291070000064792,
+              "mean_us": 36.45535000032396
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03939320000063162,
+              "mean_us": 703.450000011279
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.22021269999822835,
+              "mean_us": 308.4211484569025
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07660030000261031,
+              "mean_us": 38.300150001305155
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04968860000371933,
+              "mean_us": 887.2964286378452
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.2725460000001476,
+              "mean_us": 381.71708683494063
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16637749999790685,
+              "mean_us": 83.18874999895343
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04417809999722522,
+              "mean_us": 788.8946428075932
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.26012579999951413,
+              "mean_us": 364.32184873881533
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16939289999572793,
+              "mean_us": 84.69644999786397
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.037902399999438785,
+              "mean_us": 676.8285714185497
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.22959749999427004,
+              "mean_us": 321.56512604239504
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.0769810000056168,
+              "mean_us": 38.4905000028084
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03886929999862332,
+              "mean_us": 694.0946428325593
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.21825099999841768,
+              "mean_us": 305.673669465571
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07576030000200262,
+              "mean_us": 37.88015000100131
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03800540000520414,
+              "mean_us": 678.6678572357881
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.255352899999707,
+              "mean_us": 357.637114845528
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.1532063000049675,
+              "mean_us": 76.60315000248374
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.0401172999991104,
+              "mean_us": 716.3803571269715
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.27044040000328096,
+              "mean_us": 378.76806723148593
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.15914820000034524,
+              "mean_us": 79.57410000017262
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.034157100002630614,
+              "mean_us": 609.9482143326895
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.21781390000251122,
+              "mean_us": 305.06148459735465
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.0762447000015527,
+              "mean_us": 38.12235000077635
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.0349659999992582,
+              "mean_us": 624.3928571296108
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.22753829999419395,
+              "mean_us": 318.68109242884304
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07919209999818122,
+              "mean_us": 39.59604999909061
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03790659999503987,
+              "mean_us": 676.9035713399977
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.24964479999471223,
+              "mean_us": 349.6425770234065
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16501589999825228,
+              "mean_us": 82.50794999912614
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04071700000349665,
+              "mean_us": 727.0892857767259
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.25643290000152774,
+              "mean_us": 359.1497198900949
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.15724410000257194,
+              "mean_us": 78.62205000128597
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.0397443000038038,
+              "mean_us": 709.7196429250679
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.2274674000000232,
+              "mean_us": 318.5817927171193
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07651780000014696,
+              "mean_us": 38.25890000007348
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.036487299999862444,
+              "mean_us": 651.5589285689722
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.2146435000031488,
+              "mean_us": 300.6211484637938
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.0700146000017412,
+              "mean_us": 35.0073000008706
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04077569999935804,
+              "mean_us": 728.1374999885364
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 714,
+              "seconds": 0.24048069999844301,
+              "mean_us": 336.80770307905186
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16603329999634298,
+              "mean_us": 83.01664999817149
+            }
+          ],
+          "per_delivery_mean_us": {
+            "bootstrap": {
+              "baseline": 741.502499996776,
+              "candidate": 661.278571429388
+            },
+            "steady": {
+              "baseline": 363.35885154022395,
+              "candidate": 312.0446218486568
+            }
+          },
+          "per_fingerprint_mean_us": {
+            "baseline": 82.0574299996224,
+            "candidate": 37.295900000754045
+          }
+        }
+      },
+      {
+        "case": 99402,
+        "input_path": "artifacts/oasis_workspace_replay01/capture/99402/trajectory.pt",
+        "input_sha256": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9",
+        "known_prompt_rows": 5001,
+        "uncaptured_prompt_rows": 236807,
+        "reconstructed_source_bytes": 123805696,
+        "source_bytes_unchanged": true,
+        "consumed_banks": 420,
+        "selected_wire_bytes_exact": true,
+        "observations": {
+          "baseline": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1205,
+              "bytes": 616960,
+              "source_component_views": 112,
+              "wire_sha256": "95eb18cfddcfae620f4c48469a9951ffb092a797710f1b5cb977b4b74218899b",
+              "manifest_sha256": "55f1ca827340df3528f55d34a275d349c94b5e645f4bf2a5f11c036d9605186b",
+              "layout_wire_sha256": "3d44846ea3625eb1096027a68337193a6dc7cc5b79318c82473bd387da542b4c"
+            },
+            "steady": {
+              "deliveries": 716,
+              "rows": 3796,
+              "bytes": 1943552,
+              "source_component_views": 1432,
+              "wire_sha256": "e6a4252ad789ac2a8cd65c567cbb75431321821de17c9e2f29ef4b4207e71620",
+              "manifest_sha256": "929a4b5d54310ef537847997d830742545c8af5c580d9f3dbd1cbcb1ff10cbff",
+              "layout_wire_sha256": "773cc1c89da976dd898e47b224c9ccd2fdffac8876e5449163d0aca5d6fb4e1a"
+            }
+          },
+          "candidate": {
+            "bootstrap": {
+              "deliveries": 56,
+              "rows": 1205,
+              "bytes": 616960,
+              "source_component_views": 112,
+              "wire_sha256": "95eb18cfddcfae620f4c48469a9951ffb092a797710f1b5cb977b4b74218899b",
+              "manifest_sha256": "55f1ca827340df3528f55d34a275d349c94b5e645f4bf2a5f11c036d9605186b",
+              "layout_wire_sha256": "3d44846ea3625eb1096027a68337193a6dc7cc5b79318c82473bd387da542b4c"
+            },
+            "steady": {
+              "deliveries": 716,
+              "rows": 3796,
+              "bytes": 1943552,
+              "source_component_views": 1432,
+              "wire_sha256": "e6a4252ad789ac2a8cd65c567cbb75431321821de17c9e2f29ef4b4207e71620",
+              "manifest_sha256": "929a4b5d54310ef537847997d830742545c8af5c580d9f3dbd1cbcb1ff10cbff",
+              "layout_wire_sha256": "773cc1c89da976dd898e47b224c9ccd2fdffac8876e5449163d0aca5d6fb4e1a"
+            }
+          }
+        },
+        "matched_cpu_timing": {
+          "rounds": 5,
+          "trials": [
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.0399364000040805,
+              "mean_us": 713.150000072866
+            },
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.26808560000063153,
+              "mean_us": 374.42122905116133
+            },
+            {
+              "round": 0,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.165118100005202,
+              "mean_us": 82.559050002601
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04306240000005346,
+              "mean_us": 768.9714285723832
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.22071480000158772,
+              "mean_us": 308.2608938569661
+            },
+            {
+              "round": 0,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07519689999753609,
+              "mean_us": 37.59844999876805
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.043556100004934706,
+              "mean_us": 777.7875000881197
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2207708999994793,
+              "mean_us": 308.33924580932865
+            },
+            {
+              "round": 0,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07947899999999208,
+              "mean_us": 39.73949999999604
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03773599999840371,
+              "mean_us": 673.8571428286377
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2852366999941296,
+              "mean_us": 398.37527932141006
+            },
+            {
+              "round": 0,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.1664119000051869,
+              "mean_us": 83.20595000259345
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03922869999951217,
+              "mean_us": 700.5124999912888
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.284299099999771,
+              "mean_us": 397.0657821225852
+            },
+            {
+              "round": 1,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.15532770000572782,
+              "mean_us": 77.66385000286391
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04172149999794783,
+              "mean_us": 745.0267856776399
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2151605000035488,
+              "mean_us": 300.50349162506814
+            },
+            {
+              "round": 1,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07266579999850364,
+              "mean_us": 36.33289999925182
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.0419945000030566,
+              "mean_us": 749.9017857688679
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.21468150000146125,
+              "mean_us": 299.8344972087448
+            },
+            {
+              "round": 1,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.08153630000015255,
+              "mean_us": 40.768150000076275
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03927850000036415,
+              "mean_us": 701.4017857207883
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2609489999958896,
+              "mean_us": 364.4539106087844
+            },
+            {
+              "round": 1,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16028479999658884,
+              "mean_us": 80.14239999829442
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.0435628999985056,
+              "mean_us": 777.9089285447428
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.27038110000285087,
+              "mean_us": 377.62723464085315
+            },
+            {
+              "round": 2,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16284599999926286,
+              "mean_us": 81.42299999963143
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.05003209999995306,
+              "mean_us": 893.4303571420189
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.23619809999945574,
+              "mean_us": 329.8856145243795
+            },
+            {
+              "round": 2,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.0803583000015351,
+              "mean_us": 40.17915000076755
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03774530000373488,
+              "mean_us": 674.0232143524087
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.23345530000369763,
+              "mean_us": 326.0548882733207
+            },
+            {
+              "round": 2,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.06999170000199229,
+              "mean_us": 34.99585000099614
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03773609999916516,
+              "mean_us": 673.8589285565207
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2583749999976135,
+              "mean_us": 360.8589385441529
+            },
+            {
+              "round": 2,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.1676789999983157,
+              "mean_us": 83.83949999915785
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04575929999555228,
+              "mean_us": 817.1303570634336
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2658277000009548,
+              "mean_us": 371.26773743150113
+            },
+            {
+              "round": 3,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16288989999884507,
+              "mean_us": 81.44494999942253
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03437810000468744,
+              "mean_us": 613.8946429408471
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.22466200000053504,
+              "mean_us": 313.77374301750706
+            },
+            {
+              "round": 3,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07837519999884535,
+              "mean_us": 39.18759999942267
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03691580000304384,
+              "mean_us": 659.2107143400686
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2191633999973419,
+              "mean_us": 306.0941340744999
+            },
+            {
+              "round": 3,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.06902999999874737,
+              "mean_us": 34.514999999373686
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04523730000073556,
+              "mean_us": 807.8089285845635
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.25299819999781903,
+              "mean_us": 353.3494413377361
+            },
+            {
+              "round": 3,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.15759719999914523,
+              "mean_us": 78.79859999957262
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.03808700000081444,
+              "mean_us": 680.1250000145436
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.25819749999936903,
+              "mean_us": 360.61103351867183
+            },
+            {
+              "round": 4,
+              "arm": "base_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.1548636000006809,
+              "mean_us": 77.43180000034044
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.039569399996253196,
+              "mean_us": 706.5964285045213
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.222210100000666,
+              "mean_us": 310.3493016769078
+            },
+            {
+              "round": 4,
+              "arm": "opt_a",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.07088410000142176,
+              "mean_us": 35.44205000071088
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.045961600000737235,
+              "mean_us": 820.7428571560221
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.22719399999914458,
+              "mean_us": 317.3100558647271
+            },
+            {
+              "round": 4,
+              "arm": "opt_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.0810358999951859,
+              "mean_us": 40.51794999759295
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "bootstrap",
+              "calls": 56,
+              "seconds": 0.04089940000267234,
+              "mean_us": 730.3464286191489
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "steady",
+              "calls": 716,
+              "seconds": 0.2950137000007089,
+              "mean_us": 412.03030726355996
+            },
+            {
+              "round": 4,
+              "arm": "base_b",
+              "phase": "fingerprint",
+              "calls": 2000,
+              "seconds": 0.16742830000293907,
+              "mean_us": 83.71415000146953
+            }
+          ],
+          "per_delivery_mean_us": {
+            "bootstrap": {
+              "baseline": 727.6099999996534,
+              "candidate": 740.9585714542898
+            },
+            "steady": {
+              "baseline": 377.0060893840416,
+              "candidate": 312.04058659314495
+            }
+          },
+          "per_fingerprint_mean_us": {
+            "baseline": 81.02232500059472,
+            "candidate": 37.92765999969561
+          }
+        }
+      }
+    ],
+    "source_hashes": {
+      "benchmark/verify_pvd_layout_serialization_real_kv.py": "02551edf47c53ff511f13e07a84b72cc6ee100498095c70d60320a80613df916",
+      "python/sglang/srt/disaggregation/pvd/protocol.py": "1d19f65e6b8754738b43addbce6411ac6ea611e9b584997386e2aa973cbadcb0",
+      "benchmark/verify_pvd_selected_views_real_kv.py": "02a95b5c1916166677a81475609e03d2d7e394df4488fda86b5293ebbec957b7",
+      "python/sglang/srt/disaggregation/pvd/sparse_copy.py": "1e759d38620aa7b9d46f975759ac9660b7aea3d58f342e8eaab38f5b3bce7649",
+      "python/sglang/srt/disaggregation/pvd/sparse_payload.py": "5df371fc3dffc1256ae146855a0729cd5752ed0488ddf37830a1cdc26ae031cd"
+    }
+  },
+  "invariants": [
+    "canonical dictionary/JSON/hash identity and subclass field order",
+    "shallow extra semantics and fresh reads of nested mutations",
+    "original asdict fallback for non-atomic top-level fields",
+    "all selected/unselected layout validation and uint8 KV bytes",
+    "unchanged manifest, rows, bytes, source ownership and device/native fences"
+  ],
+  "exploratory_profile": "artifacts/v_layout_serialization_20261004/pack_profile.txt; cProfile overhead excluded from final ABBA and not used as a serving estimate",
+  "pending": [
+    "Linux direct-bootstrap integration gate",
+    "actual CUDA cases and native RDMA",
+    "fixed baseline/candidate revision full-path serving comparison with identical launch/config/inputs",
+    "V source phases, D wait and TPOT under contention"
+  ],
+  "live_speedup_demonstrated": false,
+  "source_proof_files": 170,
+  "raw_evidence": "artifacts/v_layout_serialization_20261004/evidence.tar.gz"
+}

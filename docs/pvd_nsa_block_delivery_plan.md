@@ -240,3 +240,24 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
    CUDA/native, full V service, D wait and TPOT remain pending. Future serving
    comparison should pin the baseline and candidate commits with identical
    launch options and inputs; no combined timing claims across earlier pilots.
+
+### Layout-serialization local stages completed
+
+- Plan `8334dc410`; implementation `3da9d9ed8`. Equivalent metadata serialization
+  is used directly; the existing selected-component serving flag stays off.
+- Gate:612passed,5subtests passed,16actual CUDA cases skipped,1existing warning.
+  One Linux direct-bootstrap module could not collect on Windows because of
+  resource; its original failed log is retained and Linux qualification pending.
+- Dictionary/key order/JSON/fingerprint and complex-field fallback match the
+  old serializer. Mutable extra is still read each call, with no cached hashes.
+  Both ordinary and selected packing reject mismatched metadata before writes.
+- Same frozen captures,840banks:wire/layout/manifest bits, row/byte budgets and
+  source hash unchanged. Reconstructed uncaptured rows remain unqueried poison.
+- Fresh controlled CPU ABBA with only to_dict changed:steady helper means
+  363.36/377.01us to312.04/312.04us; fingerprints82.06/81.02us to37.30/37.93us.
+  Case99402bootstrap regressed1.8percent; retain it rather than generalize gains.
+  Fingerprint time is already part of helper time; neither can be added to
+  prior experiments or translated into GPU/D wait/TPOT savings.
+- Next local probes:manifest hash/wire construction and per-row copy dispatch.
+  Native/CUDA and fixed-revision full-path comparisons require new GPU hosts.
+- Report:`benchmark/results/pvd_layout_serialization_local_20261004.md`.
