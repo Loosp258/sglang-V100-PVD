@@ -1,5 +1,35 @@
 # PVD streaming KV upload and incremental Prompt graph work
 
+## Local output directory constraint
+
+- 用户明确要求：工作时不得污染 `D:\code` 根目录。项目生成的文件必须
+  放在对应的 `sglang*` 项目目录或其 worktree 内；临时文件、传输 bundle、
+  压缩包、日志和实验产物统一放在项目内的 `artifacts/`。除非用户明确
+  指定其他位置，创建文件前必须检查输出路径，不得写入项目外的目录。
+
+- Keep all files generated for this project inside its own checkout or worktree.
+- Do not write bundles, archives, scripts, logs, evidence, caches or temporary
+  files directly into `D:\code` or another directory outside the project unless
+  the user explicitly requests that destination.
+- Use the project-local, Git-ignored `artifacts/` directory for temporary outputs
+  and transfer packages. Keep intended source and reports in their normal
+  repository paths. Use explicit output paths and check their resolved location
+  before running a command that creates files.
+
+## Current publication authorization (2026-10-05)
+
+- The user now requests committing and pushing all outstanding work on
+  `codex/pvd-oasiskv`, then optimizing in the agreed order and committing/pushing
+  each completed step. This supersedes earlier local-only/no-GitHub directions
+  for this branch. Preserve the historical experiment records below.
+- Order: bounded V source staging/MR reuse; D READY separated from owned cleanup;
+  scoped CUDA source completion; binary Q transport; fused search/delivery.
+  Keep each experiment isolated and default-off until its gates pass.
+- CloudLab is expired and no GPU is available. Continue implementation and
+  genuine CPU/byte/lifecycle verification; do not retry expired nodes or present
+  CPU policy doubles as CUDA/native or full-path latency qualification.
+
+
 This file records the implementation order for overlapping P→V Prompt KV
 arrival with V-side graph construction. The requested serving outcome is that
 V begins a provisional graph after a proven-complete page-aligned KV prefix,
