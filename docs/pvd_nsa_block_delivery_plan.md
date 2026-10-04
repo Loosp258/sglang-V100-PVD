@@ -107,3 +107,17 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
    `d-cache-install` ABBA entry changing only this option. Report operation
    counts separately from live cache-copy time, D wait and TPOT; no inferred
    latency gain from CPU-only saved-trajectory verification.
+
+### CPU-cache-install local stages completed
+
+- Plan committed as `c3d038206`; implementation as `1b581757d`.
+- Gate:173passed,20real CUDA cases skipped,1existing config warning.
+- Actual record-method CPU replay:840distinct real banks exact; unchanged
+  manifest/wire hashes, cache rows, payload and local KV H2D bytes. Steady
+  row clones3815/3796 to0; KV copies3815/3796 to1170/1169.
+- Local CPU five-round matched ABBA:steady cache method means210.9/205.5us
+  to113.3/108.5us per rank delivery. D2H/native/network, live D wait/TPOT and
+  GPU contention excluded. These numbers are not CloudLab performance claims.
+- `d-cache-install` full-path fair entry is prepared; default remains off.
+- See `benchmark/results/pvd_oasis_cache_install_local_20261004.md` for source
+  proof, failed assertion fixture, evidence and native/CUDA pending gates.

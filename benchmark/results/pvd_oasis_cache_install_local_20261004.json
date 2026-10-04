@@ -1,0 +1,253 @@
+{
+  "schema": "pvd-oasis-cache-install-local-v1",
+  "implementation_commit": "1b581757d",
+  "branch": "codex/pvd-oasiskv",
+  "default_enabled": false,
+  "cpu_only": true,
+  "gate": {
+    "passed": 173,
+    "skipped_real_cuda": 20,
+    "existing_pytest_config_warnings": 1,
+    "pytest_seconds": 5.25,
+    "python": "3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]",
+    "torch": "2.14.0+cpu",
+    "package_bootstrap_only": true,
+    "tests_include_explicit_policy_transport_doubles": true,
+    "output": "artifacts/d_cache_install_20261004/gate03/unit.txt"
+  },
+  "real_replay": {
+    "schema": "pvd-cache-real-bank-equivalence-v1",
+    "cpu_only": true,
+    "native_cuda_online_tested": false,
+    "latency_measured": false,
+    "target_forward_run": false,
+    "terminal_unused_prefetch_included": false,
+    "receive_readiness_is_explicit_local_fixture": true,
+    "wire_source": "captured known selected KV; not reconstructed V memory or native PUT",
+    "cases": [
+      {
+        "case": 99401,
+        "source_sha256": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+        "observations": {
+          "rows": {
+            "phases": {
+              "bootstrap": {
+                "bank_checks": 28,
+                "deliveries": 56,
+                "groups": 112,
+                "kv_h2d_bytes": 610816,
+                "cache_installed_rows": 1193,
+                "cache_kv_bytes": 610816,
+                "cache_row_clones": 1193,
+                "cache_kv_copy_calls": 1193,
+                "cache_valid_write_calls": 1193,
+                "cache_index_bytes": 0
+              },
+              "steady": {
+                "bank_checks": 392,
+                "deliveries": 714,
+                "groups": 1170,
+                "kv_h2d_bytes": 2122240,
+                "cache_installed_rows": 3815,
+                "cache_kv_bytes": 1953280,
+                "cache_row_clones": 3815,
+                "cache_kv_copy_calls": 3815,
+                "cache_valid_write_calls": 3815,
+                "cache_index_bytes": 0
+              }
+            },
+            "wire_and_manifest_sha256": "4974b08acb3605b84e4f1450046dbbba9704a835c2f1d199e1e2a784549e0aee",
+            "installed_cache_rows": 5008
+          },
+          "batched": {
+            "phases": {
+              "bootstrap": {
+                "bank_checks": 28,
+                "deliveries": 56,
+                "groups": 112,
+                "kv_h2d_bytes": 610816,
+                "cache_installed_rows": 1193,
+                "cache_kv_bytes": 610816,
+                "cache_row_clones": 0,
+                "cache_kv_copy_calls": 112,
+                "cache_valid_write_calls": 112,
+                "cache_index_bytes": 9544
+              },
+              "steady": {
+                "bank_checks": 392,
+                "deliveries": 714,
+                "groups": 1170,
+                "kv_h2d_bytes": 2122240,
+                "cache_installed_rows": 3815,
+                "cache_kv_bytes": 1953280,
+                "cache_row_clones": 0,
+                "cache_kv_copy_calls": 1170,
+                "cache_valid_write_calls": 1170,
+                "cache_index_bytes": 30520
+              }
+            },
+            "wire_and_manifest_sha256": "4974b08acb3605b84e4f1450046dbbba9704a835c2f1d199e1e2a784549e0aee",
+            "installed_cache_rows": 5008
+          }
+        },
+        "cache_and_bank_bits_order_mask_exact": true
+      },
+      {
+        "case": 99402,
+        "source_sha256": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9",
+        "observations": {
+          "rows": {
+            "phases": {
+              "bootstrap": {
+                "bank_checks": 28,
+                "deliveries": 56,
+                "groups": 112,
+                "kv_h2d_bytes": 616960,
+                "cache_installed_rows": 1205,
+                "cache_kv_bytes": 616960,
+                "cache_row_clones": 1205,
+                "cache_kv_copy_calls": 1205,
+                "cache_valid_write_calls": 1205,
+                "cache_index_bytes": 0
+              },
+              "steady": {
+                "bank_checks": 392,
+                "deliveries": 716,
+                "groups": 1169,
+                "kv_h2d_bytes": 2110976,
+                "cache_installed_rows": 3796,
+                "cache_kv_bytes": 1943552,
+                "cache_row_clones": 3796,
+                "cache_kv_copy_calls": 3796,
+                "cache_valid_write_calls": 3796,
+                "cache_index_bytes": 0
+              }
+            },
+            "wire_and_manifest_sha256": "c34c97dc393259d5cf59eb937c19603a63de3aec79cdd225fcc64e7a2798c8f4",
+            "installed_cache_rows": 5001
+          },
+          "batched": {
+            "phases": {
+              "bootstrap": {
+                "bank_checks": 28,
+                "deliveries": 56,
+                "groups": 112,
+                "kv_h2d_bytes": 616960,
+                "cache_installed_rows": 1205,
+                "cache_kv_bytes": 616960,
+                "cache_row_clones": 0,
+                "cache_kv_copy_calls": 112,
+                "cache_valid_write_calls": 112,
+                "cache_index_bytes": 9640
+              },
+              "steady": {
+                "bank_checks": 392,
+                "deliveries": 716,
+                "groups": 1169,
+                "kv_h2d_bytes": 2110976,
+                "cache_installed_rows": 3796,
+                "cache_kv_bytes": 1943552,
+                "cache_row_clones": 0,
+                "cache_kv_copy_calls": 1169,
+                "cache_valid_write_calls": 1169,
+                "cache_index_bytes": 30368
+              }
+            },
+            "wire_and_manifest_sha256": "c34c97dc393259d5cf59eb937c19603a63de3aec79cdd225fcc64e7a2798c8f4",
+            "installed_cache_rows": 5001
+          }
+        },
+        "cache_and_bank_bits_order_mask_exact": true
+      }
+    ],
+    "source_hashes": {
+      "benchmark/verify_pvd_cache_real_banks.py": "21d080dd7f532c02486ee2005f72e196c113c99821478103bfc43a7522bccd22",
+      "benchmark/verify_pvd_batched_real_banks.py": "d0f478e11fb7862af37952627c91fcc441dbc86f8c26026f6dd5329fe835932c",
+      "python/sglang/srt/disaggregation/pvd/oasis_transport.py": "6e6aaf3ab784a398e36c4df72882b64f5775d0343f3a320977be584dfa261d33",
+      "python/sglang/srt/disaggregation/pvd/oasis_cache_install.py": "64df452bc2434821d029df8236c8aa24f57967655010a152b8617a54d087a649"
+    }
+  },
+  "cpu_stage": {
+    "scope": "actual CPU receive/cache methods on real miss packets; preparation and validity reset excluded",
+    "repetitions": 5,
+    "order": [
+      "rows",
+      "batched",
+      "batched",
+      "rows"
+    ],
+    "cases": [
+      {
+        "case": 99401,
+        "source_sha256": "4983da4f677cf94a3a270981af9294be1b7da66235da8e1672de881b153ceff4",
+        "packet_count": 770,
+        "summary": {
+          "rows": {
+            "bootstrap": {
+              "mean_of_round_mean_us": 808.8080357142857,
+              "median_round_mean_us": 898.6419642857143
+            },
+            "steady": {
+              "mean_of_round_mean_us": 210.94060224089634,
+              "median_round_mean_us": 204.86771708683472
+            }
+          },
+          "batched": {
+            "bootstrap": {
+              "mean_of_round_mean_us": 158.49178571428573,
+              "median_round_mean_us": 160.66160714285712
+            },
+            "steady": {
+              "mean_of_round_mean_us": 113.34099439775909,
+              "median_round_mean_us": 113.67696078431372
+            }
+          }
+        }
+      },
+      {
+        "case": 99402,
+        "source_sha256": "9e3daabce259caada81ebfcf43dbd4dc8f210b938604c425eed838acc67a55e9",
+        "packet_count": 772,
+        "summary": {
+          "rows": {
+            "bootstrap": {
+              "mean_of_round_mean_us": 665.0219642857143,
+              "median_round_mean_us": 650.3383928571429
+            },
+            "steady": {
+              "mean_of_round_mean_us": 205.4824162011173,
+              "median_round_mean_us": 204.12807262569834
+            }
+          },
+          "batched": {
+            "bootstrap": {
+              "mean_of_round_mean_us": 148.49089285714285,
+              "median_round_mean_us": 142.6767857142857
+            },
+            "steady": {
+              "mean_of_round_mean_us": 108.50857541899441,
+              "median_round_mean_us": 111.0179469273743
+            }
+          }
+        }
+      }
+    ],
+    "cuda_d2h_native_network_measured": false,
+    "note": "CPU receive readiness is declared fixture; local timing is not CloudLab or D-wait timing"
+  },
+  "source_proof": {
+    "implementation_commit": "1b581757d",
+    "matched_git_blob_count": 159,
+    "hash_normalization": "LF"
+  },
+  "evidence": {
+    "path": "artifacts/d_cache_install_20261004/evidence.tar.gz",
+    "nbytes": 25830,
+    "sha256": "c407d5d94b178e1169798eaa2590b63efa635e9d5f4b90debec1f954c3d13c99"
+  },
+  "no_gpu_latency_recall_or_output_quality_claim": true,
+  "pending": [
+    "real CUDA D2H/install and native terminal/ACK validation",
+    "new CloudLab connection/checkouts, then d-cache-install fair ABBA P/V/D timing"
+  ]
+}
