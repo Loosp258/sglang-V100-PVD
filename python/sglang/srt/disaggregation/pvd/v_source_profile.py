@@ -12,9 +12,11 @@ SOURCE_PHASES = (
 
 
 class VSourceProfile:
-    def __init__(self, *, nbytes, cuda, kernel, reuse_pack_fence=False, selected_component_views=False):
+    def __init__(self, *, nbytes, cuda, kernel, reuse_pack_fence=False, selected_component_views=False,
+                 scoped_source_completion=False):
         self.nbytes, self.cuda, self.kernel = nbytes, cuda, kernel
         self.reuse_pack_fence = reuse_pack_fence
+        self.scoped_source_completion = scoped_source_completion
         self._outer_fence_reused = False
         self.selected_component_views = selected_component_views
         self._source_component_views = 0
@@ -48,6 +50,7 @@ class VSourceProfile:
             return dict(
                 schema=1, nbytes=self.nbytes, cuda=self.cuda, kernel=self.kernel,
                 reuse_pack_fence=self.reuse_pack_fence,
+                scoped_source_completion=self.scoped_source_completion,
                 outer_fence_reused=self._outer_fence_reused,
                 selected_component_views=self.selected_component_views,
                 source_component_views=self._source_component_views,
@@ -91,6 +94,8 @@ def copy_source_profile(value, *, nbytes):
     )):
         raise ValueError("invalid V source fence diagnostic")
     selected = value.get("selected_component_views", False)
+    scoped=value.get('scoped_source_completion',False)
+    if type(scoped) is not bool: raise ValueError('invalid scoped source diagnostic')
     count = value.get("source_component_views", 0)
     if type(selected) is not bool or type(count) is not int or not 0 <= count <= 65536:
         raise ValueError("invalid V source component diagnostic")
@@ -123,4 +128,5 @@ def copy_source_profile(value, *, nbytes):
     return dict(schema=1, nbytes=nbytes, cuda=value["cuda"], kernel=value["kernel"],
                 reuse_pack_fence=value["reuse_pack_fence"],
                 outer_fence_reused=value["outer_fence_reused"], phases=copied,
-                selected_component_views=selected, source_component_views=count, **metrics, **slots)
+                selected_component_views=selected, source_component_views=count,
+                scoped_source_completion=scoped, **metrics, **slots)

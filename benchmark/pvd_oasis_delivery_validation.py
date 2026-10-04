@@ -9,7 +9,7 @@ import math
 from statistics import median
 
 
-DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots', 'd-owned-cleanup', 'v-scoped-completion', 'd-binary-q')
+DELIVERY_COMPARISONS = ("v-combine", "v-slots", "v-workers", "v-direct-sparse", "d-gpu-bank", 'd-stages', 'd-workspace', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots', 'd-owned-cleanup', 'v-scoped-completion', 'd-binary-q','d-fused-search-delivery')
 DELIVERY_TIMINGS = (
     "prepare_seconds", "allocate_seconds", "register_seconds",
     "reserve_seconds", "start_seconds", "combined_seconds", "poll_seconds",
@@ -118,6 +118,7 @@ def validate_gpu_backup(snapshot, *, enabled):
 
 def validate_delivery_snapshot(snapshot, *, comparison, arm):
     combine, slots = delivery_flags(comparison, arm)
+    fused=comparison=='d-fused-search-delivery' and arm.startswith('opt')
     assert snapshot["combine_reserve_start"] is combine
     assert snapshot["reuse_receive_slots"] is slots
     assert snapshot["closed"] is True and snapshot["closing"] is True
@@ -126,8 +127,8 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
         integer(snapshot[name], name)
     assert snapshot["ack_rpc_count"] == deliveries
     assert snapshot["combined_rpc_count"] == (deliveries if combine else 0)
-    assert snapshot["reserve_rpc_count"] == (0 if combine else deliveries)
-    assert snapshot["start_rpc_count"] == (0 if combine else deliveries)
+    assert snapshot["reserve_rpc_count"] == (0 if combine or fused else deliveries)
+    assert snapshot["start_rpc_count"] == (0 if combine or fused else deliveries)
     registrations = snapshot["registration_count"]
     assert snapshot["unregistration_count"] == registrations
     if slots:
@@ -147,7 +148,8 @@ def validate_delivery_snapshot(snapshot, *, comparison, arm):
         assert integer(pool["acquired_leases"], "acquired_leases", minimum=1) == deliveries
         assert integer(pool["returned_leases"], "returned_leases", minimum=1) == deliveries
     else:
-        assert registrations == deliveries, "per-delivery registration mode changed"
+        assert registrations == (snapshot['fused_rpc_count'] if fused else deliveries), "per-delivery registration mode changed"
+        if fused: assert registrations == 2*snapshot['job_count']
 
 
 def validate_bank_install_profile(profile, *, batched):
@@ -235,6 +237,15 @@ def validate_indexed_source_profile(profile, *, indexed, nbytes, group_rows):
 def validate_delivery_profiles(trace, *, comparison, arm):
     """Check both rank profiles against cumulative post-retirement counters."""
     snapshot = trace["io"]
+    fused=comparison=='d-fused-search-delivery' and arm.startswith('opt')
+    if comparison=='d-fused-search-delivery':
+        assert snapshot['fused_search_delivery'] is fused
+        if fused:
+            records=[p for row in trace['transport'] for p in row['fused_profiles']]
+            assert len(records)==snapshot['fused_rpc_count']==2*snapshot['job_count']
+            assert all(p['fused_calls']==p['physical_register_calls']==p['physical_unregister_calls']==1
+                and p['reserve_calls']==p['start_calls']==p['combined_calls']==0
+                and p['authorized_bytes']==32768 for p in records)
     if comparison == 'd-binary-q':
         assert snapshot['binary_queries'] is arm.startswith('opt')
     if comparison == 'd-owned-cleanup':
@@ -310,6 +321,13 @@ def validate_delivery_profiles(trace, *, comparison, arm):
             if comparison == 'v-pack-fence':
                 assert item.get('v_source_profile_invalid', False) is False
                 validate_v_source_profile(item['v_source'], reuse=arm.startswith('opt'), nbytes=item['nbytes'])
+            if comparison=='v-scoped-completion':
+                p=item['v_source'];scoped=arm.startswith('opt')
+                assert p['scoped_source_completion'] is scoped
+                assert p['reuse_pack_fence'] is False and p['outer_fence_reused'] is scoped
+                assert p['phases']['pack_fence']['calls']==p['phases']['pack_fence']['successes']==1
+                assert p['phases']['outer_fence']['calls']==p['phases']['outer_fence']['successes']==int(not scoped)
+                assert p['source_component_views']==56 and p['kernel']=='torch'
             if comparison == 'v-selected-views':
                 assert item.get('v_source_profile_invalid', False) is False
                 validate_selected_source_profile(item['v_source'], selected=arm.startswith('opt'), nbytes=item['nbytes'])
@@ -338,7 +356,7 @@ def validate_delivery_profiles(trace, *, comparison, arm):
                 assert type(value) in (int, float) and math.isfinite(value) and value >= 0, (name, value)
             for name in DELIVERY_COUNTS:
                 integer(item[name], name)
-            assert item["reserve_calls"] == item["start_calls"] == (0 if combine else 1)
+            assert item["reserve_calls"] == item["start_calls"] == (0 if combine or fused else 1)
             assert item["combined_calls"] == (1 if combine else 0)
             # A successful start response can already prove terminal readiness.
             # Zero polling is valid; actual totals are matched below.
@@ -353,6 +371,8 @@ def validate_delivery_profiles(trace, *, comparison, arm):
         assert snapshot['gpu_backup']['rows_copied'] == sum(item['remote_rows'] for item in profiles)
     for field, counter in DELIVERY_COUNTS.items():
         total = sum(item[field] for item in profiles)
+        if fused and field in ('physical_register_calls','physical_unregister_calls'):
+            total=sum(item[field] for item in records)
         if slots and field == "physical_unregister_calls":
             # Request retirement closes the physical pool after all jobs drain.
             assert total <= snapshot[counter]

@@ -60,3 +60,7 @@ ABBA，并以 D wait、TPOT、实际输出和 cleanup 判断采用，不能默�
 - 第 4 步：直接 little-endian float32 envelope 与逐层 ndarray 发送，CPU
   HTTP/精确 bytes 对照通过，默认关闭；详见
   `benchmark/results/pvd_binary_queries_local_20261005.md`。
+- 第 5 步：预授权动态接收前缀，融合原搜索/选择/reserve/start，并接入 D
+  逐层 `_select_and_fetch`。CPU 双逻辑 rank/HTTP/字节/重放/失败 gate 通过；
+  默认关闭，GPU/native/full-path 待测。详见
+  `benchmark/results/pvd_fused_search_delivery_local_20261005.md`。

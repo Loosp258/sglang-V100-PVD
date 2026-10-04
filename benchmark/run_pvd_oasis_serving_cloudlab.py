@@ -149,7 +149,7 @@ def start(role, arm):
         if status == '200':
             (OUT / f'{arm}_{role}.command').write_text(call(remote, f'ps -p {OWNED[role]} -o args='))
             print('healthy', role, arm, OWNED[role], flush=True)
-            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
+            if role == 'v' and args.comparison in ('v-pack', 'v-contiguous', 'd-batch-install', 'd-cache-install', 'v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots','v-scoped-completion'):
                 prove_pack_modes(arm)
             if role == 'v' and args.comparison == 'v-direct-sparse':
                 sparse_batch_health(arm, 'before')
@@ -188,6 +188,10 @@ def prove_pack_modes(arm):
         assert state.get('sparse_pack_kernel') == expected, 'actual V packing kernel differs from arm'
         if args.comparison == 'v-pack-fence':
             assert state.get('reuse_sparse_pack_fence') is arm.startswith('opt')
+        if args.comparison == 'v-scoped-completion':
+            assert state.get('scoped_sparse_source_completion') is arm.startswith('opt')
+            assert state.get('reuse_sparse_pack_fence') is False
+            assert state['sparse_source_slots']['enabled'] is False
         if args.comparison == 'v-selected-views':
             assert state.get('selected_sparse_component_views') is arm.startswith('opt')
             assert state.get('reuse_sparse_pack_fence') is False
@@ -291,6 +295,8 @@ def main():
                               'protocol.py', 'control_server.py', 'vector_store.py',
                               'mooncake_engine.py', 'transfer_engine.py', 'oasis_receive_slots.py')]
                 relative += ['python/sglang/srt/disaggregation/pvd/v_source_profile.py']
+                relative += ['python/sglang/srt/disaggregation/pvd/'+name for name in
+                    ('search_client.py','search_wire.py','fused_search_delivery.py')]
                 relative = list(dict.fromkeys(relative))
             if args.comparison == 'v-direct-sparse' and role in ('v', 'd'):
                 relative += ['python/sglang/srt/disaggregation/pvd/' + name for name in
@@ -370,6 +376,8 @@ def main():
                     config['ready_before_cleanup'] = arm.startswith('opt')
                 if args.comparison == 'd-binary-q':
                     config['binary_queries'] = arm.startswith('opt')
+                if args.comparison == 'd-fused-search-delivery':
+                    config['fused_search_delivery'] = arm.startswith('opt')
                 if args.comparison in ('v-pack-fence', 'v-selected-views', 'v-indexed-pack', 'v-source-slots'):
                     config.update(gpu_receive_to_bank=False, staged_transport=False,
                                   attention_workspace=False, sort_missing_tokens=False,

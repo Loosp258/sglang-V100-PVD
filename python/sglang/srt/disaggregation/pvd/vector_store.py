@@ -1360,6 +1360,7 @@ class VectorKVStore:
                             "torch_contiguous_runs" if self.contiguous_sparse_packing else
                             "torch_indexed_rows" if self.indexed_sparse_packing else "torch"),
                     reuse_pack_fence=self.reuse_sparse_pack_fence,
+                    scoped_source_completion=self.scoped_sparse_source_completion,
                     selected_component_views=self.selected_sparse_component_views,
                 )
             # The reservation already pins Entry pages. Packing and native
@@ -1682,11 +1683,11 @@ class VectorKVStore:
         delivery.packing_index_lease = lease
         workspace = None
         metadata_completion_unknown = False
-        if self.scoped_sparse_source_completion and self.pool.is_cuda:
-            # Ordinary Torch packing launches on this exact current stream.
-            # Source Entry is immutable after native upload terminal proof.
-            delivery.packing_stream = torch.cuda.current_stream(self.pool.device)
         try:
+            if self.scoped_sparse_source_completion and self.pool.is_cuda:
+                # Ordinary Torch packing launches on this exact current stream.
+                # Source Entry is immutable after native upload terminal proof.
+                delivery.packing_stream = torch.cuda.current_stream(self.pool.device)
             if self.fused_cuda_sparse_packing:
                 from sglang.srt.disaggregation.pvd.triton_sparse_pack import (
                     SparsePackWorkspace,

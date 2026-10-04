@@ -32,6 +32,7 @@ if configs:
                           'v-source-slots': '__no_config_difference__',
                           'd-owned-cleanup': 'ready_before_cleanup',
                           'd-binary-q': 'binary_queries',
+                          'd-fused-search-delivery': 'fused_search_delivery',
                           'v-scoped-completion': '__no_config_difference__',
                           'd-gpu-bank': 'gpu_receive_to_bank',
                           'd-stages': 'staged_transport',
@@ -395,6 +396,10 @@ scope = {
     'v-selected-views': 'live overlapped paired with identical fast V/CAGRA, D, Torch packed PUT, fences and candidate/byte budgets; prepare all source components vs only selected K/V layer components with full metadata validation',
     'v-indexed-pack': 'live overlapped paired with identical fast V/CAGRA, D, selected source views, fences and candidate/byte budgets; per-row copies vs budgeted owned row indexes and exact-out gathers, singleton fallback',
     'v-source-slots': 'live overlapped paired with identical fast V/CAGRA, D, Torch packing, full views, original fences and budgets; per-delivery source staging/MR vs bounded physical V source slots with independent terminal leases',
+    'd-owned-cleanup': 'live overlapped paired with identical two-worker search/packing and installed banks; READY after cleanup vs READY before same-thread owned cleanup',
+    'v-scoped-completion': 'live overlapped paired with identical immutable staging and queries; device completion vs owned producer event independently checked before native RDMA submission',
+    'd-binary-q': 'live overlapped paired with identical Q values, shapes and per-layer publication; existing JSON/base64 envelope vs direct binary float32',
+    'd-fused-search-delivery': 'live overlapped paired with identical Q encoding and resident/cache snapshots; separate search/reserve/start vs fused search and exact-prefix delivery under preauthorized physical receive capacity',
 }[a.comparison] + '; full initial KV retained'
 if a.comparison in DELIVERY_COMPARISONS:
     assert all(item['prompt_identical'] and item['output_ids_identical'] and item['text_identical']

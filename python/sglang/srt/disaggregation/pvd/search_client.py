@@ -428,7 +428,7 @@ class PVDShardSearchClient:
                     answers.append(
                         (
                             await self.search(
-                                identity, queries=queries.tolist() if isinstance(queries,np.ndarray) else queries, top_k=top_k, scope=scope
+                                identity, queries=queries, top_k=top_k, scope=scope
                             ),
                         )
                     )

@@ -223,7 +223,7 @@ class SparseReceiveRecord:
         if (
             reply.get("delivery_id") != self.identity.transfer_id
             or reply.get("entry_key") != self.identity.key.to_dict()
-            or reply.get("destination") != self._registration.descriptor.to_dict()
+            or reply.get("destination") != getattr(self,'_wire_destination',self._registration.descriptor).to_dict()
             or reply.get("sparse_fingerprint") != self.manifest.fingerprint
             or WriteIdentity.from_dict(reply.get("write_identity")) != self.identity
         ):

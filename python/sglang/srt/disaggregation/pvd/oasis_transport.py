@@ -7,6 +7,7 @@ Unknown remote/native completion keeps those owners in the request quarantine.
 """
 
 import asyncio
+import os
 import threading
 import time
 
@@ -226,7 +227,8 @@ class OasisLayerTransport:
                  gpu_receive_to_bank=False, backup_budget_bytes=33554432,
                  staged_transport=False, sort_missing_tokens=False,
                  batched_bank_install=False, install_scratch_bytes=33554432,
-                 batched_cache_install=False, ready_before_cleanup=False, binary_queries=False):
+                 batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
+                 fused_search_delivery=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -244,6 +246,7 @@ class OasisLayerTransport:
                 or type(batched_cache_install) is not bool
                 or type(ready_before_cleanup) is not bool
                 or type(binary_queries) is not bool
+                or type(fused_search_delivery) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -266,6 +269,11 @@ class OasisLayerTransport:
                 or reuse_receive_slots or combine_reserve_start or batched_bank_install
                 or batched_cache_install or workers != 2):
             raise ValueError('binary Q experiment requires isolated two-worker baseline')
+        if fused_search_delivery and (binary_queries or ready_before_cleanup or staged_transport
+                or gpu_receive_to_bank or reuse_io or reuse_receive_slots or combine_reserve_start
+                or batched_bank_install or batched_cache_install or sort_missing_tokens or workers != 2
+                or capacity > 32):
+            raise ValueError('fused selection requires isolated bounded two-worker baseline')
         self.request_id, self.incarnation = request_id, incarnation
         self.device = torch.device(device)
         self.capacity, self.max_new, self.top_k = capacity, max_new, top_k
@@ -280,6 +288,7 @@ class OasisLayerTransport:
         self.batched_cache_install = batched_cache_install
         self.ready_before_cleanup = ready_before_cleanup
         self.binary_queries = binary_queries
+        self.fused_search_delivery = fused_search_delivery
         self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if ready_before_cleanup else None
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
@@ -416,7 +425,8 @@ class OasisLayerTransport:
     def io_snapshot(self):
         with self.lock:
             deliveries = [d for row in self.trace for d in row.get("deliveries", ())]
-            sums = {name: sum(d[field] for d in deliveries) for name, field in (
+            owners = [d for row in self.trace for d in row.get('fused_profiles',())] if self.fused_search_delivery else deliveries
+            sums = {name: sum(d[field] for d in owners) for name, field in (
                 ("registration_count", "physical_register_calls"),
                 ("unregistration_count", "physical_unregister_calls"),
                 ("reserve_rpc_count", "reserve_calls"), ("start_rpc_count", "start_calls"),
@@ -429,6 +439,8 @@ class OasisLayerTransport:
             return dict(reuse_io=self.reuse_io, **self._io_counts, **sums,
                 ready_before_cleanup=self.ready_before_cleanup,
                 binary_queries=self.binary_queries,
+                fused_search_delivery=self.fused_search_delivery,
+                fused_rpc_count=sum(p['fused_calls'] for row in self.trace for p in row.get('fused_profiles',())),
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 staged_transport=self.staged_transport,
                 stages=self.stages.snapshot() if self.stages else None,
@@ -448,6 +460,7 @@ class OasisLayerTransport:
     async def _select_and_fetch(self, state, ticket, query, bank, bootstrap,
                                 *, select_only=False, plan=None, deadline=None):
         state["delivery_profiles"] = []
+        state['fused_profiles'] = []
         state['gpu_readers'] = []
         state['fresh_gpu_rows'] = {}
         layer_cache = self.cache[ticket.layer]
@@ -467,6 +480,11 @@ class OasisLayerTransport:
             requests = [(SearchRequestIdentity(self.vector_space, ROPE_APPLIED,
                 self.selected.manifest.key.transfer_id, ticket.layer, head, *pin), query[head * 7:(head + 1) * 7],
                 min(self.top_k, self.prompt_tokens), self.scope) for head in heads]
+            if self.fused_search_delivery:
+                chosen, rows = await self._fused_fetch(state,ticket,route,requests,bank,bootstrap)
+                for head, ids in zip(heads,chosen,strict=True): selected_ids[head]=ids
+                remote_rows += rows
+                return
             results = await state["search"][route.rank].search_many(requests)
             resident = bank() if callable(bank) else bank
             pair = (results[0].index_version, results[0].id_mapping_version)
@@ -563,6 +581,59 @@ class OasisLayerTransport:
             return dict(chosen=tuple(selected_ids), wires=plans,
                         search_seconds=time.perf_counter() - started)
         return tuple(selected_ids), remote_rows, time.perf_counter() - started
+
+    async def _fused_fetch(self,state,ticket,route,requests,bank,bootstrap):
+        from sglang.srt.disaggregation.pvd.fused_search_delivery import prepare_fused, start_fused
+        resident=bank() if callable(bank) else bank
+        heads=[route.rank*2,route.rank*2+1]
+        scope=dict(request_id=ticket.request_id,incarnation=ticket.incarnation,
+            operation_id=f"oasis:{'bootstrap' if bootstrap else 'lookahead'}:{ticket.step}:{ticket.layer}",
+            target_tokens=0 if bootstrap else ticket.step+1,
+            entry_transfer_id=self.selected.manifest.key.transfer_id,
+            layout_fingerprint=self.selected.manifest.layout.fingerprint,layer=ticket.layer,heads=heads,
+            capacity=self.capacity,max_new=self.capacity if bootstrap else self.max_new,
+            prompt_tokens=self.prompt_tokens,dtype=self.selected.manifest.layout.kv_dtype,
+            head_dim=self.selected.manifest.layout.head_dim,
+            resident=[list(resident.ids[h]) if resident is not None else [] for h in heads],
+            cached=[self._cache_valid[ticket.layer,h].nonzero().flatten().tolist() for h in heads])
+        search_client=state['search'][route.rank]
+        items=[search_client._prepare_search(identity,queries=q,top_k=k,scope=s)[0] for identity,q,k,s in requests]
+        if os.environ.get('PVD_PACKED_QUERY_BATCH') == '1':
+            from sglang.srt.disaggregation.pvd.search_wire import pack_query_rows
+            for item in items: item.update(pack_query_rows(item.pop('queries')))
+        import uuid
+        search=dict(batch_protocol='pvd.search.batch.v1',batch_id=uuid.uuid4().hex,items=items)
+        record=prepare_fused(state['registry'],scope,search,key=self.selected.manifest.key,rank=route.rank,
+            rail=route.rail,endpoint=self.endpoints[route.rank],sender_epoch=route.sender_epoch,
+            client=state['control'][route.rank],owner_scope=self.incarnation)
+        try:
+            chosen,ready=await start_fused(record,search_client,requests)
+            pair=(record.fused_results[0]['index_version'],record.fused_results[0]['id_mapping_version'])
+            with self.lock:
+                if self.versions.setdefault(route.rank,pair) != pair: raise RuntimeError('immutable fused index changed')
+            if getattr(record,'fused_no_miss',False):
+                if not await record.close(): raise RuntimeError('zero-miss fused authorization did not fence')
+                state['fused_profiles'].append(dict(record.profile,nbytes=0,rank=route.rank))
+                return chosen,0
+            deadline=time.monotonic()+self.timeout
+            while not ready:
+                if time.monotonic() >= deadline: raise TimeoutError('fused native delivery expired')
+                await asyncio.sleep(0.001);ready=await record.poll()
+            tick=time.perf_counter();record.copy_to_cache(self.cache[ticket.layer])
+            copy_seconds=time.perf_counter()-tick
+            await record.ack()
+            if not await record.close(): raise RuntimeError('fused destination did not retire')
+            rows=sum(len(s.token_ids) for s in record.manifest.specs)
+            profile=dict(record.profile,nbytes=record.manifest.nbytes,remote_rows=rows,rank=route.rank,
+                cache_copy_seconds=copy_seconds,gpu_receive_to_bank=False,sort_missing_tokens=False,
+                wire_runs=sum(sum(1 for _ in consecutive_token_runs(s.token_ids)) for s in record.manifest.specs),
+                wire_ids_sorted=all(tuple(sorted(s.token_ids))==s.token_ids for s in record.manifest.specs),
+                wire_group_rows=[len(s.token_ids) for s in record.manifest.specs])
+            state['delivery_profiles'].append(profile);state['fused_profiles'].append(profile)
+            return chosen,rows
+        except BaseException:
+            if not await record.close(): self.quarantined=True
+            raise
 
     async def _finish_owned_cleanup(self, state):
         errors = []
@@ -820,6 +891,7 @@ class OasisLayerTransport:
                     self.trace.append(dict(step=ticket.step, layer=ticket.layer,
                         remote_rows=remote_rows, rpc_seconds=rpc_seconds,
                         bank_install=install_profile,
+                        fused_profiles=state.get('fused_profiles',[]),
                         deliveries=state.get("delivery_profiles", [])))
                 reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
                 if publish_ready is not None:

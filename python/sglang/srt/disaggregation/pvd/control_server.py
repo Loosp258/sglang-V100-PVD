@@ -973,6 +973,48 @@ def create_shard_app(
             raise ValueError('binary Q content type required')
         return await search_index_batch(request, unpack_binary_batch(await request.read()))
 
+    async def search_and_deliver(request):
+        from sglang.srt.disaggregation.pvd.fused_search_delivery import (
+            FUSED_PROTOCOL, selection_digest, allocation_bytes, choose_wire, wire_destination)
+        from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
+        data=await _payload(request)
+        if set(data) != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
+            raise ValueError('exact fused request required')
+        scope=data['selection'];digest=selection_digest(scope,data['search'])
+        identity=WriteIdentity.from_dict(data['identity'])
+        physical=RemoteRegionDescriptor.from_dict(data['destination'])
+        identity.validate_destination(physical)
+        if (identity.sender_epoch != store.worker_epoch or identity.shard_rank != store.rank
+                or scope['heads'] != [store.rank*2,store.rank*2+1]
+                or identity.key.transfer_id != scope['entry_transfer_id']
+                or physical.rail != store.rail or physical.length != allocation_bytes(scope)
+                or physical.backend_metadata.get(SPARSE_DELIVERY_KEY) != dict(
+                    protocol='pvd-fused-allocation-only-v1',nbytes=physical.length,selection_digest=digest)):
+            raise ValueError('fused physical capability mismatch')
+        # Validate immutable Entry before search; ordinary reserve/fence remains
+        # authoritative after the await, closing the absent-write race.
+        with store._lock:
+            entry=store._entry(identity.key)
+            if (entry.layout.fingerprint != scope['layout_fingerprint']
+                    or entry.layout.head_dim != scope['head_dim'] or entry.layout.kv_dtype != scope['dtype']
+                    or entry.layout.kv_heads_per_rank != 2 or scope['layer'] >= entry.layout.num_layers
+                    or ((entry.manifest.page_count-1)*entry.layout.page_size
+                        +entry.manifest.last_page_valid_tokens) != scope['prompt_tokens']):
+                raise ValueError('fused Entry/layout mismatch')
+        response=await search_index_batch(request,data['search'])
+        results=json.loads(response.body)['results']
+        chosen,wire=choose_wire(scope,results)
+        delivery=None
+        if wire is not None:
+            destination=wire_destination(physical,wire)
+            def reserve_start():
+                store.reserve_delivery(identity.key,identity.transfer_id,destination)
+                return store.start_delivery(identity.key,identity.transfer_id).to_dict()
+            delivery=await asyncio.to_thread(reserve_start)
+        return web.json_response(dict(protocol=FUSED_PROTOCOL,identity=identity.to_dict(),
+            selection_digest=digest,results=results,chosen=[list(ids) for ids in chosen],
+            manifest=wire.to_dict() if wire else None,delivery=delivery))
+
     async def health(_request):
         snapshot = await asyncio.to_thread(store.snapshot)
         snapshot["preflight"] = dict(preflight or {})
@@ -1014,6 +1056,7 @@ def create_shard_app(
             web.post("/internal/v1/indexes/search", search_index),
             web.post("/internal/v1/indexes/search-batch", search_index_batch),
             web.post('/internal/v1/indexes/search-batch-binary', search_index_batch_binary),
+            web.post('/internal/v1/indexes/search-deliver', search_and_deliver),
             web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/v1/capacity", capacity),
             web.post("/internal/v1/capacity", capacity_for_entry),
