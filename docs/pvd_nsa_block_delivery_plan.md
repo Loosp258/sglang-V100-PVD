@@ -89,3 +89,21 @@ proceed; CUDA qualification and fair live timing await new GPU resources.
   allocator memory, live installation time, D wait and TPOT are still pending.
 - Evidence and reproduction scope:
   `benchmark/results/pvd_oasis_batched_bank_local_20261004.md`.
+
+## Next local experiment: batch D CPU-cache installation
+
+1. Preserve the same V payload and synchronous receive-ordering/D2H proof.
+   Replace per-token clone/copy/valid writes with one indexed KV copy and one
+   validity write per head into the existing charged monotonic CPU cache.
+   Validate all groups before any cache mutation; retain sources on failures.
+2. Add default-off `batched_cache_install`, isolated from batch-bank, GPU-backup,
+   stages and attention-workspace experiments. Keep native receiver identities,
+   ACK-after-install, quarantine, registration and terminal proofs unchanged.
+3. Check real payload bytes, cache validity, candidate order and bank bits on
+   CPU and saved real trajectories. Test duplicate/alias/later-group rejection,
+   partial writes, ACK refusal and UNKNOWN ownership. CUDA/native qualification
+   remains a separate gate when GPU resources return.
+4. Commit plan, implementation and evidence locally. Prepare a fair
+   `d-cache-install` ABBA entry changing only this option. Report operation
+   counts separately from live cache-copy time, D wait and TPOT; no inferred
+   latency gain from CPU-only saved-trajectory verification.
