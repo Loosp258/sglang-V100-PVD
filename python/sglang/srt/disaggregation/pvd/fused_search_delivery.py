@@ -17,6 +17,7 @@ from sglang.srt.disaggregation.pvd.search_wire import unpack_query_rows, PACKED_
 from sglang.srt.disaggregation.pvd.search_wire import (
     BINARY_QUERY_ENCODING, BINARY_QUERY_CONTENT_TYPE, binary_search_snapshot,
     unpack_binary_batch, pack_binary_fused)
+from sglang.srt.disaggregation.pvd.cache_snapshot import cache_ids
 
 FUSED_PROTOCOL = 'pvd.search-delivery.v1'
 _SIZES={'torch.float16':2,'torch.bfloat16':2,'torch.float32':4}
@@ -40,6 +41,9 @@ def validate_selection(scope):
     for name in ('resident','cached'):
         if not isinstance(scope[name],list) or len(scope[name]) != 2: raise ValueError('two head snapshots required')
         for ids in scope[name]:
+            if name == 'cached':
+                cache_ids(ids, scope['prompt_tokens'])
+                continue
             if (not isinstance(ids,list) or len(ids) > (scope['capacity'] if name=='resident' else scope['prompt_tokens'])
                     or any(type(t) is not int or not 0 <= t < scope['prompt_tokens'] for t in ids)
                     or len(set(ids)) != len(ids)):
@@ -95,7 +99,7 @@ def choose_wire(scope, results):
         ranked=tuple(t for _,t in sorted(zip(result['scores'],result['token_ids'],strict=True),reverse=True))
         ids=select_resident(ranked,scope['resident'][i],capacity=scope['capacity'],max_new=scope['max_new'])
         if not ids or any(t >= scope['prompt_tokens'] for t in ids): raise ValueError('invalid selected IDs')
-        chosen.append(ids);cached=set(scope['cached'][i]);missing=tuple(t for t in ids if t not in cached)
+        chosen.append(ids);cached=set(cache_ids(scope['cached'][i],scope['prompt_tokens']));missing=tuple(t for t in ids if t not in cached)
         if missing:
             specs.append(SparseKVSpec(scope['request_id'],scope['incarnation'],scope['operation_id'],
                 scope['target_tokens'],scope['entry_transfer_id'],*pair,scope['layout_fingerprint'],

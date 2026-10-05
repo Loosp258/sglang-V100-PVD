@@ -36,3 +36,20 @@ native 字节证明、安装后 ACK 及 UNKNOWN 保留没有省略。全缓存�
 不返槽，原池注册/注销未知状态与关闭测试通过。日志及 hash 位于
 `artifacts/delivery_followup_20261005/step2/gate03/`。真实 GPU/RDMA 与组合
 D wait/TPOT 待测；旧独立接收池实验的注册收益不能当作当前延迟收益。
+
+## 3. 精确缓存快照压缩
+
+融合配置增加默认关闭的 `compact_cache_snapshots=true`。少于等于 8 个 ID
+保留原列表；其余按实际原始字节大小选 uint16 稀疏整数或 little-endian
+bitset，随后 base64 包装。生产者不再将较大的集合变成 Python 整数列表。
+不使用跨消息增量状态；每个授权仍绑定完整、冻结的 head 缓存集合。
+
+2159-token Prompt 的完整 bitmap 原始载荷为 **270 B/head**（另有 base64
+和明确编码元数据）；稀疏载荷为 **2 B/ID**。这是载荷大小，非延迟实测。
+接收端检查精确长度、顺序、重复、越界、高位 padding 与规范 base64。
+
+本地 gate：**107 passed，1 Linux CUDA skipped**。1/7/8/9/2159/32768-token
+边界、密集/稀疏集合、错误编码以及真实 HTTP 二进制/JSON 混合 miss 的
+原选择和 wire manifest 完全等价；D 的实际两逻辑 rank 路径继续通过。
+日志与 hash：`artifacts/delivery_followup_20261005/step3/gate01/`。
+GPU/RDMA、线上质量、缓存集合规模下的 D wait/TPOT 收益待测。

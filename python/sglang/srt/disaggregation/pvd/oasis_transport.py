@@ -237,7 +237,7 @@ class OasisLayerTransport:
                  staged_transport=False, sort_missing_tokens=False,
                  batched_bank_install=False, install_scratch_bytes=33554432,
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
-                 fused_search_delivery=False):
+                 fused_search_delivery=False, compact_cache_snapshots=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -256,6 +256,7 @@ class OasisLayerTransport:
                 or type(ready_before_cleanup) is not bool
                 or type(binary_queries) is not bool
                 or type(fused_search_delivery) is not bool
+                or type(compact_cache_snapshots) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -298,6 +299,9 @@ class OasisLayerTransport:
         self.ready_before_cleanup = ready_before_cleanup
         self.binary_queries = binary_queries
         self.fused_search_delivery = fused_search_delivery
+        if compact_cache_snapshots and not fused_search_delivery:
+            raise ValueError('compact cache snapshots require fused delivery')
+        self.compact_cache_snapshots = compact_cache_snapshots
         self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if ready_before_cleanup else None
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
@@ -449,6 +453,7 @@ class OasisLayerTransport:
                 ready_before_cleanup=self.ready_before_cleanup,
                 binary_queries=self.binary_queries,
                 fused_search_delivery=self.fused_search_delivery,
+                compact_cache_snapshots=self.compact_cache_snapshots,
                 fused_rpc_count=sum(p['fused_calls'] for row in self.trace for p in row.get('fused_profiles',())),
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 staged_transport=self.staged_transport,
@@ -593,6 +598,7 @@ class OasisLayerTransport:
 
     async def _fused_fetch(self,state,ticket,route,requests,bank,bootstrap):
         from sglang.srt.disaggregation.pvd.fused_search_delivery import prepare_fused, start_fused
+        from sglang.srt.disaggregation.pvd.cache_snapshot import pack_cache_snapshot
         resident=bank() if callable(bank) else bank
         heads=[route.rank*2,route.rank*2+1]
         scope=dict(request_id=ticket.request_id,incarnation=ticket.incarnation,
@@ -604,7 +610,9 @@ class OasisLayerTransport:
             prompt_tokens=self.prompt_tokens,dtype=self.selected.manifest.layout.kv_dtype,
             head_dim=self.selected.manifest.layout.head_dim,
             resident=[list(resident.ids[h]) if resident is not None else [] for h in heads],
-            cached=[self._cache_valid[ticket.layer,h].nonzero().flatten().tolist() for h in heads])
+            cached=[(pack_cache_snapshot(self._cache_valid[ticket.layer,h].numpy())
+                     if self.compact_cache_snapshots else self._cache_valid[ticket.layer,h].nonzero().flatten().tolist())
+                    for h in heads])
         search_client=state['search'][route.rank]
         items=[search_client._prepare_search(identity,queries=q,top_k=k,scope=s)[0] for identity,q,k,s in requests]
         if not self.binary_queries and os.environ.get('PVD_PACKED_QUERY_BATCH') == '1':
