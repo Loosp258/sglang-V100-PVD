@@ -18,6 +18,12 @@
 
 ## Current publication authorization (2026-10-05)
 
+- Latest user instruction: the next five optimizations are local commits only;
+  do not push to GitHub. This supersedes the push authorization below for new
+  work. Order: binary Q plus fused delivery; fused D receive-slot reuse; compact
+  cache snapshots; pinned scratch and event-based bank readiness; request-scoped
+  binary control channel. See `docs/pvd_delivery_followup_plan_20261005.md`.
+
 - The user now requests committing and pushing all outstanding work on
   `codex/pvd-oasiskv`, then optimizing in the agreed order and committing/pushing
   each completed step. This supersedes earlier local-only/no-GitHub directions

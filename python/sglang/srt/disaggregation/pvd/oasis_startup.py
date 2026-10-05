@@ -317,7 +317,7 @@ def maybe_install_oasis(scheduler):
              'staged_transport', 'attention_workspace', 'batched_bank_install', 'batched_cache_install'))):
         raise ValueError('READY cleanup requires isolated two-worker baseline')
     if cfg['fused_search_delivery'] and (cfg['workers'] != 2 or cfg['capacity'] > 32 or any(cfg[name] for name in
-            ('binary_queries','ready_before_cleanup','reuse_io','combine_reserve_start','reuse_receive_slots',
+            ('ready_before_cleanup','reuse_io','combine_reserve_start','reuse_receive_slots',
              'gpu_receive_to_bank','staged_transport','attention_workspace','sort_missing_tokens',
              'batched_bank_install','batched_cache_install'))):
         raise ValueError('fused selection requires isolated bounded two-worker baseline')

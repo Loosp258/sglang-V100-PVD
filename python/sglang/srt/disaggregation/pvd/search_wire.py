@@ -19,6 +19,39 @@ _MAGIC = b'PVDQF32\x01'
 _MAX_META = 262144
 
 
+def binary_search_snapshot(search):
+    """Freeze either producer arrays or locally parsed rows in one wire form."""
+    items = []
+    for item in search['items']:
+        if item.get('query_encoding') == BINARY_QUERY_ENCODING:
+            values = unpack_query_rows(item)
+            meta = {k: v for k, v in item.items() if not k.startswith('query_')}
+            meta['queries'] = values
+        else:
+            meta = dict(item)
+        items.append(meta)
+    return pack_binary_batch({**search, 'items': items})
+
+
+def pack_binary_fused(payload):
+    search = payload['search']
+    parsed = unpack_binary_batch(binary_search_snapshot(search))
+    items = []
+    for item in parsed['items']:
+        items.append({**{k: v for k, v in item.items() if not k.startswith('query_')},
+                      'queries': item['query_values']})
+    return pack_binary_batch({**{k: v for k, v in payload.items() if k != 'search'},
+        'search': {k: v for k, v in search.items() if k != 'items'}, 'items': items})
+
+
+def unpack_binary_fused(raw):
+    payload = unpack_binary_batch(raw)
+    if not isinstance(payload.get('search'), dict) or 'items' in payload['search']:
+        raise ValueError('exact nested binary search metadata required')
+    payload['search'] = {**payload['search'], 'items': payload.pop('items')}
+    return payload
+
+
 def pack_binary_batch(payload):
     """Bounded metadata plus exact f32 bytes; never materialize Python Q floats."""
     items, chunks, cells = [], [], 0

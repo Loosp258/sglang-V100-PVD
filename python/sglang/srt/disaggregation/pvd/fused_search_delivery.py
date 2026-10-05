@@ -14,6 +14,9 @@ from sglang.srt.disaggregation.pvd.protocol import WriteIdentity, PVD_TRANSFER_L
 from sglang.srt.disaggregation.pvd.sparse_delivery import SparseDeliveryManifest, SPARSE_DELIVERY_KEY
 from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
 from sglang.srt.disaggregation.pvd.search_wire import unpack_query_rows, PACKED_QUERY_ENCODING
+from sglang.srt.disaggregation.pvd.search_wire import (
+    BINARY_QUERY_ENCODING, BINARY_QUERY_CONTENT_TYPE, binary_search_snapshot,
+    unpack_binary_batch, pack_binary_fused)
 
 FUSED_PROTOCOL = 'pvd.search-delivery.v1'
 _SIZES={'torch.float16':2,'torch.bfloat16':2,'torch.float32':4}
@@ -49,7 +52,7 @@ def selection_digest(scope, search):
     if not isinstance(search,dict) or not isinstance(search.get('items'),list) or len(search['items']) != 2:
         raise ValueError('two head searches required')
     for head,item in zip(scope['heads'],search['items'],strict=True):
-        if item.get('query_encoding') == PACKED_QUERY_ENCODING:
+        if item.get('query_encoding') in (PACKED_QUERY_ENCODING, BINARY_QUERY_ENCODING):
             if 'queries' in item: raise ValueError('mixed fused query encodings')
             values=unpack_query_rows(item)
             shape=values.shape
@@ -63,7 +66,13 @@ def selection_digest(scope, search):
                 or item.get('transfer_id') != scope['entry_transfer_id']
                 or not 1 <= shape[0] <= 7 or shape[1] != scope['head_dim']):
             raise ValueError('search differs from authorized rank/layer/shape')
-    encoded=json.dumps([scope,search],sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    if any(item.get('query_encoding') == BINARY_QUERY_ENCODING for item in search['items']):
+        if not all(item.get('query_encoding') == BINARY_QUERY_ENCODING for item in search['items']):
+            raise ValueError('mixed fused binary encodings')
+        encoded=(json.dumps(scope,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+                 + b'\x00pvd-fused-binary-v1\x00' + binary_search_snapshot(search))
+    else:
+        encoded=json.dumps([scope,search],sort_keys=True,separators=(',',':'),allow_nan=False).encode()
     if len(encoded) > 262144: raise ValueError('fused selection snapshot too large')
     return hashlib.sha256(encoded).hexdigest()
 
@@ -110,7 +119,8 @@ class _AllocationOnly:
         return dict(protocol='pvd-fused-allocation-only-v1',nbytes=self.nbytes,selection_digest=self.digest)
 
 
-def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_epoch, client, owner_scope=None):
+def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_epoch, client, owner_scope=None,
+                  binary_queries=False):
     registry._owner();started=time.perf_counter()
     if any(not isinstance(value,str) or not value.strip() for value in (rail,endpoint)):
         raise ValueError('explicit fused rail/endpoint required')
@@ -118,7 +128,9 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
         raise ValueError('explicit fused owner scope required')
     # Freeze the producer snapshots before registration and the first await.
     scope=json.loads(json.dumps(scope,allow_nan=False))
-    search=json.loads(json.dumps(search,allow_nan=False))
+    if type(binary_queries) is not bool: raise ValueError('binary fused option must be bool')
+    search=(unpack_binary_batch(binary_search_snapshot(search)) if binary_queries
+            else json.loads(json.dumps(search,allow_nan=False)))
     digest=selection_digest(scope,search)
     if scope['heads'] != [rank*2,rank*2+1] or scope['entry_transfer_id'] != key.transfer_id:
         raise ValueError('fused allocation rank/Entry mismatch')
@@ -145,9 +157,14 @@ async def start_fused(record, search_client, requests):
         record._live()
         if record._published: raise ValueError('fused destination already published; poll or fence')
         record._published=True
-        reply=await record._timed_rpc('fused',search_client._post_json('/internal/v1/indexes/search-deliver',
-            dict(protocol=FUSED_PROTOCOL,selection=record.fused_scope,search=record.fused_search,
-                 identity=record.identity.to_dict(),destination=record._registration.descriptor.to_dict())))
+        payload=dict(protocol=FUSED_PROTOCOL,selection=record.fused_scope,search=record.fused_search,
+                     identity=record.identity.to_dict(),destination=record._registration.descriptor.to_dict())
+        binary=record.fused_search['items'][0].get('query_encoding') == BINARY_QUERY_ENCODING
+        options=(dict(encoded_payload=pack_binary_fused(payload),content_type=BINARY_QUERY_CONTENT_TYPE)
+                 if binary else {})
+        reply=await record._timed_rpc('fused',search_client._post_json(
+            '/internal/v1/indexes/search-deliver-binary' if binary else '/internal/v1/indexes/search-deliver',
+            payload,**options))
         if reply.get('protocol') != FUSED_PROTOCOL or reply.get('selection_digest') != record.fused_digest:
             raise ValueError('fused response capability mismatch')
         if reply.get('identity') != record.identity.to_dict(): raise ValueError('fused response identity mismatch')

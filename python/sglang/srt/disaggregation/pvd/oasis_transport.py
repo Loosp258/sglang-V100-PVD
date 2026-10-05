@@ -269,7 +269,7 @@ class OasisLayerTransport:
                 or reuse_receive_slots or combine_reserve_start or batched_bank_install
                 or batched_cache_install or workers != 2):
             raise ValueError('binary Q experiment requires isolated two-worker baseline')
-        if fused_search_delivery and (binary_queries or ready_before_cleanup or staged_transport
+        if fused_search_delivery and (ready_before_cleanup or staged_transport
                 or gpu_receive_to_bank or reuse_io or reuse_receive_slots or combine_reserve_start
                 or batched_bank_install or batched_cache_install or sort_missing_tokens or workers != 2
                 or capacity > 32):
@@ -598,14 +598,15 @@ class OasisLayerTransport:
             cached=[self._cache_valid[ticket.layer,h].nonzero().flatten().tolist() for h in heads])
         search_client=state['search'][route.rank]
         items=[search_client._prepare_search(identity,queries=q,top_k=k,scope=s)[0] for identity,q,k,s in requests]
-        if os.environ.get('PVD_PACKED_QUERY_BATCH') == '1':
+        if not self.binary_queries and os.environ.get('PVD_PACKED_QUERY_BATCH') == '1':
             from sglang.srt.disaggregation.pvd.search_wire import pack_query_rows
             for item in items: item.update(pack_query_rows(item.pop('queries')))
         import uuid
         search=dict(batch_protocol='pvd.search.batch.v1',batch_id=uuid.uuid4().hex,items=items)
         record=prepare_fused(state['registry'],scope,search,key=self.selected.manifest.key,rank=route.rank,
             rail=route.rail,endpoint=self.endpoints[route.rank],sender_epoch=route.sender_epoch,
-            client=state['control'][route.rank],owner_scope=self.incarnation)
+            client=state['control'][route.rank],owner_scope=self.incarnation,
+            binary_queries=self.binary_queries)
         try:
             chosen,ready=await start_fused(record,search_client,requests)
             pair=(record.fused_results[0]['index_version'],record.fused_results[0]['id_mapping_version'])

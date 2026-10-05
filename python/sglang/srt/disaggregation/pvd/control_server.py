@@ -973,11 +973,11 @@ def create_shard_app(
             raise ValueError('binary Q content type required')
         return await search_index_batch(request, unpack_binary_batch(await request.read()))
 
-    async def search_and_deliver(request):
+    async def search_and_deliver(request, data=None):
         from sglang.srt.disaggregation.pvd.fused_search_delivery import (
             FUSED_PROTOCOL, selection_digest, allocation_bytes, choose_wire, wire_destination)
         from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
-        data=await _payload(request)
+        if data is None: data=await _payload(request)
         if set(data) != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
             raise ValueError('exact fused request required')
         scope=data['selection'];digest=selection_digest(scope,data['search'])
@@ -1014,6 +1014,12 @@ def create_shard_app(
         return web.json_response(dict(protocol=FUSED_PROTOCOL,identity=identity.to_dict(),
             selection_digest=digest,results=results,chosen=[list(ids) for ids in chosen],
             manifest=wire.to_dict() if wire else None,delivery=delivery))
+
+    async def search_and_deliver_binary(request):
+        from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_fused, BINARY_QUERY_CONTENT_TYPE
+        if request.content_type != BINARY_QUERY_CONTENT_TYPE:
+            raise ValueError('binary fused content type required')
+        return await search_and_deliver(request,unpack_binary_fused(await request.read()))
 
     async def health(_request):
         snapshot = await asyncio.to_thread(store.snapshot)
@@ -1057,6 +1063,7 @@ def create_shard_app(
             web.post("/internal/v1/indexes/search-batch", search_index_batch),
             web.post('/internal/v1/indexes/search-batch-binary', search_index_batch_binary),
             web.post('/internal/v1/indexes/search-deliver', search_and_deliver),
+            web.post('/internal/v1/indexes/search-deliver-binary', search_and_deliver_binary),
             web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/v1/capacity", capacity),
             web.post("/internal/v1/capacity", capacity_for_entry),
