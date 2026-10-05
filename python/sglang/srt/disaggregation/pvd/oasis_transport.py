@@ -241,7 +241,7 @@ class OasisLayerTransport:
                  batched_bank_install=False, install_scratch_bytes=33554432,
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
                  fused_search_delivery=False, compact_cache_snapshots=False,
-                 reuse_pinned_scratch=False, event_bank_ready=False):
+                 reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -262,6 +262,7 @@ class OasisLayerTransport:
                 or type(fused_search_delivery) is not bool
                 or type(compact_cache_snapshots) is not bool
                 or type(reuse_pinned_scratch) is not bool or type(event_bank_ready) is not bool
+                or type(binary_control_channel) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -316,6 +317,10 @@ class OasisLayerTransport:
         if event_bank_ready and not reuse_pinned_scratch:
             raise ValueError('event bank publication requires owned pinned scratch')
         self.reuse_pinned_scratch, self.event_bank_ready = reuse_pinned_scratch, event_bank_ready
+        if binary_control_channel and (not binary_queries or not fused_search_delivery or reuse_io):
+            raise ValueError('binary control channel requires fused binary Q and its own search clients')
+        self.binary_control_channel=binary_control_channel
+        self._channel_clients=None
         self.pinned_pool = (PinnedScratchPool(manager.transfer_budget,capacity=capacity,slots=workers)
                             if reuse_pinned_scratch else None)
         self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if (ready_before_cleanup or event_bank_ready) else None
@@ -328,7 +333,7 @@ class OasisLayerTransport:
         self._shared_close_future = None
         self._closing = False
         self._io_loop = None
-        if reuse_io:
+        if reuse_io or binary_control_channel:
             self._io_loop = getattr(getattr(manager, "control", None), "loop", None)
             if (not isinstance(self._io_loop, asyncio.AbstractEventLoop)
                     or not self._io_loop.is_running() or self._io_loop.is_closed()):
@@ -381,6 +386,7 @@ class OasisLayerTransport:
         clients = dict(
             search={r.rank: PVDShardSearchClient(r.url, timeout_seconds=self.timeout,
                         binary_queries=self.binary_queries,
+                        binary_control_channel=self.binary_control_channel,
                         background_loop=background_loop) for r in self.selected.shards
                     if 'search' in kinds},
             control={r.rank: HttpShardClient(r.rank, r.url, timeout_seconds=self.timeout,
@@ -397,7 +403,12 @@ class OasisLayerTransport:
             with self.lock:
                 if self.closed or self._closing or self.quarantined:
                     raise RuntimeError("layer transport is closing or quarantined")
-                if self.reuse_io:
+                if self.binary_control_channel:
+                    if self._channel_clients is None:
+                        self._channel_clients=self._new_clients(background_loop=self._io_loop,kinds=('search',))
+                    clients=self._new_clients(kinds=('control',))
+                    clients['search']=self._channel_clients['search']
+                elif self.reuse_io:
                     if self._shared_clients is None:
                         self._shared_clients = self._new_clients(background_loop=self._io_loop)
                     clients = self._shared_clients
@@ -432,7 +443,8 @@ class OasisLayerTransport:
                     if self.reuse_io:
                         self._seen_shared_sessions.add(identity)
         if not self.reuse_io:
-            state["loop"].run_until_complete(self._close_clients(state))
+            closing=({**state,'search':{}} if self.binary_control_channel else state)
+            state["loop"].run_until_complete(self._close_clients(closing))
         del self.local.state
         if not state["registry"]._records and not state.get("quarantine"):
             state["loop"].close()
@@ -472,6 +484,9 @@ class OasisLayerTransport:
                 compact_cache_snapshots=self.compact_cache_snapshots,
                 reuse_pinned_scratch=self.reuse_pinned_scratch,event_bank_ready=self.event_bank_ready,
                 pinned_scratch=self.pinned_pool.snapshot() if self.pinned_pool else None,
+                binary_control_channel=self.binary_control_channel,
+                binary_channels={r:(c._channel.snapshot() if c._channel else None)
+                    for r,c in self._channel_clients['search'].items()} if self._channel_clients else {},
                 fused_rpc_count=sum(p['fused_calls'] for row in self.trace for p in row.get('fused_profiles',())),
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 staged_transport=self.staged_transport,
@@ -995,7 +1010,7 @@ class OasisLayerTransport:
             self.cleanup.close()
         if self.stages is not None:
             self.stages.close()
-        if self.reuse_io:
+        if self.reuse_io or self.binary_control_channel:
             self._outside_io_loop()
         with self.lock:
             if self.closed:
@@ -1005,11 +1020,12 @@ class OasisLayerTransport:
             # Caller joins LayerLookahead before this transition. Reject late
             # jobs while waiting for the real HTTP-close future to complete.
             self._closing = True
-            if self.reuse_io and self._shared_clients is not None:
+            clients=self._channel_clients if self.binary_control_channel else self._shared_clients
+            if clients is not None:
                 if self._shared_close_future is None:
                     if not self._io_loop.is_running() or self._io_loop.is_closed():
                         raise RuntimeError("Oasis I/O loop stopped; retain request owners")
-                    coroutine = self._close_clients(self._shared_clients)
+                    coroutine = self._close_clients(clients)
                     try:
                         self._shared_close_future = self.manager.control.submit(coroutine)
                     except BaseException:

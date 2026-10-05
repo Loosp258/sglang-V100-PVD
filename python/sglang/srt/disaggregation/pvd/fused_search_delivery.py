@@ -167,9 +167,14 @@ async def start_fused(record, search_client, requests):
         binary=record.fused_search['items'][0].get('query_encoding') == BINARY_QUERY_ENCODING
         options=(dict(encoded_payload=pack_binary_fused(payload),content_type=BINARY_QUERY_CONTENT_TYPE)
                  if binary else {})
-        reply=await record._timed_rpc('fused',search_client._post_json(
-            '/internal/v1/indexes/search-deliver-binary' if binary else '/internal/v1/indexes/search-deliver',
-            payload,**options))
+        if search_client.binary_control_channel:
+            if not binary:raise ValueError('binary channel requires frozen binary Q')
+            operation=search_client._post_fused_channel(options['encoded_payload'])
+        else:
+            operation=search_client._post_json(
+                '/internal/v1/indexes/search-deliver-binary' if binary else '/internal/v1/indexes/search-deliver',
+                payload,**options)
+        reply=await record._timed_rpc('fused',operation)
         if reply.get('protocol') != FUSED_PROTOCOL or reply.get('selection_digest') != record.fused_digest:
             raise ValueError('fused response capability mismatch')
         if reply.get('identity') != record.identity.to_dict(): raise ValueError('fused response identity mismatch')

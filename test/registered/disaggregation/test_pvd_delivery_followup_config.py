@@ -1,0 +1,45 @@
+"""The real serving config admits each ordered combination, never enables it implicitly."""
+import json
+from types import SimpleNamespace
+import pytest
+from sglang.srt.disaggregation.pvd import oasis_startup as startup
+
+
+def config(stage):
+    value=dict(eagle_source='source',eagle_checkpoint='checkpoint',eagle_manifest='manifest',
+        vector_space='target-Q',capacity=32,max_new=16,top_k=4,workers=2,timeout_seconds=5,
+        max_sequence_tokens=64,max_decode_steps=16,request_budget_bytes=1<<28,
+        request_scratch_bytes=1<<20,bootstrap_budget_bytes=1<<28,bootstrap_transient_bytes=1<<20,
+        overlap=True)
+    if stage>=1:value.update(fused_search_delivery=True,binary_queries=True)
+    if stage>=2:value['reuse_receive_slots']=True
+    if stage>=3:value['compact_cache_snapshots']=True
+    if stage>=4:value.update(reuse_pinned_scratch=True,event_bank_ready=True)
+    if stage>=5:value['binary_control_channel']=True
+    return value
+
+
+def load(monkeypatch,tmp_path,value):
+    path=tmp_path/'config.json';path.write_text(json.dumps(value))
+    scheduler=SimpleNamespace(server_args=SimpleNamespace(pvd_oasis_config=str(path)),
+        tp_worker=SimpleNamespace(model_runner=SimpleNamespace(
+            model_config=SimpleNamespace(context_len=128))))
+    monkeypatch.setattr(startup,'OasisSchedulerBinding',lambda *args:SimpleNamespace())
+    monkeypatch.setattr(startup,'OasisResources',lambda scheduler,cfg:
+        SimpleNamespace(config=cfg,prepare=lambda *args:None))
+    startup.maybe_install_oasis(scheduler)
+    return scheduler.pvd_oasis_resources.config
+
+
+@pytest.mark.parametrize('stage',range(6))
+def test_explicit_ordered_config_combinations(monkeypatch,tmp_path,stage):
+    expected=config(stage);actual=load(monkeypatch,tmp_path,expected)
+    for name,value in expected.items():assert actual[name]==value
+    assert actual['binary_control_channel'] is (stage==5)
+
+
+@pytest.mark.parametrize('option',['binary_queries','fused_search_delivery','reuse_receive_slots',
+    'compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel'])
+def test_nonbool_optimization_option_refused(monkeypatch,tmp_path,option):
+    value=config(5);value[option]=1
+    with pytest.raises(ValueError):load(monkeypatch,tmp_path,value)

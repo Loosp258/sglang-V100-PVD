@@ -36,8 +36,8 @@ def setup(rank):
     return index,store,manifest,pool,layout,requests,selection
 
 
-async def prepared(store,manifest,requests,selection,http,*,cuda=False,binary=False):
-    search=PVDShardSearchClient(str(http.make_url('')),binary_queries=binary)
+async def prepared(store,manifest,requests,selection,http,*,cuda=False,binary=False,channel=False):
+    search=PVDShardSearchClient(str(http.make_url('')),binary_queries=binary,binary_control_channel=channel)
     control=HttpShardClient(store.rank,str(http.make_url('')),timeout_seconds=1)
     batch=dict(batch_protocol='pvd.search.batch.v1',batch_id='batch',items=[
         search._prepare_search(identity,queries=q,top_k=k,scope=s)[0] for identity,q,k,s in requests])
@@ -51,14 +51,14 @@ async def prepared(store,manifest,requests,selection,http,*,cuda=False,binary=Fa
 
 @pytest.mark.parametrize('rank',[0,1])
 @pytest.mark.parametrize('mode',['miss','mixed','hit'])
-@pytest.mark.parametrize('binary',[False,True])
-def test_both_logical_ranks_http_dynamic_prefix_exact_bytes_and_zero_miss(rank,mode,binary):
+@pytest.mark.parametrize('binary,channel',[(False,False),(True,False),(True,True)])
+def test_both_logical_ranks_http_dynamic_prefix_exact_bytes_and_zero_miss(rank,mode,binary,channel):
     async def run():
         _,store,manifest,pool,layout,requests,selection=setup(rank)
         if mode in ('mixed','hit'): selection['cached'][0]=list(range(manifest.prompt_token_count))
         if mode=='hit': selection['cached'][1]=list(range(manifest.prompt_token_count))
         async with shard_client(store) as http:
-            search,control,budget,registry,record=await prepared(store,manifest,requests,selection,http,binary=binary)
+            search,control,budget,registry,record=await prepared(store,manifest,requests,selection,http,binary=binary,channel=channel)
             old=await search.search_many(requests)
             # Independent baseline policy uses original resident selector.
             from sglang.srt.disaggregation.pvd.oasis_pipeline import select_resident
@@ -224,8 +224,8 @@ def test_capability_mismatch_rejected_before_registration(change):
 
 
 @pytest.mark.parametrize('packed',[False,True])
-@pytest.mark.parametrize('binary',[False,True])
-def test_actual_two_shard_select_fetch_cache_misses_then_hits(monkeypatch,packed,binary):
+@pytest.mark.parametrize('binary,channel',[(False,False),(True,False),(True,True)])
+def test_actual_two_shard_select_fetch_cache_misses_then_hits(monkeypatch,packed,binary,channel):
     monkeypatch.setenv('PVD_PACKED_QUERY_BATCH','1' if packed else '0')
     async def run():
         index0,store0,manifest,pool,layout,_,_=setup(0)
@@ -251,7 +251,7 @@ def test_actual_two_shard_select_fetch_cache_misses_then_hits(monkeypatch,packed
             rows=torch.empty((layout.num_layers,4,manifest.prompt_token_count,2,layout.head_dim),dtype=torch.float16)
             owner.cache=[[_HeadCPUCache(rows[l,h],owner._cache_valid[l,h]) for h in range(4)] for l in range(layout.num_layers)]
             budget=TransferBudget(1<<20,4)
-            state=dict(search={r.rank:PVDShardSearchClient(r.url,binary_queries=binary) for r in routes},
+            state=dict(search={r.rank:PVDShardSearchClient(r.url,binary_queries=binary,binary_control_channel=channel) for r in routes},
                 control={r.rank:HttpShardClient(r.rank,r.url) for r in routes},
                 registry=OasisCPUReceiveRegistry(store0.transfer_engine,budget,receiver_epoch='D'))
             queries=[]
@@ -280,6 +280,9 @@ def test_actual_two_shard_select_fetch_cache_misses_then_hits(monkeypatch,packed
                 assert again==chosen and remote==0 and not state['delivery_profiles']
                 assert len(state['fused_profiles'])==2 and all(p['nbytes']==0 for p in state['fused_profiles'])
                 assert sum(s.transfer_engine.total_put_bytes for s in (store0,store1))==before
+                if channel:
+                    assert all(c._channel.snapshot()['connections']==1 and c._channel.snapshot()['requests']==2
+                               for c in state['search'].values())
                 assert not state['registry']._records and budget.snapshot()['used_staging_bytes']==0
             finally:
                 finish=False;await task

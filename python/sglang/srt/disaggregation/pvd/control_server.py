@@ -1021,6 +1021,70 @@ def create_shard_app(
             raise ValueError('binary fused content type required')
         return await search_and_deliver(request,unpack_binary_fused(await request.read()))
 
+    channel_sockets, channel_work = set(), set()
+
+    async def finish_channels(_app):
+        if channel_sockets:
+            await asyncio.gather(*(ws.close(code=1001) for ws in tuple(channel_sockets)),return_exceptions=True)
+        if channel_work:
+            await asyncio.gather(*tuple(channel_work),return_exceptions=True)
+
+    app.on_shutdown.append(finish_channels)
+
+    async def fused_channel(request):
+        from sglang.srt.disaggregation.pvd.fused_binary_channel import (
+            MAX_REQUEST_BYTES, unpack_request, pack_response, BinaryChannelError)
+        from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_fused
+        from sglang.srt.disaggregation.pvd.fused_search_delivery import validate_selection
+        if len(channel_sockets)>=32:
+            raise ResourceExhaustedError('bounded binary channel capacity exhausted')
+        socket=web.WebSocketResponse(max_msg_size=MAX_REQUEST_BYTES+16,compress=False)
+        channel_sockets.add(socket)
+        try:
+            await socket.prepare(request)
+        except BaseException:
+            channel_sockets.discard(socket)
+            raise
+        tasks=set();last_sequence=0;binding=None
+
+        async def deliver(sequence,data):
+            try:
+                response=await pvd_error_middleware(request,lambda _:search_and_deliver(request,data))
+            except Exception:
+                response=_json_error('binary fused handler failed',500)
+            try:
+                if not socket.closed:
+                    await socket.send_bytes(pack_response(sequence,response.status,response.body))
+            except Exception:
+                await socket.close(code=1011)
+
+        try:
+            async for message in socket:
+                if message.type != aiohttp.WSMsgType.BINARY:
+                    raise BinaryChannelError('binary request frame required')
+                sequence,raw=unpack_request(message.data)
+                if sequence != last_sequence+1 or sum(not t.done() for t in tasks)>=2:
+                    raise BinaryChannelError('channel sequence or inflight bound exceeded')
+                last_sequence=sequence
+                data=unpack_binary_fused(raw)
+                scope=validate_selection(data['selection'])
+                current=(scope['request_id'],scope['incarnation'],scope['entry_transfer_id'],tuple(scope['heads']))
+                if binding is None:binding=current
+                if current != binding:raise BinaryChannelError('channel request/Entry scope changed')
+                task=asyncio.create_task(deliver(sequence,data))
+                tasks.add(task);channel_work.add(task)
+                def finished(done):
+                    tasks.discard(done);channel_work.discard(done)
+                    if not done.cancelled():done.exception()
+                task.add_done_callback(finished)
+        except (BinaryChannelError,ValueError,KeyError,TypeError):
+            await socket.close(code=1008)
+        finally:
+            # Disconnect does not cancel a task that may authorize/start PUT.
+            if tasks:await asyncio.gather(*tuple(tasks),return_exceptions=True)
+            channel_sockets.discard(socket)
+        return socket
+
     async def health(_request):
         snapshot = await asyncio.to_thread(store.snapshot)
         snapshot["preflight"] = dict(preflight or {})
@@ -1064,6 +1128,7 @@ def create_shard_app(
             web.post('/internal/v1/indexes/search-batch-binary', search_index_batch_binary),
             web.post('/internal/v1/indexes/search-deliver', search_and_deliver),
             web.post('/internal/v1/indexes/search-deliver-binary', search_and_deliver_binary),
+            web.get('/internal/v1/indexes/search-deliver-channel',fused_channel),
             web.get("/internal/v1/indexes", index_snapshot),
             web.get("/internal/v1/capacity", capacity),
             web.post("/internal/v1/capacity", capacity_for_entry),

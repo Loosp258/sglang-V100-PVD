@@ -106,10 +106,15 @@ class PVDShardSearchClient:
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 2 * 1024 * 1024,
         binary_queries: bool = False,
+        binary_control_channel: bool = False,
     ):
         if type(binary_queries) is not bool:
             raise ValueError('binary query option must be bool')
         self.binary_queries = binary_queries
+        if type(binary_control_channel) is not bool or (binary_control_channel and not binary_queries):
+            raise ValueError('binary control channel requires binary Q')
+        self.binary_control_channel=binary_control_channel
+        self._channel=None
         if not isinstance(base_url, str) or not base_url.startswith(
             ("http://", "https://")
         ):
@@ -157,9 +162,9 @@ class PVDShardSearchClient:
                     return_exceptions=True,
                 )
             self._background_inflight.clear()
-            if self._session is not None and self._owns_session:
+            if self._channel is not None or (self._session is not None and self._owns_session):
                 if self._background_close_future is None:
-                    coroutine = self._session.close()
+                    coroutine = self._close_owned_transports()
                     try:
                         self._background_close_future = (
                             asyncio.run_coroutine_threadsafe(
@@ -172,9 +177,46 @@ class PVDShardSearchClient:
                 await asyncio.shield(asyncio.wrap_future(self._background_close_future))
             self._session = None
             return
-        if self._session is not None and self._owns_session:
-            await self._session.close()
+        await self._close_owned_transports()
         self._session = None
+
+    async def _close_owned_transports(self):
+        if self._channel is not None:await self._channel.close()
+        if self._session is not None and self._owns_session:await self._session.close()
+
+    async def _post_fused_channel(self,raw):
+        if self._closed or not self.binary_control_channel:
+            raise SearchTransportError('binary fused channel unavailable')
+        if self._background_loop is None:
+            return await self._post_fused_channel_on_loop(raw)
+        if not self._background_loop.is_running():
+            raise SearchTransportError('binary channel I/O loop stopped')
+        coroutine=self._post_fused_channel_on_loop(raw)
+        try:
+            future=asyncio.run_coroutine_threadsafe(coroutine,self._background_loop)
+        except BaseException:
+            coroutine.close();raise
+        self._background_inflight.add(future)
+        try:
+            return await asyncio.shield(asyncio.wrap_future(future))
+        finally:
+            if future.done():self._background_inflight.discard(future)
+
+    async def _post_fused_channel_on_loop(self,raw):
+        from sglang.srt.disaggregation.pvd.fused_binary_channel import (
+            FusedBinaryChannel,BinaryChannelError,BinaryChannelRefused)
+        if self._channel is None:
+            self._channel=FusedBinaryChannel(self.base_url,timeout=self._timeout.total,
+                                            max_response_bytes=self._max_response_bytes)
+        try:
+            return await self._channel.exchange(raw)
+        except BinaryChannelRefused as exc:
+            code=exc.body.get('code','request_refused')
+            if (exc.status,code) not in ((400,'index_not_ready'),(507,'index_capacity')):
+                code='request_refused'
+            raise SearchRefused(exc.status,code,str(exc.body.get('error',''))) from exc
+        except BinaryChannelError as exc:
+            raise SearchTransportError(str(exc)) from exc
 
     def _prepare_search(
         self,

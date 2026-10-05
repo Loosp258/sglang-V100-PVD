@@ -76,3 +76,40 @@ CPU HTTP/FP16 bytes、显式 CPU CUDA policy 下的完整 job，在阻塞 comple
 真实 pinned CUDA copy 测试已加入但未执行；native/RDMA/输出及完整 TPOT 待测。
 CPU consumer_wait 可能转移到 GPU 事件依赖，不能用 callback 提前 READY 的
 时间单独宣称 Decode 加速。
+
+## 5. 请求拥有的二进制控制通道
+
+默认关闭的 `binary_control_channel=true` 要求融合交付＋二进制 Q，使用
+每请求/rank 一个持久 WebSocket。首次进行 HTTP upgrade，后续逐层发送
+带明确 sequence 的有界二进制 frame；允许两个任务并发，响应可以乱序。
+Q 继续是原始 float32；身份元数据和返回结果仍为有界 JSON，未声称清除
+所有 JSON 成本。原融合搜索/选择/动态 manifest/PUT 处理器复用。
+
+客户端保持请求拥有的 search clients 和已存在的 manager I/O loop，worker
+本地 registry/stream 及 ACK/fence HTTP clients 的生命周期不变。worker
+退休不会关闭共享通道；request close join 实际 RPC 后关闭。服务端最多
+32 个通道，每通道两个 handler；连接绑定 request/incarnation/Entry/rank
+head scope，断线不取消可能已提交 PUT 的 handler，不自动重连或重发。
+KV 数据、native terminal proof、ACK/fence 继续沿用原路径。
+
+本步 gate：**166 passed，2 actual CUDA skipped**。真实本地网络、两个
+逻辑 rank 的相同 KV bytes、两次查询一个连接、两个响应乱序、错误 frame/
+超大响应/断线失败关闭、取消时实际 RPC 保留、absent-write fence 阻止晚写。
+丢响应但已 native-submit 的接收 owner 在明确终态前不释放；两个真实
+worker 顺序退休仍复用两条 rank 通道，并在原 I/O loop 完成请求关闭。
+0→5 各步显式组合通过真实配置解析；非 bool 开关被拒绝。
+日志与 hash：`artifacts/delivery_followup_20261005/step5/gate04/`。
+
+## 最终回归与限制
+
+在五步实现上最终 gate：**436 passed，3 actual CUDA skipped**，覆盖原
+search/index/store/receiver、接收池、Oasis request/pipeline、配置及新增
+协议/事件生命周期。既有 asyncio_mode warning 未影响 gate。
+原始日志、全部 PVD 模块及已执行测试的 normalized-LF hash 位于
+`artifacts/delivery_followup_20261005/final/gate01/`。
+
+五步没有改变默认选项，也没有改变 Q 数量、Top4/capacity32/max_new16、
+KV 选择或 actual-only 写回。没有 GPU，未执行真实 CUDA/RDMA、两个物理
+rank、实际模型输出质量、D wait/TPOT 或压力/峰值内存实验。上述结果不能
+证明线上已加速；特别是 event READY 把等待转移到 GPU 依赖时，应以完整
+前台执行和客户端 TPOT 判断收益。每步本地 commit，未推送 GitHub。

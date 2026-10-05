@@ -80,7 +80,8 @@ def echo_server():
 
 
 def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", timeout=5,
-              ready_before_cleanup=False, reuse_pinned_scratch=False, event_bank_ready=False):
+              ready_before_cleanup=False, reuse_pinned_scratch=False, event_bank_ready=False,
+              binary_control_channel=False):
     class Registry:
         def __init__(self, *args, **kwargs):
             self.owner_thread = threading.get_ident()
@@ -103,7 +104,8 @@ def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", 
         incarnation="incarnation", device="cpu", vector_space="target-Q",
         capacity=4, max_new=2, top_k=4, timeout=timeout, reuse_io=reuse_io,
         ready_before_cleanup=ready_before_cleanup,reuse_pinned_scratch=reuse_pinned_scratch,
-        event_bank_ready=event_bank_ready)
+        event_bank_ready=event_bank_ready,binary_control_channel=binary_control_channel,
+        binary_queries=binary_control_channel,fused_search_delivery=binary_control_channel)
 
 
 @pytest.mark.parametrize("reuse_io", [False, True])

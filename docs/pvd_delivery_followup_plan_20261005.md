@@ -26,3 +26,43 @@
 
 每步提交代码、必要的回归测试和报告后进入下一步。性能采用与前一步相同
 配置的独立对照，不累加历史阶段中位数，不宣称未实测的 D wait/TPOT 收益。
+
+## 本地完成与资源恢复后的对照
+
+1. `ecd35a47a`：二进制 Q＋融合；126 passed/1 CUDA skipped。
+2. `e0e51f02c`：融合接收槽；87 passed/1 CUDA skipped。
+3. `26f330ff4`：缓存快照；107 passed/1 CUDA skipped。
+4. `e7c3188fc`：pinned scratch＋事件 bank；93 passed/2 CUDA skipped。
+5. 二进制持久控制通道：166 passed/2 CUDA skipped；最终跨步 gate
+   436 passed/3 CUDA skipped。各次测试有重叠，数量不相加。
+
+所有代码与 gate 说明见 `benchmark/results/pvd_delivery_followup_local_20261005.md`。
+最终配置解析已验证每个组合，但组合 CUDA/native/full-path 未执行。
+
+| 下一轮公平实验 | 两臂共同设置 | 单一变量 |
+|---|---|---|
+| 1 | fused=true，原固定预算 | binary_queries false→true |
+| 2 | fused/binary=true | reuse_receive_slots false→true |
+| 3 | fused/binary/receive_slots=true | compact_cache_snapshots false→true |
+| 4a | 上一步设置 | reuse_pinned_scratch false→true；event_bank_ready=false |
+| 4b | 上一步＋pinned=true | event_bank_ready false→true |
+| 5 | 上一步全部设置；reuse_io=false | binary_control_channel false→true |
+
+示例开关仅应合并到已验证的完整 D 配置；全部默认关闭：
+
+```json
+{
+  "fused_search_delivery": true,
+  "binary_queries": true,
+  "reuse_receive_slots": true,
+  "compact_cache_snapshots": true,
+  "reuse_pinned_scratch": true,
+  "event_bank_ready": true,
+  "binary_control_channel": true
+}
+```
+
+有 GPU 后按相同 Prompt/输出数/暖机/启动源码/资源做 ABBA，记录 per-rank
+查询、控制与 native 交付、callback READY、实际 GPU 事件依赖、D wait、
+客户端 TPOT、精确输出和峰值预算。尤其不能把事件 READY 提前的时间当作
+真实 Decode 加速，也不能将历史独立注册池与当前融合通道收益相加。
