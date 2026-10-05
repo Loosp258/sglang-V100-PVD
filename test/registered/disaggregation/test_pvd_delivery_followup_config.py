@@ -43,3 +43,10 @@ def test_explicit_ordered_config_combinations(monkeypatch,tmp_path,stage):
 def test_nonbool_optimization_option_refused(monkeypatch,tmp_path,option):
     value=config(5);value[option]=1
     with pytest.raises(ValueError):load(monkeypatch,tmp_path,value)
+
+
+@pytest.mark.parametrize('stage', range(1, 6))
+def test_fused_ready_cleanup_with_each_followup_combination(monkeypatch, tmp_path, stage):
+    value = config(stage)
+    value['ready_before_cleanup'] = True
+    assert load(monkeypatch, tmp_path, value)['ready_before_cleanup'] is True

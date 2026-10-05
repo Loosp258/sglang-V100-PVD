@@ -331,23 +331,24 @@ def maybe_install_oasis(scheduler):
         from sglang.srt.disaggregation.pvd.oasis_pinned_scratch import scratch_bytes
         if (cfg['workers'] != 2 or cfg['capacity'] > 32
                 or any(cfg[name] for name in ('staged_transport','gpu_receive_to_bank',
-                       'batched_bank_install','batched_cache_install','ready_before_cleanup','attention_workspace'))
+                       'batched_bank_install','batched_cache_install','attention_workspace'))
+                or (cfg['ready_before_cleanup'] and not cfg['fused_search_delivery'])
                 or cfg['workers']*scratch_bytes(cfg['capacity']) > cfg['request_scratch_bytes']
                 or (cfg['event_bank_ready'] and not cfg['reuse_pinned_scratch'])):
             raise ValueError('pinned/event mode requires bounded ordinary owned scratch')
-    if cfg['ready_before_cleanup'] and (cfg['workers'] != 2 or any(cfg[name] for name in
+    if cfg['ready_before_cleanup'] and not cfg['fused_search_delivery'] and (cfg['workers'] != 2 or any(cfg[name] for name in
             ('reuse_io', 'combine_reserve_start', 'reuse_receive_slots', 'gpu_receive_to_bank',
              'staged_transport', 'attention_workspace', 'batched_bank_install', 'batched_cache_install'))):
         raise ValueError('READY cleanup requires isolated two-worker baseline')
     if cfg['fused_search_delivery'] and (cfg['workers'] != 2 or cfg['capacity'] > 32 or any(cfg[name] for name in
-            ('ready_before_cleanup','reuse_io','combine_reserve_start',
+            ('reuse_io','combine_reserve_start',
              'gpu_receive_to_bank','staged_transport','attention_workspace','sort_missing_tokens',
              'batched_bank_install','batched_cache_install'))):
         raise ValueError('fused selection requires isolated bounded two-worker baseline')
     if cfg['binary_queries'] and (cfg['workers'] != 2 or any(cfg[name] for name in
-            ('ready_before_cleanup','reuse_io','combine_reserve_start',
+            ('reuse_io','combine_reserve_start',
              'gpu_receive_to_bank','staged_transport','attention_workspace','batched_bank_install','batched_cache_install'))
-            or (cfg['reuse_receive_slots'] and not cfg['fused_search_delivery'])):
+            or ((cfg['ready_before_cleanup'] or cfg['reuse_receive_slots']) and not cfg['fused_search_delivery'])):
         raise ValueError('binary Q requires isolated two-worker baseline')
     if cfg['batched_bank_install']:
         from sglang.srt.disaggregation.pvd.oasis_bank_install import install_tensor_bound

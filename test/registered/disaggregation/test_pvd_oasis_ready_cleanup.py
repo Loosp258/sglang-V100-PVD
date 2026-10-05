@@ -121,10 +121,12 @@ def test_transport_owned_cleanup_attempts_all_records_preserves_unknown(failure)
     assert all(p['ack_calls'] == 1 for p in state['delivery_profiles'])
 
 
+@pytest.mark.parametrize('fused_channel', [False, True])
 def test_full_job_ready_before_ack_same_worker_using_explicit_cpu_cuda_policy(
-    monkeypatch, background_io
+    monkeypatch, background_io, fused_channel
 ):
-    owner = transport(monkeypatch, background_io, reuse_io=False, ready_before_cleanup=True)
+    owner = transport(monkeypatch, background_io, reuse_io=False, ready_before_cleanup=True,
+                      binary_control_channel=fused_channel)
     entered, release = threading.Event(), threading.Event()
     calls = []
     class Event:

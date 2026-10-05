@@ -18,6 +18,11 @@
 
 ## Current publication authorization (2026-10-05)
 
+- Latest follow-up: implement four further steps, each with a local commit only:
+  fused READY before ACK/cleanup; zero-miss absent-write proof in the search
+  response; encode a frozen binary Q once; bounded request async scheduling.
+  No GitHub push. See `docs/pvd_async_delivery_plan_20261005.md`.
+
 - Latest user instruction: the next five optimizations are local commits only;
   do not push to GitHub. This supersedes the push authorization below for new
   work. Order: binary Q plus fused delivery; fused D receive-slot reuse; compact

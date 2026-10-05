@@ -265,7 +265,7 @@ class OasisLayerTransport:
                 or type(binary_control_channel) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
-        if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
+        if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
                 or reuse_receive_slots or combine_reserve_start or batched_bank_install
                 or batched_cache_install or workers != 2):
             raise ValueError('READY cleanup experiment requires isolated two-worker baseline')
@@ -281,11 +281,11 @@ class OasisLayerTransport:
                 or install_scratch_bytes < workers * cache_install_tensor_bound(capacity)):
             raise ValueError('batched cache install requires isolated mode and admitted request scratch')
         self.manager, self.selected = manager, selected
-        if binary_queries and (ready_before_cleanup or staged_transport or gpu_receive_to_bank or reuse_io
+        if binary_queries and ((ready_before_cleanup and not fused_search_delivery) or staged_transport or gpu_receive_to_bank or reuse_io
                 or (reuse_receive_slots and not fused_search_delivery) or combine_reserve_start or batched_bank_install
                 or batched_cache_install or workers != 2):
             raise ValueError('binary Q experiment requires isolated two-worker baseline')
-        if fused_search_delivery and (ready_before_cleanup or staged_transport
+        if fused_search_delivery and (staged_transport
                 or gpu_receive_to_bank or reuse_io or combine_reserve_start
                 or batched_bank_install or batched_cache_install or sort_missing_tokens or workers != 2
                 or capacity > 32):
@@ -310,7 +310,7 @@ class OasisLayerTransport:
         self.compact_cache_snapshots = compact_cache_snapshots
         if (reuse_pinned_scratch or event_bank_ready) and (
                 workers != 2 or capacity > 32 or staged_transport or gpu_receive_to_bank
-                or batched_bank_install or batched_cache_install or ready_before_cleanup
+                or batched_bank_install or batched_cache_install or (ready_before_cleanup and not fused_search_delivery)
                 or type(install_scratch_bytes) is not int
                 or workers*scratch_bytes(capacity) > install_scratch_bytes):
             raise ValueError('pinned/event experiment requires bounded ordinary two-worker installation')
@@ -672,8 +672,13 @@ class OasisLayerTransport:
                 await asyncio.sleep(0.001);ready=await record.poll()
             tick=time.perf_counter();record.copy_to_cache(self.cache[ticket.layer])
             copy_seconds=time.perf_counter()-tick
-            await record.ack()
-            if not await record.close(): raise RuntimeError('fused destination did not retire')
+            if self.ready_before_cleanup:
+                # Native completion and local copy already succeeded. Keep the
+                # registration on this owner until bank publication and cleanup.
+                state.setdefault('pending_cleanup', []).append(record)
+            else:
+                await record.ack()
+                if not await record.close(): raise RuntimeError('fused destination did not retire')
             rows=sum(len(s.token_ids) for s in record.manifest.specs)
             profile=dict(record.profile,nbytes=record.manifest.nbytes,remote_rows=rows,rank=route.rank,
                 cache_copy_seconds=copy_seconds,gpu_receive_to_bank=False,sort_missing_tokens=False,
