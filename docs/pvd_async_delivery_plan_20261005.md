@@ -24,3 +24,29 @@
 
 每步报告修改、测试与未验证边界。GPU 恢复后逐步 ABBA 对照，只改一个
 变量，记录搜索、交付、bank READY、ACK、排队、D wait、TPOT 和精确输出。
+
+## 已完成
+
+1. `8c5a86757`：融合 READY／清理分离，41 passed/1 CUDA skipped。
+2. `ad823bcbd`：零 miss 响应证明，82 passed/1 CUDA skipped。
+3. `214f28884`：Q 一次编码，69 passed/1 CUDA skipped。
+4. 请求级有界异步 owner：最终跨步 517 passed/3 CUDA skipped。
+   每项计数包含重叠测试，不相加。完整报告为
+   `benchmark/results/pvd_async_delivery_local_20261005.md`。
+
+完整组合新增以下配置，合并到已有资格配置；全部可选且默认关闭：
+
+```json
+{
+  "ready_before_cleanup": true,
+  "fused_zero_miss_proof": true,
+  "async_layer_jobs": true,
+  "request_scratch_bytes": 33554432
+}
+```
+
+`async_layer_jobs` 必须已有 `fused_search_delivery=true`、`binary_queries=true`
+和 `binary_control_channel=true`。pinned/event、receive reuse 和 compact cache
+选项沿用既有配置。查询/交付最多两项，清理最多两项；复用接收区时每 rank
+四槽，明确增加 128 KiB 物理最大容量（capacity32），仍计入原 transfer budget。
+GPU/RDMA/质量/TPOT 尚未验证。只做本地 commit，没有上传 GitHub。

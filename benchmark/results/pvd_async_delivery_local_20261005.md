@@ -48,3 +48,44 @@
   签名零、producer mutation、NaN/长度/shape 错误继续拒绝。
 - 日志/源码 hash：`artifacts/async_delivery_20261005/step3/gate03/`。
   CPU pack 调用数减少不等价于已实测 TPOT 降幅。
+
+## 4. 请求级有界异步 owner
+
+- 新增默认关闭 `async_layer_jobs`，要求 fused binary channel 与
+  `ready_before_cleanup`。一个请求 owner 线程运行异步循环，最多两个有效
+  查询/交付任务，另保留两个退休任务；总 admitted 上限 56。
+- 网络 await 不占独立层线程；bank 本地完成后让出查询名额，原 owner
+  继续 ACK/close。每个 job 的 registry/stream/control client 保持独立，
+  创建、CPU copy 与退休均在同一线程。CUDA context 不跨 await。
+- local GPU 事件、RDMA ordering 和 exact terminal proof 保留；事件 READY
+  不等于 GPU 完成。GPU copy 同步仍可能阻塞 owner loop，需要实际 GPU 测试。
+- receive pool 每 rank 从 2 到 4 个物理槽，支持 2 active+2 cleanup。capacity32
+  时最坏物理容量从 128 KiB 增到 256 KiB，实际创建仍逐个计费，有界 UNKNOWN
+  不退槽。pinned scratch 仍两个 slot。queued Q/四 live job 的额外 tensor
+  allowance 是 1,875,968 bytes，必须由 request_scratch_bytes 覆盖。
+- 完整 CPU-policy job 与真实双 V CPU HTTP/channel 证明：阻塞前两层 ACK
+  时，后两层仍安装 bank；FP16 K/V 与 immutable source 逐字节一致。随后
+  全缓存命中，无新增 PUT；8 个 MR 全部释放，budget/inflight 回到零。
+  两种 pinned/event 组合均通过。搜索/backend/native completion 是明确的
+  CPU exact/fake doubles，不作为 CAGRA/RDMA/真实模型质量或性能证据。
+- public cancellation 不取消真实任务；队列过期不创建 owner；清理失败
+  会 latch 并保留 loop；close 超时保留原 drain future，重试 join 原任务。
+- 中间 gate 暴露 Python 3.14 gather(all-done) 不 yield 的关闭忙循环，已
+  修复，失败/终止记录保留。最终跨步收集还发现旧测试重新绑定 pipeline
+  module，测试装配需使用消费者当前的 exact LayerReply class；仅修正
+  fixture，生产 ticket/类型检查保持严格。
+
+## 最终验证与后续实测
+
+- `final/gate03`：**517 passed、3 actual-CUDA skipped**，一个既有
+  asyncio_mode warning。涵盖之前五步、当前四步和 store/receiver 失败恢复。
+  这些测试与分步 gate 有重叠，数量不相加。
+- 154 个 PVD Python 模块全部 AST parse 通过。
+- 日志/执行命令/测试前后源码 hash：
+  `artifacts/async_delivery_20261005/final/gate03/`。阶段源文件与真实 commit
+  对照保存为该产物树内的 `evidence_commit.json`。
+- 有 GPU 后依次对照：fused READY flag；zero-miss proof flag；旧/新 binary
+  snapshot（相同开关、不同对应源码）；async_layer_jobs flag。最后一项明确
+  记录 owner 线程数和新增接收槽，检索/native 并发保持相同。使用相同 Prompt、
+  warmup、输出数与快图配置，报告 D wait/TPOT/TTFT、精确输出与峰值内存。
+- 尚未测量最新真实 D wait/TPOT，不能把历史收益相加或宣称 GPU 加速。

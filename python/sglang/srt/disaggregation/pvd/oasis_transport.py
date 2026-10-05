@@ -19,6 +19,7 @@ from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerReply, select_resi
 from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
 from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
 from sglang.srt.disaggregation.pvd.oasis_ready_cleanup import OwnedReadyCleanup
+from sglang.srt.disaggregation.pvd.oasis_async_jobs import BoundedAsyncLayerJobs, async_tensor_bound
 from sglang.srt.disaggregation.pvd.oasis_pinned_scratch import PinnedScratchPool, scratch_bytes
 from sglang.srt.disaggregation.pvd.oasis_gpu_backup import OasisGPUBackupPool
 from sglang.srt.disaggregation.pvd.oasis_bank_install import install_batched_bank, install_tensor_bound
@@ -242,7 +243,7 @@ class OasisLayerTransport:
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
                  fused_search_delivery=False, compact_cache_snapshots=False,
                  reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False,
-                 fused_zero_miss_proof=False):
+                 fused_zero_miss_proof=False, async_layer_jobs=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -265,6 +266,7 @@ class OasisLayerTransport:
                 or type(reuse_pinned_scratch) is not bool or type(event_bank_ready) is not bool
                 or type(binary_control_channel) is not bool
                 or type(fused_zero_miss_proof) is not bool
+                or type(async_layer_jobs) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -325,14 +327,20 @@ class OasisLayerTransport:
         if binary_control_channel and (not binary_queries or not fused_search_delivery or reuse_io):
             raise ValueError('binary control channel requires fused binary Q and its own search clients')
         self.binary_control_channel=binary_control_channel
+        if async_layer_jobs and (not binary_control_channel or not ready_before_cleanup
+                or type(install_scratch_bytes) is not int
+                or install_scratch_bytes < async_tensor_bound(capacity)):
+            raise ValueError('async layer jobs require fused binary channel and owned READY cleanup')
+        self.async_layer_jobs = async_layer_jobs
+        self.async_jobs = None
         self._channel_clients=None
         self.pinned_pool = (PinnedScratchPool(manager.transfer_budget,capacity=capacity,slots=workers)
                             if reuse_pinned_scratch else None)
-        self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if (ready_before_cleanup or event_bank_ready) else None
+        self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if (ready_before_cleanup or event_bank_ready) and not async_layer_jobs else None
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
-            receiver_epoch=manager.worker_epoch, slots_per_rank=workers,
+            receiver_epoch=manager.worker_epoch, slots_per_rank=workers*(2 if async_layer_jobs else 1),
             capacity_bytes=capacity * 2 * 512) if reuse_receive_slots else None)
         self._shared_clients = None
         self._shared_close_future = None
@@ -378,6 +386,9 @@ class OasisLayerTransport:
             self.stages = BoundedLayerStages(
                 (self._stage_search, self._stage_delivery, self._stage_install),
                 initialize=self._stage_worker, retire=self._retire_stage_worker)
+        if async_layer_jobs:
+            self.async_jobs = BoundedAsyncLayerJobs()
+            self._io_counts['worker_loops_created'] += 1
 
     def _outside_io_loop(self):
         try:
@@ -401,8 +412,10 @@ class OasisLayerTransport:
         self._io_counts["control_clients_created"] += len(clients["control"])
         return clients
 
-    def _worker(self):
-        if not hasattr(self.local, "state"):
+    def _worker(self, *, async_loop=None):
+        if async_loop is not None and asyncio.get_running_loop() is not async_loop:
+            raise RuntimeError('async native owner loop mismatch')
+        if async_loop is not None or not hasattr(self.local, "state"):
             # Admission and client creation share the retirement lock. A close
             # cannot see an empty worker list while native owners are created.
             with self.lock:
@@ -419,7 +432,8 @@ class OasisLayerTransport:
                     clients = self._shared_clients
                 else:
                     clients = self._new_clients()
-                state = dict(loop=asyncio.new_event_loop(),
+                state = dict(loop=async_loop if async_loop is not None else asyncio.new_event_loop(),
+                    async_owner=async_loop is not None,
                     stream=torch.cuda.Stream(device=self.device), **clients,
                     owner_thread=threading.get_ident(),
                     registry=OasisCUDAReceiveRegistry(self.manager.sparse_receive_engine,
@@ -427,11 +441,23 @@ class OasisLayerTransport:
                         device=self.device, combine_reserve_start=self.combine_reserve_start,
                         batched_cache_install=self.batched_cache_install, cache_capacity=self.capacity,
                         receive_pool=self.receive_pool))
-                self.local.state = state
+                if async_loop is None: self.local.state = state
                 self.workers.append(state)
                 self._io_counts["job_count"] += 1
-                self._io_counts["worker_loops_created"] += 1
+                self._io_counts["worker_loops_created"] += int(async_loop is None)
+            return state
         return self.local.state
+
+    async def _retire_async_worker(self, state):
+        if (not state.get('async_owner') or state['owner_thread'] != threading.get_ident()
+                or state['loop'] is not asyncio.get_running_loop()):
+            raise RuntimeError('async receive owners must retire on their request loop')
+        with self.lock:
+            for client in state['control'].values():
+                self._io_counts['control_sessions_created'] += int(client._session is not None)
+        await self._close_clients({**state,'search':{}})
+        if not state['registry']._records and not state.get('quarantine'):
+            with self.lock: self.workers.remove(state)
 
     def _retire_worker(self, state):
         if state["owner_thread"] != threading.get_ident():
@@ -495,6 +521,9 @@ class OasisLayerTransport:
                     for r,c in self._channel_clients['search'].items()} if self._channel_clients else {},
                 fused_rpc_count=sum(p['fused_calls'] for row in self.trace for p in row.get('fused_profiles',())),
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
+                async_layer_jobs=self.async_layer_jobs,
+                async_jobs=self.async_jobs.snapshot() if self.async_jobs else None,
+                async_scratch_bound=async_tensor_bound(self.capacity) if self.async_layer_jobs else None,
                 staged_transport=self.staged_transport,
                 stages=self.stages.snapshot() if self.stages else None,
                 stage_trace=list(self.stages.trace) if self.stages else None,
@@ -676,7 +705,13 @@ class OasisLayerTransport:
             while not ready:
                 if time.monotonic() >= deadline: raise TimeoutError('fused native delivery expired')
                 await asyncio.sleep(0.001);ready=await record.poll()
-            tick=time.perf_counter();record.copy_to_cache(self.cache[ticket.layer])
+            tick=time.perf_counter()
+            if state.get('async_owner'):
+                # No CUDA context spans the network await on the shared owner.
+                with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                    record.copy_to_cache(self.cache[ticket.layer])
+            else:
+                record.copy_to_cache(self.cache[ticket.layer])
             copy_seconds=time.perf_counter()-tick
             if self.ready_before_cleanup:
                 # Native completion and local copy already succeeded. Keep the
@@ -863,145 +898,198 @@ class OasisLayerTransport:
                     return future
             return StagedCallback()
 
+        def prepare_input(state, retained):
+            scratch = None
+            if self.pinned_pool is not None:
+                scratch = self.pinned_pool.acquire()
+                state['scratch'] = scratch
+                retained.append(scratch)
+                state['registry'].pinned_scratch = scratch
+                scratch.begin()
+            state["stream"].wait_event(event)
+            host_q = (scratch.query if scratch is not None
+                      else torch.empty_like(query, device="cpu", pin_memory=True))
+            retained.append(host_q)
+            host_q.copy_(query, non_blocking=True)
+            state["stream"].synchronize()
+            return host_q, scratch
+
+        def install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready):
+            resident = bank() if callable(bank) else bank
+            if resident is not None and resident.completion is not None:
+                state['stream'].wait_event(resident.completion)
+            install_started = time.perf_counter()
+            install_profile = None
+            if self.batched_bank_install:
+                keys, values, valid, install_profile = install_batched_bank(
+                    chosen, resident, self.cache[ticket.layer], device=self.device,
+                    capacity=self.capacity, prompt_tokens=self.prompt_tokens, retained=retained)
+            else:
+                if not self.gpu_receive_to_bank:
+                    install_profile = dict(mode='per_head', selected_rows=sum(map(len, chosen)),
+                        resident_rows=0, cpu_rows=0, kv_h2d_bytes=0, kv_h2d_calls=0,
+                        resident_gather_calls=0, resident_scatter_calls=0,
+                        cpu_scatter_calls=0, cuda=True)
+                width = max(map(len, chosen))
+                keys = torch.zeros((4, width, 128), device=self.device, dtype=torch.float16)
+                values, valid = torch.zeros_like(keys), torch.zeros((4, width),
+                    device=self.device, dtype=torch.bool)
+                retained.extend((keys, values, valid))
+                for head, ids in enumerate(chosen):
+                    old = {} if resident is None else {t: i for i, t in enumerate(resident.ids[head])}
+                    hits = [(i, old[t]) for i, t in enumerate(ids) if t in old]
+                    misses = [(i, t) for i, t in enumerate(ids) if t not in old]
+                    if install_profile is not None:
+                        install_profile['resident_rows'] += len(hits)
+                        install_profile['cpu_rows'] += len(misses)
+                        install_profile['kv_h2d_bytes'] += len(misses) * 512
+                        install_profile['kv_h2d_calls'] += int(bool(misses))
+                        install_profile['resident_gather_calls'] += 2 * int(bool(hits))
+                        install_profile['resident_scatter_calls'] += 2 * int(bool(hits))
+                        install_profile['cpu_scatter_calls'] += 2 * int(bool(misses))
+                    if hits:
+                        dst, src = zip(*hits)
+                        keys[head, list(dst)] = resident.keys[head, list(src)]
+                        values[head, list(dst)] = resident.values[head, list(src)]
+                    if misses:
+                        cpu_misses = []
+                        for dst, token in misses:
+                            row = state['fresh_gpu_rows'].get((head, token))
+                            if row is None and self.gpu_backups:
+                                reader = self.gpu_backups.acquire(ticket.layer, head, token)
+                                if reader is not None:
+                                    state['gpu_readers'].append(reader)
+                                    row = reader.rows[head, token]
+                            if row is None:
+                                cpu_misses.append((dst, token))
+                            else:
+                                keys[head, dst], values[head, dst] = row[0], row[1]
+                        if cpu_misses:
+                            rows = [self.cache[ticket.layer][head][t] for _, t in cpu_misses]
+                            if scratch is None:
+                                host = torch.stack(rows).pin_memory()
+                            else:
+                                host = scratch.bank[head,:len(rows)]
+                                torch.stack(rows,out=host)
+                            gpu = host.to(self.device, non_blocking=True)
+                            retained.extend((host, gpu))
+                            dst = [i for i, _ in cpu_misses]
+                            keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
+                    valid[head, :len(ids)] = True
+            complete = torch.cuda.Event()
+            retained.append(complete)
+            complete.record()
+            if self.event_bank_ready:
+                if publish_ready is None:
+                    raise RuntimeError('event bank requires owned publication callback')
+                # READY permits a consumer stream to enqueue wait_event;
+                # it is not a claim that local GPU copies have finished.
+                publish_ready(LayerReply(ticket,PromptBank(chosen,keys,values,valid,complete)))
+            # Source owners can retire only after the H2D/copy event.
+            if scratch is None:
+                complete.synchronize()
+            else:
+                scratch.finish(complete)
+            if install_profile is not None:
+                install_profile.update(completion_proven=True,
+                    install_seconds=time.perf_counter() - install_started)
+            # Borrowed row aliases must disappear before a reader's
+            # last unpin may drop storage and refund its byte charge.
+            state['fresh_gpu_rows'].clear()
+            row = None
+            for reader in state['gpu_readers']:
+                reader.release_after_copy(complete)
+            state['gpu_readers'].clear()
+            with self.lock:
+                self.trace.append(dict(step=ticket.step, layer=ticket.layer,
+                    remote_rows=remote_rows, rpc_seconds=rpc_seconds,
+                    bank_install=install_profile,
+                    fused_profiles=state.get('fused_profiles',[]),
+                    deliveries=state.get("delivery_profiles", [])))
+            reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
+            if publish_ready is not None and not self.event_bank_ready:
+                publish_ready(reply)
+            return reply
+
+        def drain_failure(state, retained):
+            scratch = state.get('scratch')
+            try:
+                state["stream"].synchronize()
+                if scratch is not None and scratch.active:
+                    scratch.abort(state['stream'])
+            except BaseException:
+                self.quarantined = True
+                state.setdefault("quarantine", []).append(retained)
+            if state.get('gpu_readers'):
+                self.quarantined = True
+                state.setdefault('quarantine', []).append(state['gpu_readers'])
+            raise
+
         @torch.inference_mode()
         def run(ticket, publish_ready=None):
             if (ticket.request_id, ticket.incarnation) != (self.request_id, self.incarnation):
-                raise RuntimeError("foreign layer transport ticket")
+                raise RuntimeError('foreign layer transport ticket')
             state = self._worker()
             retained = [query, event, bank]
-            scratch = None
             try:
-                with torch.cuda.device(self.device), torch.cuda.stream(state["stream"]):
-                    if self.pinned_pool is not None:
-                        scratch = self.pinned_pool.acquire()
-                        retained.append(scratch)
-                        state['registry'].pinned_scratch = scratch
-                        scratch.begin()
-                    state["stream"].wait_event(event)
-                    host_q = (scratch.query if scratch is not None
-                              else torch.empty_like(query, device="cpu", pin_memory=True))
-                    retained.append(host_q)
-                    host_q.copy_(query, non_blocking=True)
-                    state["stream"].synchronize()
-                    chosen, remote_rows, rpc_seconds = state["loop"].run_until_complete(
+                with torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                    host_q, scratch = prepare_input(state, retained)
+                    chosen, remote_rows, rpc_seconds = state['loop'].run_until_complete(
                         self._select_and_fetch(state, ticket,
                             host_q.float().numpy() if self.binary_queries else host_q.tolist(), bank, bootstrap))
-                    resident = bank() if callable(bank) else bank
-                    if resident is not None and resident.completion is not None:
-                        state['stream'].wait_event(resident.completion)
-                    install_started = time.perf_counter()
-                    install_profile = None
-                    if self.batched_bank_install:
-                        keys, values, valid, install_profile = install_batched_bank(
-                            chosen, resident, self.cache[ticket.layer], device=self.device,
-                            capacity=self.capacity, prompt_tokens=self.prompt_tokens, retained=retained)
-                    else:
-                        if not self.gpu_receive_to_bank:
-                            install_profile = dict(mode='per_head', selected_rows=sum(map(len, chosen)),
-                                resident_rows=0, cpu_rows=0, kv_h2d_bytes=0, kv_h2d_calls=0,
-                                resident_gather_calls=0, resident_scatter_calls=0,
-                                cpu_scatter_calls=0, cuda=True)
-                        width = max(map(len, chosen))
-                        keys = torch.zeros((4, width, 128), device=self.device, dtype=torch.float16)
-                        values, valid = torch.zeros_like(keys), torch.zeros((4, width),
-                            device=self.device, dtype=torch.bool)
-                        retained.extend((keys, values, valid))
-                        for head, ids in enumerate(chosen):
-                            old = {} if resident is None else {t: i for i, t in enumerate(resident.ids[head])}
-                            hits = [(i, old[t]) for i, t in enumerate(ids) if t in old]
-                            misses = [(i, t) for i, t in enumerate(ids) if t not in old]
-                            if install_profile is not None:
-                                install_profile['resident_rows'] += len(hits)
-                                install_profile['cpu_rows'] += len(misses)
-                                install_profile['kv_h2d_bytes'] += len(misses) * 512
-                                install_profile['kv_h2d_calls'] += int(bool(misses))
-                                install_profile['resident_gather_calls'] += 2 * int(bool(hits))
-                                install_profile['resident_scatter_calls'] += 2 * int(bool(hits))
-                                install_profile['cpu_scatter_calls'] += 2 * int(bool(misses))
-                            if hits:
-                                dst, src = zip(*hits)
-                                keys[head, list(dst)] = resident.keys[head, list(src)]
-                                values[head, list(dst)] = resident.values[head, list(src)]
-                            if misses:
-                                cpu_misses = []
-                                for dst, token in misses:
-                                    row = state['fresh_gpu_rows'].get((head, token))
-                                    if row is None and self.gpu_backups:
-                                        reader = self.gpu_backups.acquire(ticket.layer, head, token)
-                                        if reader is not None:
-                                            state['gpu_readers'].append(reader)
-                                            row = reader.rows[head, token]
-                                    if row is None:
-                                        cpu_misses.append((dst, token))
-                                    else:
-                                        keys[head, dst], values[head, dst] = row[0], row[1]
-                                if cpu_misses:
-                                    rows = [self.cache[ticket.layer][head][t] for _, t in cpu_misses]
-                                    if scratch is None:
-                                        host = torch.stack(rows).pin_memory()
-                                    else:
-                                        host = scratch.bank[head,:len(rows)]
-                                        torch.stack(rows,out=host)
-                                    gpu = host.to(self.device, non_blocking=True)
-                                    retained.extend((host, gpu))
-                                    dst = [i for i, _ in cpu_misses]
-                                    keys[head, dst], values[head, dst] = gpu[:, 0], gpu[:, 1]
-                            valid[head, :len(ids)] = True
-                    complete = torch.cuda.Event()
-                    retained.append(complete)
-                    complete.record()
-                    if self.event_bank_ready:
-                        if publish_ready is None:
-                            raise RuntimeError('event bank requires owned publication callback')
-                        # READY permits a consumer stream to enqueue wait_event;
-                        # it is not a claim that local GPU copies have finished.
-                        publish_ready(LayerReply(ticket,PromptBank(chosen,keys,values,valid,complete)))
-                    # Source owners can retire only after the H2D/copy event.
-                    if scratch is None:
-                        complete.synchronize()
-                    else:
-                        scratch.finish(complete)
-                    if install_profile is not None:
-                        install_profile.update(completion_proven=True,
-                            install_seconds=time.perf_counter() - install_started)
-                    # Borrowed row aliases must disappear before a reader's
-                    # last unpin may drop storage and refund its byte charge.
-                    state['fresh_gpu_rows'].clear()
-                    row = None
-                    for reader in state['gpu_readers']:
-                        reader.release_after_copy(complete)
-                    state['gpu_readers'].clear()
-                with self.lock:
-                    self.trace.append(dict(step=ticket.step, layer=ticket.layer,
-                        remote_rows=remote_rows, rpc_seconds=rpc_seconds,
-                        bank_install=install_profile,
-                        fused_profiles=state.get('fused_profiles',[]),
-                        deliveries=state.get("delivery_profiles", [])))
-                reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
-                if publish_ready is not None and not self.event_bank_ready:
-                    publish_ready(reply)
-                return reply
+                    return install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready)
             except BaseException:
-                try:
-                    state["stream"].synchronize()
-                    if scratch is not None and scratch.active:
-                        scratch.abort(state['stream'])
-                except BaseException:
-                    self.quarantined = True
-                    state.setdefault("quarantine", []).append(retained)
-                if state.get('gpu_readers'):
-                    self.quarantined = True
-                    state.setdefault('quarantine', []).append(state['gpu_readers'])
+                with torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                    drain_failure(state, retained)
                 raise
             finally:
                 state['registry'].pinned_scratch = None
-                # Native registries remain job/thread-local. Request clients
-                # alone survive on the already-running background I/O loop.
                 try:
                     if self.ready_before_cleanup:
                         state['loop'].run_until_complete(self._finish_owned_cleanup(state))
                 finally:
                     self._retire_worker(state)
+
+        async def async_run(ticket, publish_ready, begin_cleanup):
+            if (ticket.request_id, ticket.incarnation) != (self.request_id, self.incarnation):
+                raise RuntimeError('foreign async layer transport ticket')
+            state = self._worker(async_loop=asyncio.get_running_loop())
+            retained = [query, event, bank]
+            try:
+                # Never hold a CUDA stream/inference context across an await:
+                # the other admitted coroutine shares this owner thread.
+                with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                    host_q, scratch = prepare_input(state, retained)
+                chosen, remote_rows, rpc_seconds = await self._select_and_fetch(
+                    state, ticket, host_q.float().numpy(), bank, bootstrap)
+                with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                    reply = install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready)
+                # Local GPU work and scratch have completed. Up to two proven
+                # destination owners may now await ACK, independently of queries.
+                await begin_cleanup()
+                return reply
+            except BaseException:
+                with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                    drain_failure(state, retained)
+                raise
+            finally:
+                state['registry'].pinned_scratch = None
+                try:
+                    await self._finish_owned_cleanup(state)
+                finally:
+                    await self._retire_async_worker(state)
+
+        if self.async_jobs is not None:
+            transport = self
+            class AsyncCallback:
+                def __call__(self, ticket):
+                    raise RuntimeError('async callback requires bounded submission')
+
+                def submit_layer(self, ticket, *, published, timeout):
+                    return transport.async_jobs.submit(
+                        lambda publish, cleanup: async_run(ticket, publish, cleanup),
+                        published=published, timeout=timeout)
+            return AsyncCallback()
 
         if self.cleanup is not None:
             transport = self
@@ -1017,6 +1105,8 @@ class OasisLayerTransport:
         return run
 
     def close(self):
+        if self.async_jobs is not None:
+            self.async_jobs.close(timeout=self.timeout)
         if self.cleanup is not None:
             self.cleanup.close()
         if self.stages is not None:

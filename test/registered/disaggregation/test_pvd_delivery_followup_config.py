@@ -39,7 +39,7 @@ def test_explicit_ordered_config_combinations(monkeypatch,tmp_path,stage):
 
 
 @pytest.mark.parametrize('option',['binary_queries','fused_search_delivery','reuse_receive_slots',
-    'compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof'])
+    'compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof','async_layer_jobs'])
 def test_nonbool_optimization_option_refused(monkeypatch,tmp_path,option):
     value=config(5);value[option]=1
     with pytest.raises(ValueError):load(monkeypatch,tmp_path,value)
@@ -59,3 +59,16 @@ def test_zero_miss_proof_requires_fusion_and_is_default_off(monkeypatch, tmp_pat
     assert load(monkeypatch, tmp_path, value)['fused_zero_miss_proof'] is True
     value['fused_search_delivery'] = False
     with pytest.raises(ValueError): load(monkeypatch, tmp_path, value)
+
+
+def test_async_jobs_require_channel_and_ready_cleanup(monkeypatch, tmp_path):
+    value=config(5)
+    assert load(monkeypatch,tmp_path,value)['async_layer_jobs'] is False
+    value.update(ready_before_cleanup=True,async_layer_jobs=True,fused_zero_miss_proof=True,request_scratch_bytes=2<<20)
+    assert load(monkeypatch,tmp_path,value)['async_layer_jobs'] is True
+    for field in ('binary_control_channel','ready_before_cleanup'):
+        bad={**value,field:False}
+        with pytest.raises(ValueError): load(monkeypatch,tmp_path,bad)
+    from sglang.srt.disaggregation.pvd.oasis_async_jobs import async_tensor_bound
+    bad={**value,'request_scratch_bytes':async_tensor_bound(value['capacity'])-1}
+    with pytest.raises(ValueError): load(monkeypatch,tmp_path,bad)
