@@ -16,7 +16,7 @@ from sglang.srt.disaggregation.pvd.sparse_payload import SparseKVSpec
 from sglang.srt.disaggregation.pvd.search_wire import unpack_query_rows, PACKED_QUERY_ENCODING
 from sglang.srt.disaggregation.pvd.search_wire import (
     BINARY_QUERY_ENCODING, BINARY_QUERY_CONTENT_TYPE, binary_search_snapshot,
-    unpack_binary_batch, pack_binary_fused)
+    unpack_binary_batch, pack_binary_fused, BinarySearchSnapshot, freeze_binary_search)
 from sglang.srt.disaggregation.pvd.cache_snapshot import cache_ids
 
 FUSED_PROTOCOL = 'pvd.search-delivery.v1'
@@ -52,6 +52,8 @@ def validate_selection(scope):
 
 
 def selection_digest(scope, search):
+    snapshot=search if isinstance(search,BinarySearchSnapshot) else None
+    if snapshot is not None: search=snapshot.search
     validate_selection(scope)
     if not isinstance(search,dict) or not isinstance(search.get('items'),list) or len(search['items']) != 2:
         raise ValueError('two head searches required')
@@ -74,7 +76,7 @@ def selection_digest(scope, search):
         if not all(item.get('query_encoding') == BINARY_QUERY_ENCODING for item in search['items']):
             raise ValueError('mixed fused binary encodings')
         encoded=(json.dumps(scope,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
-                 + b'\x00pvd-fused-binary-v1\x00' + binary_search_snapshot(search))
+                 + b'\x00pvd-fused-binary-v1\x00' + (snapshot.wire if snapshot else binary_search_snapshot(search)))
     else:
         encoded=json.dumps([scope,search],sort_keys=True,separators=(',',':'),allow_nan=False).encode()
     if len(encoded) > 262144: raise ValueError('fused selection snapshot too large')
@@ -135,9 +137,9 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
     scope=json.loads(json.dumps(scope,allow_nan=False))
     if type(binary_queries) is not bool: raise ValueError('binary fused option must be bool')
     if type(zero_miss_proof) is not bool: raise ValueError('zero-miss proof option must be bool')
-    search=(unpack_binary_batch(binary_search_snapshot(search)) if binary_queries
-            else json.loads(json.dumps(search,allow_nan=False)))
-    digest=selection_digest(scope,search)
+    snapshot=freeze_binary_search(search) if binary_queries else None
+    search=snapshot.search if snapshot else json.loads(json.dumps(search,allow_nan=False))
+    digest=selection_digest(scope,snapshot or search)
     if scope['heads'] != [rank*2,rank*2+1] or scope['entry_transfer_id'] != key.transfer_id:
         raise ValueError('fused allocation rank/Entry mismatch')
     identity=WriteIdentity(PVD_TRANSFER_LIFECYCLE_PROTOCOL,sender_epoch,registry.receiver_epoch,
@@ -145,6 +147,7 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
     record=registry._new_record(_AllocationOnly(allocation_bytes(scope),digest,scope),identity,client)
     record._scope=owner_scope
     record.fused_scope,record.fused_search,record.fused_digest=scope,search,digest
+    record.fused_binary_snapshot=snapshot
     record.fused_zero_miss_proof=zero_miss_proof
     registry.budget.reserve(record.owner,registry._destination_charge(record.manifest),1)
     registry._records[identity.transfer_id]=record
@@ -168,7 +171,7 @@ async def start_fused(record, search_client, requests):
                      identity=record.identity.to_dict(),destination=record._registration.descriptor.to_dict())
         if record.fused_zero_miss_proof: payload['zero_miss_proof']=True
         binary=record.fused_search['items'][0].get('query_encoding') == BINARY_QUERY_ENCODING
-        options=(dict(encoded_payload=pack_binary_fused(payload),content_type=BINARY_QUERY_CONTENT_TYPE)
+        options=(dict(encoded_payload=pack_binary_fused(payload,snapshot=record.fused_binary_snapshot),content_type=BINARY_QUERY_CONTENT_TYPE)
                  if binary else {})
         if search_client.binary_control_channel:
             if not binary:raise ValueError('binary channel requires frozen binary Q')

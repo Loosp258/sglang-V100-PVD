@@ -8,6 +8,7 @@ import base64
 import binascii
 import json
 import struct
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -33,7 +34,43 @@ def binary_search_snapshot(search):
     return pack_binary_batch({**search, 'items': items})
 
 
-def pack_binary_fused(payload):
+@dataclass(frozen=True)
+class BinarySearchSnapshot:
+    """One owned wire encoding; readonly Q views retain its immutable bytes."""
+    wire: bytes
+    search: dict
+    search_metadata: bytes
+    item_metadata: bytes
+    query_offset: int
+
+
+def freeze_binary_search(search):
+    wire = binary_search_snapshot(search)
+    parsed = unpack_binary_batch(wire, copy_queries=False)
+    return _snapshot_from_wire(wire, parsed)
+
+
+def _snapshot_from_wire(wire, parsed):
+    size = struct.unpack_from('<I', wire, 8)[0]
+    # Metadata is independent of the producer and contains no query arrays.
+    meta = {**parsed, 'items': [{k:v for k,v in item.items() if k != 'query_values'}
+                              for item in parsed['items']]}
+    return BinarySearchSnapshot(wire, parsed,
+        json.dumps({k:v for k,v in meta.items() if k != 'items'},allow_nan=False,separators=(',',':')).encode(),
+        json.dumps(meta['items'],allow_nan=False,separators=(',',':')).encode(), 12+size)
+
+
+def pack_binary_fused(payload, *, snapshot=None):
+    if snapshot is not None:
+        if not isinstance(snapshot, BinarySearchSnapshot):
+            raise ValueError('owned binary search snapshot required')
+        prefix = json.dumps({k:v for k,v in payload.items() if k != 'search'},
+                            allow_nan=False,separators=(',',':')).encode('utf-8')
+        encoded = (prefix[:-1]+(b',' if len(prefix)>2 else b'')+b'"search":'+snapshot.search_metadata
+                   +b',"items":'+snapshot.item_metadata+b'}')
+        if len(encoded) > _MAX_META: raise ValueError('binary batch metadata too large')
+        return b''.join((_MAGIC,struct.pack('<I',len(encoded)),encoded,
+                        memoryview(snapshot.wire)[snapshot.query_offset:]))
     search = payload['search']
     parsed = unpack_binary_batch(binary_search_snapshot(search))
     items = []
@@ -44,11 +81,23 @@ def pack_binary_fused(payload):
         'search': {k: v for k, v in search.items() if k != 'items'}, 'items': items})
 
 
-def unpack_binary_fused(raw):
+def unpack_binary_fused(raw, *, frozen_search=False):
+    # V retains writable owned arrays for torch/native consumers. The digest
+    # still binds the original immutable wire bytes without encoding Q again.
     payload = unpack_binary_batch(raw)
     if not isinstance(payload.get('search'), dict) or 'items' in payload['search']:
         raise ValueError('exact nested binary search metadata required')
     payload['search'] = {**payload['search'], 'items': payload.pop('items')}
+    if frozen_search:
+        search=payload['search']
+        items=[{**{k:v for k,v in item.items() if not k.startswith('query_')},
+                'query_encoding':BINARY_QUERY_ENCODING,'query_rows':item['query_rows'],
+                'query_dim':item['query_dim']} for item in search['items']]
+        meta=json.dumps({**search,'items':items},allow_nan=False,separators=(',',':')).encode()
+        if len(meta)>_MAX_META: raise ValueError('binary batch metadata too large')
+        offset=12+struct.unpack_from('<I',raw,8)[0]
+        canonical=b''.join((_MAGIC,struct.pack('<I',len(meta)),meta,memoryview(raw)[offset:]))
+        payload['search']=_snapshot_from_wire(canonical,search)
     return payload
 
 
@@ -75,7 +124,7 @@ def pack_binary_batch(payload):
     return _MAGIC + struct.pack('<I',len(meta)) + meta + b''.join(chunks)
 
 
-def unpack_binary_batch(raw):
+def unpack_binary_batch(raw, *, copy_queries=True):
     if not isinstance(raw, bytes) or not 12 <= len(raw) <= 12+_MAX_META+4*MAX_PACKED_QUERY_CELLS or raw[:8] != _MAGIC:
         raise ValueError('invalid binary query envelope')
     size = struct.unpack_from('<I',raw,8)[0]
@@ -95,7 +144,9 @@ def unpack_binary_batch(raw):
         if cells > MAX_PACKED_QUERY_CELLS or offset+rows*dim*4 > len(raw):
             raise ValueError('binary query size differs from bound')
         # Owned copy independent of HTTP storage; only parser creates this ndarray.
-        values=np.frombuffer(raw,dtype='<f4',count=rows*dim,offset=offset).copy().reshape(rows,dim)
+        values=np.frombuffer(raw,dtype='<f4',count=rows*dim,offset=offset)
+        if copy_queries: values=values.copy()
+        values=values.reshape(rows,dim)
         if not np.isfinite(values).all(): raise ValueError('nonfinite binary query')
         item['query_values']=values;offset+=rows*dim*4
     if offset != len(raw): raise ValueError('trailing binary bytes')

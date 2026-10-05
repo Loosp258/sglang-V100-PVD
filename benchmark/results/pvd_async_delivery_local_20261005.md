@@ -33,3 +33,18 @@
   调用为零。第一次 gate 的旧手工 transport fixture 缺新字段已修正。
 - 日志/源码 hash：`artifacts/async_delivery_20261005/step2/gate02/`。
   缓存命中比例与完整路径收益尚未测量。
+
+## 3. 冻结二进制 Q 只编码一次
+
+- D 一次编码保留不可变 wire bytes，供摘要和最终 envelope 使用；Q 为其
+  readonly view。metadata 字节单独冻结，producer 后续 mutation 不改变发送。
+- V 从原始载荷重组 canonical search metadata 与 Q bytes 计算相同摘要，
+  不再把 ndarray 编码为 Q bytes。V 保留原 writable owned array，供 Torch/
+  native 消费，避免把只读 numpy 内存作为可写 tensor。
+- 协议/字节/旧摘要完全一致。计数测试确认 D freeze、摘要、发送、V 解析、
+  V 摘要合计只调用一次 query pack。旧 D prepare→digest→send 原有四次。
+- `step3/gate03`：69 passed、1 actual-CUDA skipped。真实双 rank HTTP/
+  channel、miss/mixed/hit、授权 proof、FP16 字节与旧 binary oracle 等价；
+  签名零、producer mutation、NaN/长度/shape 错误继续拒绝。
+- 日志/源码 hash：`artifacts/async_delivery_20261005/step3/gate03/`。
+  CPU pack 调用数减少不等价于已实测 TPOT 降幅。

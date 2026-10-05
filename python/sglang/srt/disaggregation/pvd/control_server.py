@@ -977,6 +977,7 @@ def create_shard_app(
         from sglang.srt.disaggregation.pvd.fused_search_delivery import (
             FUSED_PROTOCOL, selection_digest, allocation_bytes, choose_wire, wire_destination)
         from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
+        from sglang.srt.disaggregation.pvd.search_wire import BinarySearchSnapshot
         if data is None: data=await _payload(request)
         if set(data)-{'zero_miss_proof'} != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
             raise ValueError('exact fused request required')
@@ -1003,7 +1004,8 @@ def create_shard_app(
                     or ((entry.manifest.page_count-1)*entry.layout.page_size
                         +entry.manifest.last_page_valid_tokens) != scope['prompt_tokens']):
                 raise ValueError('fused Entry/layout mismatch')
-        response=await search_index_batch(request,data['search'])
+        search=data['search'].search if isinstance(data['search'],BinarySearchSnapshot) else data['search']
+        response=await search_index_batch(request,search)
         results=json.loads(response.body)['results']
         chosen,wire=choose_wire(scope,results)
         delivery=None;absent_write_fence=None
@@ -1025,7 +1027,7 @@ def create_shard_app(
         from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_fused, BINARY_QUERY_CONTENT_TYPE
         if request.content_type != BINARY_QUERY_CONTENT_TYPE:
             raise ValueError('binary fused content type required')
-        return await search_and_deliver(request,unpack_binary_fused(await request.read()))
+        return await search_and_deliver(request,unpack_binary_fused(await request.read(),frozen_search=True))
 
     channel_sockets, channel_work = set(), set()
 
@@ -1072,7 +1074,7 @@ def create_shard_app(
                 if sequence != last_sequence+1 or sum(not t.done() for t in tasks)>=2:
                     raise BinaryChannelError('channel sequence or inflight bound exceeded')
                 last_sequence=sequence
-                data=unpack_binary_fused(raw)
+                data=unpack_binary_fused(raw,frozen_search=True)
                 scope=validate_selection(data['selection'])
                 current=(scope['request_id'],scope['incarnation'],scope['entry_transfer_id'],tuple(scope['heads']))
                 if binding is None:binding=current
