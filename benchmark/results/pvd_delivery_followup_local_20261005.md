@@ -53,3 +53,26 @@ bitset，随后 base64 包装。生产者不再将较大的集合变成 Python �
 原选择和 wire manifest 完全等价；D 的实际两逻辑 rank 路径继续通过。
 日志与 hash：`artifacts/delivery_followup_20261005/step3/gate01/`。
 GPU/RDMA、线上质量、缓存集合规模下的 D wait/TPOT 收益待测。
+
+## 4. 有界 pinned scratch 与 bank 完成事件
+
+新增默认关闭的 `reuse_pinned_scratch`、`event_bank_ready`；后者要求前者。
+每个活跃 job 独占 Q float32、四 head 的 H2D host rows 及 rank D2H host
+字节缓冲。capacity32、两个槽持续计费上限 **225280 B（220 KiB）**，
+顺序 job 可复用；同一线程在实际 event/stream completion 后才返还。
+本地完成未知时隔离全部槽、tensor 与预算，close 不猜测完成。
+
+event 模式发布带 completion 的独立 bank，前台已有 `wait_event`；发布
+表示可以排队 GPU 依赖，不表示 GPU copy 已完成。原 worker 仍等待实际完成
+并拥有清理责任，未声称释放 worker 或提升任务吞吐。新安装显式等待 resident
+bank 的事件，防止早期发布的 bank 被另一个 stream 提前读取。远程 PUT
+终态字节检查和 D 上 GPUDirect receive ordering 保持原策略。
+
+本地 gate：**93 passed，2 actual CUDA skipped**。固定 host prefix 的真实
+CPU HTTP/FP16 bytes、显式 CPU CUDA policy 下的完整 job，在阻塞 completion
+时仍保留 lease/预算、可消费带事件 bank；随后两个 job 只分配一个 scratch
+槽。event/stream 错误保留 UNKNOWN，原 request/pipeline/cleanup gate 通过。
+日志与 hash：`artifacts/delivery_followup_20261005/step4/gate02/`。
+真实 pinned CUDA copy 测试已加入但未执行；native/RDMA/输出及完整 TPOT 待测。
+CPU consumer_wait 可能转移到 GPU 事件依赖，不能用 callback 提前 READY 的
+时间单独宣称 Decode 加速。

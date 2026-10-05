@@ -19,6 +19,7 @@ from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerReply, select_resi
 from sglang.srt.disaggregation.pvd.oasis_qwen import PromptBank
 from sglang.srt.disaggregation.pvd.oasis_receive_slots import OasisReceiveSlotPool
 from sglang.srt.disaggregation.pvd.oasis_ready_cleanup import OwnedReadyCleanup
+from sglang.srt.disaggregation.pvd.oasis_pinned_scratch import PinnedScratchPool, scratch_bytes
 from sglang.srt.disaggregation.pvd.oasis_gpu_backup import OasisGPUBackupPool
 from sglang.srt.disaggregation.pvd.oasis_bank_install import install_batched_bank, install_tensor_bound
 from sglang.srt.disaggregation.pvd.oasis_cache_install import (
@@ -152,7 +153,9 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
             self._ordered = True
             views = self.manifest.payload_views(self._buffer)
             self._cache_copy_owners.extend(views)
-            host = torch.empty_like(self._buffer, device="cpu", pin_memory=True)
+            scratch = getattr(self._registry, 'pinned_scratch', None)
+            host = (scratch.receive[:self.manifest.nbytes] if scratch is not None
+                    else torch.empty_like(self._buffer, device="cpu", pin_memory=True))
             self._cache_copy_owners.append(host)
             host.copy_(self._buffer, non_blocking=True)
             torch.cuda.current_stream(self._registry.device).synchronize()
@@ -237,7 +240,8 @@ class OasisLayerTransport:
                  staged_transport=False, sort_missing_tokens=False,
                  batched_bank_install=False, install_scratch_bytes=33554432,
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
-                 fused_search_delivery=False, compact_cache_snapshots=False):
+                 fused_search_delivery=False, compact_cache_snapshots=False,
+                 reuse_pinned_scratch=False, event_bank_ready=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -257,6 +261,7 @@ class OasisLayerTransport:
                 or type(binary_queries) is not bool
                 or type(fused_search_delivery) is not bool
                 or type(compact_cache_snapshots) is not bool
+                or type(reuse_pinned_scratch) is not bool or type(event_bank_ready) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -302,7 +307,18 @@ class OasisLayerTransport:
         if compact_cache_snapshots and not fused_search_delivery:
             raise ValueError('compact cache snapshots require fused delivery')
         self.compact_cache_snapshots = compact_cache_snapshots
-        self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if ready_before_cleanup else None
+        if (reuse_pinned_scratch or event_bank_ready) and (
+                workers != 2 or capacity > 32 or staged_transport or gpu_receive_to_bank
+                or batched_bank_install or batched_cache_install or ready_before_cleanup
+                or type(install_scratch_bytes) is not int
+                or workers*scratch_bytes(capacity) > install_scratch_bytes):
+            raise ValueError('pinned/event experiment requires bounded ordinary two-worker installation')
+        if event_bank_ready and not reuse_pinned_scratch:
+            raise ValueError('event bank publication requires owned pinned scratch')
+        self.reuse_pinned_scratch, self.event_bank_ready = reuse_pinned_scratch, event_bank_ready
+        self.pinned_pool = (PinnedScratchPool(manager.transfer_budget,capacity=capacity,slots=workers)
+                            if reuse_pinned_scratch else None)
+        self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if (ready_before_cleanup or event_bank_ready) else None
         self.stages = None
         self.receive_pool = (OasisReceiveSlotPool(manager.sparse_receive_engine,
             manager.transfer_budget, device=self.device,
@@ -454,6 +470,8 @@ class OasisLayerTransport:
                 binary_queries=self.binary_queries,
                 fused_search_delivery=self.fused_search_delivery,
                 compact_cache_snapshots=self.compact_cache_snapshots,
+                reuse_pinned_scratch=self.reuse_pinned_scratch,event_bank_ready=self.event_bank_ready,
+                pinned_scratch=self.pinned_pool.snapshot() if self.pinned_pool else None,
                 fused_rpc_count=sum(p['fused_calls'] for row in self.trace for p in row.get('fused_profiles',())),
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 staged_transport=self.staged_transport,
@@ -825,10 +843,17 @@ class OasisLayerTransport:
                 raise RuntimeError("foreign layer transport ticket")
             state = self._worker()
             retained = [query, event, bank]
+            scratch = None
             try:
                 with torch.cuda.device(self.device), torch.cuda.stream(state["stream"]):
+                    if self.pinned_pool is not None:
+                        scratch = self.pinned_pool.acquire()
+                        retained.append(scratch)
+                        state['registry'].pinned_scratch = scratch
+                        scratch.begin()
                     state["stream"].wait_event(event)
-                    host_q = torch.empty_like(query, device="cpu", pin_memory=True)
+                    host_q = (scratch.query if scratch is not None
+                              else torch.empty_like(query, device="cpu", pin_memory=True))
                     retained.append(host_q)
                     host_q.copy_(query, non_blocking=True)
                     state["stream"].synchronize()
@@ -836,6 +861,8 @@ class OasisLayerTransport:
                         self._select_and_fetch(state, ticket,
                             host_q.float().numpy() if self.binary_queries else host_q.tolist(), bank, bootstrap))
                     resident = bank() if callable(bank) else bank
+                    if resident is not None and resident.completion is not None:
+                        state['stream'].wait_event(resident.completion)
                     install_started = time.perf_counter()
                     install_profile = None
                     if self.batched_bank_install:
@@ -883,8 +910,12 @@ class OasisLayerTransport:
                                     else:
                                         keys[head, dst], values[head, dst] = row[0], row[1]
                                 if cpu_misses:
-                                    host = torch.stack([self.cache[ticket.layer][head][t]
-                                                        for _, t in cpu_misses]).pin_memory()
+                                    rows = [self.cache[ticket.layer][head][t] for _, t in cpu_misses]
+                                    if scratch is None:
+                                        host = torch.stack(rows).pin_memory()
+                                    else:
+                                        host = scratch.bank[head,:len(rows)]
+                                        torch.stack(rows,out=host)
                                     gpu = host.to(self.device, non_blocking=True)
                                     retained.extend((host, gpu))
                                     dst = [i for i, _ in cpu_misses]
@@ -893,8 +924,17 @@ class OasisLayerTransport:
                     complete = torch.cuda.Event()
                     retained.append(complete)
                     complete.record()
+                    if self.event_bank_ready:
+                        if publish_ready is None:
+                            raise RuntimeError('event bank requires owned publication callback')
+                        # READY permits a consumer stream to enqueue wait_event;
+                        # it is not a claim that local GPU copies have finished.
+                        publish_ready(LayerReply(ticket,PromptBank(chosen,keys,values,valid,complete)))
                     # Source owners can retire only after the H2D/copy event.
-                    complete.synchronize()
+                    if scratch is None:
+                        complete.synchronize()
+                    else:
+                        scratch.finish(complete)
                     if install_profile is not None:
                         install_profile.update(completion_proven=True,
                             install_seconds=time.perf_counter() - install_started)
@@ -912,12 +952,14 @@ class OasisLayerTransport:
                         fused_profiles=state.get('fused_profiles',[]),
                         deliveries=state.get("delivery_profiles", [])))
                 reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
-                if publish_ready is not None:
+                if publish_ready is not None and not self.event_bank_ready:
                     publish_ready(reply)
                 return reply
             except BaseException:
                 try:
                     state["stream"].synchronize()
+                    if scratch is not None and scratch.active:
+                        scratch.abort(state['stream'])
                 except BaseException:
                     self.quarantined = True
                     state.setdefault("quarantine", []).append(retained)
@@ -926,6 +968,7 @@ class OasisLayerTransport:
                     state.setdefault('quarantine', []).append(state['gpu_readers'])
                 raise
             finally:
+                state['registry'].pinned_scratch = None
                 # Native registries remain job/thread-local. Request clients
                 # alone survive on the already-running background I/O loop.
                 try:
@@ -981,6 +1024,8 @@ class OasisLayerTransport:
             future.result(timeout=self.timeout)
         if self.receive_pool is not None:
             self.receive_pool.close()
+        if self.pinned_pool is not None:
+            self.pinned_pool.close()
         if self.gpu_backups is not None:
             self.gpu_backups.close()
         self.cache.clear()

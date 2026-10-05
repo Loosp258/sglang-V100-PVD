@@ -223,6 +223,8 @@ class OasisResources:
                 binary_queries=cfg.get('binary_queries', False),
                 fused_search_delivery=cfg.get('fused_search_delivery',False),
                 compact_cache_snapshots=cfg.get('compact_cache_snapshots',False),
+                reuse_pinned_scratch=cfg.get('reuse_pinned_scratch',False),
+                event_bank_ready=cfg.get('event_bank_ready',False),
                 install_scratch_bytes=cfg['request_scratch_bytes'],
                 backup_budget_bytes=cfg['request_scratch_bytes'])
             pending["transport"] = transport
@@ -280,7 +282,7 @@ def maybe_install_oasis(scheduler):
     fields = {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "capacity",
         "max_new", "top_k", "workers", "timeout_seconds", "max_sequence_tokens", "max_decode_steps",
         "request_budget_bytes", "request_scratch_bytes", "bootstrap_budget_bytes", "bootstrap_transient_bytes", "overlap"}
-    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries','fused_search_delivery','compact_cache_snapshots'} != fields:
+    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries','fused_search_delivery','compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready'} != fields:
         raise ValueError("Oasis config must contain exactly the documented bounds and pins")
     cfg.setdefault("reuse_io", False)
     cfg.setdefault("combine_reserve_start", False)
@@ -295,6 +297,8 @@ def maybe_install_oasis(scheduler):
     cfg.setdefault('binary_queries', False)
     cfg.setdefault('fused_search_delivery',False)
     cfg.setdefault('compact_cache_snapshots',False)
+    cfg.setdefault('reuse_pinned_scratch',False)
+    cfg.setdefault('event_bank_ready',False)
     if cfg['compact_cache_snapshots'] and not cfg['fused_search_delivery']:
         raise ValueError('compact cache snapshots require fused delivery')
     for name in fields - {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "max_new", "overlap"}:
@@ -313,10 +317,19 @@ def maybe_install_oasis(scheduler):
             or type(cfg['binary_queries']) is not bool
             or type(cfg['fused_search_delivery']) is not bool
             or type(cfg['compact_cache_snapshots']) is not bool
+            or type(cfg['reuse_pinned_scratch']) is not bool or type(cfg['event_bank_ready']) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]
             or cfg["workers"] > 4 or cfg["capacity"] > 2048 or cfg["top_k"] > 512
             or cfg["max_sequence_tokens"] > scheduler.tp_worker.model_runner.model_config.context_len):
         raise ValueError("unsupported Oasis bounds")
+    if cfg['reuse_pinned_scratch'] or cfg['event_bank_ready']:
+        from sglang.srt.disaggregation.pvd.oasis_pinned_scratch import scratch_bytes
+        if (cfg['workers'] != 2 or cfg['capacity'] > 32
+                or any(cfg[name] for name in ('staged_transport','gpu_receive_to_bank',
+                       'batched_bank_install','batched_cache_install','ready_before_cleanup','attention_workspace'))
+                or cfg['workers']*scratch_bytes(cfg['capacity']) > cfg['request_scratch_bytes']
+                or (cfg['event_bank_ready'] and not cfg['reuse_pinned_scratch'])):
+            raise ValueError('pinned/event mode requires bounded ordinary owned scratch')
     if cfg['ready_before_cleanup'] and (cfg['workers'] != 2 or any(cfg[name] for name in
             ('reuse_io', 'combine_reserve_start', 'reuse_receive_slots', 'gpu_receive_to_bank',
              'staged_transport', 'attention_workspace', 'batched_bank_install', 'batched_cache_install'))):

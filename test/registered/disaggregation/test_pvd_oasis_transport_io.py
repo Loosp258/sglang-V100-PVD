@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import sglang.srt.disaggregation.pvd.oasis_transport as oasis
+from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
 class BackgroundIO:
@@ -79,7 +80,7 @@ def echo_server():
 
 
 def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", timeout=5,
-              ready_before_cleanup=False):
+              ready_before_cleanup=False, reuse_pinned_scratch=False, event_bank_ready=False):
     class Registry:
         def __init__(self, *args, **kwargs):
             self.owner_thread = threading.get_ident()
@@ -91,7 +92,7 @@ def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", 
     monkeypatch.setattr(oasis.torch.cuda, "Stream", lambda **kwargs:
         SimpleNamespace(owner_thread=threading.get_ident()))
     manager = SimpleNamespace(control=control, worker_epoch="D-incarnation",
-        transfer_budget=object(), sparse_receive_engine=SimpleNamespace(
+        transfer_budget=(TransferBudget(1<<20,8) if reuse_pinned_scratch else object()), sparse_receive_engine=SimpleNamespace(
             health=lambda: {"healthy": True, "session_id": "D-session"}))
     layout = SimpleNamespace(num_layers=28, total_kv_heads=4,
         kv_heads_per_rank=2, head_dim=128, kv_dtype="torch.float16", page_size=4)
@@ -101,7 +102,8 @@ def transport(monkeypatch, control, *, reuse_io=True, url="http://127.0.0.1:1", 
     return oasis.OasisLayerTransport(manager, selected, request_id="request",
         incarnation="incarnation", device="cpu", vector_space="target-Q",
         capacity=4, max_new=2, top_k=4, timeout=timeout, reuse_io=reuse_io,
-        ready_before_cleanup=ready_before_cleanup)
+        ready_before_cleanup=ready_before_cleanup,reuse_pinned_scratch=reuse_pinned_scratch,
+        event_bank_ready=event_bank_ready)
 
 
 @pytest.mark.parametrize("reuse_io", [False, True])
