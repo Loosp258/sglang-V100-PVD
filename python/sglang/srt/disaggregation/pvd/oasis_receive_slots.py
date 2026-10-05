@@ -132,7 +132,8 @@ for each logical write, preserving the existing live-write admission bound.
         return torch.empty(self.capacity_bytes, dtype=torch.uint8, device=self.device)
 
     def _validate_request(self, manifest, identity, endpoint, rail, device, ordering):
-        if (not isinstance(manifest, SparseDeliveryManifest)
+        from sglang.srt.disaggregation.pvd.fused_search_delivery import _AllocationOnly, allocation_bytes
+        if (not isinstance(manifest, (SparseDeliveryManifest, _AllocationOnly))
                 or not isinstance(identity, WriteIdentity)
                 or identity.receiver_epoch != self.receiver_epoch
                 or identity.region_id != "pending-registration"
@@ -141,6 +142,15 @@ for each logical write, preserving the existing live-write admission bound.
                 or any(not isinstance(s, str) or not s.strip() for s in (endpoint, rail))
                 or not callable(getattr(ordering, "prepare", None))):
             raise SparseReceiveError("matching private receive identity, device and route required")
+        if isinstance(manifest, _AllocationOnly):
+            scope = manifest.scope
+            if (manifest.nbytes != allocation_bytes(scope) or manifest.nbytes > self.capacity_bytes
+                    or scope['dtype'] != 'torch.float16' or scope['head_dim'] != 128
+                    or scope['entry_transfer_id'] != identity.key.transfer_id
+                    or scope['heads'] != [2*identity.shard_rank, 2*identity.shard_rank+1]
+                    or not isinstance(manifest.digest, str) or len(manifest.digest) != 64):
+                raise SparseReceiveError('fused allocation exceeds exact rank/Entry slot scope')
+            return
         specs = manifest.specs
         start_head = identity.shard_rank * 2
         if (manifest.dtype != "torch.float16" or manifest.head_dim != 128

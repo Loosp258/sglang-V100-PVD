@@ -206,9 +206,18 @@ class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
         if self.receive_pool is None:
             return super()._prepare_registration(record, **route)
         record._registration_unknown = True
-        lease = self.receive_pool.acquire(record.manifest, record.identity,
-            endpoint=route["endpoint"], rail=route["rail"], device=self.device,
-            ordering=self.ordering)
+        try:
+            lease = self.receive_pool.acquire(record.manifest, record.identity,
+                endpoint=route["endpoint"], rail=route["rail"], device=self.device,
+                ordering=self.ordering)
+        except BaseException:
+            if self.receive_pool.snapshot()['quarantine'] is None:
+                # Known admission failure: no destination was published or MR
+                # registration left unknown. The pool still owns idle MRs.
+                record._registration_unknown = False
+                self.budget.release(record.owner)
+                self._records.pop(record.identity.transfer_id, None)
+            raise
         record._slot_lease = lease
         record._buffer, record._registration = lease.buffer, lease.registration
         record.profile.update(reuse_receive_slots=True,
@@ -266,11 +275,11 @@ class OasisLayerTransport:
             raise ValueError('batched cache install requires isolated mode and admitted request scratch')
         self.manager, self.selected = manager, selected
         if binary_queries and (ready_before_cleanup or staged_transport or gpu_receive_to_bank or reuse_io
-                or reuse_receive_slots or combine_reserve_start or batched_bank_install
+                or (reuse_receive_slots and not fused_search_delivery) or combine_reserve_start or batched_bank_install
                 or batched_cache_install or workers != 2):
             raise ValueError('binary Q experiment requires isolated two-worker baseline')
         if fused_search_delivery and (ready_before_cleanup or staged_transport
-                or gpu_receive_to_bank or reuse_io or reuse_receive_slots or combine_reserve_start
+                or gpu_receive_to_bank or reuse_io or combine_reserve_start
                 or batched_bank_install or batched_cache_install or sort_missing_tokens or workers != 2
                 or capacity > 32):
             raise ValueError('fused selection requires isolated bounded two-worker baseline')

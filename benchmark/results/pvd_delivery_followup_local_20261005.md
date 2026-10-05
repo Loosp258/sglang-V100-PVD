@@ -20,3 +20,19 @@ rank、miss/mixed/hit、D 实际 `_select_and_fetch` 原选择与 KV 字节一�
 日志与源文件 normalized-LF hash：
 `artifacts/delivery_followup_20261005/step1/gate03/{unit.txt,status.json}`。
 未进行真实 CUDA、线上 D wait/TPOT 或输出质量实验，不能累加历史阶段收益。
+
+## 2. 融合交付复用 D 接收槽
+
+在融合模式下允许 `reuse_receive_slots=true`，兼容第 1 步二进制 Q。
+allocation-only 明确绑定原选择 scope，既有池检查 rank/Entry/dtype/宽度/上界；
+逻辑记录只收取 inflight charge，物理容量在池中持续计费。每次 lease 使用
+独立 generation，实际 KV 是同一授权的精确前缀。原 GPUDirect ordering、
+native 字节证明、安装后 ACK 及 UNKNOWN 保留没有省略。全缓存命中复用同一
+物理槽，仍用 absent-write fence 确认不会再有 writer 后返还。
+
+本地 gate：**87 passed，1 Linux CUDA skipped**。真实 HTTP 与 FP16 CPU
+字节、明确 CUDA policy doubles；miss→hit→miss 三次仅一次物理 MR 注册，
+结束只注销原 physical owner。旧请求重放不新增 writer；失响应且 native 尚未完成时
+不返槽，原池注册/注销未知状态与关闭测试通过。日志及 hash 位于
+`artifacts/delivery_followup_20261005/step2/gate03/`。真实 GPU/RDMA 与组合
+D wait/TPOT 待测；旧独立接收池实验的注册收益不能当作当前延迟收益。

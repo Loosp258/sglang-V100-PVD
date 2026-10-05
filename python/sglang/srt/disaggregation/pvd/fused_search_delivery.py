@@ -115,6 +115,7 @@ def wire_destination(physical, wire):
 class _AllocationOnly:
     nbytes: int
     digest: str
+    scope: dict
     def to_dict(self):
         return dict(protocol='pvd-fused-allocation-only-v1',nbytes=self.nbytes,selection_digest=self.digest)
 
@@ -136,10 +137,10 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
         raise ValueError('fused allocation rank/Entry mismatch')
     identity=WriteIdentity(PVD_TRANSFER_LIFECYCLE_PROTOCOL,sender_epoch,registry.receiver_epoch,
         uuid.uuid4().hex,'pending-registration',uuid.uuid4().hex,rank,key)
-    record=registry._new_record(_AllocationOnly(allocation_bytes(scope),digest),identity,client)
+    record=registry._new_record(_AllocationOnly(allocation_bytes(scope),digest,scope),identity,client)
     record._scope=owner_scope
     record.fused_scope,record.fused_search,record.fused_digest=scope,search,digest
-    registry.budget.reserve(record.owner,record.manifest.nbytes,1)
+    registry.budget.reserve(record.owner,registry._destination_charge(record.manifest),1)
     registry._records[identity.transfer_id]=record
     registry._prepare_registration(record,endpoint=endpoint,rank=rank,rail=rail,generation=identity.generation)
     descriptor=record._registration.descriptor
