@@ -39,7 +39,7 @@ def test_explicit_ordered_config_combinations(monkeypatch,tmp_path,stage):
 
 
 @pytest.mark.parametrize('option',['binary_queries','fused_search_delivery','reuse_receive_slots',
-    'compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel'])
+    'compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof'])
 def test_nonbool_optimization_option_refused(monkeypatch,tmp_path,option):
     value=config(5);value[option]=1
     with pytest.raises(ValueError):load(monkeypatch,tmp_path,value)
@@ -50,3 +50,12 @@ def test_fused_ready_cleanup_with_each_followup_combination(monkeypatch, tmp_pat
     value = config(stage)
     value['ready_before_cleanup'] = True
     assert load(monkeypatch, tmp_path, value)['ready_before_cleanup'] is True
+
+
+def test_zero_miss_proof_requires_fusion_and_is_default_off(monkeypatch, tmp_path):
+    assert load(monkeypatch, tmp_path, config(5))['fused_zero_miss_proof'] is False
+    value = config(5)
+    value['fused_zero_miss_proof'] = True
+    assert load(monkeypatch, tmp_path, value)['fused_zero_miss_proof'] is True
+    value['fused_search_delivery'] = False
+    with pytest.raises(ValueError): load(monkeypatch, tmp_path, value)

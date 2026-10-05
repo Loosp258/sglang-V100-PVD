@@ -23,6 +23,7 @@ def test_fused_copy_returns_before_ack_and_retains_slot_until_owned_cleanup(monk
             owner.prompt_tokens, owner.timeout = 8, 5
             owner.compact_cache_snapshots = False
             owner.binary_queries, owner.ready_before_cleanup = binary, True
+            owner.fused_zero_miss_proof = False
             owner._cache_valid = torch.zeros((1, 2, 8), dtype=torch.bool)
             owner.cache, owner.versions = [[{}, {}]], {}
             import threading

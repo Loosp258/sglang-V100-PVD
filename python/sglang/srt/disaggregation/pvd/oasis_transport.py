@@ -241,7 +241,8 @@ class OasisLayerTransport:
                  batched_bank_install=False, install_scratch_bytes=33554432,
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
                  fused_search_delivery=False, compact_cache_snapshots=False,
-                 reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False):
+                 reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False,
+                 fused_zero_miss_proof=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -263,6 +264,7 @@ class OasisLayerTransport:
                 or type(compact_cache_snapshots) is not bool
                 or type(reuse_pinned_scratch) is not bool or type(event_bank_ready) is not bool
                 or type(binary_control_channel) is not bool
+                or type(fused_zero_miss_proof) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -305,6 +307,9 @@ class OasisLayerTransport:
         self.ready_before_cleanup = ready_before_cleanup
         self.binary_queries = binary_queries
         self.fused_search_delivery = fused_search_delivery
+        if fused_zero_miss_proof and not fused_search_delivery:
+            raise ValueError('zero-miss proof requires fused delivery')
+        self.fused_zero_miss_proof = fused_zero_miss_proof
         if compact_cache_snapshots and not fused_search_delivery:
             raise ValueError('compact cache snapshots require fused delivery')
         self.compact_cache_snapshots = compact_cache_snapshots
@@ -481,6 +486,7 @@ class OasisLayerTransport:
                 ready_before_cleanup=self.ready_before_cleanup,
                 binary_queries=self.binary_queries,
                 fused_search_delivery=self.fused_search_delivery,
+                fused_zero_miss_proof=self.fused_zero_miss_proof,
                 compact_cache_snapshots=self.compact_cache_snapshots,
                 reuse_pinned_scratch=self.reuse_pinned_scratch,event_bank_ready=self.event_bank_ready,
                 pinned_scratch=self.pinned_pool.snapshot() if self.pinned_pool else None,
@@ -656,7 +662,7 @@ class OasisLayerTransport:
         record=prepare_fused(state['registry'],scope,search,key=self.selected.manifest.key,rank=route.rank,
             rail=route.rail,endpoint=self.endpoints[route.rank],sender_epoch=route.sender_epoch,
             client=state['control'][route.rank],owner_scope=self.incarnation,
-            binary_queries=self.binary_queries)
+            binary_queries=self.binary_queries,zero_miss_proof=self.fused_zero_miss_proof)
         try:
             chosen,ready=await start_fused(record,search_client,requests)
             pair=(record.fused_results[0]['index_version'],record.fused_results[0]['id_mapping_version'])

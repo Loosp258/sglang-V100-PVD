@@ -7,7 +7,7 @@ from test_pvd_prompt_index import ident
 from test_pvd_oasis_receive_slot_records import slot_case, writer
 
 
-def prepared(c, client, op, *, cached=False):
+def prepared(c, client, op, *, cached=False, zero_miss_proof=False):
     scope = dict(request_id='req', incarnation='inc', operation_id=op,
         target_tokens=1, entry_transfer_id=c.entry.key.transfer_id,
         layout_fingerprint=c.entry.layout.fingerprint, layer=0, heads=[0,1],
@@ -19,7 +19,7 @@ def prepared(c, client, op, *, cached=False):
         client._prepare_search(i,queries=q,top_k=k,scope=s)[0] for i,q,k,s in requests])
     record = prepare_fused(c.registry,scope,search,key=c.entry.key,rank=0,
         rail=c.store.rail,endpoint='D',sender_epoch=c.store.worker_epoch,
-        client=c.client,binary_queries=client.binary_queries)
+        client=c.client,binary_queries=client.binary_queries,zero_miss_proof=zero_miss_proof)
     return record, requests
 
 

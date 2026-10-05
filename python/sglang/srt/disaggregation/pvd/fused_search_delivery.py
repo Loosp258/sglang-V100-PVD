@@ -125,7 +125,7 @@ class _AllocationOnly:
 
 
 def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_epoch, client, owner_scope=None,
-                  binary_queries=False):
+                  binary_queries=False, zero_miss_proof=False):
     registry._owner();started=time.perf_counter()
     if any(not isinstance(value,str) or not value.strip() for value in (rail,endpoint)):
         raise ValueError('explicit fused rail/endpoint required')
@@ -134,6 +134,7 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
     # Freeze the producer snapshots before registration and the first await.
     scope=json.loads(json.dumps(scope,allow_nan=False))
     if type(binary_queries) is not bool: raise ValueError('binary fused option must be bool')
+    if type(zero_miss_proof) is not bool: raise ValueError('zero-miss proof option must be bool')
     search=(unpack_binary_batch(binary_search_snapshot(search)) if binary_queries
             else json.loads(json.dumps(search,allow_nan=False)))
     digest=selection_digest(scope,search)
@@ -144,6 +145,7 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
     record=registry._new_record(_AllocationOnly(allocation_bytes(scope),digest,scope),identity,client)
     record._scope=owner_scope
     record.fused_scope,record.fused_search,record.fused_digest=scope,search,digest
+    record.fused_zero_miss_proof=zero_miss_proof
     registry.budget.reserve(record.owner,registry._destination_charge(record.manifest),1)
     registry._records[identity.transfer_id]=record
     registry._prepare_registration(record,endpoint=endpoint,rank=rank,rail=rail,generation=identity.generation)
@@ -164,6 +166,7 @@ async def start_fused(record, search_client, requests):
         record._published=True
         payload=dict(protocol=FUSED_PROTOCOL,selection=record.fused_scope,search=record.fused_search,
                      identity=record.identity.to_dict(),destination=record._registration.descriptor.to_dict())
+        if record.fused_zero_miss_proof: payload['zero_miss_proof']=True
         binary=record.fused_search['items'][0].get('query_encoding') == BINARY_QUERY_ENCODING
         options=(dict(encoded_payload=pack_binary_fused(payload),content_type=BINARY_QUERY_CONTENT_TYPE)
                  if binary else {})
@@ -189,6 +192,8 @@ async def start_fused(record, search_client, requests):
             raise ValueError('V selection/cache misses differ from D policy')
         if wire is None:
             if reply.get('delivery') is not None: raise ValueError('unexpected zero-miss writer')
+            if record.fused_zero_miss_proof:
+                record.accept_absent_write_fence(reply.get('absent_write_fence'))
             record.fused_no_miss=True
             return chosen,True
         record.manifest=wire

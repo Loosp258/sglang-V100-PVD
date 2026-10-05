@@ -183,6 +183,7 @@ class SparseReceiveRecord:
         self._registration_unknown = False
         self._published = self._source_started = self._safe = self._ready = False
         self._closing = self._closed = self._acknowledged = False
+        self._absent_write_closed = False
         self._group = self._receipt = None
         self._installed = False
         self._lock = asyncio.Lock()
@@ -218,6 +219,15 @@ class SparseReceiveRecord:
         if identity != self.identity:
             raise SparseReceiveError("write fence identity mismatch")
         return proof["fenced"]
+
+    def accept_absent_write_fence(self, proof):
+        """Accept an exact tombstone response, never a lack of delivery metadata."""
+        self._live()
+        if self._source_started or self._ready or not self._published:
+            raise SparseReceiveError('absent-write proof conflicts with receive state')
+        if not self._fenced(proof):
+            raise SparseReceiveError('absent write is not fenced')
+        self._safe = self._absent_write_closed = True
 
     def _observe(self, reply):
         if (
@@ -347,7 +357,7 @@ class SparseReceiveRecord:
                 return False
             # An unacknowledged successful transfer also needs business closure
             # on V, otherwise its Entry retains an active Delivery until TTL.
-            if self._published and (not self._safe or not self._acknowledged):
+            if self._published and (not self._safe or not (self._acknowledged or self._absent_write_closed)):
                 self._safe = self._fenced(
                     await self._client.fence_delivery(self.identity)
                 )

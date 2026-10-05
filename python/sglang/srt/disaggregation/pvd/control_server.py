@@ -978,8 +978,10 @@ def create_shard_app(
             FUSED_PROTOCOL, selection_digest, allocation_bytes, choose_wire, wire_destination)
         from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
         if data is None: data=await _payload(request)
-        if set(data) != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
+        if set(data)-{'zero_miss_proof'} != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
             raise ValueError('exact fused request required')
+        zero_miss_proof=data.get('zero_miss_proof',False)
+        if type(zero_miss_proof) is not bool: raise ValueError('zero-miss proof option must be bool')
         scope=data['selection'];digest=selection_digest(scope,data['search'])
         identity=WriteIdentity.from_dict(data['identity'])
         physical=RemoteRegionDescriptor.from_dict(data['destination'])
@@ -1004,16 +1006,20 @@ def create_shard_app(
         response=await search_index_batch(request,data['search'])
         results=json.loads(response.body)['results']
         chosen,wire=choose_wire(scope,results)
-        delivery=None
+        delivery=None;absent_write_fence=None
         if wire is not None:
             destination=wire_destination(physical,wire)
             def reserve_start():
                 store.reserve_delivery(identity.key,identity.transfer_id,destination)
                 return store.start_delivery(identity.key,identity.transfer_id).to_dict()
             delivery=await asyncio.to_thread(reserve_start)
-        return web.json_response(dict(protocol=FUSED_PROTOCOL,identity=identity.to_dict(),
+        elif zero_miss_proof:
+            absent_write_fence=store.fence_absent_write(identity)
+        reply=dict(protocol=FUSED_PROTOCOL,identity=identity.to_dict(),
             selection_digest=digest,results=results,chosen=[list(ids) for ids in chosen],
-            manifest=wire.to_dict() if wire else None,delivery=delivery))
+            manifest=wire.to_dict() if wire else None,delivery=delivery)
+        if zero_miss_proof: reply['absent_write_fence']=absent_write_fence
+        return web.json_response(reply)
 
     async def search_and_deliver_binary(request):
         from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_fused, BINARY_QUERY_CONTENT_TYPE

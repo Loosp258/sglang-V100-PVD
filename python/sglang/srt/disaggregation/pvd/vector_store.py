@@ -2026,6 +2026,16 @@ class VectorKVStore:
         self._progress_releases()
         return delivery
 
+    def fence_absent_write(self, identity: WriteIdentity):
+        """Close an absent authorization atomically; never cancel an existing PUT."""
+        with self._lock:
+            if not isinstance(identity, WriteIdentity):
+                raise EntryConflictError('complete write identity required')
+            entry = self._entry(identity.key)
+            if identity.transfer_id in entry.deliveries:
+                raise EntryConflictError('zero-miss identity already has a delivery')
+            return self.fence_write(identity)
+
     def fence_write(self, identity: WriteIdentity):
         with self._lock:
             if not isinstance(identity, WriteIdentity):

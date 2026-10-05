@@ -246,6 +246,7 @@ def test_actual_two_shard_select_fetch_cache_misses_then_hits(monkeypatch,packed
             owner.scope=SearchScope(manifest.prompt_token_count,layout.page_size,layout.head_dim,'l2')
             owner.incarnation='incarnation';owner.timeout=2;owner.fused_search_delivery=True;owner.binary_queries=binary
             owner.compact_cache_snapshots=True
+            owner.fused_zero_miss_proof=False;owner.ready_before_cleanup=False
             owner.endpoints={0:'D0',1:'D1'};owner.quarantined=False
             owner._cache_valid=torch.zeros((layout.num_layers,4,manifest.prompt_token_count),dtype=torch.bool)
             rows=torch.empty((layout.num_layers,4,manifest.prompt_token_count,2,layout.head_dim),dtype=torch.float16)
