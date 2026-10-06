@@ -243,7 +243,7 @@ class OasisLayerTransport:
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
                  fused_search_delivery=False, compact_cache_snapshots=False,
                  reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False,
-                 fused_zero_miss_proof=False, async_layer_jobs=False):
+                 fused_zero_miss_proof=False, async_layer_jobs=False, parallel_owned_cleanup=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -267,6 +267,7 @@ class OasisLayerTransport:
                 or type(binary_control_channel) is not bool
                 or type(fused_zero_miss_proof) is not bool
                 or type(async_layer_jobs) is not bool
+                or type(parallel_owned_cleanup) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -307,6 +308,9 @@ class OasisLayerTransport:
         self.batched_bank_install = batched_bank_install
         self.batched_cache_install = batched_cache_install
         self.ready_before_cleanup = ready_before_cleanup
+        if parallel_owned_cleanup and not ready_before_cleanup:
+            raise ValueError('parallel rank cleanup requires owned READY cleanup')
+        self.parallel_owned_cleanup = parallel_owned_cleanup
         self.binary_queries = binary_queries
         self.fused_search_delivery = fused_search_delivery
         if fused_zero_miss_proof and not fused_search_delivery:
@@ -522,6 +526,7 @@ class OasisLayerTransport:
                 fused_rpc_count=sum(p['fused_calls'] for row in self.trace for p in row.get('fused_profiles',())),
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 async_layer_jobs=self.async_layer_jobs,
+                parallel_owned_cleanup=self.parallel_owned_cleanup,
                 async_jobs=self.async_jobs.snapshot() if self.async_jobs else None,
                 async_scratch_bound=async_tensor_bound(self.capacity) if self.async_layer_jobs else None,
                 staged_transport=self.staged_transport,
@@ -734,7 +739,7 @@ class OasisLayerTransport:
 
     async def _finish_owned_cleanup(self, state):
         errors = []
-        for record in state.get('pending_cleanup', ()):
+        async def clean(record):
             try:
                 await record.ack()
             except BaseException as exc:
@@ -749,6 +754,23 @@ class OasisLayerTransport:
             for profile in state.get('delivery_profiles', ()):
                 if profile.get('rank') == record.identity.shard_rank:
                     profile.update(record.profile)
+        records = tuple(state.get('pending_cleanup', ()))
+        if getattr(self, 'parallel_owned_cleanup', False):
+            if len(records) > 2 or len({r.identity.shard_rank for r in records}) != len(records):
+                raise RuntimeError('cleanup requires at most one owned record per rank')
+            joined = asyncio.gather(*(clean(record) for record in records), return_exceptions=True)
+            cancelled = None
+            while not joined.done():
+                try:
+                    await asyncio.shield(joined)
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            errors.extend(item for item in joined.result() if isinstance(item, BaseException))
+            if cancelled is not None:
+                raise cancelled
+        else:
+            for record in records:
+                await clean(record)
         if errors:
             raise RuntimeError('owned ACK/receive cleanup failed') from errors[0]
 
