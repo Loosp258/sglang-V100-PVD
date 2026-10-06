@@ -229,6 +229,7 @@ class OasisResources:
                 fused_zero_miss_proof=cfg.get('fused_zero_miss_proof',False),
                 async_layer_jobs=cfg.get('async_layer_jobs',False),
                 parallel_owned_cleanup=cfg.get('parallel_owned_cleanup',False),
+                async_cuda_completion=cfg.get('async_cuda_completion',False),
                 channel_cleanup=cfg.get('channel_cleanup',False),
                 install_scratch_bytes=cfg['request_scratch_bytes'],
                 backup_budget_bytes=cfg['request_scratch_bytes'])
@@ -287,7 +288,7 @@ def maybe_install_oasis(scheduler):
     fields = {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "capacity",
         "max_new", "top_k", "workers", "timeout_seconds", "max_sequence_tokens", "max_decode_steps",
         "request_budget_bytes", "request_scratch_bytes", "bootstrap_budget_bytes", "bootstrap_transient_bytes", "overlap"}
-    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries','fused_search_delivery','compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof','async_layer_jobs','parallel_owned_cleanup','channel_cleanup'} != fields:
+    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries','fused_search_delivery','compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof','async_layer_jobs','parallel_owned_cleanup','channel_cleanup','async_cuda_completion'} != fields:
         raise ValueError("Oasis config must contain exactly the documented bounds and pins")
     cfg.setdefault("reuse_io", False)
     cfg.setdefault("combine_reserve_start", False)
@@ -308,6 +309,9 @@ def maybe_install_oasis(scheduler):
     cfg.setdefault('fused_zero_miss_proof',False)
     cfg.setdefault('async_layer_jobs',False)
     cfg.setdefault('parallel_owned_cleanup',False)
+    cfg.setdefault('async_cuda_completion',False)
+    if cfg['async_cuda_completion'] and not cfg['async_layer_jobs']:
+        raise ValueError('async CUDA completion requires bounded async layer jobs')
     cfg.setdefault('channel_cleanup',False)
     if cfg['channel_cleanup'] and not cfg['binary_control_channel']:
         raise ValueError('channel cleanup requires request binary channel')
@@ -345,6 +349,7 @@ def maybe_install_oasis(scheduler):
             or type(cfg['fused_zero_miss_proof']) is not bool
             or type(cfg['async_layer_jobs']) is not bool
             or type(cfg['parallel_owned_cleanup']) is not bool
+            or type(cfg['async_cuda_completion']) is not bool
             or type(cfg['channel_cleanup']) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]
             or cfg["workers"] > 4 or cfg["capacity"] > 2048 or cfg["top_k"] > 512
@@ -356,7 +361,7 @@ def maybe_install_oasis(scheduler):
                 or any(cfg[name] for name in ('staged_transport','gpu_receive_to_bank',
                        'batched_bank_install','batched_cache_install','attention_workspace'))
                 or (cfg['ready_before_cleanup'] and not cfg['fused_search_delivery'])
-                or cfg['workers']*scratch_bytes(cfg['capacity']) > cfg['request_scratch_bytes']
+                or cfg['workers']*scratch_bytes(cfg['capacity'],2 if cfg['async_cuda_completion'] else 1) > cfg['request_scratch_bytes']
                 or (cfg['event_bank_ready'] and not cfg['reuse_pinned_scratch'])):
             raise ValueError('pinned/event mode requires bounded ordinary owned scratch')
     if cfg['ready_before_cleanup'] and not cfg['fused_search_delivery'] and (cfg['workers'] != 2 or any(cfg[name] for name in

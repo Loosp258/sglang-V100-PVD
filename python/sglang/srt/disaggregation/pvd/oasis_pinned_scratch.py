@@ -5,10 +5,11 @@ import torch
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
 
 
-def scratch_bytes(capacity):
-    if type(capacity) is not int or not 1 <= capacity <= 32:
+def scratch_bytes(capacity, receive_ranks=1):
+    if (type(capacity) is not int or not 1 <= capacity <= 32
+            or type(receive_ranks) is not int or receive_ranks not in (1,2)):
         raise ValueError('bounded sparse bank capacity required')
-    return 28*128*4 + 4*capacity*2*128*2 + 2*capacity*2*128*2
+    return 28*128*4 + 4*capacity*2*128*2 + receive_ranks*2*capacity*2*128*2
 
 
 class PinnedScratchLease:
@@ -49,13 +50,27 @@ class PinnedScratchLease:
         self.pending = False
         self.pool._return(self)
 
+    def finish_completed(self, event):
+        """Recycle only after an independently awaited local CUDA event proof."""
+        self._owner()
+        self.event=event
+        try:
+            if event.query() is not True:
+                raise RuntimeError('pinned scratch event still pending')
+        except BaseException:
+            self.pool._quarantine(self,'pinned scratch local event completion unknown')
+            raise
+        self.pending=False
+        self.pool._return(self)
+
 
 class PinnedScratchPool:
-    def __init__(self, budget, *, capacity, slots=2):
+    def __init__(self, budget, *, capacity, slots=2, receive_ranks=1):
         if not isinstance(budget, TransferBudget) or type(slots) is not int or not 1 <= slots <= 2:
             raise ValueError('explicit bounded pinned scratch budget required')
         self.budget, self.capacity, self.slots = budget, capacity, slots
-        self.bytes_per_slot = scratch_bytes(capacity)
+        self.bytes_per_slot = scratch_bytes(capacity,receive_ranks)
+        self.receive_ranks=receive_ranks
         self._lock = threading.RLock()
         self._slots, self._closed, self._unknown = [], False, None
         self._allocations, self._acquired, self._returned = 0, 0, 0
@@ -64,7 +79,7 @@ class PinnedScratchPool:
     def _allocate(self):
         return (torch.empty((28,128),dtype=torch.float32,pin_memory=True),
                 torch.empty((4,self.capacity,2,128),dtype=torch.float16,pin_memory=True),
-                torch.empty(2*self.capacity*512,dtype=torch.uint8,pin_memory=True))
+                torch.empty(self.receive_ranks*2*self.capacity*512,dtype=torch.uint8,pin_memory=True))
 
     def acquire(self):
         with self._lock:

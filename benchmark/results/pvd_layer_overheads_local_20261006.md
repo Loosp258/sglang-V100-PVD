@@ -42,3 +42,21 @@
 - gate01 的断线计数断言错误（断线后的 fence 正确走 HTTP，不新增 channel
   请求），已修正测试，原失败日志保留。无 GPU/RDMA/TPOT 实测。
 - 输出：`artifacts/layer_overheads_20261006/step3/gate02/`。
+
+## 4. 本地 CUDA 完成异步等待
+
+- 默认关闭 D 配置 `async_cuda_completion`，要求 bounded async layer jobs。
+- Q D2H、接收 KV D2H、bank H2D 记录 local event，在原 owner 上 query/yield，
+  让另一任务的网络处理继续；CUDA/inference context 不跨 await。
+- 原 GPUDirect ordering 仍保留；异常恢复仍用原保守 stream fence。异步 KV
+  copy 持有 record 锁与全部 MR/host/view owners，成功以后才写 cache valid。
+- 两个 rank 的 pinned receive scratch 分区：capacity32/两 lease 新增 32 KiB
+  物理最大容量，计入原 transfer budget；完成证明前不复用或退费。
+- `step4/gate02`：70 passed、2 real-CUDA skipped。CPU policy 验证事件等待
+  能让出循环、取消仍 join、cache 未完成不安装、unknown 保留 scratch/budget；
+  双 V 完整异步 job 在 pinned/event 两种模式保持精确 FP16 字节与退休。
+- gate01 新测试误用 fixture.prepare，修正为既有 prepare helper；原日志保留。
+- `query()` 的完成语义依据 [PyTorch Event 文档](https://docs.pytorch.org/docs/2.14/generated/torch.cuda.Event.html)。
+  新 GPU gate 已写但无 GPU 跳过；没有 RDMA/GPU/TPOT 资格结论。0.5 ms 轮询
+  间隔也需真实 GPU 对照其唤醒延迟，不宣称它一定比同步更快。
+- 输出：`artifacts/layer_overheads_20261006/step4/gate02/`。

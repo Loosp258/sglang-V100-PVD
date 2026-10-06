@@ -124,6 +124,7 @@ def cuda_policy(monkeypatch):
     class Event:
         def record(self,*args):pass
         def synchronize(self):pass
+        def query(self):return True
     class Stream:
         def wait_event(self,event):pass
         def synchronize(self):pass

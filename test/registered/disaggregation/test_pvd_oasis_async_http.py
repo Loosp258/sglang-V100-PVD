@@ -25,7 +25,8 @@ from test_pvd_prompt_vectors import FakePool, storage_layout, pack_shard
 
 
 @pytest.mark.parametrize('pinned',[False,True])
-def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkeypatch,background_io,pinned):
+@pytest.mark.parametrize('async_cuda',[False,True])
+def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkeypatch,background_io,pinned,async_cuda):
     # CPU byte qualification only: avoid massive tiny-op thread-pool overhead.
     prior_threads=torch.get_num_threads();torch.set_num_threads(1)
     source=FakePool(layers=28,heads=4,dim=128)
@@ -91,8 +92,9 @@ def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkey
         request_id='req',incarnation='inc',device='cpu',vector_space=SPACE,capacity=4,max_new=4,top_k=2,
         timeout=5,ready_before_cleanup=True,binary_queries=True,fused_search_delivery=True,
         binary_control_channel=True,compact_cache_snapshots=True,fused_zero_miss_proof=True,
-        reuse_receive_slots=True,reuse_pinned_scratch=pinned,event_bank_ready=pinned,async_layer_jobs=True)
-    if pinned:monkeypatch.setattr(owner.pinned_pool,'_allocate',lambda:cpu_allocate(4))
+        reuse_receive_slots=True,reuse_pinned_scratch=pinned,event_bank_ready=pinned,async_layer_jobs=True,
+        async_cuda_completion=async_cuda)
+    if pinned:monkeypatch.setattr(owner.pinned_pool,'_allocate',lambda:cpu_allocate(4,2 if async_cuda else 1))
     lookahead=LayerLookahead('req','inc',layers=28,timeout=5)
     banks=[]
     try:

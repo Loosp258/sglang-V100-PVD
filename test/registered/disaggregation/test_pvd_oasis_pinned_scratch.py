@@ -10,10 +10,10 @@ from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerLookahead
 from test_pvd_oasis_transport_io import transport, background_io
 
 
-def cpu_allocate(capacity):
+def cpu_allocate(capacity, receive_ranks=1):
     # Explicit CPU policy; production allocator always requests pinned memory.
     return (torch.empty((28,128)),torch.empty((4,capacity,2,128),dtype=torch.float16),
-            torch.empty(2*capacity*512,dtype=torch.uint8))
+            torch.empty(receive_ranks*2*capacity*512,dtype=torch.uint8))
 
 
 def test_reuse_and_pending_completion_keep_exact_byte_charge(monkeypatch):

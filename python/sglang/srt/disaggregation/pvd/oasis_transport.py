@@ -186,6 +186,65 @@ class OasisCUDAReceiveRecord(CUDASparseReceiveRecord):
                 self._cache_copy_owners.clear()
 
 
+    async def copy_to_cache_async(self, cache, *, stream):
+        """Keep the MR and D2H owners while the request loop advances other jobs."""
+        from sglang.srt.disaggregation.pvd.async_cuda_completion import wait_local_cuda_event
+        self._live()
+        if self._lock.locked() or not self._ready or not self._safe or self._installed:
+            raise RuntimeError('one exact terminal-success CUDA receive required')
+        async with self._lock:
+            self._cache_copy_owners=[]
+            try:
+                with torch.inference_mode(), torch.cuda.device(self._registry.device), torch.cuda.stream(stream):
+                    try:
+                        self._registry.ordering.after_remote_write(self._registration)
+                    except BaseException:
+                        self._local_unknown='CUDA receive ordering unknown'
+                        raise
+                    self._ordered=True
+                    views=self.manifest.payload_views(self._buffer)
+                    self._cache_copy_owners.extend(views)
+                    scratch=getattr(self._registry,'pinned_scratch',None)
+                    if scratch is not None:
+                        if scratch.pool.receive_ranks!=2:raise RuntimeError('async receive needs distinct rank scratch')
+                        offset=self.identity.shard_rank*2*self._registry.cache_capacity*512
+                        host=scratch.receive[offset:offset+self.manifest.nbytes]
+                        if host.numel()!=self.manifest.nbytes:raise RuntimeError('rank scratch extent mismatch')
+                    else:
+                        host=torch.empty_like(self._buffer,device='cpu',pin_memory=True)
+                    self._cache_copy_owners.append(host)
+                    host.copy_(self._buffer,non_blocking=True)
+                    complete=torch.cuda.Event()
+                    self._cache_copy_owners.append(complete)
+                    complete.record()
+                await wait_local_cuda_event(complete,self._registry.device)
+                with torch.inference_mode():
+                    cpu_views=self.manifest.payload_views(host)
+                    self._cache_copy_owners.extend(cpu_views)
+                    if self._registry.batched_cache_install:
+                        profile=install_cpu_payloads(cpu_views,cache,capacity=self._registry.cache_capacity,
+                            retained=self._cache_copy_owners)
+                    else:
+                        for payload in cpu_views:
+                            head=payload.spec.kv_head
+                            for offset,token in enumerate(payload.spec.token_ids):
+                                if token in cache[head]:raise RuntimeError('duplicate remote cache row')
+                                cache[head][token]=payload.tensor[:,offset].clone()
+                        profile=row_cache_profile(cpu_views)
+                self._installed=True
+                self.profile.update(profile,cache_install_complete=True,cache_d2h_fenced=True,
+                    cache_async_completion=True)
+            except BaseException:
+                # Exceptional recovery keeps the original conservative stream proof.
+                try:
+                    with torch.cuda.device(self._registry.device):stream.synchronize()
+                except BaseException:
+                    self._local_unknown='Oasis cache D2H completion unknown'
+                raise
+            finally:
+                if self._local_unknown is None:self._cache_copy_owners.clear()
+
+
 class OasisCUDAReceiveRegistry(CUDASparseReceiveRegistry):
     def __init__(self, *args, receive_pool=None, batched_cache_install=False,
                  cache_capacity=2048, **kwargs):
@@ -244,7 +303,7 @@ class OasisLayerTransport:
                  fused_search_delivery=False, compact_cache_snapshots=False,
                  reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False,
                  fused_zero_miss_proof=False, async_layer_jobs=False, parallel_owned_cleanup=False,
-                 channel_cleanup=False):
+                 channel_cleanup=False, async_cuda_completion=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -270,6 +329,7 @@ class OasisLayerTransport:
                 or type(async_layer_jobs) is not bool
                 or type(parallel_owned_cleanup) is not bool
                 or type(channel_cleanup) is not bool
+                or type(async_cuda_completion) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -325,7 +385,7 @@ class OasisLayerTransport:
                 workers != 2 or capacity > 32 or staged_transport or gpu_receive_to_bank
                 or batched_bank_install or batched_cache_install or (ready_before_cleanup and not fused_search_delivery)
                 or type(install_scratch_bytes) is not int
-                or workers*scratch_bytes(capacity) > install_scratch_bytes):
+                or workers*scratch_bytes(capacity,2 if async_cuda_completion else 1) > install_scratch_bytes):
             raise ValueError('pinned/event experiment requires bounded ordinary two-worker installation')
         if event_bank_ready and not reuse_pinned_scratch:
             raise ValueError('event bank publication requires owned pinned scratch')
@@ -341,9 +401,13 @@ class OasisLayerTransport:
                 or install_scratch_bytes < async_tensor_bound(capacity)):
             raise ValueError('async layer jobs require fused binary channel and owned READY cleanup')
         self.async_layer_jobs = async_layer_jobs
+        if async_cuda_completion and not async_layer_jobs:
+            raise ValueError('async CUDA completion requires bounded async layer jobs')
+        self.async_cuda_completion=async_cuda_completion
         self.async_jobs = None
         self._channel_clients=None
-        self.pinned_pool = (PinnedScratchPool(manager.transfer_budget,capacity=capacity,slots=workers)
+        self.pinned_pool = (PinnedScratchPool(manager.transfer_budget,capacity=capacity,slots=workers,
+                            receive_ranks=2 if async_cuda_completion else 1)
                             if reuse_pinned_scratch else None)
         self.cleanup = OwnedReadyCleanup(workers=workers, capacity=56) if (ready_before_cleanup or event_bank_ready) and not async_layer_jobs else None
         self.stages = None
@@ -533,6 +597,7 @@ class OasisLayerTransport:
                 async_layer_jobs=self.async_layer_jobs,
                 parallel_owned_cleanup=self.parallel_owned_cleanup,
                 channel_cleanup=self.channel_cleanup,
+                async_cuda_completion=self.async_cuda_completion,
                 async_jobs=self.async_jobs.snapshot() if self.async_jobs else None,
                 async_scratch_bound=async_tensor_bound(self.capacity) if self.async_layer_jobs else None,
                 staged_transport=self.staged_transport,
@@ -721,7 +786,9 @@ class OasisLayerTransport:
                 if time.monotonic() >= deadline: raise TimeoutError('fused native delivery expired')
                 await asyncio.sleep(0.001);ready=await record.poll()
             tick=time.perf_counter()
-            if state.get('async_owner'):
+            if state.get('async_owner') and getattr(self,'async_cuda_completion',False):
+                await record.copy_to_cache_async(self.cache[ticket.layer],stream=state['stream'])
+            elif state.get('async_owner'):
                 # No CUDA context spans the network await on the shared owner.
                 with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
                     record.copy_to_cache(self.cache[ticket.layer])
@@ -930,7 +997,7 @@ class OasisLayerTransport:
                     return future
             return StagedCallback()
 
-        def prepare_input(state, retained):
+        def prepare_input(state, retained, *, defer_completion=False):
             scratch = None
             if self.pinned_pool is not None:
                 scratch = self.pinned_pool.acquire()
@@ -943,10 +1010,16 @@ class OasisLayerTransport:
                       else torch.empty_like(query, device="cpu", pin_memory=True))
             retained.append(host_q)
             host_q.copy_(query, non_blocking=True)
-            state["stream"].synchronize()
+            if defer_completion:
+                complete=torch.cuda.Event()
+                complete.record()
+                retained.append(complete)
+                state['input_completion']=complete
+            else:
+                state["stream"].synchronize()
             return host_q, scratch
 
-        def install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready):
+        def install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready, *, defer_completion=False):
             resident = bank() if callable(bank) else bank
             if resident is not None and resident.completion is not None:
                 state['stream'].wait_event(resident.completion)
@@ -1017,31 +1090,38 @@ class OasisLayerTransport:
                 # READY permits a consumer stream to enqueue wait_event;
                 # it is not a claim that local GPU copies have finished.
                 publish_ready(LayerReply(ticket,PromptBank(chosen,keys,values,valid,complete)))
+            def finish_bank():
+                nonlocal row
+                if install_profile is not None:
+                    install_profile.update(completion_proven=True,
+                        install_seconds=time.perf_counter() - install_started)
+                # Borrowed row aliases must disappear before a reader's
+                # last unpin may drop storage and refund its byte charge.
+                state['fresh_gpu_rows'].clear()
+                row = None
+                for reader in state['gpu_readers']:
+                    reader.release_after_copy(complete)
+                state['gpu_readers'].clear()
+                with self.lock:
+                    self.trace.append(dict(step=ticket.step, layer=ticket.layer,
+                        remote_rows=remote_rows, rpc_seconds=rpc_seconds,
+                        bank_install=install_profile,
+                        fused_profiles=state.get('fused_profiles',[]),
+                        deliveries=state.get("delivery_profiles", [])))
+                reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
+                if publish_ready is not None and not self.event_bank_ready:
+                    publish_ready(reply)
+                return reply
+            if defer_completion:
+                state['bank_completion']=complete
+                state['finish_bank']=finish_bank
+                return None
             # Source owners can retire only after the H2D/copy event.
             if scratch is None:
                 complete.synchronize()
             else:
                 scratch.finish(complete)
-            if install_profile is not None:
-                install_profile.update(completion_proven=True,
-                    install_seconds=time.perf_counter() - install_started)
-            # Borrowed row aliases must disappear before a reader's
-            # last unpin may drop storage and refund its byte charge.
-            state['fresh_gpu_rows'].clear()
-            row = None
-            for reader in state['gpu_readers']:
-                reader.release_after_copy(complete)
-            state['gpu_readers'].clear()
-            with self.lock:
-                self.trace.append(dict(step=ticket.step, layer=ticket.layer,
-                    remote_rows=remote_rows, rpc_seconds=rpc_seconds,
-                    bank_install=install_profile,
-                    fused_profiles=state.get('fused_profiles',[]),
-                    deliveries=state.get("delivery_profiles", [])))
-            reply = LayerReply(ticket, PromptBank(chosen, keys, values, valid, complete))
-            if publish_ready is not None and not self.event_bank_ready:
-                publish_ready(reply)
-            return reply
+            return finish_bank()
 
         def drain_failure(state, retained):
             scratch = state.get('scratch')
@@ -1087,15 +1167,25 @@ class OasisLayerTransport:
                 raise RuntimeError('foreign async layer transport ticket')
             state = self._worker(async_loop=asyncio.get_running_loop())
             retained = [query, event, bank]
+            deferred=getattr(self,'async_cuda_completion',False)
+            from sglang.srt.disaggregation.pvd.async_cuda_completion import wait_local_cuda_event
             try:
                 # Never hold a CUDA stream/inference context across an await:
                 # the other admitted coroutine shares this owner thread.
                 with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
-                    host_q, scratch = prepare_input(state, retained)
+                    host_q, scratch = prepare_input(state, retained, defer_completion=deferred)
+                if deferred:
+                    await wait_local_cuda_event(state['input_completion'],self.device)
                 chosen, remote_rows, rpc_seconds = await self._select_and_fetch(
                     state, ticket, host_q.float().numpy(), bank, bootstrap)
                 with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
-                    reply = install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready)
+                    reply = install_bank(state, ticket, chosen, remote_rows, rpc_seconds, scratch, retained, publish_ready,
+                        defer_completion=deferred)
+                if deferred:
+                    await wait_local_cuda_event(state['bank_completion'],self.device)
+                    with torch.inference_mode(), torch.cuda.device(self.device), torch.cuda.stream(state['stream']):
+                        if scratch is not None:scratch.finish_completed(state['bank_completion'])
+                        reply=state.pop('finish_bank')()
                 # Local GPU work and scratch have completed. Up to two proven
                 # destination owners may now await ACK, independently of queries.
                 await begin_cleanup()
