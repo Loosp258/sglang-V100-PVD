@@ -127,7 +127,7 @@ class _AllocationOnly:
 
 
 def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_epoch, client, owner_scope=None,
-                  binary_queries=False, zero_miss_proof=False):
+                  binary_queries=False, zero_miss_proof=False, cache_delta=None):
     registry._owner();started=time.perf_counter()
     if any(not isinstance(value,str) or not value.strip() for value in (rail,endpoint)):
         raise ValueError('explicit fused rail/endpoint required')
@@ -149,6 +149,7 @@ def prepare_fused(registry, scope, search, *, key, rank, rail, endpoint, sender_
     record.fused_scope,record.fused_search,record.fused_digest=scope,search,digest
     record.fused_binary_snapshot=snapshot
     record.fused_zero_miss_proof=zero_miss_proof
+    record.fused_cache_delta=json.loads(json.dumps(cache_delta,allow_nan=False)) if cache_delta is not None else None
     registry.budget.reserve(record.owner,registry._destination_charge(record.manifest),1)
     registry._records[identity.transfer_id]=record
     registry._prepare_registration(record,endpoint=endpoint,rank=rank,rail=rail,generation=identity.generation)
@@ -171,6 +172,10 @@ async def start_fused(record, search_client, requests):
                      identity=record.identity.to_dict(),destination=record._registration.descriptor.to_dict())
         if record.fused_zero_miss_proof: payload['zero_miss_proof']=True
         if getattr(record,'fused_channel_cleanup',False): payload['channel_cleanup']=True
+        if record.fused_cache_delta is not None:
+            if not search_client.binary_control_channel:raise ValueError('cache deltas require owned channel')
+            payload['cache_delta']=record.fused_cache_delta
+            payload['selection']={**record.fused_scope,'cached':[[],[]]}
         binary=record.fused_search['items'][0].get('query_encoding') == BINARY_QUERY_ENCODING
         options=(dict(encoded_payload=pack_binary_fused(payload,snapshot=record.fused_binary_snapshot),content_type=BINARY_QUERY_CONTENT_TYPE)
                  if binary else {})
@@ -182,9 +187,23 @@ async def start_fused(record, search_client, requests):
                 '/internal/v1/indexes/search-deliver-binary' if binary else '/internal/v1/indexes/search-deliver',
                 payload,**options)
         reply=await record._timed_rpc('fused',operation)
+        if reply.get('cache_resync') is True:
+            from sglang.srt.disaggregation.pvd.cache_delta import CacheDeltaResync
+            if (record.fused_cache_delta is None or reply.get('protocol')!=FUSED_PROTOCOL
+                    or reply.get('identity')!=record.identity.to_dict()):
+                raise ValueError('unexpected cache resync identity')
+            record.accept_absent_write_fence(reply.get('absent_write_fence'))
+            raise CacheDeltaResync('V requested an exact full cache snapshot')
         if reply.get('protocol') != FUSED_PROTOCOL or reply.get('selection_digest') != record.fused_digest:
             raise ValueError('fused response capability mismatch')
         if reply.get('identity') != record.identity.to_dict(): raise ValueError('fused response identity mismatch')
+        if record.fused_cache_delta is not None:
+            proof=reply.get('cache_versions')
+            expected=[dict(version=s['version'],digest=s['digest']) for s in record.fused_cache_delta['states']]
+            if (proof!=expected or not isinstance(proof,list)
+                    or any(type(item.get('version')) is not int for item in proof)):
+                raise ValueError('fused cache confirmation differs from exact frozen snapshot')
+            record.fused_cache_confirmation=proof
         results=reply.get('results')
         if not isinstance(results,list) or len(results) != 2: raise ValueError('missing fused search results')
         for result, request, item in zip(results,requests,record.fused_search['items'],strict=True):

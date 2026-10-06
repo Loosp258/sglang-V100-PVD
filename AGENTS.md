@@ -22,6 +22,9 @@
   no GitHub push: V typed batch results; parallel rank cleanup; persistent
   ACK/fence; async local CUDA completion; versioned exact cache deltas.
   See `docs/pvd_layer_overheads_plan_20261006.md`. No GPU is available.
+  All five local implementations now have a combined 567-pass/4-CUDA-skip
+  gate. New options remain default-off; no GPU/RDMA/TPOT or model quality
+  claim. Evidence: `benchmark/results/pvd_layer_overheads_local_20261006.md`.
 
 - Latest follow-up: implement four further steps, each with a local commit only:
   fused READY before ACK/cleanup; zero-miss absent-write proof in the search

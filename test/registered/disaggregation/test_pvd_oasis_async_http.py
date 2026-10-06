@@ -14,6 +14,7 @@ import torch
 
 from sglang.srt.disaggregation.pvd import oasis_transport as oasis
 from sglang.srt.disaggregation.pvd.control_server import HttpShardClient, create_shard_app
+from sglang.srt.disaggregation.pvd.fused_binary_channel import ChannelRecordControl
 from sglang.srt.disaggregation.pvd.oasis_pipeline import LayerLookahead
 from sglang.srt.disaggregation.pvd.protocol import KVEntryKey, KVEntryManifest
 from sglang.srt.disaggregation.pvd.transfer_lifecycle import TransferBudget
@@ -26,7 +27,8 @@ from test_pvd_prompt_vectors import FakePool, storage_layout, pack_shard
 
 @pytest.mark.parametrize('pinned',[False,True])
 @pytest.mark.parametrize('async_cuda',[False,True])
-def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkeypatch,background_io,pinned,async_cuda):
+@pytest.mark.parametrize('followup',[False,True])
+def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkeypatch,background_io,pinned,async_cuda,followup):
     # CPU byte qualification only: avoid massive tiny-op thread-pool overhead.
     prior_threads=torch.get_num_threads();torch.set_num_threads(1)
     source=FakePool(layers=28,heads=4,dim=128)
@@ -62,12 +64,14 @@ def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkey
     completion=background_io.submit(start_servers()).result(5)
     release=threading.Event()
     calls=[]
-    original_ack=HttpShardClient.ack_delivery
+    ack_class=ChannelRecordControl if followup else HttpShardClient
+    original_ack=ack_class.ack_delivery
     async def blocked_ack(client,*args):
         calls.append(('ack',threading.get_ident()))
         while not release.is_set():await asyncio.sleep(0.001)
         return await original_ack(client,*args)
-    monkeypatch.setattr(HttpShardClient,'ack_delivery',blocked_ack)
+    monkeypatch.setattr(ack_class,'ack_delivery',blocked_ack)
+    if followup:monkeypatch.setenv('PVD_TYPED_BATCH_RESULTS','1')
     original_registry,original_pool=oasis.OasisCUDAReceiveRegistry,oasis.OasisReceiveSlotPool
     cuda_policy(monkeypatch)
     monkeypatch.setattr(torch.cuda,'is_available',lambda:True)
@@ -93,7 +97,8 @@ def test_actual_async_two_rank_pipeline_and_slot_budget_with_blocked_acks(monkey
         timeout=5,ready_before_cleanup=True,binary_queries=True,fused_search_delivery=True,
         binary_control_channel=True,compact_cache_snapshots=True,fused_zero_miss_proof=True,
         reuse_receive_slots=True,reuse_pinned_scratch=pinned,event_bank_ready=pinned,async_layer_jobs=True,
-        async_cuda_completion=async_cuda)
+        async_cuda_completion=async_cuda,parallel_owned_cleanup=followup,
+        channel_cleanup=followup,cache_delta_snapshots=followup)
     if pinned:monkeypatch.setattr(owner.pinned_pool,'_allocate',lambda:cpu_allocate(4,2 if async_cuda else 1))
     lookahead=LayerLookahead('req','inc',layers=28,timeout=5)
     banks=[]

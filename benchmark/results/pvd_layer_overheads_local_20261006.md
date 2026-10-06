@@ -60,3 +60,41 @@
   新 GPU gate 已写但无 GPU 跳过；没有 RDMA/GPU/TPOT 资格结论。0.5 ms 轮询
   间隔也需真实 GPU 对照其唤醒延迟，不宣称它一定比同步更快。
 - 输出：`artifacts/layer_overheads_20261006/step4/gate02/`。
+
+## 5. 精确缓存版本与增量
+
+- 默认关闭 D 配置 `cache_delta_snapshots`，要求 compact snapshots 与 owned
+  binary channel。逐行 CPU copy 成功后更新 journal/bitmap，不扫描完整 validity。
+  完整 canonical 快照按版本缓存，摘要/选择与旧 compact snapshot 完全一致。
+- 首次发送完整集合；后续发送自最后确认版本以来的新 ID、目标版本和精确
+  bitmap digest。V 在查询结果中确认快照，独立于 native delivery ACK。
+- V 只保存当前请求/rank 的 28x2 bitmaps。重复累积增量可幂等处理；旧增量或
+  缺基准要求 full resync，不猜缓存命中。完整旧快照可用于原查询但不倒退最新状态。
+- resync 响应带原始 WriteIdentity 的 absent-write fence；D 验证并关闭原 MR
+  lease，创建新身份/generation 后仅重试一次完整冻结快照。坏或丢证明不重用身份。
+- D journal/bitmap/canonical metadata 计入已有 request scratch；V persistent
+  metadata 和两查询临时集合由同一 lifecycle transfer budget 有界预留，join
+  通道工作后退费。32K Prompt 的 D bound=9,748,480 bytes，V/rank/channel
+  host bound=8,839,168 bytes；有全局 admission，不是无限 32 通道叠加。
+- `step5/gate01`：122 passed、1 CUDA skipped；`step5/gate02`：57 passed。
+  第二次覆盖真实通道 full resync、旧身份 tombstone、新 generation、零新增 PUT
+  和组合双 V pipeline；后续补齐保守 memory bounds，以最终 gate 为当前源资格。
+- 全部五项组合 `final/gate01`：**567 passed、4 real-CUDA skipped**，一个既有
+  asyncio_mode warning；156 个 PVD Python 模块 AST parse 通过。分步数字有重叠，
+  不相加。测试前后归一化源码 hash 一致；最终 commit blob 对照另存 evidence_commit。
+- 完整组合包含 pinned/event/no-pinned、local async completion on/off，两 V
+  真实 CPU channel、阻塞前两层 ACK 时后两层精确 bank、随后全命中、8 MR 退休
+  和预算回到零；CAGRA/native/CUDA 使用明确 CPU policy doubles，不是模型质量证据。
+- 密集且不变的两 head 缓存控制字段字节（包含整个 delta 描述，不含 Q/其他身份）：
+
+  | Prompt | 原完整快照 | 增量 |
+  |---|---:|---:|
+  | 2159 | 822 B | 378 B |
+  | 8192 | 2838 B | 378 B |
+  | 32768 | 11030 B | 383 B |
+
+- 初次或频繁增长的增量不保证更小。新 GPU/RDMA/完整质量、D wait/TPOT、负载与
+  故障 gates 尚未测量，全部默认关闭；保留过去无收益实验，不相加历史收益。
+- 日志/命令/源码：`artifacts/layer_overheads_20261006/`；字节与 AST 证据
+  为 `diagnostics.json`。最终 runner 的初次参数提取错误在正式 pytest 启动前
+  已修正，没有从那次启动声称任何测试结果。

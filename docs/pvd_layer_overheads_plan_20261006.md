@@ -17,3 +17,37 @@ CloudLab 已到期，无 GPU；明确区分 CPU 验证与 CUDA/RDMA/TPOT 实测�
 
 新模式默认关闭。每步记录代码、测试、资源/失败边界及 commit；有 GPU 后逐项
 ABBA，只改变一项，检查精确输出、流量、峰值内存、D wait 与 TPOT。
+
+## 本地完成情况
+
+1. `7e109d953`：V typed batch/final encode，155 passed/2 CUDA skipped。
+2. `41d4e7d3c`：并行 owned rank cleanup，51 passed。
+3. `3b935ed72`：持久 channel ACK/fence，97 passed/1 CUDA skipped。
+4. `31c845bd9`：local CUDA event async wait，70 passed/2 CUDA skipped。
+5. 精确 cache delta/full resync；最终跨步 567 passed/4 CUDA skipped。
+
+分步测试重叠，不相加。详见 `benchmark/results/pvd_layer_overheads_local_20261006.md`。
+五项代码按顺序本地 commit；不 push。CUDA/RDMA/真实模型/TPOT gates 仍待 GPU。
+
+## 可选配置
+
+V 环境变量：`PVD_TYPED_BATCH_RESULTS=1`。
+
+以下 D 字段加入已经通过旧配置校验的 JSON；新字段均默认 false：
+
+```json
+{
+  "parallel_owned_cleanup": true,
+  "channel_cleanup": true,
+  "async_cuda_completion": true,
+  "cache_delta_snapshots": true,
+  "request_scratch_bytes": 33554432
+}
+```
+
+要求已有 `ready_before_cleanup=true`、`async_layer_jobs=true`、
+`fused_search_delivery=true`、`binary_queries=true`、`binary_control_channel=true`
+和 `compact_cache_snapshots=true`。原 pinned/event/receive reuse 可继续使用；
+`fused_zero_miss_proof=true` 可省掉全命中额外 fence。容量仍为32、workers仍为2。
+local async+pinned 在 capacity32 增加32KiB rank分区；delta另按Prompt上限预留。
+先逐项GPU对照，再测组合，不把开启全部视作已经验证收益。

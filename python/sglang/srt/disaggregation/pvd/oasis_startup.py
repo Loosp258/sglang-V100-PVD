@@ -229,6 +229,7 @@ class OasisResources:
                 fused_zero_miss_proof=cfg.get('fused_zero_miss_proof',False),
                 async_layer_jobs=cfg.get('async_layer_jobs',False),
                 parallel_owned_cleanup=cfg.get('parallel_owned_cleanup',False),
+                cache_delta_snapshots=cfg.get('cache_delta_snapshots',False),
                 async_cuda_completion=cfg.get('async_cuda_completion',False),
                 channel_cleanup=cfg.get('channel_cleanup',False),
                 install_scratch_bytes=cfg['request_scratch_bytes'],
@@ -288,7 +289,7 @@ def maybe_install_oasis(scheduler):
     fields = {"eagle_source", "eagle_checkpoint", "eagle_manifest", "vector_space", "capacity",
         "max_new", "top_k", "workers", "timeout_seconds", "max_sequence_tokens", "max_decode_steps",
         "request_budget_bytes", "request_scratch_bytes", "bootstrap_budget_bytes", "bootstrap_transient_bytes", "overlap"}
-    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries','fused_search_delivery','compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof','async_layer_jobs','parallel_owned_cleanup','channel_cleanup','async_cuda_completion'} != fields:
+    if set(cfg) - {"reuse_io", "combine_reserve_start", "reuse_receive_slots", 'gpu_receive_to_bank', 'staged_transport', 'attention_workspace', 'sort_missing_tokens', 'batched_bank_install', 'batched_cache_install', 'ready_before_cleanup', 'binary_queries','fused_search_delivery','compact_cache_snapshots','reuse_pinned_scratch','event_bank_ready','binary_control_channel','fused_zero_miss_proof','async_layer_jobs','parallel_owned_cleanup','channel_cleanup','async_cuda_completion','cache_delta_snapshots'} != fields:
         raise ValueError("Oasis config must contain exactly the documented bounds and pins")
     cfg.setdefault("reuse_io", False)
     cfg.setdefault("combine_reserve_start", False)
@@ -309,6 +310,15 @@ def maybe_install_oasis(scheduler):
     cfg.setdefault('fused_zero_miss_proof',False)
     cfg.setdefault('async_layer_jobs',False)
     cfg.setdefault('parallel_owned_cleanup',False)
+    cfg.setdefault('cache_delta_snapshots',False)
+    if cfg['cache_delta_snapshots']:
+        from sglang.srt.disaggregation.pvd.cache_delta import delta_scratch_bytes
+        from sglang.srt.disaggregation.pvd.oasis_async_jobs import async_tensor_bound
+        required=delta_scratch_bytes(cfg['max_sequence_tokens'])
+        if cfg['async_layer_jobs']:required+=async_tensor_bound(cfg['capacity'])
+        if (not cfg['compact_cache_snapshots'] or not cfg['binary_control_channel']
+                or cfg['request_scratch_bytes']<required):
+            raise ValueError('cache deltas require compact binary channel and admitted request scratch')
     cfg.setdefault('async_cuda_completion',False)
     if cfg['async_cuda_completion'] and not cfg['async_layer_jobs']:
         raise ValueError('async CUDA completion requires bounded async layer jobs')
@@ -349,6 +359,7 @@ def maybe_install_oasis(scheduler):
             or type(cfg['fused_zero_miss_proof']) is not bool
             or type(cfg['async_layer_jobs']) is not bool
             or type(cfg['parallel_owned_cleanup']) is not bool
+            or type(cfg['cache_delta_snapshots']) is not bool
             or type(cfg['async_cuda_completion']) is not bool
             or type(cfg['channel_cleanup']) is not bool
             or type(cfg["max_new"]) is not int or not 0 <= cfg["max_new"] <= cfg["capacity"]

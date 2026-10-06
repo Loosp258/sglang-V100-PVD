@@ -37,8 +37,9 @@ from sglang.srt.disaggregation.pvd.sparse_token_runs import consecutive_token_ru
 
 class _HeadCPUCache:
     """Views into one charged contiguous Prompt allocation, no per-row owners."""
-    def __init__(self, rows, valid):
+    def __init__(self, rows, valid, on_publish=None):
         self.rows, self.valid = rows, valid
+        self.on_publish=on_publish
 
     def __contains__(self, token):
         return type(token) is int and 0 <= token < len(self.valid) and bool(self.valid[token])
@@ -55,6 +56,7 @@ class _HeadCPUCache:
             raise ValueError("unique bounded CPU Prompt KV row required")
         self.rows[token].copy_(value)
         self.valid[token] = True
+        if self.on_publish is not None:self.on_publish(token)
 
 
 class OasisCPUReceiveRecord(SparseReceiveRecord):
@@ -303,7 +305,7 @@ class OasisLayerTransport:
                  fused_search_delivery=False, compact_cache_snapshots=False,
                  reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False,
                  fused_zero_miss_proof=False, async_layer_jobs=False, parallel_owned_cleanup=False,
-                 channel_cleanup=False, async_cuda_completion=False):
+                 channel_cleanup=False, async_cuda_completion=False, cache_delta_snapshots=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -330,6 +332,7 @@ class OasisLayerTransport:
                 or type(parallel_owned_cleanup) is not bool
                 or type(channel_cleanup) is not bool
                 or type(async_cuda_completion) is not bool
+                or type(cache_delta_snapshots) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -381,6 +384,9 @@ class OasisLayerTransport:
         if compact_cache_snapshots and not fused_search_delivery:
             raise ValueError('compact cache snapshots require fused delivery')
         self.compact_cache_snapshots = compact_cache_snapshots
+        if cache_delta_snapshots and (not compact_cache_snapshots or not binary_control_channel):
+            raise ValueError('cache deltas require exact compact snapshots and owned binary channel')
+        self.cache_delta_snapshots=cache_delta_snapshots
         if (reuse_pinned_scratch or event_bank_ready) and (
                 workers != 2 or capacity > 32 or staged_transport or gpu_receive_to_bank
                 or batched_bank_install or batched_cache_install or (ready_before_cleanup and not fused_search_delivery)
@@ -428,10 +434,19 @@ class OasisLayerTransport:
         shard = manifest.shards[0]
         self.prompt_tokens = ((shard.page_count - 1) * manifest.layout.page_size
                               + shard.last_page_valid_tokens)
+        self.cache_delta_sender=None
+        if cache_delta_snapshots:
+            from sglang.srt.disaggregation.pvd.cache_delta import CacheDeltaSender,delta_scratch_bytes
+            required=delta_scratch_bytes(self.prompt_tokens)+(async_tensor_bound(capacity) if async_layer_jobs else 0)
+            if type(install_scratch_bytes) is not int or install_scratch_bytes<required:
+                raise ValueError('cache delta journal requires admitted request scratch')
+            self.cache_delta_sender=CacheDeltaSender(self.prompt_tokens)
         self.scope = SearchScope(self.prompt_tokens, manifest.layout.page_size, 128, "ip")
         self._cpu_cache = torch.empty((28, 4, self.prompt_tokens, 2, 128), dtype=torch.float16)
         self._cache_valid = torch.zeros((28, 4, self.prompt_tokens), dtype=torch.bool)
-        self.cache = [[_HeadCPUCache(self._cpu_cache[layer, head], self._cache_valid[layer, head])
+        self.cache = [[_HeadCPUCache(self._cpu_cache[layer, head], self._cache_valid[layer, head],
+                       (lambda token,layer=layer,head=head:self.cache_delta_sender.publish(layer,head,token))
+                       if self.cache_delta_sender is not None else None)
                        for head in range(4)] for layer in range(28)]
         self.gpu_backups = (OasisGPUBackupPool(self.cache, manager.transfer_budget,
             device=self.device, request_id=request_id, incarnation=incarnation,
@@ -598,6 +613,7 @@ class OasisLayerTransport:
                 parallel_owned_cleanup=self.parallel_owned_cleanup,
                 channel_cleanup=self.channel_cleanup,
                 async_cuda_completion=self.async_cuda_completion,
+                cache_delta_snapshots=self.cache_delta_snapshots,
                 async_jobs=self.async_jobs.snapshot() if self.async_jobs else None,
                 async_scratch_bound=async_tensor_bound(self.capacity) if self.async_layer_jobs else None,
                 staged_transport=self.staged_transport,
@@ -745,6 +761,8 @@ class OasisLayerTransport:
         from sglang.srt.disaggregation.pvd.cache_snapshot import pack_cache_snapshot
         resident=bank() if callable(bank) else bank
         heads=[route.rank*2,route.rank*2+1]
+        tracker=getattr(self,'cache_delta_sender',None)
+        cached,cache_delta=tracker.snapshot(ticket.layer,heads) if tracker is not None else (None,None)
         scope=dict(request_id=ticket.request_id,incarnation=ticket.incarnation,
             operation_id=f"oasis:{'bootstrap' if bootstrap else 'lookahead'}:{ticket.step}:{ticket.layer}",
             target_tokens=0 if bootstrap else ticket.step+1,
@@ -754,7 +772,7 @@ class OasisLayerTransport:
             prompt_tokens=self.prompt_tokens,dtype=self.selected.manifest.layout.kv_dtype,
             head_dim=self.selected.manifest.layout.head_dim,
             resident=[list(resident.ids[h]) if resident is not None else [] for h in heads],
-            cached=[(pack_cache_snapshot(self._cache_valid[ticket.layer,h].numpy())
+            cached=cached if cached is not None else [(pack_cache_snapshot(self._cache_valid[ticket.layer,h].numpy())
                      if self.compact_cache_snapshots else self._cache_valid[ticket.layer,h].nonzero().flatten().tolist())
                     for h in heads])
         search_client=state['search'][route.rank]
@@ -764,16 +782,29 @@ class OasisLayerTransport:
             for item in items: item.update(pack_query_rows(item.pop('queries')))
         import uuid
         search=dict(batch_protocol='pvd.search.batch.v1',batch_id=uuid.uuid4().hex,items=items)
-        record=prepare_fused(state['registry'],scope,search,key=self.selected.manifest.key,rank=route.rank,
-            rail=route.rail,endpoint=self.endpoints[route.rank],sender_epoch=route.sender_epoch,
-            client=state['control'][route.rank],owner_scope=self.incarnation,
-            binary_queries=self.binary_queries,zero_miss_proof=self.fused_zero_miss_proof)
-        if getattr(self,'channel_cleanup',False):
-            from sglang.srt.disaggregation.pvd.fused_binary_channel import ChannelRecordControl
-            record._client=ChannelRecordControl(search_client,record._client,record.identity,record.fused_scope)
-            record.fused_channel_cleanup=True
+        def prepare(delta):
+            record=prepare_fused(state['registry'],scope,search,key=self.selected.manifest.key,rank=route.rank,
+                rail=route.rail,endpoint=self.endpoints[route.rank],sender_epoch=route.sender_epoch,
+                client=state['control'][route.rank],owner_scope=self.incarnation,
+                binary_queries=self.binary_queries,zero_miss_proof=self.fused_zero_miss_proof,cache_delta=delta)
+            if getattr(self,'channel_cleanup',False):
+                from sglang.srt.disaggregation.pvd.fused_binary_channel import ChannelRecordControl
+                record._client=ChannelRecordControl(search_client,record._client,record.identity,record.fused_scope)
+                record.fused_channel_cleanup=True
+            return record
+        record=prepare(cache_delta)
         try:
-            chosen,ready=await start_fused(record,search_client,requests)
+            from sglang.srt.disaggregation.pvd.cache_delta import CacheDeltaResync,full_resync_delta
+            try:
+                chosen,ready=await start_fused(record,search_client,requests)
+            except CacheDeltaResync:
+                if not await record.close():raise RuntimeError('cache resync identity did not fence')
+                cache_delta=full_resync_delta(cache_delta,record.fused_scope['cached'])
+                record=prepare(cache_delta)
+                record.profile['cache_delta_resyncs']=1
+                chosen,ready=await start_fused(record,search_client,requests)
+            if tracker is not None:
+                tracker.confirm(cache_delta,record.fused_cache_confirmation)
             pair=(record.fused_results[0]['index_version'],record.fused_results[0]['id_mapping_version'])
             with self.lock:
                 if self.versions.setdefault(route.rank,pair) != pair: raise RuntimeError('immutable fused index changed')
@@ -1269,5 +1300,8 @@ class OasisLayerTransport:
             self.gpu_backups.close()
         self.cache.clear()
         self._cpu_cache = self._cache_valid = None
+        if self.cache_delta_sender is not None:
+            self.cache_delta_sender.states.clear()
+            self.cache_delta_sender=None
         self._shared_clients = None
         self.closed = True

@@ -984,18 +984,33 @@ def create_shard_app(
             raise ValueError('binary Q content type required')
         return await search_index_batch(request, unpack_binary_batch(await request.read()))
 
-    async def search_and_deliver(request, data=None):
+    async def search_and_deliver(request, data=None, cache_receiver=None):
         from sglang.srt.disaggregation.pvd.fused_search_delivery import (
             FUSED_PROTOCOL, selection_digest, allocation_bytes, choose_wire, wire_destination)
         from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
         from sglang.srt.disaggregation.pvd.search_wire import BinarySearchSnapshot
         if data is None: data=await _payload(request)
-        if set(data)-{'zero_miss_proof','channel_cleanup'} != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
+        if set(data)-{'zero_miss_proof','channel_cleanup','cache_delta'} != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
             raise ValueError('exact fused request required')
         zero_miss_proof=data.get('zero_miss_proof',False)
         if type(zero_miss_proof) is not bool: raise ValueError('zero-miss proof option must be bool')
         if type(data.get('channel_cleanup',False)) is not bool:raise ValueError('channel cleanup option must be bool')
-        scope=data['selection'];digest=selection_digest(scope,data['search'])
+        scope=data['selection'];cache_versions=None;cache_commit=None
+        if 'cache_delta' in data:
+            from sglang.srt.disaggregation.pvd.cache_delta import CacheDeltaResync
+            if cache_receiver is None:raise ValueError('cache delta requires owned request channel')
+            try:
+                scope,cache_versions,cache_commit=cache_receiver.prepare(scope,data['cache_delta'])
+            except CacheDeltaResync:
+                identity=WriteIdentity.from_dict(data['identity'])
+                identity.validate_destination(RemoteRegionDescriptor.from_dict(data['destination']))
+                if identity.shard_rank!=store.rank or identity.key.transfer_id!=scope['entry_transfer_id']:
+                    raise ValueError('cache resync identity mismatch')
+                fence=store.fence_absent_write(identity)
+                data['_channel_writer_closed']=True
+                return web.json_response(dict(protocol=FUSED_PROTOCOL,identity=identity.to_dict(),
+                    cache_resync=True,absent_write_fence=fence))
+        digest=selection_digest(scope,data['search'])
         identity=WriteIdentity.from_dict(data['identity'])
         physical=RemoteRegionDescriptor.from_dict(data['destination'])
         identity.validate_destination(physical)
@@ -1016,6 +1031,7 @@ def create_shard_app(
                     or ((entry.manifest.page_count-1)*entry.layout.page_size
                         +entry.manifest.last_page_valid_tokens) != scope['prompt_tokens']):
                 raise ValueError('fused Entry/layout mismatch')
+        if cache_commit is not None:cache_commit()
         search=data['search'].search if isinstance(data['search'],BinarySearchSnapshot) else data['search']
         typed = os.environ.get('PVD_TYPED_BATCH_RESULTS') == '1'
         if typed:
@@ -1038,6 +1054,7 @@ def create_shard_app(
             selection_digest=digest,results=results,chosen=[list(ids) for ids in chosen],
             manifest=wire.to_dict() if wire else None,delivery=delivery)
         if zero_miss_proof: reply['absent_write_fence']=absent_write_fence
+        if cache_versions is not None:reply['cache_versions']=cache_versions
         return _bounded_search_response(reply) if typed else web.json_response(reply)
 
     async def search_and_deliver_binary(request):
@@ -1071,7 +1088,7 @@ def create_shard_app(
         except BaseException:
             channel_sockets.discard(socket)
             raise
-        tasks=set();classes={};known={};last_sequence=0;binding=None
+        tasks=set();classes={};known={};last_sequence=0;binding=None;cache_receiver=None
 
         async def control(data):
             identity=data['identity']
@@ -1092,7 +1109,7 @@ def create_shard_app(
 
         async def deliver(sequence,data,cleanup):
             try:
-                response=await pvd_error_middleware(request,lambda _:control(data) if cleanup else search_and_deliver(request,data))
+                response=await pvd_error_middleware(request,lambda _:control(data) if cleanup else search_and_deliver(request,data,cache_receiver))
             except Exception:
                 response=_json_error('binary fused handler failed',500)
             if not cleanup and data.get('_channel_writer_closed'):
@@ -1124,6 +1141,10 @@ def create_shard_app(
                     current=(scope['request_id'],scope['incarnation'],scope['entry_transfer_id'],tuple(scope['heads']))
                     if binding is None:binding=current
                 if current != binding:raise BinaryChannelError('channel request/Entry scope changed')
+                if not cleanup and 'cache_delta' in data and cache_receiver is None:
+                    from sglang.srt.disaggregation.pvd.cache_delta import CacheDeltaReceiver
+                    cache_receiver=CacheDeltaReceiver(scope['prompt_tokens'],scope['heads'],
+                        store.transfer_engine.lifecycle_manager.budget)
                 if not cleanup and data.get('channel_cleanup') is True:
                     identity=WriteIdentity.from_dict(data['identity'])
                     if identity.transfer_id in known or len(known)>=4:
@@ -1142,6 +1163,7 @@ def create_shard_app(
         finally:
             # Disconnect does not cancel a task that may authorize/start PUT.
             if tasks:await asyncio.gather(*tuple(tasks),return_exceptions=True)
+            if cache_receiver is not None:cache_receiver.close()
             channel_sockets.discard(socket)
         return socket
 
