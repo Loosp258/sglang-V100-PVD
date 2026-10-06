@@ -58,6 +58,14 @@ def _json_error(message: str, status: int) -> web.Response:
     return web.json_response({"error": message}, status=status)
 
 
+def _bounded_search_response(reply):
+    """Encode once and send the very bytes checked against the response cap."""
+    raw = json.dumps(reply, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("search batch response exceeds 2 MiB")
+    return web.Response(body=raw, content_type="application/json")
+
+
 @web.middleware
 async def pvd_error_middleware(request: web.Request, handler):
     try:
@@ -815,7 +823,7 @@ def create_shard_app(
             logger.info("PVD V search stage_ms=%s", _stage_ms(timings))
         return web.json_response(result)
 
-    async def search_index_batch(request, decoded=None):
+    async def search_index_batch_data(request, decoded=None):
         from sglang.srt.disaggregation.pvd.search_client import SEARCH_BATCH_PROTOCOL
 
         profile = os.environ.get("PVD_PROFILE_V_SEARCH") == "1"
@@ -960,10 +968,13 @@ def create_shard_app(
             "batch_id": batch_id,
             "results": results,
         }
-        if (
-            len(json.dumps(reply, separators=(",", ":")).encode("utf-8"))
-            > 2 * 1024 * 1024
-        ):
+        return reply
+
+    async def search_index_batch(request, decoded=None):
+        reply = await search_index_batch_data(request, decoded)
+        if os.environ.get('PVD_TYPED_BATCH_RESULTS') == '1':
+            return _bounded_search_response(reply)
+        if len(json.dumps(reply, separators=(",", ":")).encode("utf-8")) > 2 * 1024 * 1024:
             raise ValueError("search batch response exceeds 2 MiB")
         return web.json_response(reply)
 
@@ -1005,8 +1016,12 @@ def create_shard_app(
                         +entry.manifest.last_page_valid_tokens) != scope['prompt_tokens']):
                 raise ValueError('fused Entry/layout mismatch')
         search=data['search'].search if isinstance(data['search'],BinarySearchSnapshot) else data['search']
-        response=await search_index_batch(request,search)
-        results=json.loads(response.body)['results']
+        typed = os.environ.get('PVD_TYPED_BATCH_RESULTS') == '1'
+        if typed:
+            results=(await search_index_batch_data(request,search))['results']
+        else:
+            response=await search_index_batch(request,search)
+            results=json.loads(response.body)['results']
         chosen,wire=choose_wire(scope,results)
         delivery=None;absent_write_fence=None
         if wire is not None:
@@ -1021,7 +1036,7 @@ def create_shard_app(
             selection_digest=digest,results=results,chosen=[list(ids) for ids in chosen],
             manifest=wire.to_dict() if wire else None,delivery=delivery)
         if zero_miss_proof: reply['absent_write_fence']=absent_write_fence
-        return web.json_response(reply)
+        return _bounded_search_response(reply) if typed else web.json_response(reply)
 
     async def search_and_deliver_binary(request):
         from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_fused, BINARY_QUERY_CONTENT_TYPE

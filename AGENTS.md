@@ -18,6 +18,11 @@
 
 ## Current publication authorization (2026-10-05)
 
+- Latest request (2026-10-06): five steps in order, local commit after each,
+  no GitHub push: V typed batch results; parallel rank cleanup; persistent
+  ACK/fence; async local CUDA completion; versioned exact cache deltas.
+  See `docs/pvd_layer_overheads_plan_20261006.md`. No GPU is available.
+
 - Latest follow-up: implement four further steps, each with a local commit only:
   fused READY before ACK/cleanup; zero-miss absent-write proof in the search
   response; encode a frozen binary Q once; bounded request async scheduling.
