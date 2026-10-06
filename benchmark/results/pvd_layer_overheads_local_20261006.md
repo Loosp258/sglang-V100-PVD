@@ -26,3 +26,19 @@
   在释放前都进入；覆盖 lost ACK、取消、配置边界与完整双 V 异步交付回归。
 - 无 GPU/TPOT 实测；此项减少清理槽占用的潜在时间，不把 ACK 算成 D 前景等待。
 - 输出：`artifacts/layer_overheads_20261006/step2/gate01/`。
+
+## 3. 持久通道 ACK/fence
+
+- 默认关闭 D 配置 `channel_cleanup`，要求 binary control channel。
+- 同一请求/rank 通道承载完整 WriteIdentity 的 ACK/fence；服务端绑定请求、
+  incarnation、Entry 与 heads，只接受本通道已声明的原始 writer 身份。
+- 搜索/交付仍最多 2 项；清理独立最多 2 项，总在途最多 4，未退休身份最多 4。
+  每个 record 的本地安装/ACK/native terminal 校验沿用原协议。零 miss 证明
+  当场移除已 fenced 身份，长串命中不积累通道 writer。
+- 通道断线、坏回复或丢证明不代表安全；fence 使用原 HTTP 完整身份恢复。
+- `step3/gate02`：97 passed、1 CUDA skipped。真实两 rank CPU 通道各连续
+  六次 miss/hit/zero-miss proof/ACK/fence；1 条连接、精确退休，错误 generation
+  拒绝，断线仍 HTTP fence 恢复。阻塞网络证明查询/清理各 2 项独立有界。
+- gate01 的断线计数断言错误（断线后的 fence 正确走 HTTP，不新增 channel
+  请求），已修正测试，原失败日志保留。无 GPU/RDMA/TPOT 实测。
+- 输出：`artifacts/layer_overheads_20261006/step3/gate02/`。

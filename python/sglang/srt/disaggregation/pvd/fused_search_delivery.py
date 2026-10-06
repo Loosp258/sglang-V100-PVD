@@ -170,6 +170,7 @@ async def start_fused(record, search_client, requests):
         payload=dict(protocol=FUSED_PROTOCOL,selection=record.fused_scope,search=record.fused_search,
                      identity=record.identity.to_dict(),destination=record._registration.descriptor.to_dict())
         if record.fused_zero_miss_proof: payload['zero_miss_proof']=True
+        if getattr(record,'fused_channel_cleanup',False): payload['channel_cleanup']=True
         binary=record.fused_search['items'][0].get('query_encoding') == BINARY_QUERY_ENCODING
         options=(dict(encoded_payload=pack_binary_fused(payload,snapshot=record.fused_binary_snapshot),content_type=BINARY_QUERY_CONTENT_TYPE)
                  if binary else {})

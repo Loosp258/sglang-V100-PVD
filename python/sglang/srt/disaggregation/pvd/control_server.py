@@ -990,10 +990,11 @@ def create_shard_app(
         from sglang.srt.disaggregation.pvd.sparse_delivery import SPARSE_DELIVERY_KEY
         from sglang.srt.disaggregation.pvd.search_wire import BinarySearchSnapshot
         if data is None: data=await _payload(request)
-        if set(data)-{'zero_miss_proof'} != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
+        if set(data)-{'zero_miss_proof','channel_cleanup'} != {'protocol','selection','search','identity','destination'} or data['protocol'] != FUSED_PROTOCOL:
             raise ValueError('exact fused request required')
         zero_miss_proof=data.get('zero_miss_proof',False)
         if type(zero_miss_proof) is not bool: raise ValueError('zero-miss proof option must be bool')
+        if type(data.get('channel_cleanup',False)) is not bool:raise ValueError('channel cleanup option must be bool')
         scope=data['selection'];digest=selection_digest(scope,data['search'])
         identity=WriteIdentity.from_dict(data['identity'])
         physical=RemoteRegionDescriptor.from_dict(data['destination'])
@@ -1032,6 +1033,7 @@ def create_shard_app(
             delivery=await asyncio.to_thread(reserve_start)
         elif zero_miss_proof:
             absent_write_fence=store.fence_absent_write(identity)
+            if data.get('channel_cleanup') is True:data['_channel_writer_closed']=True
         reply=dict(protocol=FUSED_PROTOCOL,identity=identity.to_dict(),
             selection_digest=digest,results=results,chosen=[list(ids) for ids in chosen],
             manifest=wire.to_dict() if wire else None,delivery=delivery)
@@ -1056,7 +1058,8 @@ def create_shard_app(
 
     async def fused_channel(request):
         from sglang.srt.disaggregation.pvd.fused_binary_channel import (
-            MAX_REQUEST_BYTES, unpack_request, pack_response, BinaryChannelError)
+            MAX_REQUEST_BYTES, unpack_request, pack_response, BinaryChannelError,
+            CLEANUP_MAGIC, CLEANUP_PROTOCOL, unpack_cleanup)
         from sglang.srt.disaggregation.pvd.search_wire import unpack_binary_fused
         from sglang.srt.disaggregation.pvd.fused_search_delivery import validate_selection
         if len(channel_sockets)>=32:
@@ -1068,13 +1071,32 @@ def create_shard_app(
         except BaseException:
             channel_sockets.discard(socket)
             raise
-        tasks=set();last_sequence=0;binding=None
+        tasks=set();classes={};known={};last_sequence=0;binding=None
 
-        async def deliver(sequence,data):
+        async def control(data):
+            identity=data['identity']
+            if data['operation']=='ack':
+                with store._lock:
+                    entry=store._entry(identity.key)
+                    delivery=entry.deliveries.get(identity.transfer_id)
+                    if delivery is None or delivery.authorization is None or delivery.authorization.identity!=identity:
+                        raise ValueError('channel ACK write identity mismatch')
+                    identity.validate_destination(delivery.destination)
+                    result=store.ack_delivery(identity.key,identity.transfer_id).to_dict()
+            else:
+                result=await LocalShardClient(store).fence_delivery(identity)
+            if data['operation']=='ack' or result.get('fenced') is True:
+                known.pop(identity.transfer_id,None)
+            return web.json_response(dict(protocol=CLEANUP_PROTOCOL,operation=data['operation'],
+                identity=identity.to_dict(),result=result))
+
+        async def deliver(sequence,data,cleanup):
             try:
-                response=await pvd_error_middleware(request,lambda _:search_and_deliver(request,data))
+                response=await pvd_error_middleware(request,lambda _:control(data) if cleanup else search_and_deliver(request,data))
             except Exception:
                 response=_json_error('binary fused handler failed',500)
+            if not cleanup and data.get('_channel_writer_closed'):
+                known.pop(data['identity']['transfer_id'],None)
             try:
                 if not socket.closed:
                     await socket.send_bytes(pack_response(sequence,response.status,response.body))
@@ -1086,18 +1108,33 @@ def create_shard_app(
                 if message.type != aiohttp.WSMsgType.BINARY:
                     raise BinaryChannelError('binary request frame required')
                 sequence,raw=unpack_request(message.data)
-                if sequence != last_sequence+1 or sum(not t.done() for t in tasks)>=2:
+                cleanup=raw.startswith(CLEANUP_MAGIC)
+                if sequence != last_sequence+1 or sum(not t.done() and classes[t]==cleanup for t in tasks)>=2:
                     raise BinaryChannelError('channel sequence or inflight bound exceeded')
                 last_sequence=sequence
-                data=unpack_binary_fused(raw,frozen_search=True)
-                scope=validate_selection(data['selection'])
-                current=(scope['request_id'],scope['incarnation'],scope['entry_transfer_id'],tuple(scope['heads']))
-                if binding is None:binding=current
+                if cleanup:
+                    data=unpack_cleanup(raw)
+                    current=(*data['binding'][:3],tuple(data['binding'][3]))
+                    identity=data['identity']
+                    if known.get(identity.transfer_id)!=identity:
+                        raise BinaryChannelError('cleanup was not authorized on this channel')
+                else:
+                    data=unpack_binary_fused(raw,frozen_search=True)
+                    scope=validate_selection(data['selection'])
+                    current=(scope['request_id'],scope['incarnation'],scope['entry_transfer_id'],tuple(scope['heads']))
+                    if binding is None:binding=current
                 if current != binding:raise BinaryChannelError('channel request/Entry scope changed')
-                task=asyncio.create_task(deliver(sequence,data))
+                if not cleanup and data.get('channel_cleanup') is True:
+                    identity=WriteIdentity.from_dict(data['identity'])
+                    if identity.transfer_id in known or len(known)>=4:
+                        raise BinaryChannelError('channel writer capacity/replay rejected')
+                    known[identity.transfer_id]=identity
+                task=asyncio.create_task(deliver(sequence,data,cleanup))
+                classes[task]=cleanup
                 tasks.add(task);channel_work.add(task)
                 def finished(done):
                     tasks.discard(done);channel_work.discard(done)
+                    classes.pop(done,None)
                     if not done.cancelled():done.exception()
                 task.add_done_callback(finished)
         except (BinaryChannelError,ValueError,KeyError,TypeError):

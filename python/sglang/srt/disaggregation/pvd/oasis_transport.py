@@ -243,7 +243,8 @@ class OasisLayerTransport:
                  batched_cache_install=False, ready_before_cleanup=False, binary_queries=False,
                  fused_search_delivery=False, compact_cache_snapshots=False,
                  reuse_pinned_scratch=False, event_bank_ready=False, binary_control_channel=False,
-                 fused_zero_miss_proof=False, async_layer_jobs=False, parallel_owned_cleanup=False):
+                 fused_zero_miss_proof=False, async_layer_jobs=False, parallel_owned_cleanup=False,
+                 channel_cleanup=False):
         manifest = selected.manifest
         if (manifest.layout.num_layers != 28 or manifest.layout.total_kv_heads != 4
                 or manifest.layout.kv_heads_per_rank != 2
@@ -268,6 +269,7 @@ class OasisLayerTransport:
                 or type(fused_zero_miss_proof) is not bool
                 or type(async_layer_jobs) is not bool
                 or type(parallel_owned_cleanup) is not bool
+                or type(channel_cleanup) is not bool
                 or type(workers) is not int or not 1 <= workers <= 4):
             raise ValueError("bounded selected two-rank Qwen2.5-7B routes required")
         if ready_before_cleanup and not fused_search_delivery and (staged_transport or gpu_receive_to_bank or reuse_io
@@ -331,6 +333,9 @@ class OasisLayerTransport:
         if binary_control_channel and (not binary_queries or not fused_search_delivery or reuse_io):
             raise ValueError('binary control channel requires fused binary Q and its own search clients')
         self.binary_control_channel=binary_control_channel
+        if channel_cleanup and not binary_control_channel:
+            raise ValueError('channel cleanup requires request binary channel')
+        self.channel_cleanup=channel_cleanup
         if async_layer_jobs and (not binary_control_channel or not ready_before_cleanup
                 or type(install_scratch_bytes) is not int
                 or install_scratch_bytes < async_tensor_bound(capacity)):
@@ -527,6 +532,7 @@ class OasisLayerTransport:
                 owned_cleanup=self.cleanup.snapshot() if self.cleanup else None,
                 async_layer_jobs=self.async_layer_jobs,
                 parallel_owned_cleanup=self.parallel_owned_cleanup,
+                channel_cleanup=self.channel_cleanup,
                 async_jobs=self.async_jobs.snapshot() if self.async_jobs else None,
                 async_scratch_bound=async_tensor_bound(self.capacity) if self.async_layer_jobs else None,
                 staged_transport=self.staged_transport,
@@ -697,6 +703,10 @@ class OasisLayerTransport:
             rail=route.rail,endpoint=self.endpoints[route.rank],sender_epoch=route.sender_epoch,
             client=state['control'][route.rank],owner_scope=self.incarnation,
             binary_queries=self.binary_queries,zero_miss_proof=self.fused_zero_miss_proof)
+        if getattr(self,'channel_cleanup',False):
+            from sglang.srt.disaggregation.pvd.fused_binary_channel import ChannelRecordControl
+            record._client=ChannelRecordControl(search_client,record._client,record.identity,record.fused_scope)
+            record.fused_channel_cleanup=True
         try:
             chosen,ready=await start_fused(record,search_client,requests)
             pair=(record.fused_results[0]['index_version'],record.fused_results[0]['id_mapping_version'])

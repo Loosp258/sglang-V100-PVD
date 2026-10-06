@@ -184,14 +184,14 @@ class PVDShardSearchClient:
         if self._channel is not None:await self._channel.close()
         if self._session is not None and self._owns_session:await self._session.close()
 
-    async def _post_fused_channel(self,raw):
+    async def _post_fused_channel(self,raw,*,cleanup=False):
         if self._closed or not self.binary_control_channel:
             raise SearchTransportError('binary fused channel unavailable')
         if self._background_loop is None:
-            return await self._post_fused_channel_on_loop(raw)
+            return await self._post_fused_channel_on_loop(raw,cleanup=cleanup)
         if not self._background_loop.is_running():
             raise SearchTransportError('binary channel I/O loop stopped')
-        coroutine=self._post_fused_channel_on_loop(raw)
+        coroutine=self._post_fused_channel_on_loop(raw,cleanup=cleanup)
         try:
             future=asyncio.run_coroutine_threadsafe(coroutine,self._background_loop)
         except BaseException:
@@ -202,14 +202,14 @@ class PVDShardSearchClient:
         finally:
             if future.done():self._background_inflight.discard(future)
 
-    async def _post_fused_channel_on_loop(self,raw):
+    async def _post_fused_channel_on_loop(self,raw,*,cleanup=False):
         from sglang.srt.disaggregation.pvd.fused_binary_channel import (
             FusedBinaryChannel,BinaryChannelError,BinaryChannelRefused)
         if self._channel is None:
             self._channel=FusedBinaryChannel(self.base_url,timeout=self._timeout.total,
                                             max_response_bytes=self._max_response_bytes)
         try:
-            return await self._channel.exchange(raw)
+            return await self._channel.exchange(raw,cleanup=cleanup)
         except BinaryChannelRefused as exc:
             code=exc.body.get('code','request_refused')
             if (exc.status,code) not in ((400,'index_not_ready'),(507,'index_capacity')):

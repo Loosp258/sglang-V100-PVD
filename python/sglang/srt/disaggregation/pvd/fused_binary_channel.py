@@ -14,6 +14,65 @@ MAX_RESPONSE_BYTES = 2*1024*1024
 _MAGIC = b'PVDFC01\x00'
 _REQUEST = struct.Struct('<8sQ')
 _RESPONSE = struct.Struct('<8sQI')
+CLEANUP_MAGIC = b'PVDCLN1\x00'
+CLEANUP_PROTOCOL = 'pvd.channel-cleanup.v1'
+
+
+def pack_cleanup(operation, identity, binding):
+    from sglang.srt.disaggregation.pvd.protocol import WriteIdentity
+    if operation not in ('ack', 'fence') or not isinstance(identity, WriteIdentity):
+        raise BinaryChannelError('exact cleanup operation/identity required')
+    if (not isinstance(binding, (list, tuple)) or len(binding) != 4
+            or any(not isinstance(v, str) or not 1 <= len(v) <= 256 for v in binding[:3])
+            or binding[2] != identity.key.transfer_id
+            or list(binding[3]) != [identity.shard_rank*2, identity.shard_rank*2+1]):
+        raise BinaryChannelError('cleanup binding mismatch')
+    raw=json.dumps(dict(protocol=CLEANUP_PROTOCOL, operation=operation,
+        identity=identity.to_dict(), binding=list(binding)), separators=(',', ':'), allow_nan=False).encode()
+    if len(raw)>8192:raise BinaryChannelError('cleanup metadata exceeds bound')
+    return CLEANUP_MAGIC+raw
+
+
+def unpack_cleanup(raw):
+    from sglang.srt.disaggregation.pvd.protocol import WriteIdentity
+    if not raw.startswith(CLEANUP_MAGIC) or len(raw)>8192+len(CLEANUP_MAGIC):
+        raise BinaryChannelError('invalid cleanup frame')
+    data=json.loads(raw[len(CLEANUP_MAGIC):])
+    if (not isinstance(data,dict) or set(data)!={'protocol','operation','identity','binding'}
+            or data['protocol']!=CLEANUP_PROTOCOL):raise BinaryChannelError('exact cleanup frame required')
+    identity=WriteIdentity.from_dict(data['identity'])
+    pack_cleanup(data['operation'], identity, data['binding'])
+    data['identity']=identity
+    return data
+
+
+class ChannelRecordControl:
+    """Record-bound control adapter. HTTP fencing remains the recovery proof."""
+    def __init__(self, search, fallback, identity, scope):
+        self.search,self.fallback,self.identity=search,fallback,identity
+        self.binding=(scope['request_id'],scope['incarnation'],scope['entry_transfer_id'],scope['heads'])
+
+    def __getattr__(self,name):return getattr(self.fallback,name)
+
+    async def _control(self,operation):
+        reply=await self.search._post_fused_channel(pack_cleanup(operation,self.identity,self.binding),cleanup=True)
+        if (reply.get('protocol')!=CLEANUP_PROTOCOL or reply.get('identity')!=self.identity.to_dict()
+                or reply.get('operation')!=operation or not isinstance(reply.get('result'),dict)):
+            raise BinaryChannelError('cleanup reply identity/operation mismatch')
+        return reply['result']
+
+    async def ack_delivery(self,key,delivery_id):
+        if key!=self.identity.key or delivery_id!=self.identity.transfer_id:
+            raise BinaryChannelError('foreign cleanup ACK')
+        return await self._control('ack')
+
+    async def fence_delivery(self,identity):
+        if identity!=self.identity:raise BinaryChannelError('foreign cleanup fence')
+        try:
+            return await self._control('fence')
+        except Exception:
+            # A missing response is no evidence that the writer stopped.
+            return await self.fallback.fence_delivery(identity)
 
 
 class BinaryChannelError(RuntimeError):
@@ -63,7 +122,7 @@ class FusedBinaryChannel:
         self.base_url,self.timeout,self.max_response_bytes=base_url,timeout,min(max_response_bytes,MAX_RESPONSE_BYTES)
         self._connect_lock,self._send_lock=asyncio.Lock(),asyncio.Lock()
         self._session=self._socket=self._reader_task=None
-        self._owned,self._pending=set(),{}
+        self._owned,self._cleanup_owned,self._pending=set(),set(),{}
         self._sequence=0
         self._closed,self._failure=False,None
         self.connections,self.requests,self.pending_peak=0,0,0
@@ -130,15 +189,19 @@ class FusedBinaryChannel:
             if self._socket is not None:await self._socket.close()
             raise failure
 
-    async def exchange(self,body):
+    async def exchange(self,body,*,cleanup=False):
         if self._closed or self._failure:raise BinaryChannelError('binary channel closed or failed')
         # Matches the two serving workers; reject before publication rather than
         # buffering an unbounded number of authorized write requests.
-        if len(self._owned)>=2:raise BinaryChannelError('binary channel inflight capacity exhausted')
+        if type(cleanup) is not bool:raise BinaryChannelError('explicit channel operation class required')
+        if (len(self._cleanup_owned) if cleanup else len(self._owned)-len(self._cleanup_owned))>=2:
+            raise BinaryChannelError('binary channel inflight capacity exhausted')
         task=asyncio.create_task(self._exchange(body))
         self._owned.add(task)
+        if cleanup:self._cleanup_owned.add(task)
         def done(future):
             self._owned.discard(future)
+            self._cleanup_owned.discard(future)
             if not future.cancelled():future.exception()
         task.add_done_callback(done)
         return await asyncio.shield(task)
