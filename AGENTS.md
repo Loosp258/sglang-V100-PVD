@@ -18,6 +18,12 @@
 
 ## Current publication authorization (2026-10-05)
 
+- Latest request (2026-10-08): inspect further hot paths and implement in order,
+  local commit after each, no GitHub push. Three bounded CPU follow-ups:
+  direct exact cache membership; reuse unchanged V cache versions; direct
+  immutable binary Q freeze. Keep fast graph/Q/TopK/resident policy unchanged.
+  See `docs/pvd_cache_compute_plan_20261008.md`. No GPU is available.
+
 - Latest request (2026-10-06): five steps in order, local commit after each,
   no GitHub push: V typed batch results; parallel rank cleanup; persistent
   ACK/fence; async local CUDA completion; versioned exact cache deltas.

@@ -7,6 +7,7 @@ before any late reserve, even when the dynamic manifest response is lost.
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 import time
 import uuid
 from sglang.srt.disaggregation.pvd.oasis_pipeline import select_resident
@@ -17,7 +18,7 @@ from sglang.srt.disaggregation.pvd.search_wire import unpack_query_rows, PACKED_
 from sglang.srt.disaggregation.pvd.search_wire import (
     BINARY_QUERY_ENCODING, BINARY_QUERY_CONTENT_TYPE, binary_search_snapshot,
     unpack_binary_batch, pack_binary_fused, BinarySearchSnapshot, freeze_binary_search)
-from sglang.srt.disaggregation.pvd.cache_snapshot import cache_ids
+from sglang.srt.disaggregation.pvd.cache_snapshot import cache_ids, decode_cache_snapshot, cache_hits
 
 FUSED_PROTOCOL = 'pvd.search-delivery.v1'
 _SIZES={'torch.float16':2,'torch.bfloat16':2,'torch.float32':4}
@@ -26,7 +27,7 @@ _FIELDS={'request_id','incarnation','operation_id','target_tokens','entry_transf
          'head_dim','resident','cached'}
 
 
-def validate_selection(scope):
+def validate_selection(scope, *, decoded_cache=None):
     if not isinstance(scope,dict) or set(scope) != _FIELDS:
         raise ValueError('exact fused selection scope required')
     for name in ('request_id','incarnation','operation_id','entry_transfer_id','layout_fingerprint'):
@@ -42,7 +43,11 @@ def validate_selection(scope):
         if not isinstance(scope[name],list) or len(scope[name]) != 2: raise ValueError('two head snapshots required')
         for ids in scope[name]:
             if name == 'cached':
-                cache_ids(ids, scope['prompt_tokens'])
+                if os.environ.get('PVD_DIRECT_CACHE_MEMBERSHIP') == '1':
+                    decoded = decode_cache_snapshot(ids, scope['prompt_tokens'])
+                    if decoded_cache is not None: decoded_cache.append(decoded)
+                else:
+                    cache_ids(ids, scope['prompt_tokens'])
                 continue
             if (not isinstance(ids,list) or len(ids) > (scope['capacity'] if name=='resident' else scope['prompt_tokens'])
                     or any(type(t) is not int or not 0 <= t < scope['prompt_tokens'] for t in ids)
@@ -90,7 +95,8 @@ def allocation_bytes(scope):
 
 def choose_wire(scope, results):
     """Same score ordering, resident policy and CPU cache misses as D baseline."""
-    validate_selection(scope)
+    decoded = []
+    validate_selection(scope, decoded_cache=decoded)
     if not isinstance(results,(list,tuple)) or len(results) != 2: raise ValueError('two search results required')
     versions={(r['index_version'],r['id_mapping_version']) for r in results}
     if len(versions) != 1: raise ValueError('mixed immutable index versions')
@@ -101,7 +107,13 @@ def choose_wire(scope, results):
         ranked=tuple(t for _,t in sorted(zip(result['scores'],result['token_ids'],strict=True),reverse=True))
         ids=select_resident(ranked,scope['resident'][i],capacity=scope['capacity'],max_new=scope['max_new'])
         if not ids or any(t >= scope['prompt_tokens'] for t in ids): raise ValueError('invalid selected IDs')
-        chosen.append(ids);cached=set(cache_ids(scope['cached'][i],scope['prompt_tokens']));missing=tuple(t for t in ids if t not in cached)
+        chosen.append(ids)
+        if decoded:
+            hits = cache_hits(decoded[i], ids, scope['prompt_tokens'])
+            missing = tuple(t for t, hit in zip(ids, hits, strict=True) if not hit)
+        else:
+            cached=set(cache_ids(scope['cached'][i],scope['prompt_tokens']))
+            missing=tuple(t for t in ids if t not in cached)
         if missing:
             specs.append(SparseKVSpec(scope['request_id'],scope['incarnation'],scope['operation_id'],
                 scope['target_tokens'],scope['entry_transfer_id'],*pair,scope['layout_fingerprint'],
